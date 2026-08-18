@@ -122,7 +122,12 @@ async function openWhatsAppSession(
         key?: { remoteJid?: string; fromMe?: boolean };
         message?: {
           conversation?: string;
-          extendedTextMessage?: { text?: string };
+          extendedTextMessage?: {
+            text?: string;
+            contextInfo?: { quotedMessage?: Record<string, unknown> };
+          };
+          imageMessage?: { caption?: string; mimetype?: string };
+          videoMessage?: { caption?: string; mimetype?: string };
         };
       }>;
     }) => {
@@ -130,13 +135,27 @@ async function openWhatsAppSession(
         if (message.key?.fromMe || !message.key?.remoteJid) continue;
         const text =
           message.message?.conversation ??
-          message.message?.extendedTextMessage?.text;
-        if (!text) continue;
+          message.message?.extendedTextMessage?.text ??
+          message.message?.imageMessage?.caption ??
+          message.message?.videoMessage?.caption ??
+          "";
+        const quoted =
+          message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        const quotedText =
+          typeof quoted?.conversation === "string"
+            ? quoted.conversation
+            : typeof (
+                  quoted?.extendedTextMessage as { text?: unknown } | undefined
+                )?.text === "string"
+              ? (quoted?.extendedTextMessage as { text: string }).text
+              : undefined;
+        if (!text && !quotedText) continue;
         void routeWhatsAppText({
           workspaceId,
           sessionId,
           senderJid: message.key.remoteJid,
           text,
+          ...(quotedText ? { quotedText } : {}),
         }).then((reply) => {
           if (reply)
             void socket.sendMessage(message.key?.remoteJid ?? "", {
