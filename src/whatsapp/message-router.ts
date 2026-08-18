@@ -25,14 +25,29 @@ export interface WhatsAppReply {
   caption?: string;
 }
 
+function normalizeIdentity(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/@s\.whatsapp\.net$/, "")
+    .replace(/@c\.us$/, "")
+    .replace(/\D/g, "");
+}
+function identityMatches(left: string, right: string): boolean {
+  return left === right || normalizeIdentity(left) === normalizeIdentity(right);
+}
 function isOwnerFor(
   message: IncomingTextMessage,
   session: ReturnType<typeof getSession>,
 ): boolean {
   return (
-    message.senderJid === session.phoneNumber ||
-    session.sudoList.includes(message.senderJid) ||
-    getWorkspaceSudo(session.workspaceId).includes(message.senderJid)
+    identityMatches(message.senderJid, session.phoneNumber ?? "") ||
+    session.sudoList.some((identity) =>
+      identityMatches(message.senderJid, identity),
+    ) ||
+    getWorkspaceSudo(session.workspaceId).some((identity) =>
+      identityMatches(message.senderJid, identity),
+    )
   );
 }
 
