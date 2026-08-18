@@ -236,7 +236,11 @@ async function openWhatsAppSession(
     "messages.upsert",
     (event: {
       messages?: Array<{
-        key?: { remoteJid?: string; fromMe?: boolean };
+        key?: {
+          remoteJid?: string;
+          participant?: string;
+          fromMe?: boolean;
+        };
         message?: {
           conversation?: string;
           extendedTextMessage?: {
@@ -276,7 +280,7 @@ async function openWhatsAppSession(
         void routeWhatsAppText({
           workspaceId,
           sessionId,
-          senderJid: message.key.remoteJid,
+          senderJid: message.key.participant ?? message.key.remoteJid,
           text,
           ...(quotedText ? { quotedText } : {}),
         }).then((reply) => {
