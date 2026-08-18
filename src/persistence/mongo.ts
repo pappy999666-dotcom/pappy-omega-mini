@@ -270,6 +270,27 @@ export interface ScheduleRecord {
   lastRunAt?: number;
   updatedAt: number;
 }
+export async function listSchedules(
+  workspaceId: string,
+  limit = 50,
+): Promise<ScheduleRecord[]> {
+  await connectMongo();
+  return scheduleModel()
+    .find({ workspaceId })
+    .sort({ nextRunAt: 1 })
+    .limit(limit)
+    .lean<ScheduleRecord[]>()
+    .exec();
+}
+export async function disableSchedule(scheduleId: string): Promise<void> {
+  await connectMongo();
+  await scheduleModel()
+    .updateOne(
+      { scheduleId },
+      { $set: { enabled: false, updatedAt: Date.now() } },
+    )
+    .exec();
+}
 export async function saveSchedule(schedule: ScheduleRecord): Promise<void> {
   await connectMongo();
   await scheduleModel().replaceOne(

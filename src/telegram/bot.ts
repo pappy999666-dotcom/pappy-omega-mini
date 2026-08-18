@@ -25,13 +25,17 @@ import {
 } from "../core/control-plane.js";
 import { getValidatorSnapshot } from "../links/validator-snapshot.js";
 import { exportBucket } from "../links/link-export.js";
+import { randomUUID } from "node:crypto";
 import {
   deletePairingRequest,
+  disableSchedule,
   getPairingRequest,
   listForceJoinTargets,
+  listSchedules,
   listUsers,
   removeForceJoinTarget,
   savePairingRequest,
+  saveSchedule,
   setForceJoinTargetEnabled,
   setUserStatus,
   upsertForceJoinTarget,
@@ -105,6 +109,7 @@ const pendingAdminBroadcasts = new Map<
   string,
   { text: string; workspaceId: string }
 >();
+const pendingScheduleInput = new Map<string, { workspaceId: string }>();
 const pendingPairing = new Map<
   string,
   {
@@ -190,6 +195,11 @@ export function createTelegramBot(): Telegraf<Context> {
       !ctx.message.text.startsWith("/")
     ) {
       await handleAdminBroadcastDraft(ctx, ctx.message.text.trim());
+      return;
+    }
+    const scheduleInput = pendingScheduleInput.get(userId);
+    if (scheduleInput && !ctx.message.text.startsWith("/")) {
+      await handleScheduleInput(ctx, scheduleInput, ctx.message.text.trim());
       return;
     }
     const pending = pendingGlobalCommand.get(userId);
@@ -675,13 +685,40 @@ export function createTelegramBot(): Telegraf<Context> {
     );
   });
 
-  bot.action("jobs:list", async (ctx) =>
-    showFeature(
+  bot.action("jobs:list", async (ctx) => {
+    await ctx.answerCbQuery();
+    await showSchedulePanel(ctx);
+  });
+  bot.action("schedule:new:validation", async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = resolveTelegramUser(ctx);
+    pendingScheduleInput.set(String(ctx.from?.id ?? ""), {
+      workspaceId: user.workspaceId,
+    });
+    await edit(
       ctx,
-      "Scheduled Jobs",
-      "Create timezone-aware jobs for owned sessions. Every job must carry workspace and session scope and supports bounded execution, progress, and cancellation.",
-    ),
-  );
+      pageText(
+        "Scheduled Jobs · New",
+        infoResponse(
+          "Hourly Link Validation",
+          "Send one or more HTTP, HTTPS, or WhatsApp invite links separated by new lines. The schedule will run hourly until disabled.",
+        ),
+      ),
+      keyboard([[btn("Cancel", "jobs:list", "danger")]]),
+    );
+  });
+  bot.action(/^schedule:disable:([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Disabling…");
+    await disableSchedule(ctx.match[1] ?? "");
+    recordAudit({
+      workspaceId: resolveTelegramUser(ctx).workspaceId,
+      actorTelegramUserId: String(ctx.from?.id ?? ""),
+      action: "schedule.disable",
+      success: true,
+      metadata: { scheduleId: ctx.match[1] ?? "" },
+    });
+    await showSchedulePanel(ctx);
+  });
   bot.action("settings:menu", async (ctx) => {
     await ctx.answerCbQuery();
     const settings = getWorkspaceDefaults(resolveTelegramUser(ctx).workspaceId);
@@ -1499,6 +1536,93 @@ async function handleForceJoinAdminInput(
     },
   });
   await showAdminForceJoin(ctx);
+}
+
+async function showSchedulePanel(ctx: Context): Promise<void> {
+  const user = resolveTelegramUser(ctx);
+  const schedules = await listSchedules(user.workspaceId);
+  const rows = schedules.length
+    ? schedules
+        .map(
+          (schedule) =>
+            `<b>${escapeHtml(schedule.kind)}</b> · <code>${escapeHtml(schedule.scheduleId.slice(0, 8))}</code>\n` +
+            `<b>Status:</b> ${schedule.enabled ? "ACTIVE" : "DISABLED"} · <b>Timezone:</b> ${escapeHtml(schedule.timezone)}\n` +
+            `<b>Next:</b> ${new Date(schedule.nextRunAt).toLocaleString()}${schedule.enabled ? "" : ""}`,
+        )
+        .join("\n\n")
+    : "No schedules have been created for this workspace.";
+  const buttons = schedules
+    .filter((schedule) => schedule.enabled)
+    .map((schedule) => [
+      btn(
+        `■ Disable ${schedule.kind}`,
+        `schedule:disable:${schedule.scheduleId}`,
+        "danger",
+      ),
+    ]);
+  await edit(
+    ctx,
+    pageText(
+      "Scheduled Jobs",
+      infoResponse(
+        "Workspace Scheduler",
+        `${rows}\n\nSchedules are persisted, claimed atomically, and dispatched through the bounded worker queue.`,
+      ),
+    ),
+    keyboard([
+      [btn("＋ Hourly Link Validation", "schedule:new:validation", "primary")],
+      ...buttons,
+      [btn(ui.back, "menu:main")],
+    ]),
+  );
+}
+
+async function handleScheduleInput(
+  ctx: Context,
+  pending: { workspaceId: string },
+  text: string,
+): Promise<void> {
+  const userId = String(ctx.from?.id ?? "");
+  pendingScheduleInput.delete(userId);
+  const urls = text
+    .split(/\s+/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, 100);
+  if (!urls.length || urls.some((url) => !/^https?:\/\//i.test(url))) {
+    await edit(
+      ctx,
+      pageText(
+        "Scheduled Jobs · Invalid Input",
+        dangerResponse(
+          "No Valid Links",
+          "Send HTTP or HTTPS links, one per line.",
+        ),
+      ),
+      keyboard([[btn("↻ Try Again", "schedule:new:validation", "primary")]]),
+    );
+    return;
+  }
+  const scheduleId = randomUUID();
+  await saveSchedule({
+    scheduleId,
+    workspaceId: pending.workspaceId,
+    kind: "link-validation",
+    payload: { urls, sourceUserId: userId },
+    timezone: getWorkspaceDefaults(pending.workspaceId).timezone,
+    nextRunAt: Date.now() + 60 * 60 * 1000,
+    intervalMs: 60 * 60 * 1000,
+    enabled: true,
+    updatedAt: Date.now(),
+  });
+  recordAudit({
+    workspaceId: pending.workspaceId,
+    actorTelegramUserId: userId,
+    action: "schedule.create",
+    success: true,
+    metadata: { scheduleId, kind: "link-validation", urls: urls.length },
+  });
+  await showSchedulePanel(ctx);
 }
 
 async function handleAdminBroadcastDraft(
