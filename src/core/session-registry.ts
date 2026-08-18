@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { User, WhatsAppSession, Workspace } from "../types/domain.js";
 import {
+  hydrateRegistry,
+  persistSession,
+  persistUser,
+  persistWorkspace,
+} from "../persistence/mongo.js";
+import {
   getWorkspaceSettings,
   updateWorkspaceSettings,
   type WorkspaceSettings,
@@ -29,6 +35,7 @@ export function resolveUser(
         : {}),
     };
     users.set(telegramUserId, updated);
+    void persistUser(updated).catch(() => undefined);
     return updated;
   }
   const workspace: Workspace = {
@@ -37,6 +44,7 @@ export function resolveUser(
     createdAt: now,
   };
   workspaces.set(workspace.workspaceId, workspace);
+  void persistWorkspace(workspace).catch(() => undefined);
   const user: User = {
     telegramUserId,
     ...(displayName ? { displayName } : {}),
@@ -48,6 +56,7 @@ export function resolveUser(
     lastSeenAt: now,
   };
   users.set(telegramUserId, user);
+  void persistUser(user).catch(() => undefined);
   return user;
 }
 
@@ -68,6 +77,7 @@ export function createSession(input: {
     autoJoinEnabled: workspaceSettings.defaultAutoJoinEnabled,
   };
   sessions.set(session.sessionId, session);
+  void persistSession(session).catch(() => undefined);
   return session;
 }
 
@@ -100,6 +110,7 @@ export function updateSession(
     workspaceId: current.workspaceId,
   };
   sessions.set(sessionId, next);
+  void persistSession(next).catch(() => undefined);
   return next;
 }
 
@@ -123,6 +134,28 @@ export function updateWorkspaceDefaults(
     });
   }
   return next;
+}
+
+export function setUserStatusLocal(
+  telegramUserId: string,
+  status: User["status"],
+): boolean {
+  const user = users.get(telegramUserId);
+  if (!user) return false;
+  users.set(telegramUserId, { ...user, status, lastSeenAt: Date.now() });
+  return true;
+}
+
+export async function hydrateSessionRegistry(): Promise<void> {
+  const snapshot = await hydrateRegistry();
+  users.clear();
+  workspaces.clear();
+  sessions.clear();
+  for (const user of snapshot.users) users.set(user.telegramUserId, user);
+  for (const workspace of snapshot.workspaces)
+    workspaces.set(workspace.workspaceId, workspace);
+  for (const session of snapshot.sessions)
+    sessions.set(session.sessionId, session);
 }
 
 export function getUserWorkspace(telegramUserId: string): string {

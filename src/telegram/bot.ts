@@ -7,6 +7,7 @@ import {
   createSession,
   getSession,
   updateSession,
+  setUserStatusLocal,
   getWorkspaceDefaults,
   updateWorkspaceDefaults,
 } from "../core/session-registry.js";
@@ -23,8 +24,10 @@ import {
 import { getValidatorSnapshot } from "../links/validator-snapshot.js";
 import {
   listForceJoinTargets,
+  listUsers,
   removeForceJoinTarget,
   setForceJoinTargetEnabled,
+  setUserStatus,
   upsertForceJoinTarget,
   type ForceJoinTargetRecord,
 } from "../persistence/mongo.js";
@@ -39,6 +42,8 @@ import {
   adminJobsText,
   adminForceJoinKeyboard,
   adminForceJoinText,
+  adminUsersKeyboard,
+  adminUsersText,
   bucketKeyboard,
   forceJoinKeyboard,
   forceJoinText,
@@ -99,6 +104,20 @@ export function createTelegramBot(): Telegraf<Context> {
   if (!env.TELEGRAM_BOT_TOKEN)
     throw new Error("TELEGRAM_BOT_TOKEN is not configured.");
   const bot = new Telegraf<Context>(env.TELEGRAM_BOT_TOKEN);
+
+  bot.use(async (ctx, next) => {
+    if (isAdmin(ctx) || !ctx.from) return next();
+    const user = resolveTelegramUser(ctx);
+    if (user.status === "banned") {
+      if (ctx.callbackQuery)
+        await ctx.answerCbQuery("This account is banned.", {
+          show_alert: true,
+        });
+      else await ctx.reply("Access denied: this Telegram account is banned.");
+      return;
+    }
+    return next();
+  });
 
   bot.start(async (ctx) => {
     resolveTelegramUser(ctx);
@@ -799,6 +818,28 @@ export function createTelegramBot(): Telegraf<Context> {
       adminKeyboard(),
     );
   });
+  bot.action(/^admin:users(?::(\d+))?$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    await showAdminUsers(ctx, Number(ctx.match?.[1] ?? 0));
+  });
+  bot.action(/^admin:user:(ban|unban):(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const action = ctx.match[1] === "ban" ? "ban" : "unban";
+    const telegramUserId = ctx.match[2] ?? "";
+    const nextStatus = action === "ban" ? "banned" : "active";
+    const changed = await setUserStatus(telegramUserId, nextStatus);
+    setUserStatusLocal(telegramUserId, nextStatus);
+    recordAudit({
+      workspaceId: resolveTelegramUser(ctx).workspaceId,
+      actorTelegramUserId: String(ctx.from?.id ?? ""),
+      action: `admin.user.${action}`,
+      success: changed,
+      metadata: { telegramUserId },
+    });
+    await showAdminUsers(ctx, 0);
+  });
   bot.action("admin:forcejoin", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
@@ -1192,6 +1233,24 @@ async function sendSessions(ctx: Context, page: number): Promise<void> {
     ctx,
     body,
     sessionsKeyboard(sessions, page, 5, isAdmin(ctx)),
+  );
+}
+
+async function showAdminUsers(ctx: Context, page: number): Promise<void> {
+  const users = await listUsers(20, Math.max(0, page) * 20);
+  const views = users.map((user) => ({
+    telegramUserId: user.telegramUserId,
+    ...(user.username ? { username: user.username } : {}),
+    ...(user.displayName ? { displayName: user.displayName } : {}),
+    status: user.status,
+    workspaceId: user.workspaceId,
+    lastSeenAt: user.lastSeenAt,
+    sessionCount: listSessions(user.workspaceId).length,
+  }));
+  await edit(
+    ctx,
+    adminUsersText(views, Math.max(0, page)),
+    adminUsersKeyboard(views, Math.max(0, page)),
   );
 }
 

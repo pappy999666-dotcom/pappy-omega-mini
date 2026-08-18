@@ -438,6 +438,56 @@ export function adminForceJoinKeyboard(
   return keyboard(rows);
 }
 
+export interface AdminUserView {
+  telegramUserId: string;
+  username?: string;
+  displayName?: string;
+  status: "active" | "banned";
+  workspaceId: string;
+  lastSeenAt: number;
+  sessionCount: number;
+}
+
+export function adminUsersText(users: AdminUserView[], page: number): string {
+  const body = users.length
+    ? users
+        .map(
+          (user) =>
+            `${user.status === "active" ? "🟢" : "⛔"} <b>${escapeHtml(user.displayName || user.username || user.telegramUserId)}</b>\n<code>${escapeHtml(user.telegramUserId)}</code> · ${user.sessionCount} sessions · last seen ${new Date(user.lastSeenAt).toISOString()}`,
+        )
+        .join("\n\n")
+    : "No users have been persisted yet.";
+  return pageText(
+    "Admin · Users",
+    infoResponse(
+      "Tenant Directory",
+      `${body}\n\n<b>Page:</b> ${page + 1}\n\nBan/unban changes the durable user policy and is recorded in the audit stream.`,
+    ),
+  );
+}
+
+export function adminUsersKeyboard(
+  users: AdminUserView[],
+  page: number,
+): InlineKeyboardMarkup {
+  const rows: Button[][] = users.map((user) => [
+    btn(
+      `${user.status === "active" ? "⛔ Ban" : "✅ Unban"} · ${user.telegramUserId}`,
+      `admin:user:${user.status === "active" ? "ban" : "unban"}:${user.telegramUserId}`,
+      user.status === "active" ? "danger" : "success",
+    ),
+  ]);
+  rows.push([
+    ...(page > 0
+      ? [btn("‹ Previous", `admin:users:${page - 1}`, "primary")]
+      : []),
+    btn("Next ›", `admin:users:${page + 1}`, "primary"),
+  ]);
+  rows.push([btn("↻ Refresh", `admin:users:${page}`, "primary")]);
+  rows.push([btn(ui.back, "admin:panel")]);
+  return keyboard(rows);
+}
+
 export function adminKeyboard(): InlineKeyboardMarkup {
   return keyboard([
     [btn("⚙ Force Join", "admin:forcejoin"), btn("◉ Users", "admin:users")],

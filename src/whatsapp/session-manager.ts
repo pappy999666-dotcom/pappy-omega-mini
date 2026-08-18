@@ -8,6 +8,11 @@ import makeWASocket, {
 import { env } from "../config/env.js";
 import { getSession, updateSession } from "../core/session-registry.js";
 import {
+  acquireSessionLock,
+  closeSessionLockRedis,
+  type SessionLock,
+} from "../core/session-lock.js";
+import {
   readEncryptedJson,
   removeEncryptedJson,
   writeEncryptedJson,
@@ -43,6 +48,7 @@ interface RuntimeSession {
 }
 
 const runtimes = new Map<string, RuntimeSession>();
+const sessionLocks = new Map<string, SessionLock>();
 const terminalDisconnectCodes = new Set([401, 403]);
 
 class FileAuthStore implements CacheManagerStore {
@@ -90,6 +96,15 @@ async function openWhatsAppSession(
   if (runtimes.has(key)) return;
 
   markOpening(key);
+  const lock = await acquireSessionLock(workspaceId, sessionId);
+  if (!lock) {
+    updateSession(workspaceId, sessionId, {
+      status: "RECONNECTING",
+      disconnectReason: "session is already managed by another worker",
+    });
+    return;
+  }
+  sessionLocks.set(key, lock);
   const session = getSession(workspaceId, sessionId);
   const authRoot = join(env.SESSION_ROOT, workspaceId, sessionId);
   await mkdir(authRoot, { recursive: true });
@@ -153,6 +168,9 @@ async function openWhatsAppSession(
       const terminal = Boolean(code && terminalDisconnectCodes.has(code));
       markClosed(key);
       runtimes.delete(key);
+      const ownedLock = sessionLocks.get(key);
+      sessionLocks.delete(key);
+      void ownedLock?.release();
       updateSession(workspaceId, sessionId, {
         status: terminal ? "LOGGED_OUT" : "DEGRADED",
         ...(code
@@ -224,6 +242,9 @@ export function stopWhatsAppSession(
     runtime.stop();
     runtimes.delete(key);
   }
+  const ownedLock = sessionLocks.get(key);
+  sessionLocks.delete(key);
+  void ownedLock?.release();
   updateSession(workspaceId, sessionId, {
     status: "DEGRADED",
     disconnectReason: "stopped by owner",
@@ -234,6 +255,9 @@ export function shutdownWhatsAppSessions(): void {
   stopAllLifecycles();
   for (const runtime of runtimes.values()) runtime.stop();
   runtimes.clear();
+  for (const lock of sessionLocks.values()) void lock.release();
+  sessionLocks.clear();
+  void closeSessionLockRedis();
 }
 
 export function getWhatsAppRuntimeCount(): number {

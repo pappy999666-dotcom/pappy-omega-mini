@@ -4,6 +4,8 @@ import {
   adminJobsText,
   adminForceJoinKeyboard,
   adminForceJoinText,
+  adminUsersKeyboard,
+  adminUsersText,
   dashboardKeyboard,
   forceJoinKeyboard,
   forceJoinText,
@@ -83,6 +85,24 @@ describe("Telegram UI authorization", () => {
     );
     expect(JSON.stringify(adminForceJoinKeyboard(targets))).toContain(
       "admin:forcejoin:toggle:target-1",
+    );
+  });
+
+  it("renders a real Admin Users directory", () => {
+    const users = [
+      {
+        telegramUserId: "7624193882",
+        username: "owner",
+        displayName: "Owner",
+        status: "active" as const,
+        workspaceId: "workspace-1",
+        lastSeenAt: Date.now(),
+        sessionCount: 2,
+      },
+    ];
+    expect(adminUsersText(users, 0)).toContain("Tenant Directory");
+    expect(JSON.stringify(adminUsersKeyboard(users, 0))).toContain(
+      "admin:user:ban:7624193882",
     );
   });
 
