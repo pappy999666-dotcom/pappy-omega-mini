@@ -7,12 +7,26 @@ import makeWASocket, {
 } from "@crysnovax/baileys";
 import { env } from "../config/env.js";
 import { getSession, updateSession } from "../core/session-registry.js";
-import { routeWhatsAppText } from "./message-router.js";
 import {
   readEncryptedJson,
   removeEncryptedJson,
   writeEncryptedJson,
 } from "../core/encrypted-store.js";
+import { routeWhatsAppText } from "./message-router.js";
+import {
+  clearLifecycle,
+  getLifecycleState,
+  getStart,
+  lifecycleKey,
+  markClosed,
+  markConnected,
+  markOpening,
+  markStopping,
+  scheduleReconnect,
+  setStart,
+  startHeartbeat,
+  stopAllLifecycles,
+} from "./session-lifecycle.js";
 
 interface RuntimeEvents {
   on(event: string, listener: (payload: any) => void): void;
@@ -61,18 +75,21 @@ class FileAuthStore implements CacheManagerStore {
     }
   }
 
-  async keys(pattern = "*"): Promise<string[]> {
-    // Auth state uses exact keys; wildcard listing is intentionally narrow until
-    // a production object-store adapter is configured.
-    return pattern === "*" ? [] : [];
+  async keys(_pattern = "*"): Promise<string[]> {
+    return [];
   }
 }
 
-export async function startWhatsAppSession(
+async function openWhatsAppSession(
   workspaceId: string,
   sessionId: string,
 ): Promise<void> {
-  if (runtimes.has(sessionId)) return;
+  const key = lifecycleKey(workspaceId, sessionId);
+  const lifecycle = getLifecycleState(key);
+  if (lifecycle.stopping) return;
+  if (runtimes.has(key)) return;
+
+  markOpening(key);
   const session = getSession(workspaceId, sessionId);
   const authRoot = join(env.SESSION_ROOT, workspaceId, sessionId);
   await mkdir(authRoot, { recursive: true });
@@ -122,6 +139,8 @@ export async function startWhatsAppSession(
       lastDisconnect?: { error?: { output?: { statusCode?: number } } };
     }) => {
       if (update.connection === "open") {
+        markConnected(key);
+        startHeartbeat({ key, workspaceId, sessionId });
         updateSession(workspaceId, sessionId, {
           status: "ACTIVE",
           connectedAt: Date.now(),
@@ -131,18 +150,40 @@ export async function startWhatsAppSession(
       }
       if (update.connection !== "close") return;
       const code = update.lastDisconnect?.error?.output?.statusCode;
+      const terminal = Boolean(code && terminalDisconnectCodes.has(code));
+      markClosed(key);
+      runtimes.delete(key);
       updateSession(workspaceId, sessionId, {
-        status:
-          code && terminalDisconnectCodes.has(code) ? "LOGGED_OUT" : "DEGRADED",
+        status: terminal ? "LOGGED_OUT" : "DEGRADED",
         ...(code
           ? { disconnectReason: `transport:${code}` }
           : { disconnectReason: "connection closed" }),
       });
-      runtimes.delete(sessionId);
+      if (!terminal && !getLifecycleState(key).stopping) {
+        scheduleReconnect({
+          key,
+          workspaceId,
+          sessionId,
+          run: () => void startWhatsAppSession(workspaceId, sessionId),
+        });
+      }
     },
   );
 
-  runtimes.set(sessionId, { socket, stop: () => socket.end() });
+  runtimes.set(key, { socket, stop: () => socket.end() });
+}
+
+export async function startWhatsAppSession(
+  workspaceId: string,
+  sessionId: string,
+): Promise<void> {
+  const key = lifecycleKey(workspaceId, sessionId);
+  if (runtimes.has(key)) return;
+  const existing = getStart(key);
+  if (existing) return existing;
+  const promise = openWhatsAppSession(workspaceId, sessionId);
+  setStart(key, promise);
+  return promise;
 }
 
 export function getWhatsAppSocket(
@@ -150,7 +191,7 @@ export function getWhatsAppSocket(
   sessionId: string,
 ): WASocket {
   getSession(workspaceId, sessionId);
-  const runtime = runtimes.get(sessionId);
+  const runtime = runtimes.get(lifecycleKey(workspaceId, sessionId));
   if (!runtime) throw new Error("WhatsApp session is not connected.");
   return runtime.socket;
 }
@@ -160,12 +201,32 @@ export function stopWhatsAppSession(
   sessionId: string,
 ): void {
   getSession(workspaceId, sessionId);
-  const runtime = runtimes.get(sessionId);
-  if (!runtime) return;
-  runtime.stop();
-  runtimes.delete(sessionId);
+  const key = lifecycleKey(workspaceId, sessionId);
+  markStopping(key);
+  const runtime = runtimes.get(key);
+  if (runtime) {
+    runtime.stop();
+    runtimes.delete(key);
+  }
   updateSession(workspaceId, sessionId, {
     status: "DEGRADED",
     disconnectReason: "stopped by owner",
   });
+}
+
+export function shutdownWhatsAppSessions(): void {
+  stopAllLifecycles();
+  for (const runtime of runtimes.values()) runtime.stop();
+  runtimes.clear();
+}
+
+export function getWhatsAppRuntimeCount(): number {
+  return runtimes.size;
+}
+
+export function resetWhatsAppSessionLifecycle(
+  workspaceId: string,
+  sessionId: string,
+): void {
+  clearLifecycle(lifecycleKey(workspaceId, sessionId));
 }

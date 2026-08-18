@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { env, assertProductionSecrets } from "./config/env.js";
 import { createTelegramBot } from "./telegram/bot.js";
+import { shutdownWhatsAppSessions } from "./whatsapp/session-manager.js";
 
 async function main(): Promise<void> {
   assertProductionSecrets();
@@ -21,11 +22,14 @@ async function main(): Promise<void> {
   await bot.launch();
   console.log("[pappy-omega-mini] Telegram gateway online.");
 
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
-    console.log(
-      `[pappy-omega-mini] ${signal} received; shutting down cleanly.`,
-    );
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[pappy-omega-mini] ${signal} received; stopping new work.`);
     bot.stop(signal);
+    shutdownWhatsAppSessions();
+    console.log("[pappy-omega-mini] transports closed; shutdown complete.");
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));

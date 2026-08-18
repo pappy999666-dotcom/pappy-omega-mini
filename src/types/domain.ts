@@ -1,6 +1,13 @@
 export type UserRole = "owner" | "admin" | "user";
 export type SessionStatus =
-  "PAIRING" | "ACTIVE" | "DEGRADED" | "FROZEN" | "LOGGED_OUT" | "BANNED";
+  | "PAIRING"
+  | "ACTIVE"
+  | "DEGRADED"
+  | "RECONNECTING"
+  | "ERROR"
+  | "FROZEN"
+  | "LOGGED_OUT"
+  | "BANNED";
 export type MediaKind = "image" | "video";
 
 export interface Workspace {
