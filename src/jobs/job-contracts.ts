@@ -11,7 +11,8 @@ export type JobKind =
   | "preview-hydration"
   | "media-processing"
   | "group-sync"
-  | "cleanup";
+  | "cleanup"
+  | "join-manager";
 
 export type JobState =
   | "QUEUED"
@@ -48,6 +49,7 @@ export interface JobRecord<TPayload = Record<string, unknown>> {
   attempts: number;
   maxAttempts: number;
   cancellationRequested: boolean;
+  pauseRequested?: boolean;
   createdAt: number;
   startedAt?: number;
   completedAt?: number;
@@ -59,6 +61,7 @@ export interface WorkerContext {
   signal: AbortSignal;
   report(progress: Partial<JobProgress>): Promise<void>;
   isCancellationRequested(): boolean;
+  waitIfPaused(): Promise<void>;
 }
 
 export type WorkerHandler = (

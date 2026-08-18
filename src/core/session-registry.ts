@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { User, WhatsAppSession, Workspace } from "../types/domain.js";
+import {
+  getWorkspaceSettings,
+  updateWorkspaceSettings,
+  type WorkspaceSettings,
+} from "./workspace-settings.js";
 
 const users = new Map<string, User>();
 const workspaces = new Map<string, Workspace>();
@@ -51,15 +56,16 @@ export function createSession(input: {
   sessionName: string;
   phoneNumber?: string;
 }): WhatsAppSession {
+  const workspaceSettings = getWorkspaceSettings(input.workspaceId);
   const session: WhatsAppSession = {
     sessionId: randomUUID(),
     workspaceId: input.workspaceId,
     sessionName: input.sessionName.trim().slice(0, 48),
     ...(input.phoneNumber ? { phoneNumber: input.phoneNumber } : {}),
     status: "PAIRING",
-    prefix: ".",
+    prefix: workspaceSettings.defaultPrefix,
     sudoList: [],
-    autoJoinEnabled: false,
+    autoJoinEnabled: workspaceSettings.defaultAutoJoinEnabled,
   };
   sessions.set(session.sessionId, session);
   return session;
@@ -94,6 +100,28 @@ export function updateSession(
     workspaceId: current.workspaceId,
   };
   sessions.set(sessionId, next);
+  return next;
+}
+
+export function getWorkspaceDefaults(workspaceId: string): WorkspaceSettings {
+  return getWorkspaceSettings(workspaceId);
+}
+
+export function updateWorkspaceDefaults(
+  workspaceId: string,
+  patch: Partial<Omit<WorkspaceSettings, "workspaceId" | "updatedAt">>,
+): WorkspaceSettings {
+  const next = updateWorkspaceSettings(workspaceId, patch);
+  for (const current of listSessions(workspaceId)) {
+    updateSession(workspaceId, current.sessionId, {
+      ...(patch.defaultPrefix !== undefined
+        ? { prefix: next.defaultPrefix }
+        : {}),
+      ...(patch.defaultAutoJoinEnabled !== undefined
+        ? { autoJoinEnabled: next.defaultAutoJoinEnabled }
+        : {}),
+    });
+  }
   return next;
 }
 

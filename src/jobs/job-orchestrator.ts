@@ -143,11 +143,23 @@ export class JobOrchestrator {
     const record = await this.store.update(jobId, {
       state: "CANCELLING",
       cancellationRequested: true,
+      pauseRequested: false,
     });
     const job = await this.queue.getJob(jobId);
     if (job && !(await job.isActive()))
       await job.remove().catch(() => undefined);
     return record;
+  }
+
+  async pause(jobId: string): Promise<JobRecord | undefined> {
+    return this.store.update(jobId, { state: "PAUSED", pauseRequested: true });
+  }
+
+  async resume(jobId: string): Promise<JobRecord | undefined> {
+    return this.store.update(jobId, {
+      state: "RUNNING",
+      pauseRequested: false,
+    });
   }
 
   async close(): Promise<void> {
@@ -173,6 +185,16 @@ export class JobOrchestrator {
       signal: controller.signal,
       isCancellationRequested: () =>
         Boolean((context.job as JobRecord).cancellationRequested),
+      waitIfPaused: async () => {
+        while (true) {
+          const current = await this.store.get(record.jobId);
+          if (!current?.pauseRequested || current.cancellationRequested) {
+            context.job = current ?? context.job;
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 750));
+        }
+      },
       report: async (progress) => {
         const current = await this.store.get(record.jobId);
         if (!current) return;

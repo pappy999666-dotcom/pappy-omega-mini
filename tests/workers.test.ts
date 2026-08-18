@@ -28,6 +28,7 @@ function context(cancelled = false): WorkerContext {
     job,
     signal: new AbortController().signal,
     isCancellationRequested: () => job.cancellationRequested,
+    waitIfPaused: async () => undefined,
     report: async (progress) => {
       job.progress = { ...job.progress, ...progress };
     },

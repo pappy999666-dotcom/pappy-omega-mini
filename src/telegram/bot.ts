@@ -6,14 +6,26 @@ import {
   listSessions,
   createSession,
   getSession,
+  getWorkspaceDefaults,
+  updateWorkspaceDefaults,
 } from "../core/session-registry.js";
 import {
   getAdminMediaOverview,
   uploadWhatsappMenuMedia,
 } from "../admin/media-actions.js";
+import { getWorkerRuntime } from "../jobs/runtime.js";
+import {
+  getEmergencyState,
+  recordAudit,
+  setEmergencyState,
+} from "../core/control-plane.js";
+import { getValidatorSnapshot } from "../links/validator-snapshot.js";
 import {
   adminKeyboard,
   bucketKeyboard,
+  workspaceSettingsKeyboard,
+  workspaceSettingsText,
+  validatorDashboardText,
   bridgeSessionPicker,
   dashboardKeyboard,
   dashboardText,
@@ -42,6 +54,8 @@ const pendingMedia = new Map<string, "image" | "video">();
 const globalBridgeSelections = new Map<string, Set<string>>();
 const globalBridgeActive = new Set<string>();
 const joinStates = new Map<string, "idle" | "running" | "paused" | "stopped">();
+const joinJobs = new Map<string, string>();
+const liveLoops = new Map<string, ReturnType<typeof setInterval>>();
 
 export function createTelegramBot(): Telegraf<Context> {
   if (!env.TELEGRAM_BOT_TOKEN)
@@ -341,31 +355,11 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.action("bucket:status", async (ctx) => {
     await ctx.answerCbQuery();
-    await edit(
-      ctx,
-      pageText(
-        "Validator Hub",
-        infoResponse(
-          "Workspace Validation",
-          "Main, Active, Dead, and Error buckets are workspace-scoped. Link collection feeds the shared queue; validation and export workers are bounded and resumable.",
-        ),
-      ),
-      bucketKeyboard(),
-    );
+    await showValidatorHub(ctx);
   });
   bot.action("ui:validator", async (ctx) => {
     await ctx.answerCbQuery();
-    await edit(
-      ctx,
-      pageText(
-        "Validator Hub",
-        infoResponse(
-          "Workspace Validation",
-          "Main, Active, Dead, and Error buckets are workspace-scoped. Link collection feeds the shared queue; validation and export workers are bounded and resumable.",
-        ),
-      ),
-      bucketKeyboard(),
-    );
+    await showValidatorHub(ctx);
   });
   bot.action(/^bucket:(view|purge|merge|downloads|live)/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -422,13 +416,60 @@ export function createTelegramBot(): Telegraf<Context> {
       "Create timezone-aware jobs for owned sessions. Every job must carry workspace and session scope and supports bounded execution, progress, and cancellation.",
     ),
   );
-  bot.action("settings:menu", async (ctx) =>
-    showFeature(
+  bot.action("settings:menu", async (ctx) => {
+    await ctx.answerCbQuery();
+    const settings = getWorkspaceDefaults(resolveTelegramUser(ctx).workspaceId);
+    await edit(
       ctx,
-      "Settings",
-      "Workspace defaults, timezone, command prefix presentation, queue limits, and safety controls belong here.",
-    ),
-  );
+      workspaceSettingsText(settings),
+      workspaceSettingsKeyboard(settings),
+    );
+  });
+  bot.action("settings:autojoin:toggle", async (ctx) => {
+    await ctx.answerCbQuery("Applying to all sessions…");
+    const user = resolveTelegramUser(ctx);
+    const current = getWorkspaceDefaults(user.workspaceId);
+    const next = updateWorkspaceDefaults(user.workspaceId, {
+      defaultAutoJoinEnabled: !current.defaultAutoJoinEnabled,
+    });
+    await edit(
+      ctx,
+      workspaceSettingsText(next),
+      workspaceSettingsKeyboard(next),
+    );
+  });
+  bot.action("settings:prefix:cycle", async (ctx) => {
+    await ctx.answerCbQuery("Applying to all sessions…");
+    const user = resolveTelegramUser(ctx);
+    const current = getWorkspaceDefaults(user.workspaceId);
+    const values = [".", "!", "/", ""];
+    const nextValue =
+      values[(values.indexOf(current.defaultPrefix) + 1) % values.length] ??
+      ".";
+    const next = updateWorkspaceDefaults(user.workspaceId, {
+      defaultPrefix: nextValue,
+    });
+    await edit(
+      ctx,
+      workspaceSettingsText(next),
+      workspaceSettingsKeyboard(next),
+    );
+  });
+  bot.action("settings:delay:cycle", async (ctx) => {
+    await ctx.answerCbQuery("Applying to all sessions…");
+    const user = resolveTelegramUser(ctx);
+    const current = getWorkspaceDefaults(user.workspaceId);
+    const values = [0, 5000, 10000, 30000];
+    const index = values.indexOf(current.defaultJoinDelayMs);
+    const next = updateWorkspaceDefaults(user.workspaceId, {
+      defaultJoinDelayMs: values[(index + 1) % values.length] ?? 5000,
+    });
+    await edit(
+      ctx,
+      workspaceSettingsText(next),
+      workspaceSettingsKeyboard(next),
+    );
+  });
   bot.action("support:menu", async (ctx) =>
     showFeature(
       ctx,
@@ -443,9 +484,15 @@ export function createTelegramBot(): Telegraf<Context> {
       "Create timezone-aware jobs for owned sessions.",
     ),
   );
-  bot.action("ui:settings", async (ctx) =>
-    showFeature(ctx, "Settings", "Workspace defaults and safety controls."),
-  );
+  bot.action("ui:settings", async (ctx) => {
+    await ctx.answerCbQuery();
+    const settings = getWorkspaceDefaults(resolveTelegramUser(ctx).workspaceId);
+    await edit(
+      ctx,
+      workspaceSettingsText(settings),
+      workspaceSettingsKeyboard(settings),
+    );
+  });
   bot.action("ui:support", async (ctx) =>
     showFeature(ctx, "Support", "Workspace-aware support requests."),
   );
@@ -502,10 +549,41 @@ export function createTelegramBot(): Telegraf<Context> {
       const session = ownedSession(ctx, ctx.match[1] ?? "");
       if (!session) return deny(ctx);
       const operation = ctx.match[2] ?? "start";
-      const key = `${resolveTelegramUser(ctx).workspaceId}:${session.sessionId}`;
-      if (operation === "start") joinStates.set(key, "running");
-      if (operation === "pause") joinStates.set(key, "paused");
-      if (operation === "stop") joinStates.set(key, "stopped");
+      const user = resolveTelegramUser(ctx);
+      const key = `${user.workspaceId}:${session.sessionId}`;
+      const runtime = getWorkerRuntime();
+      if (operation === "start") {
+        if (!runtime)
+          return edit(
+            ctx,
+            pageText(
+              "Join Manager",
+              dangerResponse(
+                "Worker unavailable",
+                "The durable worker runtime is not online.",
+              ),
+            ),
+            joinManagerKeyboard(session.sessionId, "stopped"),
+          );
+        const settings = getWorkspaceDefaults(user.workspaceId);
+        const job = await runtime.enqueue({
+          workspaceId: user.workspaceId,
+          sessionId: session.sessionId,
+          kind: "join-manager",
+          payload: { targetCount: 100, delayMs: settings.defaultJoinDelayMs },
+          idempotencyKey: `join-manager:${user.workspaceId}:${session.sessionId}:${Date.now()}`,
+        });
+        joinJobs.set(key, job.jobId);
+        joinStates.set(key, "running");
+      } else if (operation === "pause") {
+        const jobId = joinJobs.get(key);
+        if (jobId) await runtime?.pause(jobId);
+        joinStates.set(key, "paused");
+      } else if (operation === "stop") {
+        const jobId = joinJobs.get(key);
+        if (jobId) await runtime?.cancel(jobId);
+        joinStates.set(key, "stopped");
+      }
       if (operation.startsWith("set"))
         return edit(
           ctx,
@@ -513,7 +591,7 @@ export function createTelegramBot(): Telegraf<Context> {
             "Join Manager · Configure",
             infoResponse(
               "Session-Bound Setting",
-              `Send the new value for <code>${escapeHtml(operation)}</code>. It will apply only to <b>${escapeHtml(session.sessionName)}</b>.`,
+              "Use Workspace Settings to change the default delay and auto-join behavior for all owned sessions. This selected session remains the worker target.",
             ),
           ),
           keyboard([[btn(ui.back, `session:${session.sessionId}:joinmgr`)]]),
@@ -574,6 +652,52 @@ export function createTelegramBot(): Telegraf<Context> {
         ),
       ),
       keyboard([[btn(ui.back, "admin:media")]]),
+    );
+  });
+  bot.action("admin:safe", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const actor = String(ctx.from?.id ?? "");
+    const current = getEmergencyState();
+    const next = setEmergencyState(actor, {
+      enabled: !current.enabled,
+      pauseMassSends: !current.enabled,
+      pauseJoins: !current.enabled,
+      pauseBroadcasts: !current.enabled,
+      pauseScheduler: !current.enabled,
+      disablePairing: !current.enabled,
+    });
+    recordAudit({
+      workspaceId: resolveTelegramUser(ctx).workspaceId,
+      actorTelegramUserId: actor,
+      action: next.enabled ? "emergency.enabled" : "emergency.disabled",
+      success: true,
+      metadata: { ...next },
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Emergency Mode",
+        next.enabled
+          ? dangerResponse(
+              "Safe Mode Enabled",
+              "Mass sends, joins, broadcasts, scheduling, and pairing are blocked until Safe Mode is disabled.",
+            )
+          : successResponse(
+              "Safe Mode Disabled",
+              "Normal operations are allowed again, subject to quotas and per-operation checks.",
+            ),
+      ),
+      keyboard([
+        [
+          btn(
+            next.enabled ? "✅ Disable Safe Mode" : "⚠ Enable Safe Mode",
+            "admin:safe",
+            next.enabled ? "success" : "danger",
+          ),
+        ],
+        [btn(ui.back, "admin:panel")],
+      ]),
     );
   });
   bot.action("admin:media:select", async (ctx) => {
@@ -680,6 +804,49 @@ async function sendSessions(ctx: Context, page: number): Promise<void> {
   );
 }
 
+async function showValidatorHub(ctx: Context): Promise<void> {
+  const user = resolveTelegramUser(ctx);
+  const snapshot = await getValidatorSnapshot(user.workspaceId);
+  await edit(ctx, validatorDashboardText(snapshot), bucketKeyboard());
+  const message = ctx.callbackQuery?.message;
+  const chatId =
+    ctx.chat?.id ??
+    (message && "chat" in message ? message.chat.id : undefined);
+  const messageId =
+    message && "message_id" in message ? message.message_id : undefined;
+  if (!chatId || !messageId) return;
+  const loopKey = `${chatId}:${messageId}`;
+  const previous = liveLoops.get(loopKey);
+  if (previous) clearInterval(previous);
+  const interval = setInterval(() => {
+    void getValidatorSnapshot(user.workspaceId)
+      .then((nextSnapshot) => {
+        void ctx.telegram
+          .editMessageText(
+            chatId,
+            messageId,
+            undefined,
+            validatorDashboardText(nextSnapshot),
+            { parse_mode: "HTML", reply_markup: bucketKeyboard() },
+          )
+          .catch(() => {
+            const active = liveLoops.get(loopKey);
+            if (active) clearInterval(active);
+            liveLoops.delete(loopKey);
+          });
+      })
+      .catch(() => undefined);
+  }, 2500);
+  liveLoops.set(loopKey, interval);
+  setTimeout(() => {
+    const active = liveLoops.get(loopKey);
+    if (active === interval) {
+      clearInterval(interval);
+      liveLoops.delete(loopKey);
+    }
+  }, 120000);
+}
+
 async function showGlobalBridge(ctx: Context): Promise<void> {
   const user = resolveTelegramUser(ctx);
   await edit(
@@ -733,19 +900,80 @@ async function showSessionBridge(
 async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
   const session = ownedSession(ctx, sessionId);
   if (!session) return deny(ctx);
-  const key = `${resolveTelegramUser(ctx).workspaceId}:${session.sessionId}`;
-  const status = joinStates.get(key) ?? "idle";
-  await edit(
-    ctx,
+  const user = resolveTelegramUser(ctx);
+  const key = `${user.workspaceId}:${session.sessionId}`;
+  const runtime = getWorkerRuntime();
+  const jobId = joinJobs.get(key);
+  const job = jobId ? await runtime?.get(jobId) : undefined;
+  const status = job
+    ? jobStateToJoinStatus(job.state)
+    : (joinStates.get(key) ?? "idle");
+  const render = (currentJob = job) =>
     pageText(
       "Join Manager",
       infoResponse(
-        "Session-Bound Join Worker",
-        `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Source:</b> Active bucket\n<b>Status:</b> ${status}\n<b>Safety:</b> bounded execution with pause, stop, and rate-limit handling\n\nNo operation is started until you tap Start.`,
+        "Live Session-Bound Join Worker",
+        `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Source:</b> Active bucket\n<b>Status:</b> ${status}\n<b>Job:</b> <code>${escapeHtml(currentJob?.jobId ?? "not started")}</code>\n<b>Progress:</b> ${currentJob?.progress.completed ?? 0}/${currentJob?.progress.total ?? "—"}\n<b>Joined:</b> ${currentJob?.progress.success ?? 0}  <b>Failed:</b> ${currentJob?.progress.failed ?? 0}\n<b>Rate:</b> ${currentJob?.progress.rate ? currentJob.progress.rate.toFixed(2) : "0.00"}/s\n\nThe view updates in place while the worker is active.`,
       ),
-    ),
-    joinManagerKeyboard(session.sessionId, status),
-  );
+    );
+  await edit(ctx, render(), joinManagerKeyboard(session.sessionId, status));
+  const message = ctx.callbackQuery?.message;
+  const chatId =
+    ctx.chat?.id ??
+    (message && "chat" in message ? message.chat.id : undefined);
+  const messageId =
+    message && "message_id" in message ? message.message_id : undefined;
+  if (!chatId || !messageId || !jobId || !runtime) return;
+  const loopKey = `join:${chatId}:${messageId}`;
+  const previous = liveLoops.get(loopKey);
+  if (previous) clearInterval(previous);
+  const interval = setInterval(() => {
+    void runtime
+      .get(jobId)
+      .then((nextJob) => {
+        if (!nextJob) return;
+        const nextStatus = jobStateToJoinStatus(nextJob.state);
+        void ctx.telegram
+          .editMessageText(
+            chatId,
+            messageId,
+            undefined,
+            render(nextJob).replace(
+              `Status:</b> ${status}`,
+              `Status:</b> ${nextStatus}`,
+            ),
+            {
+              parse_mode: "HTML",
+              reply_markup: joinManagerKeyboard(session.sessionId, nextStatus),
+            },
+          )
+          .catch(() => {
+            const active = liveLoops.get(loopKey);
+            if (active) clearInterval(active);
+            liveLoops.delete(loopKey);
+          });
+        if (
+          ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(
+            nextJob.state,
+          )
+        ) {
+          clearInterval(interval);
+          liveLoops.delete(loopKey);
+        }
+      })
+      .catch(() => undefined);
+  }, 1500);
+  liveLoops.set(loopKey, interval);
+}
+
+function jobStateToJoinStatus(
+  state: string,
+): "idle" | "running" | "paused" | "stopped" {
+  if (state === "PAUSED") return "paused";
+  if (["RUNNING", "QUEUED", "RETRYING"].includes(state)) return "running";
+  if (["CANCELLED", "FAILED", "COMPLETED", "PARTIAL"].includes(state))
+    return "stopped";
+  return "idle";
 }
 
 async function sendAdminMedia(ctx: Context): Promise<void> {

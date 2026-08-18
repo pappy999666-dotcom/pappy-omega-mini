@@ -1,6 +1,7 @@
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
 import { LinkBucketStore } from "../links/link-bucket-store.js";
+import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
 import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
 
@@ -10,8 +11,16 @@ interface LinkValidationPayload {
   sourceSessionId?: string;
 }
 
+let activeRuntime: JobOrchestrator | undefined;
+
+export function getWorkerRuntime(): JobOrchestrator | undefined {
+  return activeRuntime;
+}
+
 export function startWorkerRuntime(): JobOrchestrator {
+  if (activeRuntime) return activeRuntime;
   const orchestrator = new JobOrchestrator(env.QUEUE_CONCURRENCY);
+  activeRuntime = orchestrator;
   const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
   const buckets = new LinkBucketStore(redis);
   orchestrator.addCloseHook(async () => {
@@ -72,6 +81,79 @@ export function startWorkerRuntime(): JobOrchestrator {
           });
           return { status: "success" as const };
         } catch {
+          return { status: "failed" as const };
+        }
+      },
+    });
+  });
+
+  orchestrator.register("join-manager", async (context) => {
+    const sessionId = context.job.sessionId;
+    if (!sessionId)
+      throw new Error("Join Manager requires a selected WhatsApp session.");
+    const socket = getWhatsAppSocket(
+      context.job.workspaceId,
+      sessionId,
+    ) as typeof getWhatsAppSocket extends (...args: never[]) => infer R
+      ? R & { groupAcceptInvite: (code: string) => Promise<unknown> }
+      : never;
+    const payload = context.job.payload as {
+      targetCount?: number;
+      delayMs?: number;
+    };
+    const active = await buckets.list(
+      context.job.workspaceId,
+      "active",
+      0,
+      Math.max(1, payload.targetCount ?? 100),
+    );
+    const records = active.records.filter(
+      (record) =>
+        !record.sourceSessionId || record.sourceSessionId === sessionId,
+    );
+    return runBoundedBatch({
+      items: records,
+      concurrency: 1,
+      context,
+      processItem: async (record) => {
+        const inviteCode =
+          record.metadata?.inviteCode ??
+          record.canonicalUrl.match(
+            /chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/,
+          )?.[1];
+        if (!inviteCode) {
+          await buckets.move(
+            context.job.workspaceId,
+            record.canonicalUrl,
+            "dead",
+            { validationError: "No WhatsApp invite code found." },
+          );
+          return { status: "failed" as const };
+        }
+        try {
+          await socket.groupAcceptInvite(inviteCode);
+          await buckets.move(
+            context.job.workspaceId,
+            record.canonicalUrl,
+            "active",
+            { lastCheckedAt: Date.now() },
+          );
+          const delayMs = Math.max(
+            0,
+            Math.min(600000, Number(payload.delayMs ?? 0)),
+          );
+          if (delayMs)
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          return { status: "success" as const };
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          await buckets.move(
+            context.job.workspaceId,
+            record.canonicalUrl,
+            message.toLowerCase().includes("rate") ? "error" : "dead",
+            { validationError: message.slice(0, 240) },
+          );
           return { status: "failed" as const };
         }
       },

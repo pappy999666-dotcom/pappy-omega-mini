@@ -2,6 +2,7 @@ import type { InlineKeyboardMarkup } from "telegraf/types";
 import type { WhatsAppSession } from "../types/domain.js";
 import { buildSessionMenu } from "../menus/menu-model.js";
 import { renderTelegramSessionMenu } from "../menus/renderers.js";
+import { infoResponse } from "./renderer.js";
 
 export type ButtonStyle = "primary" | "success" | "danger";
 type InlineButton = InlineKeyboardMarkup["inline_keyboard"][number][number] & {
@@ -162,6 +163,28 @@ export function linkCollectionKeyboard(
   ]);
 }
 
+export function validatorDashboardText(snapshot: {
+  counts: Record<string, number>;
+  recent: Array<{ canonicalUrl: string; bucket: string }>;
+  capturedAt: number;
+}): string {
+  const recent =
+    snapshot.recent
+      .slice(0, 6)
+      .map(
+        (record) =>
+          `• <code>${escapeHtml(record.canonicalUrl.slice(0, 72))}</code> <i>${escapeHtml(record.bucket)}</i>`,
+      )
+      .join("\n") || "No link records yet.";
+  return pageText(
+    "Validator Hub",
+    infoResponse(
+      "Live Workspace Buckets",
+      `<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Active:</b> ${snapshot.counts.active ?? 0}\n<b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Error:</b> ${snapshot.counts.error ?? 0}\n<b>Master:</b> ${snapshot.counts.master ?? 0}\n\n<b>Recent records</b>\n${recent}\n\n<i>Updated ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+    ),
+  );
+}
+
 export function bucketKeyboard(): InlineKeyboardMarkup {
   return keyboard([
     [
@@ -219,6 +242,36 @@ export function joinManagerKeyboard(
   return keyboard(rows);
 }
 
+export function workspaceSettingsKeyboard(settings: {
+  defaultAutoJoinEnabled: boolean;
+  defaultPrefix: string;
+  defaultJoinDelayMs: number;
+}): InlineKeyboardMarkup {
+  return keyboard([
+    [
+      btn(
+        `Auto-join: ${settings.defaultAutoJoinEnabled ? "ON" : "OFF"}`,
+        "settings:autojoin:toggle",
+        settings.defaultAutoJoinEnabled ? "success" : "danger",
+      ),
+    ],
+    [
+      btn(
+        `Prefix: ${settings.defaultPrefix || "none"}`,
+        "settings:prefix:cycle",
+      ),
+    ],
+    [
+      btn(
+        `Join delay: ${Math.round(settings.defaultJoinDelayMs / 1000)}s`,
+        "settings:delay:cycle",
+      ),
+    ],
+    [btn("↻ Refresh", "settings:menu")],
+    [btn(ui.back, "menu:main")],
+  ]);
+}
+
 export function adminKeyboard(): InlineKeyboardMarkup {
   return keyboard([
     [btn("⚙ Force Join", "admin:forcejoin"), btn("◉ Users", "admin:users")],
@@ -253,6 +306,20 @@ export function sessionText(session: WhatsAppSession): string {
   return pageText(
     "Per-Session Control",
     rendered.text.replace(/<b>.*?<\/b>\n?/s, "").trim(),
+  );
+}
+
+export function workspaceSettingsText(settings: {
+  defaultAutoJoinEnabled: boolean;
+  defaultPrefix: string;
+  defaultJoinDelayMs: number;
+}): string {
+  return pageText(
+    "Workspace Settings",
+    infoResponse(
+      "Applies to all owned sessions",
+      `<b>Auto-join:</b> ${settings.defaultAutoJoinEnabled ? "ON" : "OFF"}\n<b>Default prefix:</b> <code>${escapeHtml(settings.defaultPrefix || "none")}</code>\n<b>Join delay:</b> <code>${Math.round(settings.defaultJoinDelayMs / 1000)}s</code>\n\nChanges are persisted and propagated to every session in this workspace.`,
+    ),
   );
 }
 

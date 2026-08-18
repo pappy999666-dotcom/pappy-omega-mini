@@ -25,6 +25,7 @@ export async function runBoundedBatch<T>(
 
   const next = async (): Promise<void> => {
     while (true) {
+      await options.context.waitIfPaused();
       if (options.context.isCancellationRequested()) {
         controller.abort();
         return;
