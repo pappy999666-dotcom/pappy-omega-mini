@@ -5,6 +5,19 @@ import type { User, WhatsAppSession, Workspace } from "../types/domain.js";
 import type { AuditEvent, EmergencyState } from "../types/v2.js";
 import type { MenuMedia } from "../types/domain.js";
 
+export interface SupportTicketRecord {
+  ticketId: string;
+  workspaceId: string;
+  requesterTelegramUserId?: string;
+  sessionId?: string;
+  senderJid?: string;
+  message: string;
+  status: "open" | "answered" | "closed";
+  createdAt: number;
+  updatedAt: number;
+  lastReply?: string;
+}
+
 export interface ForceJoinTargetRecord {
   targetId: string;
   targetType: "channel" | "group";
@@ -18,6 +31,8 @@ export interface ForceJoinTargetRecord {
   updatedAt: number;
 }
 
+interface SupportTicketDocument
+  extends SupportTicketRecord, mongoose.Document {}
 interface ForceJoinTargetDocument
   extends ForceJoinTargetRecord, mongoose.Document {}
 interface UserDocument extends User, mongoose.Document {}
@@ -48,6 +63,27 @@ interface PairingRequestDocument extends mongoose.Document {
   updatedAt: number;
 }
 
+const supportTicketSchema = new mongoose.Schema<SupportTicketDocument>(
+  {
+    ticketId: { type: String, required: true, unique: true, index: true },
+    workspaceId: { type: String, required: true, index: true },
+    requesterTelegramUserId: String,
+    sessionId: String,
+    senderJid: String,
+    message: { type: String, required: true },
+    status: {
+      type: String,
+      enum: ["open", "answered", "closed"],
+      required: true,
+      index: true,
+    },
+    createdAt: { type: Number, required: true, index: true },
+    updatedAt: { type: Number, required: true },
+    lastReply: String,
+  },
+  { collection: "support_tickets", versionKey: false },
+);
+supportTicketSchema.index({ workspaceId: 1, status: 1, updatedAt: -1 });
 const forceJoinSchema = new mongoose.Schema<ForceJoinTargetDocument>(
   {
     targetId: { type: String, required: true, unique: true, index: true },
@@ -182,6 +218,7 @@ const pairingRequestSchema = new mongoose.Schema<PairingRequestDocument>(
 );
 
 let connectionPromise: Promise<typeof mongoose> | undefined;
+let SupportTicket: Model<SupportTicketDocument> | undefined;
 let ForceJoinTarget: Model<ForceJoinTargetDocument> | undefined;
 let UserModel: Model<UserDocument> | undefined;
 let WorkspaceModel: Model<WorkspaceDocument> | undefined;
@@ -201,6 +238,14 @@ export async function connectMongo(): Promise<typeof mongoose> {
   return connectionPromise;
 }
 
+function supportTicketModel(): Model<SupportTicketDocument> {
+  return (SupportTicket ??=
+    mongoose.models.SupportTicket ??
+    mongoose.model<SupportTicketDocument>(
+      "SupportTicket",
+      supportTicketSchema,
+    ));
+}
 function targetModel(): Model<ForceJoinTargetDocument> {
   return (ForceJoinTarget ??=
     mongoose.models.ForceJoinTarget ??
@@ -256,6 +301,7 @@ function pairingRequestModel(): Model<PairingRequestDocument> {
 export async function ensureMongoIndexes(): Promise<void> {
   await connectMongo();
   await Promise.all([
+    supportTicketModel().createIndexes(),
     targetModel().createIndexes(),
     userModel().createIndexes(),
     workspaceModel().createIndexes(),
@@ -266,6 +312,42 @@ export async function ensureMongoIndexes(): Promise<void> {
     mediaModel().createIndexes(),
     emergencyModel().createIndexes(),
   ]);
+}
+
+export async function createSupportTicket(
+  ticket: SupportTicketRecord,
+): Promise<void> {
+  await connectMongo();
+  await supportTicketModel().replaceOne({ ticketId: ticket.ticketId }, ticket, {
+    upsert: true,
+  });
+}
+export async function listSupportTickets(
+  workspaceId: string,
+  status?: SupportTicketRecord["status"],
+): Promise<SupportTicketRecord[]> {
+  await connectMongo();
+  return supportTicketModel()
+    .find({ workspaceId, ...(status ? { status } : {}) })
+    .sort({ updatedAt: -1 })
+    .limit(100)
+    .lean<SupportTicketRecord[]>()
+    .exec();
+}
+export async function updateSupportTicket(
+  ticketId: string,
+  patch: Partial<Pick<SupportTicketRecord, "status" | "lastReply">>,
+): Promise<SupportTicketRecord | undefined> {
+  await connectMongo();
+  const updated = await supportTicketModel()
+    .findOneAndUpdate(
+      { ticketId },
+      { $set: { ...patch, updatedAt: Date.now() } },
+      { new: true },
+    )
+    .lean<SupportTicketRecord>()
+    .exec();
+  return updated ?? undefined;
 }
 
 export async function persistUser(user: User): Promise<void> {

@@ -67,6 +67,7 @@ export async function routeWhatsAppText(
     workspaceId: message.workspaceId,
     sessionId: message.sessionId,
     isOwner,
+    senderJid: message.senderJid,
     args: [],
     ...(runtime
       ? {

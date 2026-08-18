@@ -32,6 +32,9 @@ import {
   getPairingRequest,
   listForceJoinTargets,
   listSchedules,
+  listSupportTickets,
+  createSupportTicket,
+  updateSupportTicket,
   listUsers,
   removeForceJoinTarget,
   savePairingRequest,
@@ -42,7 +45,7 @@ import {
   type ForceJoinTargetRecord,
 } from "../persistence/mongo.js";
 import { requestWhatsAppPairingCode } from "../whatsapp/session-manager.js";
-import { listGroups } from "../whatsapp/transport-adapter.js";
+import { listGroups, sendDirectText } from "../whatsapp/transport-adapter.js";
 import {
   createCommandRegistry,
   executeCommand,
@@ -111,6 +114,8 @@ const pendingAdminBroadcasts = new Map<
   { text: string; workspaceId: string }
 >();
 const pendingScheduleInput = new Map<string, { workspaceId: string }>();
+const pendingSupportInput = new Map<string, { workspaceId: string }>();
+const pendingSupportReply = new Map<string, { ticketId: string }>();
 const pendingPairing = new Map<
   string,
   {
@@ -184,6 +189,20 @@ export function createTelegramBot(): Telegraf<Context> {
       (await getPairingRequest(userId).catch(() => undefined));
     if (pairing && !ctx.message.text.startsWith("/")) {
       await handlePairingText(ctx, pairing, ctx.message.text.trim());
+      return;
+    }
+    const supportInput = pendingSupportInput.get(userId);
+    if (supportInput && !ctx.message.text.startsWith("/")) {
+      await handleSupportInput(ctx, supportInput, ctx.message.text.trim());
+      return;
+    }
+    const supportReply = pendingSupportReply.get(userId);
+    if (supportReply && !ctx.message.text.startsWith("/")) {
+      await handleSupportReply(
+        ctx,
+        supportReply.ticketId,
+        ctx.message.text.trim(),
+      );
       return;
     }
     const adminInput = pendingAdminInput.get(userId);
@@ -770,13 +789,53 @@ export function createTelegramBot(): Telegraf<Context> {
       workspaceSettingsKeyboard(next),
     );
   });
-  bot.action("support:menu", async (ctx) =>
-    showFeature(
+  bot.action("support:menu", async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = resolveTelegramUser(ctx);
+    pendingSupportInput.set(String(ctx.from?.id ?? ""), {
+      workspaceId: user.workspaceId,
+    });
+    await edit(
       ctx,
-      "Support",
-      "Support requests are workspace-aware and never expose another user’s session data.",
-    ),
-  );
+      pageText(
+        "Support Inbox",
+        infoResponse(
+          "New Support Request",
+          "Describe the issue in one message. It will be stored in your workspace inbox for owner review.",
+        ),
+      ),
+      keyboard([[btn("Cancel", "menu:main", "danger")]]),
+    );
+  });
+  bot.action("admin:support", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    await showAdminSupport(ctx);
+  });
+  bot.action(/^admin:support:reply:([a-f0-9-]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    pendingSupportReply.set(String(ctx.from?.id ?? ""), {
+      ticketId: ctx.match[1] ?? "",
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Support Inbox · Reply",
+        infoResponse(
+          "Owner Reply",
+          "Send the reply text now. It will be delivered to WhatsApp when routing metadata is available.",
+        ),
+      ),
+      keyboard([[btn("Cancel", "admin:support", "danger")]]),
+    );
+  });
+  bot.action(/^admin:support:close:([a-f0-9-]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    await updateSupportTicket(ctx.match[1] ?? "", { status: "closed" });
+    await showAdminSupport(ctx);
+  });
   bot.action("ui:schedule", async (ctx) =>
     showFeature(
       ctx,
@@ -793,9 +852,24 @@ export function createTelegramBot(): Telegraf<Context> {
       workspaceSettingsKeyboard(settings),
     );
   });
-  bot.action("ui:support", async (ctx) =>
-    showFeature(ctx, "Support", "Workspace-aware support requests."),
-  );
+  bot.action("ui:support", async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = resolveTelegramUser(ctx);
+    pendingSupportInput.set(String(ctx.from?.id ?? ""), {
+      workspaceId: user.workspaceId,
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Support Inbox",
+        infoResponse(
+          "New Support Request",
+          "Describe the issue in one message. It will be stored in your workspace inbox for owner review.",
+        ),
+      ),
+      keyboard([[btn("Cancel", "menu:main", "danger")]]),
+    );
+  });
   bot.action("ui:join", async (ctx) =>
     showFeature(
       ctx,
@@ -1706,6 +1780,159 @@ async function handleScheduleInput(
     metadata: { scheduleId, kind: "link-validation", urls: urls.length },
   });
   await showSchedulePanel(ctx);
+}
+
+async function handleSupportInput(
+  ctx: Context,
+  pending: { workspaceId: string },
+  text: string,
+): Promise<void> {
+  const actorId = String(ctx.from?.id ?? "");
+  pendingSupportInput.delete(actorId);
+  if (!text || text.length > 4000) {
+    await edit(
+      ctx,
+      pageText(
+        "Support Inbox",
+        dangerResponse(
+          "Invalid Request",
+          "Send between 1 and 4000 characters.",
+        ),
+      ),
+      keyboard([[btn("Try Again", "support:menu", "primary")]]),
+    );
+    return;
+  }
+  const now = Date.now();
+  const ticketId = randomUUID();
+  await createSupportTicket({
+    ticketId,
+    workspaceId: pending.workspaceId,
+    requesterTelegramUserId: actorId,
+    message: text,
+    status: "open",
+    createdAt: now,
+    updatedAt: now,
+  });
+  recordAudit({
+    workspaceId: pending.workspaceId,
+    actorTelegramUserId: actorId,
+    action: "support.ticket.create",
+    success: true,
+    metadata: { ticketId },
+  });
+  await edit(
+    ctx,
+    pageText(
+      "Support Inbox",
+      successResponse(
+        "Request Stored",
+        `<b>Ticket:</b> <code>${ticketId}</code>\nThe owner can review it from Admin Panel → Support Inbox.`,
+      ),
+    ),
+    keyboard([[btn("‹ Dashboard", "menu:main")]]),
+  );
+}
+
+async function showAdminSupport(ctx: Context): Promise<void> {
+  const workspaceId = resolveTelegramUser(ctx).workspaceId;
+  const tickets = await listSupportTickets(workspaceId);
+  const body = tickets.length
+    ? tickets
+        .map(
+          (ticket) =>
+            `<b>${ticket.status === "open" ? "🟡" : ticket.status === "answered" ? "✅" : "⛔"} ${escapeHtml(ticket.ticketId.slice(0, 8))}</b> · ${escapeHtml(ticket.status)}\n<i>${new Date(ticket.updatedAt).toLocaleString()}</i>\n${escapeHtml(ticket.message.slice(0, 500))}${ticket.lastReply ? `\n↳ <i>${escapeHtml(ticket.lastReply.slice(0, 300))}</i>` : ""}`,
+        )
+        .join("\n\n")
+    : "No support tickets are currently stored.";
+  const rows = tickets.flatMap((ticket) => {
+    const controls =
+      ticket.status === "closed"
+        ? []
+        : [
+            btn("↩ Reply", `admin:support:reply:${ticket.ticketId}`, "success"),
+            btn("Close", `admin:support:close:${ticket.ticketId}`, "danger"),
+          ];
+    return controls.length ? [controls] : [];
+  });
+  rows.push(
+    [btn("↻ Refresh", "admin:support", "primary")],
+    [btn(ui.back, "admin:panel")],
+  );
+  await edit(
+    ctx,
+    pageText("Admin · Support Inbox", infoResponse("Workspace Tickets", body)),
+    keyboard(rows),
+  );
+}
+
+async function handleSupportReply(
+  ctx: Context,
+  ticketId: string,
+  text: string,
+): Promise<void> {
+  const actorId = String(ctx.from?.id ?? "");
+  pendingSupportReply.delete(actorId);
+  const workspaceId = resolveTelegramUser(ctx).workspaceId;
+  const ticket = (await listSupportTickets(workspaceId)).find(
+    (item) => item.ticketId === ticketId,
+  );
+  if (!ticket) return showAdminSupport(ctx);
+  if (!text || text.length > 4000) {
+    await edit(
+      ctx,
+      pageText(
+        "Support Inbox · Reply",
+        dangerResponse("Invalid Reply", "Send between 1 and 4000 characters."),
+      ),
+      keyboard([
+        [btn("Try Again", `admin:support:reply:${ticketId}`, "primary")],
+      ]),
+    );
+    return;
+  }
+  let routed = false;
+  let routeError = "";
+  if (ticket.sessionId && ticket.senderJid) {
+    try {
+      await sendDirectText(
+        workspaceId,
+        ticket.sessionId,
+        ticket.senderJid,
+        text,
+      );
+      routed = true;
+    } catch (error) {
+      routeError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  await updateSupportTicket(ticketId, {
+    status: routed ? "answered" : "open",
+    lastReply: text,
+  });
+  recordAudit({
+    workspaceId,
+    actorTelegramUserId: actorId,
+    action: "support.ticket.reply",
+    success: routed,
+    metadata: { ticketId, routed, routeError: routeError.slice(0, 160) },
+  });
+  await edit(
+    ctx,
+    pageText(
+      "Admin · Support Inbox",
+      routed
+        ? successResponse(
+            "Reply Delivered",
+            "The response was sent to the WhatsApp sender.",
+          )
+        : infoResponse(
+            "Reply Saved",
+            `The reply is stored, but this ticket has no routable WhatsApp session/sender metadata.${routeError ? `\n<code>${escapeHtml(routeError.slice(0, 200))}</code>` : ""}`,
+          ),
+    ),
+    keyboard([[btn("‹ Support Inbox", "admin:support")]]),
+  );
 }
 
 async function handleAdminBroadcastDraft(

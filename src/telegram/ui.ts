@@ -602,7 +602,11 @@ export function adminKeyboard(): InlineKeyboardMarkup {
       btn("◷ Global Jobs", "admin:jobs"),
       btn("▤ Master Bucket", "admin:bucket"),
     ],
-    [btn("▥ Broadcast", "admin:broadcast"), btn("▤ Audit Log", "admin:audit")],
+    [
+      btn("▥ Broadcast", "admin:broadcast"),
+      btn("◌ Support Inbox", "admin:support"),
+    ],
+    [btn("▤ Audit Log", "admin:audit")],
     [btn("⚠ Emergency Mode", "admin:safe", "danger")],
     [btn(ui.back, "menu:main")],
   ]);

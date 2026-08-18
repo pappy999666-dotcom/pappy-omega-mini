@@ -93,6 +93,17 @@ export async function listGroups(
   }));
 }
 
+export async function sendDirectText(
+  workspaceId: string,
+  sessionId: string,
+  jid: string,
+  text: string,
+): Promise<void> {
+  const send = method(socketFor(workspaceId, sessionId), "sendMessage");
+  if (!send) throw new Error("Unsupported capability: sendMessage");
+  await send(jid, { text });
+}
+
 export async function sendGroupText(
   workspaceId: string,
   sessionId: string,

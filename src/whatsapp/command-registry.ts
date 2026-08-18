@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { WhatsAppSession } from "../types/domain.js";
 import {
   getSession,
@@ -6,6 +7,7 @@ import {
   updateWorkspaceSudo,
 } from "../core/session-registry.js";
 import { buildSessionMenu, renderAsciiMenu } from "../menus/menu-model.js";
+import { createSupportTicket } from "../persistence/mongo.js";
 import {
   listGroups,
   updateProfileBio,
@@ -16,6 +18,7 @@ export interface CommandContext {
   workspaceId: string;
   sessionId: string;
   isOwner: boolean;
+  senderJid?: string;
   args: string[];
   enqueueJob?: (input: {
     kind: "allstatus" | "allchat" | "tag";
@@ -38,6 +41,28 @@ function session(ctx: CommandContext): WhatsAppSession {
 
 export function createCommandRegistry(): RegisteredCommand[] {
   return [
+    {
+      name: "support",
+      aliases: ["helpdesk", "ticket"],
+      description: "Create a support ticket for this WhatsApp sender.",
+      run: async (ctx) => {
+        const message = ctx.args.join(" ").trim();
+        if (!message) return "Usage: .support <describe your issue>.";
+        const now = Date.now();
+        const ticketId = randomUUID();
+        await createSupportTicket({
+          ticketId,
+          workspaceId: ctx.workspaceId,
+          sessionId: ctx.sessionId,
+          ...(ctx.senderJid ? { senderJid: ctx.senderJid } : {}),
+          message: message.slice(0, 4000),
+          status: "open",
+          createdAt: now,
+          updatedAt: now,
+        });
+        return `Support ticket opened: ${ticketId}. An owner can review it from the Support Inbox.`;
+      },
+    },
     {
       name: "ping",
       aliases: [],

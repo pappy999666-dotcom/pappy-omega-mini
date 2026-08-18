@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  adminKeyboard,
   adminJobsKeyboard,
   adminJobsText,
   adminForceJoinKeyboard,
@@ -85,6 +86,14 @@ describe("Telegram UI authorization", () => {
     );
     expect(JSON.stringify(adminForceJoinKeyboard(targets))).toContain(
       "admin:forcejoin:toggle:target-1",
+    );
+  });
+
+  it("keeps Support Inbox inside the Admin Control Plane", () => {
+    const admin = JSON.stringify(adminKeyboard());
+    expect(admin).toContain("admin:support");
+    expect(JSON.stringify(dashboardKeyboard(false))).not.toContain(
+      "admin:support",
     );
   });
 
