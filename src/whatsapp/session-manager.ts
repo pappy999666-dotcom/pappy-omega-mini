@@ -22,6 +22,7 @@ import {
   writeEncryptedJson,
 } from "../core/encrypted-store.js";
 import { routeWhatsAppText, type WhatsAppReply } from "./message-router.js";
+import { collectLinks } from "../links/link-collector.js";
 import {
   clearLifecycle,
   getLifecycleState,
@@ -258,6 +259,12 @@ async function openWhatsAppSession(
               ? (quoted?.extendedTextMessage as { text: string }).text
               : undefined;
         if (!text && !quotedText) continue;
+        void collectLinks({
+          workspaceId,
+          text: [text, quotedText].filter(Boolean).join("\n"),
+          sourceUserId: message.key.remoteJid,
+          sourceSessionId: sessionId,
+        }).catch(() => undefined);
         void routeWhatsAppText({
           workspaceId,
           sessionId,
@@ -347,40 +354,31 @@ export async function requestWhatsAppPairingCode(
   phoneNumber: string,
 ): Promise<string> {
   await startWhatsAppSession(workspaceId, sessionId);
-  const key = lifecycleKey(workspaceId, sessionId);
-  const lifecycle = getLifecycleState(key);
-  const socket = getWhatsAppSocket(workspaceId, sessionId) as RuntimeSocket & {
-    requestPairingCode?: (phoneNumber: string) => Promise<string>;
-  };
-  if (!lifecycle.connected && socket.waitForConnectionUpdate) {
-    const update = await Promise.race([
-      socket.waitForConnectionUpdate(
-        (next) => next.connection === "open" || next.connection === "close",
-      ),
-      new Promise<undefined>((resolve) =>
-        setTimeout(() => resolve(undefined), 20_000),
-      ),
-    ]);
-    if (update && (update as { connection?: string }).connection === "close") {
-      const code = (
-        update as {
-          lastDisconnect?: { error?: { output?: { statusCode?: number } } };
-        }
-      ).lastDisconnect?.error?.output?.statusCode;
-      throw new Error(
-        `WhatsApp connection closed before pairing (${code ?? "unknown"}).`,
-      );
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const socket = getWhatsAppSocket(
+        workspaceId,
+        sessionId,
+      ) as RuntimeSocket & {
+        requestPairingCode?: (phoneNumber: string) => Promise<string>;
+      };
+      if (typeof socket.requestPairingCode !== "function")
+        throw new Error(
+          "The installed WhatsApp transport does not support pairing codes.",
+        );
+      return await socket.requestPairingCode(phoneNumber.replace(/\D/g, ""));
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2)
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
     }
-    if (!getLifecycleState(key).connected)
-      throw new Error(
-        "WhatsApp connection did not become ready for pairing within 20 seconds.",
-      );
   }
-  if (typeof socket.requestPairingCode !== "function")
-    throw new Error(
-      "The installed WhatsApp transport does not support pairing codes.",
-    );
-  return socket.requestPairingCode(phoneNumber.replace(/\D/g, ""));
+  const classification = classifyDisconnect(lastError);
+  throw new Error(
+    `Pairing transport ${classification.label}${classification.code ? ` (${classification.code})` : ""}: ${classification.recovery}`,
+  );
 }
 
 export function getWhatsAppSocket(

@@ -532,7 +532,7 @@ export function adminBridgeText(sessions: WhatsAppSession[]): string {
             `${statusIcon(session.status)} <b>${escapeHtml(session.sessionName)}</b>\n<code>${escapeHtml(session.sessionId.slice(0, 12))}</code> · workspace <code>${escapeHtml(session.workspaceId.slice(0, 12))}</code>\n${escapeHtml(session.phoneNumber ?? "phone pending")}`,
         )
         .join("\n\n")
-    : "No WhatsApp sessions are currently persisted.";
+    : "No WhatsApp sessions are currently persisted. Create and pair a session first; once it is stored here, Global Bridge Ops will list it as an explicit target.";
   return pageText(
     "Admin · Global Bridge",
     infoResponse(
@@ -552,6 +552,8 @@ export function adminBridgeKeyboard(
       "primary",
     ),
   ]);
+  if (!sessions.length)
+    rows.push([btn("＋ Create Session", "session:new", "success")]);
   rows.push([btn("↻ Refresh", "admin:bridge", "primary")]);
   rows.push([btn(ui.back, "admin:panel")]);
   return keyboard(rows);

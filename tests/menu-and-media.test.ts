@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { extractUrls } from "../src/links/link-collector.js";
 import {
   createSession,
   resolveUser,
@@ -13,6 +14,16 @@ import {
 
 beforeEach(() => {
   // Tests use unique Telegram IDs/workspaces, so state remains tenant-safe without global resets.
+});
+
+describe("link intake", () => {
+  it("extracts multiple links without punctuation noise", () => {
+    expect(
+      extractUrls(
+        "one https://example.com/a, two https://chat.whatsapp.com/ABC123.",
+      ),
+    ).toEqual(["https://example.com/a", "https://chat.whatsapp.com/ABC123"]);
+  });
 });
 
 describe("shared session menu", () => {

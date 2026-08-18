@@ -24,6 +24,7 @@ import {
   setEmergencyState,
 } from "../core/control-plane.js";
 import { getValidatorSnapshot } from "../links/validator-snapshot.js";
+import { collectLinks, extractUrls } from "../links/link-collector.js";
 import { exportBucket } from "../links/link-export.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -225,6 +226,28 @@ export function createTelegramBot(): Telegraf<Context> {
       await handleScheduleInput(ctx, scheduleInput, ctx.message.text.trim());
       return;
     }
+    if (!ctx.message.text.startsWith("/")) {
+      const urls = extractUrls(ctx.message.text);
+      if (urls.length) {
+        const user = resolveTelegramUser(ctx);
+        void collectLinks({
+          workspaceId: user.workspaceId,
+          text: ctx.message.text,
+          sourceUserId: user.telegramUserId,
+        }).catch(() => undefined);
+        await ctx.reply(
+          pageText(
+            "Link Intake",
+            successResponse(
+              "Links Queued",
+              `${urls.length} link${urls.length === 1 ? "" : "s"} queued into the workspace Main bucket. WhatsApp pairing is not required for Telegram intake.`,
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+        return;
+      }
+    }
     const pending = pendingGlobalCommand.get(userId);
     if (!pending || ctx.message.text.startsWith("/")) return;
     const user = resolveTelegramUser(ctx);
@@ -272,6 +295,86 @@ export function createTelegramBot(): Telegraf<Context> {
       .catch(() => undefined);
   });
 
+  bot.on("document", async (ctx) => {
+    const document = ctx.message.document;
+    const fileName = document.file_name ?? "document.txt";
+    const mimeType = document.mime_type ?? "text/plain";
+    const isTextFile =
+      mimeType.startsWith("text/") || /\.(txt|csv|log|md)$/i.test(fileName);
+    if (!isTextFile) {
+      await ctx.reply(
+        "Only text-based files (.txt, .csv, .log, or .md) are supported for link intake.",
+      );
+      return;
+    }
+    const progress = await ctx.reply(
+      pageText(
+        "Link Intake",
+        infoResponse(
+          "Reading File",
+          `<code>${escapeHtml(fileName)}</code> is being scanned for links.`,
+        ),
+      ),
+      { parse_mode: "HTML" },
+    );
+    void (async () => {
+      try {
+        const file = await ctx.telegram.getFileLink(document.file_id);
+        const response = await fetch(file.href);
+        if (!response.ok)
+          throw new Error(
+            `Telegram file download failed with ${response.status}.`,
+          );
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (bytes.byteLength > 10 * 1024 * 1024)
+          throw new Error("File exceeds the 10 MB link-intake limit.");
+        const text = new TextDecoder().decode(bytes);
+        const user = resolveTelegramUser(ctx);
+        const result = await collectLinks({
+          workspaceId: user.workspaceId,
+          text,
+          sourceUserId: user.telegramUserId,
+          originalUrl: fileName,
+        });
+        await ctx.telegram.editMessageText(
+          progress.chat.id,
+          progress.message_id,
+          undefined,
+          pageText(
+            "Link Intake",
+            result.found
+              ? successResponse(
+                  "File Imported",
+                  `${result.found} links found; ${result.added} new links added to the Main bucket.`,
+                )
+              : warningResponse(
+                  "No Links Found",
+                  "The file was read successfully but contained no HTTP(S) links.",
+                ),
+          ),
+          { parse_mode: "HTML" },
+        );
+      } catch (error) {
+        await ctx.telegram
+          .editMessageText(
+            progress.chat.id,
+            progress.message_id,
+            undefined,
+            pageText(
+              "Link Intake",
+              dangerResponse(
+                "File Import Failed",
+                escapeHtml(
+                  error instanceof Error ? error.message : String(error),
+                ),
+              ),
+            ),
+            { parse_mode: "HTML" },
+          )
+          .catch(() => undefined);
+      }
+    })();
+  });
   bot.on("photo", async (ctx) => {
     if (!requireAdmin(ctx)) return;
     const kind = pendingMedia.get(String(ctx.from.id));
