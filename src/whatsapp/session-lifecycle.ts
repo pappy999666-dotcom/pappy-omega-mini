@@ -2,6 +2,7 @@ import { updateSession } from "../core/session-registry.js";
 
 export interface SessionLifecycleState {
   reconnectAttempt: number;
+  connected: boolean;
   reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   stopping: boolean;
@@ -19,6 +20,7 @@ export function getLifecycleState(key: string): SessionLifecycleState {
   if (existing) return existing;
   const created: SessionLifecycleState = {
     reconnectAttempt: 0,
+    connected: false,
     reconnectTimer: undefined,
     heartbeatTimer: undefined,
     stopping: false,
@@ -44,6 +46,7 @@ export function markOpening(key: string): void {
 
 export function markConnected(key: string): void {
   const state = getLifecycleState(key);
+  state.connected = true;
   state.reconnectAttempt = 0;
   if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
   state.reconnectTimer = undefined;
@@ -60,6 +63,7 @@ export function markStopping(key: string): void {
 
 export function markClosed(key: string): void {
   const state = getLifecycleState(key);
+  state.connected = false;
   if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
   state.heartbeatTimer = undefined;
 }

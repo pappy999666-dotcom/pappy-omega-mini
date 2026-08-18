@@ -40,6 +40,12 @@ interface RuntimeEvents {
 interface RuntimeSocket extends WASocket {
   ev: RuntimeEvents;
   end: (error?: unknown) => void;
+  waitForConnectionUpdate?: (
+    predicate: (update: {
+      connection?: string;
+      lastDisconnect?: { error?: { output?: { statusCode?: number } } };
+    }) => boolean,
+  ) => Promise<unknown>;
 }
 
 interface RuntimeSession {
@@ -240,9 +246,35 @@ export async function requestWhatsAppPairingCode(
   phoneNumber: string,
 ): Promise<string> {
   await startWhatsAppSession(workspaceId, sessionId);
-  const socket = getWhatsAppSocket(workspaceId, sessionId) as WASocket & {
+  const key = lifecycleKey(workspaceId, sessionId);
+  const lifecycle = getLifecycleState(key);
+  const socket = getWhatsAppSocket(workspaceId, sessionId) as RuntimeSocket & {
     requestPairingCode?: (phoneNumber: string) => Promise<string>;
   };
+  if (!lifecycle.connected && socket.waitForConnectionUpdate) {
+    const update = await Promise.race([
+      socket.waitForConnectionUpdate(
+        (next) => next.connection === "open" || next.connection === "close",
+      ),
+      new Promise<undefined>((resolve) =>
+        setTimeout(() => resolve(undefined), 20_000),
+      ),
+    ]);
+    if (update && (update as { connection?: string }).connection === "close") {
+      const code = (
+        update as {
+          lastDisconnect?: { error?: { output?: { statusCode?: number } } };
+        }
+      ).lastDisconnect?.error?.output?.statusCode;
+      throw new Error(
+        `WhatsApp connection closed before pairing (${code ?? "unknown"}).`,
+      );
+    }
+    if (!getLifecycleState(key).connected)
+      throw new Error(
+        "WhatsApp connection did not become ready for pairing within 20 seconds.",
+      );
+  }
   if (typeof socket.requestPairingCode !== "function")
     throw new Error(
       "The installed WhatsApp transport does not support pairing codes.",
