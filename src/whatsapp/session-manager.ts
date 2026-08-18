@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import makeWASocket, {
   makeCacheManagerAuthState,
@@ -6,7 +6,11 @@ import makeWASocket, {
   type WASocket,
 } from "@crysnovax/baileys";
 import { env } from "../config/env.js";
-import { getSession, updateSession } from "../core/session-registry.js";
+import {
+  deleteSession,
+  getSession,
+  updateSession,
+} from "../core/session-registry.js";
 import {
   acquireSessionLock,
   closeSessionLockRedis,
@@ -55,7 +59,105 @@ interface RuntimeSession {
 
 const runtimes = new Map<string, RuntimeSession>();
 const sessionLocks = new Map<string, SessionLock>();
-const terminalDisconnectCodes = new Set([401, 403]);
+export interface DisconnectClassification {
+  code?: number;
+  label: string;
+  terminal: boolean;
+  status: "LOGGED_OUT" | "ERROR" | "DEGRADED" | "RECONNECTING";
+  recovery: string;
+}
+
+export function classifyDisconnect(error: unknown): DisconnectClassification {
+  const candidate = error as {
+    output?: { statusCode?: unknown };
+    statusCode?: unknown;
+    data?: { statusCode?: unknown };
+  };
+  const rawCode =
+    candidate?.output?.statusCode ??
+    candidate?.statusCode ??
+    candidate?.data?.statusCode;
+  const code = typeof rawCode === "number" ? rawCode : undefined;
+  const known: Record<number, Omit<DisconnectClassification, "code">> = {
+    401: {
+      label: "logged-out",
+      terminal: true,
+      status: "LOGGED_OUT",
+      recovery:
+        "Pair this session again or purge it before creating a replacement.",
+    },
+    403: {
+      label: "forbidden",
+      terminal: true,
+      status: "LOGGED_OUT",
+      recovery:
+        "WhatsApp rejected this authentication. Purge the session and pair again.",
+    },
+    405: {
+      label: "device-mismatch",
+      terminal: true,
+      status: "ERROR",
+      recovery:
+        "This device session is incompatible. Purge the session and pair again.",
+    },
+    408: {
+      label: "connection-closed",
+      terminal: false,
+      status: "DEGRADED",
+      recovery: "The worker will retry with backoff.",
+    },
+    411: {
+      label: "connection-lost",
+      terminal: false,
+      status: "DEGRADED",
+      recovery: "The worker will retry with backoff.",
+    },
+    428: {
+      label: "timed-out",
+      terminal: false,
+      status: "DEGRADED",
+      recovery: "The worker will retry with backoff.",
+    },
+    440: {
+      label: "connection-replaced",
+      terminal: true,
+      status: "ERROR",
+      recovery:
+        "Another WhatsApp Web session replaced this one. Purge and pair again if this is unintended.",
+    },
+    500: {
+      label: "bad-session",
+      terminal: true,
+      status: "ERROR",
+      recovery:
+        "The saved authentication is invalid. Purge the session and pair again.",
+    },
+    503: {
+      label: "service-unavailable",
+      terminal: false,
+      status: "DEGRADED",
+      recovery: "WhatsApp is temporarily unavailable; the worker will retry.",
+    },
+    515: {
+      label: "restart-required",
+      terminal: false,
+      status: "RECONNECTING",
+      recovery:
+        "WhatsApp requested a transport restart; the worker will retry.",
+    },
+  };
+  const fallback = {
+    label: "unknown-transport",
+    terminal: false,
+    status: "DEGRADED" as const,
+    recovery:
+      "The worker will retry with backoff; inspect the diagnostic reason if it persists.",
+  };
+  return {
+    ...(code !== undefined ? { code } : {}),
+    ...(code !== undefined && known[code] ? known[code] : fallback),
+  };
+}
 
 class FileAuthStore implements CacheManagerStore {
   constructor(private readonly root: string) {}
@@ -200,18 +302,17 @@ async function openWhatsAppSession(
         return;
       }
       if (update.connection !== "close") return;
-      const code = update.lastDisconnect?.error?.output?.statusCode;
-      const terminal = Boolean(code && terminalDisconnectCodes.has(code));
+      const classification = classifyDisconnect(update.lastDisconnect?.error);
+      const code = classification.code;
+      const terminal = classification.terminal;
       markClosed(key);
       runtimes.delete(key);
       const ownedLock = sessionLocks.get(key);
       sessionLocks.delete(key);
       void ownedLock?.release();
       updateSession(workspaceId, sessionId, {
-        status: terminal ? "LOGGED_OUT" : "DEGRADED",
-        ...(code
-          ? { disconnectReason: `transport:${code}` }
-          : { disconnectReason: "connection closed" }),
+        status: classification.status,
+        disconnectReason: `transport:${code ?? "unknown"} · ${classification.label}. ${classification.recovery}`,
       });
       if (!terminal && !getLifecycleState(key).stopping) {
         scheduleReconnect({
@@ -290,6 +391,20 @@ export function getWhatsAppSocket(
   const runtime = runtimes.get(lifecycleKey(workspaceId, sessionId));
   if (!runtime) throw new Error("WhatsApp session is not connected.");
   return runtime.socket;
+}
+
+export async function purgeWhatsAppSession(
+  workspaceId: string,
+  sessionId: string,
+): Promise<void> {
+  getSession(workspaceId, sessionId);
+  stopWhatsAppSession(workspaceId, sessionId);
+  await rm(join(env.SESSION_ROOT, workspaceId, sessionId), {
+    recursive: true,
+    force: true,
+  });
+  resetWhatsAppSessionLifecycle(workspaceId, sessionId);
+  await deleteSession(workspaceId, sessionId);
 }
 
 export function stopWhatsAppSession(

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { User, WhatsAppSession, Workspace } from "../types/domain.js";
 import {
   hydrateRegistry,
+  deletePersistedSession,
   persistSession,
   persistUser,
   persistWorkspace,
@@ -100,6 +101,15 @@ export function getSession(
   if (!session || session.workspaceId !== workspaceId)
     throw new Error("Session is not owned by this workspace.");
   return session;
+}
+
+export async function deleteSession(
+  workspaceId: string,
+  sessionId: string,
+): Promise<void> {
+  getSession(workspaceId, sessionId);
+  sessions.delete(sessionId);
+  await deletePersistedSession(sessionId);
 }
 
 export function updateSession(

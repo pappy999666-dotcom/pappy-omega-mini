@@ -7,6 +7,7 @@ import {
   setEmergencyState,
 } from "../src/core/control-plane.js";
 import { createSafeError, renderSafeError } from "../src/core/errors.js";
+import { classifyDisconnect } from "../src/whatsapp/session-manager.js";
 
 describe("V2 hardening", () => {
   it("encrypts and decrypts auth-state values", () => {
@@ -24,6 +25,25 @@ describe("V2 hardening", () => {
     expect(error.correlationId).toMatch(/[0-9a-f-]{20,}/);
     expect(renderSafeError(error)).toContain("Reference:");
     expect(renderSafeError(error)).not.toContain("private socket detail");
+  });
+
+  it("classifies all critical WhatsApp disconnect families with recovery guidance", () => {
+    expect(classifyDisconnect({ output: { statusCode: 401 } })).toMatchObject({
+      code: 401,
+      label: "logged-out",
+      terminal: true,
+      status: "LOGGED_OUT",
+    });
+    expect(classifyDisconnect({ output: { statusCode: 503 } })).toMatchObject({
+      code: 503,
+      label: "service-unavailable",
+      terminal: false,
+      status: "DEGRADED",
+    });
+    expect(classifyDisconnect(new Error("unknown"))).toMatchObject({
+      label: "unknown-transport",
+      terminal: false,
+    });
   });
 
   it("records workspace-scoped audit events and emergency blocking", () => {

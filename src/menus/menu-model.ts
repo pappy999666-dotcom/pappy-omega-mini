@@ -87,6 +87,13 @@ export function buildSessionMenu(
       command: "health",
       description: "View reconnect and queue health.",
     },
+    {
+      id: "purge",
+      label: "Purge Session",
+      command: "purge",
+      description:
+        "Stop this session and permanently remove its encrypted auth state.",
+    },
   ];
 
   return {

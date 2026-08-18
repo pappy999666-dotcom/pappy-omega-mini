@@ -565,6 +565,11 @@ export async function setUserStatus(
   return result.matchedCount > 0;
 }
 
+export async function deletePersistedSession(sessionId: string): Promise<void> {
+  await connectMongo();
+  await sessionModel().deleteOne({ sessionId }).exec();
+}
+
 export async function persistSession(session: WhatsAppSession): Promise<void> {
   await connectMongo();
   await sessionModel().replaceOne({ sessionId: session.sessionId }, session, {

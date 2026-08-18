@@ -149,10 +149,10 @@ describe("Telegram UI authorization", () => {
     expect(on).toContain("bucket:live:off");
   });
 
-  it("keeps the per-session sudo action owner-only", () => {
-    expect(
-      callbackData(sessionKeyboard(session, false)).join(" "),
-    ).not.toContain("session:session-1:action:sudo");
+  it("keeps the per-session sudo action owner-only and exposes purge to users", () => {
+    const userSession = callbackData(sessionKeyboard(session, false)).join(" ");
+    expect(userSession).not.toContain("session:session-1:action:sudo");
+    expect(userSession).toContain("session:session-1:action:purge");
     expect(callbackData(sessionKeyboard(session, true)).join(" ")).toContain(
       "session:session-1:action:sudo",
     );

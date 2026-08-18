@@ -44,7 +44,10 @@ import {
   upsertForceJoinTarget,
   type ForceJoinTargetRecord,
 } from "../persistence/mongo.js";
-import { requestWhatsAppPairingCode } from "../whatsapp/session-manager.js";
+import {
+  purgeWhatsAppSession,
+  requestWhatsAppPairingCode,
+} from "../whatsapp/session-manager.js";
 import { listGroups, sendDirectText } from "../whatsapp/transport-adapter.js";
 import {
   createCommandRegistry,
@@ -403,6 +406,58 @@ export function createTelegramBot(): Telegraf<Context> {
       sessionKeyboard(session, isAdmin(ctx)),
     );
   });
+  bot.action(/^session:([^:]+):purge:confirm$/, async (ctx) => {
+    await ctx.answerCbQuery("Purging session…");
+    const session = ownedSession(ctx, ctx.match[1] ?? "");
+    if (!session) return deny(ctx);
+    const user = resolveTelegramUser(ctx);
+    try {
+      await purgeWhatsAppSession(user.workspaceId, session.sessionId);
+      await recordAudit({
+        workspaceId: user.workspaceId,
+        actorTelegramUserId: String(ctx.from?.id ?? ""),
+        action: "session.purge",
+        success: true,
+        metadata: {
+          sessionId: session.sessionId,
+          sessionName: session.sessionName,
+        },
+      });
+      await edit(
+        ctx,
+        pageText(
+          "Session Purged",
+          successResponse(
+            "Encrypted Auth Removed",
+            `Session <b>${escapeHtml(session.sessionName)}</b> was stopped and permanently purged. You can create a new session from Sessions.`,
+          ),
+        ),
+        keyboard([[btn("‹ Sessions", "sessions:list:0", "success")]]),
+      );
+    } catch (error) {
+      await recordAudit({
+        workspaceId: user.workspaceId,
+        actorTelegramUserId: String(ctx.from?.id ?? ""),
+        action: "session.purge",
+        success: false,
+        metadata: {
+          sessionId: session.sessionId,
+          error: String(error).slice(0, 240),
+        },
+      });
+      await edit(
+        ctx,
+        pageText(
+          "Purge Failed",
+          dangerResponse(
+            "Session Not Purged",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        keyboard([[btn("‹ Session", `session:${session.sessionId}:menu`)]]),
+      );
+    }
+  });
   bot.action(/^session:([^:]+):action:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const session = ownedSession(ctx, ctx.match[1] ?? "");
@@ -413,6 +468,27 @@ export function createTelegramBot(): Telegraf<Context> {
     if (action === "join") return showJoinManager(ctx, session.sessionId);
     if (action === "groups") return showSessionGroups(ctx, session.sessionId);
     if (action === "health") return showSessionHealth(ctx, session.sessionId);
+    if (action === "purge")
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Purge Session`,
+          dangerResponse(
+            "Permanent Session Removal",
+            "This stops the WhatsApp connection, deletes this session’s encrypted authentication files, removes its durable record, and cannot be undone. Your other sessions are unaffected.",
+          ),
+        ),
+        keyboard([
+          [
+            btn(
+              "⚠ Confirm Purge Session",
+              `session:${session.sessionId}:purge:confirm`,
+              "danger",
+            ),
+          ],
+          [btn("Cancel", `session:${session.sessionId}:menu`)],
+        ]),
+      );
     await edit(
       ctx,
       pageText(

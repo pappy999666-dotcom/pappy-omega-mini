@@ -185,7 +185,7 @@ export function sessionKeyboard(
           btn(
             `${action.label}`,
             `session:${session.sessionId}:action:${action.id}`,
-            action.id === "gpp" ? "danger" : "primary",
+            ["gpp", "purge"].includes(action.id) ? "danger" : "primary",
           ),
         ),
     );
