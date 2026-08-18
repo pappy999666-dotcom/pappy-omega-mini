@@ -42,6 +42,7 @@ import {
   type ForceJoinTargetRecord,
 } from "../persistence/mongo.js";
 import { requestWhatsAppPairingCode } from "../whatsapp/session-manager.js";
+import { listGroups } from "../whatsapp/transport-adapter.js";
 import {
   createCommandRegistry,
   executeCommand,
@@ -391,12 +392,7 @@ export function createTelegramBot(): Telegraf<Context> {
     if (action === "sudo" && !isAdmin(ctx)) return deny(ctx);
     if (action === "bridge") return showSessionBridge(ctx, session.sessionId);
     if (action === "join") return showJoinManager(ctx, session.sessionId);
-    if (action === "groups")
-      return showFeature(
-        ctx,
-        "Groups",
-        "This session’s group inventory is isolated to the selected WhatsApp session. Use <code>.groups</code> or refresh after pairing.",
-      );
+    if (action === "groups") return showSessionGroups(ctx, session.sessionId);
     await edit(
       ctx,
       pageText(
@@ -1536,6 +1532,57 @@ async function handleForceJoinAdminInput(
     },
   });
   await showAdminForceJoin(ctx);
+}
+
+async function showSessionGroups(
+  ctx: Context,
+  sessionId: string,
+): Promise<void> {
+  const session = ownedSession(ctx, sessionId);
+  if (!session) return deny(ctx);
+  try {
+    const groups = await listGroups(session.workspaceId, session.sessionId);
+    const body = groups.length
+      ? groups
+          .map(
+            (group, index) =>
+              `<b>${index + 1}. ${escapeHtml(group.subject)}</b>\n<code>${escapeHtml(group.jid)}</code> · ${group.participantCount} participants`,
+          )
+          .join("\n\n")
+      : "No groups were returned by the connected WhatsApp session.";
+    await edit(
+      ctx,
+      pageText(
+        `${session.sessionName} · Groups`,
+        infoResponse(
+          "Live Group Inventory",
+          `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Groups:</b> ${groups.length}\n\n${body}`,
+        ),
+      ),
+      keyboard([
+        [
+          btn(
+            "↻ Refresh Groups",
+            `session:${session.sessionId}:action:groups`,
+            "primary",
+          ),
+        ],
+        [btn("‹ Session", `session:${session.sessionId}:menu`)],
+      ]),
+    );
+  } catch (error) {
+    await edit(
+      ctx,
+      pageText(
+        `${session.sessionName} · Groups`,
+        dangerResponse(
+          "Group Inventory Unavailable",
+          escapeHtml(error instanceof Error ? error.message : String(error)),
+        ),
+      ),
+      keyboard([[btn("‹ Session", `session:${session.sessionId}:menu`)]]),
+    );
+  }
 }
 
 async function showSchedulePanel(ctx: Context): Promise<void> {
