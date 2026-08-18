@@ -3,6 +3,7 @@ import { env, assertProductionSecrets } from "./config/env.js";
 import { createTelegramBot } from "./telegram/bot.js";
 import { shutdownWhatsAppSessions } from "./whatsapp/session-manager.js";
 import { startWorkerRuntime } from "./jobs/runtime.js";
+import { closeMongo, ensureMongoIndexes } from "./persistence/mongo.js";
 import type { JobOrchestrator } from "./jobs/job-orchestrator.js";
 
 async function main(): Promise<void> {
@@ -20,6 +21,7 @@ async function main(): Promise<void> {
     return;
   }
 
+  await ensureMongoIndexes();
   const bot = createTelegramBot();
   let workers: JobOrchestrator | undefined;
   if (env.TELEGRAM_BOT_TOKEN) workers = startWorkerRuntime();
@@ -34,6 +36,7 @@ async function main(): Promise<void> {
     bot.stop(signal);
     await workers?.close();
     shutdownWhatsAppSessions();
+    await closeMongo();
     console.log("[pappy-omega-mini] transports closed; shutdown complete.");
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));

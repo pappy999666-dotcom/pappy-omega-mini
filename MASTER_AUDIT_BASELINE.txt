@@ -1,0 +1,174 @@
+=== FILE INVENTORY ===
+src/admin/media-actions.ts
+src/config/env.ts
+src/core/control-plane.ts
+src/core/encrypted-store.ts
+src/core/errors.ts
+src/core/session-registry.ts
+src/core/workspace-settings.ts
+src/doctor.ts
+src/index.ts
+src/jobs/bounded-batch.ts
+src/jobs/job-contracts.ts
+src/jobs/job-orchestrator.ts
+src/jobs/runtime.ts
+src/links/link-bucket-store.ts
+src/links/validator-snapshot.ts
+src/media/menu-media-store.ts
+src/menus/menu-model.ts
+src/menus/renderers.ts
+src/menus/whatsapp-menu.ts
+src/preview/preview-manager.ts
+src/telegram/bot.ts
+src/telegram/renderer.ts
+src/telegram/ui.ts
+src/types/domain.ts
+src/types/v2.ts
+src/whatsapp/command-registry.ts
+src/whatsapp/message-router.ts
+src/whatsapp/session-lifecycle.ts
+src/whatsapp/session-manager.ts
+=== ADMIN CALLBACKS ===
+src/telegram/bot.ts:745:  bot.action("admin:panel", async (ctx) => {
+src/telegram/bot.ts:754:          "Platform-wide operations, media management, audit, force-join, emergency mode, and global operations are restricted to the owner.",
+src/telegram/bot.ts:760:  bot.action("admin:home", async (ctx) => {
+src/telegram/bot.ts:769:          "Platform-wide operations are restricted to the owner.",
+src/telegram/bot.ts:775:  bot.action("admin:media", async (ctx) => {
+src/telegram/bot.ts:780:  bot.action("admin:jobs", async (ctx) => {
+src/telegram/bot.ts:785:  bot.action("admin:jobs:refresh", async (ctx) => {
+src/telegram/bot.ts:790:  bot.action(/^admin:jobs:cancel:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:805:  bot.action(/^admin:media:add:(image|video)$/, async (ctx) => {
+src/telegram/bot.ts:821:      keyboard([[btn(ui.back, "admin:media")]]),
+src/telegram/bot.ts:824:  bot.action("admin:safe", async (ctx) => {
+src/telegram/bot.ts:862:            "admin:safe",
+src/telegram/bot.ts:866:        [btn(ui.back, "admin:panel")],
+src/telegram/bot.ts:870:  bot.action("admin:media:select", async (ctx) => {
+src/telegram/bot.ts:886:    "admin:forcejoin",
+src/telegram/bot.ts:887:    "admin:users",
+src/telegram/bot.ts:888:    "admin:bridge",
+src/telegram/bot.ts:889:    "admin:jobs",
+src/telegram/bot.ts:890:    "admin:bucket",
+src/telegram/bot.ts:891:    "admin:broadcast",
+src/telegram/bot.ts:892:    "admin:audit",
+src/telegram/bot.ts:893:    "admin:safe",
+src/telegram/bot.ts:903:            "Owner Verified",
+src/telegram/bot.ts:907:        keyboard([[btn(ui.back, "admin:panel")]]),
+src/telegram/ui.ts:66:  if (isAdmin) rows.push([btn("♛ Admin Panel", "admin:panel")]);
+src/telegram/ui.ts:91:  if (isAdmin) rows.push([btn("♛ Admin Panel", "admin:panel")]);
+src/telegram/ui.ts:360:    [btn("⚙ Force Join", "admin:forcejoin"), btn("◉ Users", "admin:users")],
+src/telegram/ui.ts:362:      btn("▣ Media", "admin:media"),
+src/telegram/ui.ts:363:      btn("🌉 Global Bridge Ops", "admin:bridge"),
+src/telegram/ui.ts:366:      btn("◷ Global Jobs", "admin:jobs"),
+src/telegram/ui.ts:367:      btn("▤ Master Bucket", "admin:bucket"),
+src/telegram/ui.ts:369:    [btn("▥ Broadcast", "admin:broadcast"), btn("▤ Audit Log", "admin:audit")],
+src/telegram/ui.ts:370:    [btn("⚠ Emergency Mode", "admin:safe", "danger")],
+src/telegram/ui.ts:426:        `admin:jobs:cancel:${job.jobId}`,
+src/telegram/ui.ts:430:  rows.push([btn("↻ Refresh Jobs", "admin:jobs:refresh", "primary")]);
+src/telegram/ui.ts:431:  rows.push([btn(ui.back, "admin:panel")]);
+src/telegram/ui.ts:438:      btn("＋ Add Image", "admin:media:add:image", "success"),
+src/telegram/ui.ts:439:      btn("＋ Add Video", "admin:media:add:video", "success"),
+src/telegram/ui.ts:441:    [btn("▣ Select WhatsApp Menu Media", "admin:media:select")],
+src/telegram/ui.ts:442:    [btn(ui.back, "admin:panel")],
+=== WHATSAPP COMMANDS ===
+src/whatsapp/command-registry.ts:27:      name: "ping",
+src/whatsapp/command-registry.ts:34:      name: "menu",
+src/whatsapp/command-registry.ts:41:      name: "profile",
+src/whatsapp/command-registry.ts:57:      name: "autojoin",
+src/whatsapp/command-registry.ts:76:      name: "setprefix",
+src/whatsapp/command-registry.ts:89:      name: "pfp",
+src/whatsapp/command-registry.ts:97:      name: "setgpp",
+src/whatsapp/command-registry.ts:105:      name: "setname",
+src/whatsapp/command-registry.ts:114:      name: "setbio",
+src/whatsapp/command-registry.ts:123:      name: "groups",
+src/whatsapp/command-registry.ts:130:      name: "health",
+src/whatsapp/command-registry.ts:137:      name: "setsudo",
+src/jobs/job-orchestrator.ts:120:  register(kind: JobKind, handler: WorkerHandler): void {
+src/jobs/runtime.ts:30:  orchestrator.register("link-validation", async (context) => {
+src/jobs/runtime.ts:61:  orchestrator.register("link-collection", async (context) => {
+src/jobs/runtime.ts:90:  orchestrator.register("join-manager", async (context) => {
+src/jobs/runtime.ts:163:  orchestrator.register("cleanup", async (context) => {
+=== PERSISTENCE ===
+src/config/env.ts:11:  MONGODB_URI: z.string().default("mongodb://127.0.0.1:27017/pappy_omega_mini"),
+src/core/session-registry.ts:9:const users = new Map<string, User>();
+src/core/session-registry.ts:10:const workspaces = new Map<string, Workspace>();
+src/core/session-registry.ts:11:const sessions = new Map<string, WhatsAppSession>();
+src/core/errors.ts:33:    userMessage: "This session is blocked and cannot reconnect automatically.",
+src/core/control-plane.ts:85:  const blocked =
+src/core/control-plane.ts:97:  if (emergency.enabled || blocked)
+src/core/control-plane.ts:98:    throw new Error(`Emergency safe mode blocks ${operation}.`);
+src/core/workspace-settings.ts:15:const settings = new Map<string, WorkspaceSettings>();
+src/media/menu-media-store.ts:16:const settings = new Map<string, MenuMediaSettings>();
+src/media/menu-media-store.ts:17:const catalog = new Map<string, MenuMedia>();
+src/telegram/bot.ts:65:const pendingMedia = new Map<string, "image" | "video">();
+src/telegram/bot.ts:66:const globalBridgeSelections = new Map<string, Set<string>>();
+src/telegram/bot.ts:68:const joinStates = new Map<string, "idle" | "running" | "paused" | "stopped">();
+src/telegram/bot.ts:69:const joinJobs = new Map<string, string>();
+src/telegram/bot.ts:70:const liveLoops = new Map<string, ReturnType<typeof setInterval>>();
+src/telegram/bot.ts:71:const validatorLiveStates = new Map<string, boolean>();
+src/telegram/bot.ts:72:const pendingPairing = new Map<
+src/telegram/bot.ts:81:const pendingGlobalCommand = new Map<
+src/telegram/bot.ts:399:          "</blockquote>",
+src/telegram/bot.ts:400:          "\n\n⚠️ Turn Fan-Out ON before sending a command.</blockquote>",
+src/telegram/bot.ts:415:        "</blockquote>",
+src/telegram/bot.ts:416:        "\n\n✍️ Send one WhatsApp command now, for example <code>ping</code> or <code>autojoin on</code>.</blockquote>",
+src/telegram/bot.ts:851:              "Mass sends, joins, broadcasts, scheduling, and pairing are blocked until Safe Mode is disabled.",
+src/telegram/ui.ts:484:  return `<b>${ui.brand}</b>\n${ui.divider}\n\n<b>${escapeHtml(title)}</b>\n\n<blockquote>${body}</blockquote>`;
+src/telegram/renderer.ts:16:export function renderTelegramBlockquote(
+src/telegram/renderer.ts:21:    /<\/?blockquote(?:\s+expandable)?>/gu,
+src/telegram/renderer.ts:24:  return `<blockquote${expandable ? " expandable" : ""}>${flattened || " "}</blockquote>`;
+src/telegram/renderer.ts:28:  return renderTelegramBlockquote(escapeHtml(normalizeTelegramNewlines(value)));
+src/telegram/renderer.ts:32:  return renderTelegramBlockquote(value);
+src/whatsapp/session-manager.ts:45:const runtimes = new Map<string, RuntimeSession>();
+src/whatsapp/session-lifecycle.ts:10:const states = new Map<string, SessionLifecycleState>();
+src/whatsapp/session-lifecycle.ts:11:const starts = new Map<string, Promise<void>>();
+src/doctor.ts:59:async function checkRedis(): Promise<CheckResult> {
+src/doctor.ts:61:    const { Redis } = await import("ioredis");
+src/doctor.ts:62:    const redis = new Redis(env.REDIS_URL, {
+src/doctor.ts:82:async function checkMongo(): Promise<CheckResult> {
+src/doctor.ts:88:    return { name: "mongodb", ok: true, detail: "ping succeeded" };
+src/doctor.ts:92:      name: "mongodb",
+src/doctor.ts:119:    await checkRedis(),
+src/doctor.ts:120:    await checkMongo(),
+src/jobs/job-orchestrator.ts:3:import { Redis } from "ioredis";
+src/jobs/job-orchestrator.ts:17:export class RedisJobStore {
+src/jobs/job-orchestrator.ts:18:  constructor(private readonly redis: Redis) {}
+src/jobs/job-orchestrator.ts:84:  private readonly redis: Redis;
+src/jobs/job-orchestrator.ts:85:  private readonly store: RedisJobStore;
+src/jobs/job-orchestrator.ts:87:  private readonly handlers = new Map<JobKind, WorkerHandler>();
+src/jobs/job-orchestrator.ts:92:    this.redis = new Redis(env.REDIS_URL, {
+src/jobs/job-orchestrator.ts:96:    this.store = new RedisJobStore(this.redis);
+src/jobs/runtime.ts:1:import { Redis } from "ioredis";
+src/jobs/runtime.ts:24:  const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
+src/links/link-bucket-store.ts:2:import { Redis } from "ioredis";
+src/links/link-bucket-store.ts:26:  constructor(private readonly redis: Redis) {}
+src/links/validator-snapshot.ts:1:import { Redis } from "ioredis";
+src/links/validator-snapshot.ts:18:  const redis = new Redis(env.REDIS_URL, {
+src/preview/preview-manager.ts:2:import { Redis } from "ioredis";
+src/preview/preview-manager.ts:5:  schemaVersion: 1;
+src/preview/preview-manager.ts:25:  private readonly failures = new Map<
+src/preview/preview-manager.ts:27:    { count: number; blockedUntil: number }
+src/preview/preview-manager.ts:32:    private readonly redis: Redis,
+src/preview/preview-manager.ts:43:    if (circuit && circuit.blockedUntil > Date.now())
+src/preview/preview-manager.ts:48:        schemaVersion: 1,
+src/preview/preview-manager.ts:71:      schemaVersion: 1,
+src/preview/preview-manager.ts:80:    const current = this.failures.get(host) ?? { count: 0, blockedUntil: 0 };
+src/preview/preview-manager.ts:83:    this.failures.set(host, { count, blockedUntil: Date.now() + cooldown });
+=== PLACEHOLDERS ===
+src/core/errors.ts:23:    userMessage: "The WhatsApp session is not ready yet.",
+src/core/errors.ts:55:    userMessage: "That media file is not supported or failed validation.",
+src/telegram/bot.ts:40:  featureText,
+src/telegram/bot.ts:322:          `The <code>${escapeHtml(action)}</code> action is scoped to this session. Continue with the guided input or use the matching WhatsApp shortcut.`,
+src/telegram/bot.ts:531:          `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Mode:</b> always-on collection into this workspace’s validation queue\n<b>Status:</b> ready for bounded collection`,
+src/telegram/bot.ts:954:        `<b>${escapeHtml(session.sessionName)}</b> is ready. Send the full WhatsApp number in country-code format, for example <code>2348012345678</code>.`,
+src/telegram/bot.ts:1313:    featureText(title, body),
+src/telegram/ui.ts:412:      `<b>Recent jobs:</b> ${jobs.length}\n${summary || "<b>No jobs recorded.</b>"}\n\n${rows || "No queued, running, or completed jobs are available yet."}\n\n<i>Updated ${new Date().toISOString()}</i>`,
+src/telegram/ui.ts:487:export function featureText(title: string, body: string): string {
+src/whatsapp/command-registry.ts:94:        "PFP controls are ready: send a quoted image with .setpfp to apply it, or use .pfp to view the current picture.",
+src/whatsapp/command-registry.ts:102:        "Group picture controls are ready: quote an image and send .setgpp in the target group.",
+src/whatsapp/command-registry.ts:110:          ? `Display name change queued: ${ctx.args.join(" ")}`
+src/whatsapp/command-registry.ts:111:          : "Current display name is managed by the session profile flow.",
+src/whatsapp/command-registry.ts:119:          ? "Bio change queued."
+src/whatsapp/command-registry.ts:120:          : "Current bio is managed by the session profile flow.",
+src/whatsapp/command-registry.ts:127:        "Group browser: use the Telegram session menu or .groups page 1. Large lists are paginated.",
+src/types/domain.ts:69:  status: "queued" | "active" | "paused" | "completed" | "failed" | "cancelled";
+src/index.ts:15:      "[pappy-omega-mini] Scaffold ready. Set TELEGRAM_BOT_TOKEN to start the Telegram gateway.",

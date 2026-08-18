@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   adminJobsKeyboard,
   adminJobsText,
+  adminForceJoinKeyboard,
+  adminForceJoinText,
   dashboardKeyboard,
+  forceJoinKeyboard,
+  forceJoinText,
   globalBridgeKeyboard,
   pageText,
   sessionKeyboard,
@@ -54,6 +58,31 @@ describe("Telegram UI authorization", () => {
   it("uses native blockquote response framing", () => {
     expect(pageText("Status", "Ready")).toContain(
       "<blockquote>Ready</blockquote>",
+    );
+  });
+
+  it("renders real Force Join user and owner controls", () => {
+    const targets = [
+      {
+        targetId: "target-1",
+        targetType: "channel" as const,
+        usernameOrLink: "@pappy_updates",
+        displayName: "Pappy Updates",
+        buttonText: "Join Updates",
+        enabled: true,
+        required: true,
+        sortOrder: 1,
+      },
+    ];
+    expect(forceJoinText(targets)).toContain("Check Membership");
+    expect(JSON.stringify(forceJoinKeyboard(targets))).toContain(
+      "forcejoin:check",
+    );
+    expect(adminForceJoinText(targets)).toContain(
+      "Persistent Membership Policy",
+    );
+    expect(JSON.stringify(adminForceJoinKeyboard(targets))).toContain(
+      "admin:forcejoin:toggle:target-1",
     );
   });
 

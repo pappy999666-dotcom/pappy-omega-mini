@@ -21,6 +21,13 @@ import {
   setEmergencyState,
 } from "../core/control-plane.js";
 import { getValidatorSnapshot } from "../links/validator-snapshot.js";
+import {
+  listForceJoinTargets,
+  removeForceJoinTarget,
+  setForceJoinTargetEnabled,
+  upsertForceJoinTarget,
+  type ForceJoinTargetRecord,
+} from "../persistence/mongo.js";
 import { requestWhatsAppPairingCode } from "../whatsapp/session-manager.js";
 import {
   createCommandRegistry,
@@ -30,7 +37,11 @@ import {
   adminKeyboard,
   adminJobsKeyboard,
   adminJobsText,
+  adminForceJoinKeyboard,
+  adminForceJoinText,
   bucketKeyboard,
+  forceJoinKeyboard,
+  forceJoinText,
   workspaceSettingsKeyboard,
   workspaceSettingsText,
   validatorDashboardText,
@@ -69,6 +80,7 @@ const joinStates = new Map<string, "idle" | "running" | "paused" | "stopped">();
 const joinJobs = new Map<string, string>();
 const liveLoops = new Map<string, ReturnType<typeof setInterval>>();
 const validatorLiveStates = new Map<string, boolean>();
+const pendingAdminInput = new Map<string, "forcejoin:add">();
 const pendingPairing = new Map<
   string,
   {
@@ -90,6 +102,16 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.start(async (ctx) => {
     resolveTelegramUser(ctx);
+    if (!isAdmin(ctx)) {
+      const gate = await getForceJoinGate(ctx);
+      if (!gate.allowed) {
+        await ctx.reply(forceJoinText(gate.targets, gate.passed), {
+          parse_mode: "HTML",
+          reply_markup: forceJoinKeyboard(gate.targets),
+        });
+        return;
+      }
+    }
     await ctx.reply(dashboardText(isAdmin(ctx)), {
       parse_mode: "HTML",
       reply_markup: dashboardKeyboard(isAdmin(ctx)),
@@ -116,6 +138,11 @@ export function createTelegramBot(): Telegraf<Context> {
     const pairing = pendingPairing.get(userId);
     if (pairing && !ctx.message.text.startsWith("/")) {
       await handlePairingText(ctx, pairing, ctx.message.text.trim());
+      return;
+    }
+    const adminInput = pendingAdminInput.get(userId);
+    if (adminInput === "forcejoin:add" && !ctx.message.text.startsWith("/")) {
+      await handleForceJoinAdminInput(ctx, ctx.message.text.trim());
       return;
     }
     const pending = pendingGlobalCommand.get(userId);
@@ -772,6 +799,88 @@ export function createTelegramBot(): Telegraf<Context> {
       adminKeyboard(),
     );
   });
+  bot.action("admin:forcejoin", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    await showAdminForceJoin(ctx);
+  });
+  bot.action("admin:forcejoin:add", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    pendingAdminInput.set(String(ctx.from?.id ?? ""), "forcejoin:add");
+    await edit(
+      ctx,
+      pageText(
+        "Admin · Add Force Join",
+        infoResponse(
+          "Send Target Details",
+          "Send one line in this format:\n<code>channel | @username-or-link | Display Name | Button Text</code>\n\nUse a public @username or numeric chat ID when automatic membership verification is required.",
+        ),
+      ),
+      keyboard([[btn(ui.back, "admin:forcejoin")]]),
+    );
+  });
+  bot.action(/^admin:forcejoin:toggle:([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const targetId = ctx.match[1] ?? "";
+    const targets = await listForceJoinTargets();
+    const target = targets.find((item) => item.targetId === targetId);
+    if (target) await setForceJoinTargetEnabled(targetId, !target.enabled);
+    recordAudit({
+      workspaceId: resolveTelegramUser(ctx).workspaceId,
+      actorTelegramUserId: String(ctx.from?.id ?? ""),
+      action: "admin.forcejoin.toggle",
+      success: Boolean(target),
+      metadata: {
+        targetId,
+        ...(target ? { enabled: !target.enabled } : {}),
+      },
+    });
+    await showAdminForceJoin(ctx);
+  });
+  bot.action(/^admin:forcejoin:remove:([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Target removed");
+    if (!requireAdmin(ctx)) return;
+    const targetId = ctx.match[1] ?? "";
+    const removed = await removeForceJoinTarget(targetId);
+    recordAudit({
+      workspaceId: resolveTelegramUser(ctx).workspaceId,
+      actorTelegramUserId: String(ctx.from?.id ?? ""),
+      action: "admin.forcejoin.remove",
+      success: removed,
+      metadata: { targetId },
+    });
+    await showAdminForceJoin(ctx);
+  });
+  bot.action(/^forcejoin:open:([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const target = (await listForceJoinTargets()).find(
+      (item) => item.targetId === (ctx.match[1] ?? ""),
+    );
+    if (!target) return;
+    await ctx.reply(
+      pageText(
+        "Force Join Target",
+        infoResponse(
+          target.displayName,
+          `<code>${escapeHtml(target.usernameOrLink)}</code>\n\nOpen the target, join it, then return and press Check Membership.`,
+        ),
+      ),
+      { parse_mode: "HTML", reply_markup: forceJoinKeyboard([target]) },
+    );
+  });
+  bot.action("forcejoin:check", async (ctx) => {
+    await ctx.answerCbQuery();
+    const gate = await getForceJoinGate(ctx);
+    if (!gate.allowed)
+      return edit(
+        ctx,
+        forceJoinText(gate.targets, gate.passed),
+        forceJoinKeyboard(gate.targets),
+      );
+    await edit(ctx, dashboardText(false), dashboardKeyboard(false));
+  });
   bot.action("admin:media", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
@@ -1084,6 +1193,91 @@ async function sendSessions(ctx: Context, page: number): Promise<void> {
     body,
     sessionsKeyboard(sessions, page, 5, isAdmin(ctx)),
   );
+}
+
+async function showAdminForceJoin(ctx: Context): Promise<void> {
+  const targets = await listForceJoinTargets();
+  await edit(ctx, adminForceJoinText(targets), adminForceJoinKeyboard(targets));
+}
+
+async function handleForceJoinAdminInput(
+  ctx: Context,
+  text: string,
+): Promise<void> {
+  pendingAdminInput.delete(String(ctx.from?.id ?? ""));
+  const [type, target, displayName, buttonText] = text
+    .split("|")
+    .map((value) => value.trim());
+  if (!["channel", "group"].includes(type ?? "") || !target || !displayName) {
+    await edit(
+      ctx,
+      pageText(
+        "Admin · Force Join",
+        dangerResponse(
+          "Invalid Target Format",
+          "Use <code>channel | @username | Display Name | Button Text</code> and try again.",
+        ),
+      ),
+      keyboard([[btn("↻ Add Target", "admin:forcejoin:add", "success")]]),
+    );
+    return;
+  }
+  await upsertForceJoinTarget({
+    targetType: type as "channel" | "group",
+    usernameOrLink: target,
+    displayName,
+    buttonText: buttonText || displayName,
+  });
+  recordAudit({
+    workspaceId: resolveTelegramUser(ctx).workspaceId,
+    actorTelegramUserId: String(ctx.from?.id ?? ""),
+    action: "admin.forcejoin.add",
+    success: true,
+    metadata: {
+      targetType: type ?? "",
+      target: target?.slice(0, 120) ?? "",
+    },
+  });
+  await showAdminForceJoin(ctx);
+}
+
+async function getForceJoinGate(ctx: Context): Promise<{
+  allowed: boolean;
+  targets: ForceJoinTargetRecord[];
+  passed: string[];
+}> {
+  const targets = await listForceJoinTargets(true);
+  if (!targets.length) return { allowed: true, targets, passed: [] };
+  const passed: string[] = [];
+  for (const target of targets) {
+    const chatRef = telegramChatReference(target.usernameOrLink);
+    if (!chatRef || !ctx.from) continue;
+    try {
+      const member = await ctx.telegram.getChatMember(chatRef, ctx.from.id);
+      if (
+        member.status === "creator" ||
+        member.status === "administrator" ||
+        member.status === "member" ||
+        (member.status === "restricted" && member.is_member)
+      )
+        passed.push(target.targetId);
+    } catch {
+      // Keep the target required and visible when Telegram cannot verify it.
+    }
+  }
+  return {
+    allowed: passed.length === targets.length,
+    targets,
+    passed,
+  };
+}
+
+function telegramChatReference(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (/^-?\d+$/.test(trimmed)) return trimmed;
+  if (trimmed.startsWith("@")) return trimmed;
+  const match = trimmed.match(/t\.me\/(?!joinchat|\+)([A-Za-z0-9_]+)/i);
+  return match?.[1] ? `@${match[1]}` : undefined;
 }
 
 async function showAdminJobs(ctx: Context): Promise<void> {

@@ -355,6 +355,89 @@ export function workspaceSettingsKeyboard(settings: {
   ]);
 }
 
+export interface ForceJoinTargetView {
+  targetId: string;
+  targetType: "channel" | "group";
+  usernameOrLink: string;
+  displayName: string;
+  buttonText: string;
+  enabled: boolean;
+  required: boolean;
+  sortOrder: number;
+}
+
+export function forceJoinText(
+  targets: ForceJoinTargetView[],
+  passed: string[] = [],
+): string {
+  const lines = targets.length
+    ? targets
+        .map((target) => {
+          const state = passed.includes(target.targetId)
+            ? "✅ Joined"
+            : "⏳ Required";
+          return `${state} · <b>${escapeHtml(target.displayName)}</b>\n<code>${escapeHtml(target.usernameOrLink)}</code>`;
+        })
+        .join("\n\n")
+    : "No force-join targets are configured.";
+  return pageText(
+    "Access Check",
+    infoResponse(
+      "Join Required Channels or Groups",
+      `${lines}\n\nJoin every required target, then press <b>Check Membership</b>. Targets that Telegram cannot verify automatically will be clearly identified.`,
+    ),
+  );
+}
+
+export function forceJoinKeyboard(
+  targets: ForceJoinTargetView[],
+): InlineKeyboardMarkup {
+  const rows: Button[][] = targets.map((target) => [
+    btn(
+      `↗ ${target.buttonText}`,
+      `forcejoin:open:${target.targetId}`,
+      "primary",
+    ),
+  ]);
+  rows.push([btn("✓ Check Membership", "forcejoin:check", "success")]);
+  return keyboard(rows);
+}
+
+export function adminForceJoinText(targets: ForceJoinTargetView[]): string {
+  const body = targets.length
+    ? targets
+        .map(
+          (target) =>
+            `${target.enabled ? "🟢" : "⛔"} <b>${escapeHtml(target.displayName)}</b> · ${escapeHtml(target.targetType)}\n<code>${escapeHtml(target.usernameOrLink)}</code> · ${target.required ? "required" : "optional"}`,
+        )
+        .join("\n\n")
+    : "No targets configured. Add a public channel or group username/link.";
+  return pageText(
+    "Admin · Force Join",
+    infoResponse(
+      "Persistent Membership Policy",
+      `${body}\n\nTelegram membership can be verified automatically for public usernames or chat IDs. Invite links remain visible but may require manual confirmation when Telegram does not expose membership lookup.`,
+    ),
+  );
+}
+
+export function adminForceJoinKeyboard(
+  targets: ForceJoinTargetView[],
+): InlineKeyboardMarkup {
+  const rows: Button[][] = targets.map((target) => [
+    btn(
+      `${target.enabled ? "⛔ Disable" : "✅ Enable"} · ${target.displayName}`,
+      `admin:forcejoin:toggle:${target.targetId}`,
+      target.enabled ? "danger" : "success",
+    ),
+    btn("✕ Remove", `admin:forcejoin:remove:${target.targetId}`, "danger"),
+  ]);
+  rows.push([btn("＋ Add Target", "admin:forcejoin:add", "success")]);
+  rows.push([btn("↻ Refresh", "admin:forcejoin", "primary")]);
+  rows.push([btn(ui.back, "admin:panel")]);
+  return keyboard(rows);
+}
+
 export function adminKeyboard(): InlineKeyboardMarkup {
   return keyboard([
     [btn("⚙ Force Join", "admin:forcejoin"), btn("◉ Users", "admin:users")],
