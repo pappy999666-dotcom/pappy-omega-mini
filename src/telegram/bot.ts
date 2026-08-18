@@ -24,6 +24,7 @@ import {
   setEmergencyState,
 } from "../core/control-plane.js";
 import { getValidatorSnapshot } from "../links/validator-snapshot.js";
+import { exportBucket } from "../links/link-export.js";
 import {
   deletePairingRequest,
   getPairingRequest,
@@ -576,7 +577,57 @@ export function createTelegramBot(): Telegraf<Context> {
       validatorLiveStates.get(workspaceId) === true,
     );
   });
-  bot.action(/^bucket:(view|purge|merge|downloads)/, async (ctx) => {
+  bot.action("bucket:downloads", async (ctx) => {
+    await ctx.answerCbQuery("Preparing exports…");
+    const user = resolveTelegramUser(ctx);
+    try {
+      const [txt, html] = await Promise.all([
+        exportBucket(user.workspaceId, "master", "txt"),
+        exportBucket(user.workspaceId, "master", "html"),
+      ]);
+      await ctx.replyWithDocument({
+        source: Buffer.from(txt.content, "utf8"),
+        filename: txt.fileName,
+      });
+      await ctx.replyWithDocument({
+        source: Buffer.from(html.content, "utf8"),
+        filename: html.fileName,
+      });
+      recordAudit({
+        workspaceId: user.workspaceId,
+        actorTelegramUserId: String(ctx.from?.id ?? ""),
+        action: "validator.bucket.export",
+        success: true,
+        metadata: { bucket: "master", formats: "txt,html" },
+      });
+      await showValidatorHub(ctx);
+    } catch (error) {
+      recordAudit({
+        workspaceId: user.workspaceId,
+        actorTelegramUserId: String(ctx.from?.id ?? ""),
+        action: "validator.bucket.export",
+        success: false,
+        metadata: {
+          error:
+            error instanceof Error
+              ? error.message.slice(0, 120)
+              : String(error),
+        },
+      });
+      await edit(
+        ctx,
+        pageText(
+          "Validator Hub",
+          dangerResponse(
+            "Export Failed",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        bucketKeyboard(),
+      );
+    }
+  });
+  bot.action(/^bucket:(view|purge|merge)/, async (ctx) => {
     await ctx.answerCbQuery();
     await edit(
       ctx,
