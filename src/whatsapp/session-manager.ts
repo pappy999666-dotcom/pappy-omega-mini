@@ -238,7 +238,9 @@ async function openWhatsAppSession(
       messages?: Array<{
         key?: {
           remoteJid?: string;
+          remoteJidAlt?: string;
           participant?: string;
+          participantAlt?: string;
           fromMe?: boolean;
         };
         message?: {
@@ -253,7 +255,7 @@ async function openWhatsAppSession(
       }>;
     }) => {
       for (const message of event.messages ?? []) {
-        if (message.key?.fromMe || !message.key?.remoteJid) continue;
+        if (!message.key?.remoteJid) continue;
         const text =
           message.message?.conversation ??
           message.message?.extendedTextMessage?.text ??
@@ -280,7 +282,13 @@ async function openWhatsAppSession(
         void routeWhatsAppText({
           workspaceId,
           sessionId,
-          senderJid: message.key.participant ?? message.key.remoteJid,
+          senderJid: message.key.fromMe
+            ? ((socket as unknown as { user?: { id?: string } }).user?.id ??
+              message.key.remoteJid)
+            : (message.key.participantAlt ??
+              message.key.participant ??
+              message.key.remoteJidAlt ??
+              message.key.remoteJid),
           text,
           ...(quotedText ? { quotedText } : {}),
         }).then((reply) => {
