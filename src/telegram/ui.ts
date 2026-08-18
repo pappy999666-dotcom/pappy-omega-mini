@@ -315,6 +315,7 @@ export function joinManagerKeyboard(
     ]);
   if (status !== "running")
     rows.push([btn("🔁 Batch Cycles", `session:${sessionId}:join:setbatch`)]);
+  rows.push([btn("⚙ Joining Settings", `session:${sessionId}:join:settings`)]);
   rows.push([btn("🔄 Refresh", `session:${sessionId}:joinmgr`)]);
   rows.push([
     btn(

@@ -79,6 +79,20 @@ export async function updateProfilePicture(
   await update(ownJid(socket), { url: imageUrl });
 }
 
+export async function updateGroupProfilePicture(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  imageUrl: string,
+): Promise<void> {
+  const update = method(
+    socketFor(workspaceId, sessionId),
+    "updateProfilePicture",
+  );
+  if (!update) throw new Error("Unsupported capability: groupProfilePicture");
+  await update(groupJid, { url: imageUrl });
+}
+
 export async function removeProfilePicture(
   workspaceId: string,
   sessionId: string,
@@ -189,6 +203,44 @@ export async function sendGroupStatus(
   const send = method(socketFor(workspaceId, sessionId), "sendGroupStatus");
   if (!send) throw new Error("Unsupported capability: groupStatus");
   await send(jid, payload);
+}
+
+export async function updateWhatsAppGroupSubject(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  subject: string,
+): Promise<void> {
+  const update = method(
+    socketFor(workspaceId, sessionId),
+    "groupUpdateSubject",
+  );
+  if (!update) throw new Error("Unsupported capability: groupSubject");
+  await update(groupJid, subject);
+}
+
+export async function updateWhatsAppGroupDescription(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  description: string,
+): Promise<void> {
+  const update = method(
+    socketFor(workspaceId, sessionId),
+    "groupUpdateDescription",
+  );
+  if (!update) throw new Error("Unsupported capability: groupDescription");
+  await update(groupJid, description);
+}
+
+export async function leaveWhatsAppGroup(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+): Promise<void> {
+  const leave = method(socketFor(workspaceId, sessionId), "groupLeave");
+  if (!leave) throw new Error("Unsupported capability: groupLeave");
+  await leave(groupJid);
 }
 
 export async function getGroupParticipants(

@@ -53,9 +53,13 @@ import {
 import {
   createWhatsAppGroup,
   getProfilePictureUrl,
+  leaveWhatsAppGroup,
   listGroups,
   removeProfilePicture,
   sendDirectText,
+  updateGroupProfilePicture,
+  updateProfileBio,
+  updateProfileName,
   updateProfilePicture,
 } from "../whatsapp/transport-adapter.js";
 import {
@@ -135,6 +139,22 @@ const pendingGroupCreate = new Map<
 const pendingProfilePicture = new Map<
   string,
   { workspaceId: string; sessionId: string }
+>();
+const pendingSessionSudo = new Map<
+  string,
+  { workspaceId: string; sessionId: string; action: "add" | "remove" }
+>();
+const pendingGroupPicture = new Map<
+  string,
+  { workspaceId: string; sessionId: string }
+>();
+const pendingGroupLeave = new Map<
+  string,
+  { workspaceId: string; sessionId: string; groupJid?: string }
+>();
+const pendingSessionSetting = new Map<
+  string,
+  { workspaceId: string; sessionId: string; action: "name" | "bio" | "prefix" }
 >();
 const pendingPairing = new Map<
   string,
@@ -220,6 +240,179 @@ export function createTelegramBot(): Telegraf<Context> {
     const supportInput = pendingSupportInput.get(userId);
     if (supportInput && !ctx.message.text.startsWith("/")) {
       await handleSupportInput(ctx, supportInput, ctx.message.text.trim());
+      return;
+    }
+    const groupLeave = pendingGroupLeave.get(userId);
+    if (groupLeave && !ctx.message.text.startsWith("/")) {
+      const groupJid = ctx.message.text.trim();
+      if (!/^[0-9-]+-\d+@g\.us$/.test(groupJid)) {
+        await ctx.reply(
+          pageText(
+            "Leave Group",
+            dangerResponse(
+              "Invalid Group JID",
+              "Send a WhatsApp group JID ending in <code>@g.us</code>.",
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+        return;
+      }
+      pendingGroupLeave.set(userId, { ...groupLeave, groupJid });
+      await ctx.reply(
+        pageText(
+          "Leave Group",
+          dangerResponse(
+            "Confirm Destructive Action",
+            `Leave <code>${escapeHtml(groupJid)}</code>? This removes the session from the group.`,
+          ),
+        ),
+        {
+          parse_mode: "HTML",
+          reply_markup: keyboard([
+            [
+              btn(
+                "⚠ Confirm Leave",
+                `session:${groupLeave.sessionId}:group:leave:confirm`,
+                "danger",
+              ),
+            ],
+            [btn("Cancel", `session:${groupLeave.sessionId}:action:groups`)],
+          ]),
+        },
+      );
+      return;
+    }
+    const groupPicture = pendingGroupPicture.get(userId);
+    if (groupPicture && !ctx.message.text.startsWith("/")) {
+      pendingGroupPicture.delete(userId);
+      const [groupJid, imageUrl] = ctx.message.text.trim().split(/\s+/);
+      try {
+        if (!groupJid || !imageUrl || !/^https:\/\//i.test(imageUrl))
+          throw new Error("Usage: send <groupJid> <https image URL>.");
+        await updateGroupProfilePicture(
+          groupPicture.workspaceId,
+          groupPicture.sessionId,
+          groupJid,
+          imageUrl,
+        );
+        await ctx.reply(
+          pageText(
+            "Group Picture",
+            successResponse(
+              "Updated",
+              `<code>${escapeHtml(groupJid)}</code> profile picture updated.`,
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+      } catch (error) {
+        await ctx.reply(
+          pageText(
+            "Group Picture",
+            dangerResponse(
+              "Update Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+      }
+      return;
+    }
+    const sessionSetting = pendingSessionSetting.get(userId);
+    if (sessionSetting && !ctx.message.text.startsWith("/")) {
+      pendingSessionSetting.delete(userId);
+      const value = ctx.message.text.trim();
+      const current = ownedSession(ctx, sessionSetting.sessionId);
+      if (!current || !value) return;
+      try {
+        if (sessionSetting.action === "name")
+          await updateProfileName(
+            sessionSetting.workspaceId,
+            sessionSetting.sessionId,
+            value,
+          );
+        if (sessionSetting.action === "bio")
+          await updateProfileBio(
+            sessionSetting.workspaceId,
+            sessionSetting.sessionId,
+            value,
+          );
+        const next =
+          sessionSetting.action === "prefix"
+            ? updateSession(
+                sessionSetting.workspaceId,
+                sessionSetting.sessionId,
+                { prefix: value === "none" ? "" : value.slice(0, 3) },
+              )
+            : current;
+        await ctx.reply(
+          pageText(
+            `Session · ${sessionSetting.action}`,
+            successResponse(
+              "Updated",
+              sessionSetting.action === "prefix"
+                ? `Prefix is now <code>${escapeHtml(next.prefix || "none")}</code>.`
+                : `${sessionSetting.action === "name" ? "Name" : "Bio"} update sent to WhatsApp.`,
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [btn("‹ Session", `session:${sessionSetting.sessionId}:menu`)],
+            ]),
+          },
+        );
+      } catch (error) {
+        await ctx.reply(
+          pageText(
+            `Session · ${sessionSetting.action}`,
+            dangerResponse(
+              "Update Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+      }
+      return;
+    }
+    const sessionSudo = pendingSessionSudo.get(userId);
+    if (sessionSudo && !ctx.message.text.startsWith("/")) {
+      pendingSessionSudo.delete(userId);
+      const identity = ctx.message.text
+        .trim()
+        .replace(/[^0-9A-Za-z:_.@-]/g, "");
+      const current = ownedSession(ctx, sessionSudo.sessionId);
+      if (!current || !identity) return;
+      const next =
+        sessionSudo.action === "add"
+          ? [...new Set([...current.sudoList, identity])]
+          : current.sudoList.filter((item) => item !== identity);
+      updateSession(sessionSudo.workspaceId, sessionSudo.sessionId, {
+        sudoList: next,
+      });
+      await ctx.reply(
+        pageText(
+          "Session · Sudo",
+          successResponse(
+            sessionSudo.action === "add" ? "Sudo Added" : "Sudo Removed",
+            `<code>${escapeHtml(identity)}</code> is ${sessionSudo.action === "add" ? "now authorized" : "no longer authorized"} for this session.`,
+          ),
+        ),
+        {
+          parse_mode: "HTML",
+          reply_markup: keyboard([
+            [btn("‹ Sudo", `session:${sessionSudo.sessionId}:sudo:list`)],
+            [btn("‹ Session", `session:${sessionSudo.sessionId}:menu`)],
+          ]),
+        },
+      );
       return;
     }
     const profilePicture = pendingProfilePicture.get(userId);
@@ -730,6 +923,132 @@ export function createTelegramBot(): Telegraf<Context> {
       );
     }
   });
+  bot.action(/^session:([^:]+):group:leave:confirm$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+    if (!session) return deny(ctx);
+    const actor = String(ctx.from?.id ?? "");
+    const pending = pendingGroupLeave.get(actor);
+    if (!pending?.groupJid || pending.sessionId !== session.sessionId)
+      return deny(ctx);
+    pendingGroupLeave.delete(actor);
+    try {
+      await leaveWhatsAppGroup(
+        session.workspaceId,
+        session.sessionId,
+        pending.groupJid,
+      );
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Groups`,
+          successResponse(
+            "Left Group",
+            `<code>${escapeHtml(pending.groupJid)}</code>`,
+          ),
+        ),
+        keyboard([
+          [
+            btn(
+              "↻ Refresh Groups",
+              `session:${session.sessionId}:action:groups`,
+            ),
+          ],
+          [btn("‹ Session", `session:${session.sessionId}:menu`)],
+        ]),
+      );
+    } catch (error) {
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Groups`,
+          dangerResponse(
+            "Leave Failed",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        keyboard([[btn("‹ Session", `session:${session.sessionId}:menu`)]]),
+      );
+    }
+  });
+  bot.action(/^session:([^:]+):group:leave$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+    if (!session) return deny(ctx);
+    pendingGroupLeave.set(String(ctx.from?.id ?? ""), {
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+    });
+    return edit(
+      ctx,
+      pageText(
+        `${session.sessionName} · Leave Group`,
+        infoResponse(
+          "Select Group",
+          "Send the group JID ending in <code>@g.us</code>. A confirmation step is required before leaving.",
+        ),
+      ),
+      keyboard([[btn("Cancel", `session:${session.sessionId}:action:groups`)]]),
+    );
+  });
+  bot.action(/^session:([^:]+):sudo:(list|add|remove)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return deny(ctx);
+    const session = ownedSession(ctx, ctx.match[1] ?? "");
+    if (!session) return deny(ctx);
+    const action = ctx.match[2] ?? "list";
+    if (action === "list") {
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Sudo`,
+          infoResponse(
+            "Session Sudo",
+            session.sudoList.length
+              ? session.sudoList
+                  .map((item) => `<code>${escapeHtml(item)}</code>`)
+                  .join("\n")
+              : "No session sudo identities are configured.",
+          ),
+        ),
+        keyboard([
+          [
+            btn(
+              "＋ Add Identity",
+              `session:${session.sessionId}:sudo:add`,
+              "success",
+            ),
+            btn(
+              "− Remove Identity",
+              `session:${session.sessionId}:sudo:remove`,
+              "danger",
+            ),
+          ],
+          [btn("↻ Refresh", `session:${session.sessionId}:sudo:list`)],
+          [btn("‹ Session", `session:${session.sessionId}:menu`)],
+        ]),
+      );
+    }
+    pendingSessionSudo.set(String(ctx.from?.id ?? ""), {
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+      action: action as "add" | "remove",
+    });
+    return edit(
+      ctx,
+      pageText(
+        `${session.sessionName} · Sudo`,
+        infoResponse(
+          action === "add" ? "Add Sudo Identity" : "Remove Sudo Identity",
+          "Send a WhatsApp identity/JID now, for example <code>2348012345678@s.whatsapp.net</code>.",
+        ),
+      ),
+      keyboard([
+        [btn("Cancel", `session:${session.sessionId}:sudo:list`)],
+        [btn("‹ Session", `session:${session.sessionId}:menu`)],
+      ]),
+    );
+  });
   bot.action(/^session:([^:]+):action:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const session = ownedSession(ctx, ctx.match[1] ?? "");
@@ -740,6 +1059,112 @@ export function createTelegramBot(): Telegraf<Context> {
     if (action === "join") return showJoinManager(ctx, session.sessionId);
     if (action === "groups") return showSessionGroups(ctx, session.sessionId);
     if (action === "health") return showSessionHealth(ctx, session.sessionId);
+    if (action === "gpp") {
+      pendingGroupPicture.set(String(ctx.from?.id ?? ""), {
+        workspaceId: session.workspaceId,
+        sessionId: session.sessionId,
+      });
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Group Picture`,
+          infoResponse(
+            "Change Group Picture",
+            "Send the group JID followed by an HTTPS image URL, separated by a space.",
+          ),
+        ),
+        keyboard([[btn("Cancel", `session:${session.sessionId}:menu`)]]),
+      );
+    }
+    if (action === "profile")
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Profile`,
+          infoResponse(
+            "Account Profile",
+            `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Phone:</b> ${escapeHtml(session.phoneNumber ?? "not paired")}\n<b>Status:</b> ${escapeHtml(session.status)}\n<b>Prefix:</b> <code>${escapeHtml(session.prefix || "none")}</code>\n<b>Auto-join:</b> ${session.autoJoinEnabled ? "ON" : "OFF"}`,
+          ),
+        ),
+        keyboard([
+          [
+            btn("PFP", `session:${session.sessionId}:action:pfp`),
+            btn("Name", `session:${session.sessionId}:action:name`),
+          ],
+          [
+            btn("Bio", `session:${session.sessionId}:action:bio`),
+            btn("Prefix", `session:${session.sessionId}:action:prefix`),
+          ],
+          [btn("‹ Session", `session:${session.sessionId}:menu`)],
+        ]),
+      );
+    if (["name", "bio", "prefix"].includes(action)) {
+      pendingSessionSetting.set(String(ctx.from?.id ?? ""), {
+        workspaceId: session.workspaceId,
+        sessionId: session.sessionId,
+        action: action as "name" | "bio" | "prefix",
+      });
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · ${action}`,
+          infoResponse(
+            "Send New Value",
+            action === "prefix"
+              ? "Send a prefix up to 3 characters, or <code>none</code> for prefixless mode."
+              : `Send the new WhatsApp ${action}.`,
+          ),
+        ),
+        keyboard([[btn("Cancel", `session:${session.sessionId}:menu`)]]),
+      );
+    }
+    if (action === "autojoin") {
+      const next = updateSession(session.workspaceId, session.sessionId, {
+        autoJoinEnabled: !session.autoJoinEnabled,
+      });
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Auto-join`,
+          successResponse(
+            "Setting Updated",
+            `Automatic invite-link joining is now <b>${next.autoJoinEnabled ? "ON" : "OFF"}</b>.`,
+          ),
+        ),
+        keyboard([[btn("‹ Session", `session:${session.sessionId}:menu`)]]),
+      );
+    }
+    if (action === "sudo")
+      return isAdmin(ctx)
+        ? edit(
+            ctx,
+            pageText(
+              `${session.sessionName} · Sudo`,
+              infoResponse(
+                "Session Sudo",
+                "Manage the WhatsApp identities allowed to issue commands through this session.",
+              ),
+            ),
+            keyboard([
+              [
+                btn("◉ List", `session:${session.sessionId}:sudo:list`),
+                btn(
+                  "＋ Add",
+                  `session:${session.sessionId}:sudo:add`,
+                  "success",
+                ),
+              ],
+              [
+                btn(
+                  "− Remove",
+                  `session:${session.sessionId}:sudo:remove`,
+                  "danger",
+                ),
+              ],
+              [btn("‹ Session", `session:${session.sessionId}:menu`)],
+            ]),
+          )
+        : deny(ctx);
     if (action === "pfp")
       return edit(
         ctx,
@@ -1310,7 +1735,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await showJoinManager(ctx, ctx.match[1] ?? "");
   });
   bot.action(
-    /^session:([^:]+):join:(start|pause|stop|setlimit|setdelay|setbatch)$/,
+    /^session:([^:]+):join:(start|pause|stop|settings|setlimit|setdelay|setbatch|setretry|setconcurrency)$/,
     async (ctx) => {
       await ctx.answerCbQuery();
       const session = ownedSession(ctx, ctx.match[1] ?? "");
@@ -1337,7 +1762,13 @@ export function createTelegramBot(): Telegraf<Context> {
           workspaceId: user.workspaceId,
           sessionId: session.sessionId,
           kind: "join-manager",
-          payload: { targetCount: 100, delayMs: settings.defaultJoinDelayMs },
+          payload: {
+            targetCount: settings.defaultJoinTargetCount,
+            delayMs: settings.defaultJoinDelayMs,
+            batchCycles: settings.defaultJoinBatchCycles,
+            maxConcurrency: settings.defaultJoinMaxConcurrency,
+            retryLimit: settings.defaultJoinRetryLimit,
+          },
           idempotencyKey: `join-manager:${user.workspaceId}:${session.sessionId}:${Date.now()}`,
         });
         joinJobs.set(key, job.jobId);
@@ -1351,18 +1782,116 @@ export function createTelegramBot(): Telegraf<Context> {
         if (jobId) await runtime?.cancel(jobId);
         joinStates.set(key, "stopped");
       }
-      if (operation.startsWith("set"))
+      if (operation === "settings") {
+        const current = getWorkspaceDefaults(user.workspaceId);
         return edit(
           ctx,
           pageText(
-            "Join Manager · Configure",
+            "Join Manager · Settings",
             infoResponse(
-              "Session-Bound Setting",
-              "Use Workspace Settings to change the default delay and auto-join behavior for all owned sessions. This selected session remains the worker target.",
+              "Durable Joining Settings",
+              `<b>Target links:</b> ${current.defaultJoinTargetCount}\n<b>Delay:</b> ${Math.round(current.defaultJoinDelayMs / 1000)}s\n<b>Batch cycles:</b> ${current.defaultJoinBatchCycles}\n<b>Concurrency:</b> ${current.defaultJoinMaxConcurrency}\n<b>Retry limit:</b> ${current.defaultJoinRetryLimit}`,
             ),
           ),
-          keyboard([[btn(ui.back, `session:${session.sessionId}:joinmgr`)]]),
+          keyboard([
+            [
+              btn("🎯 Target", `session:${session.sessionId}:join:setlimit`),
+              btn("⏱ Delay", `session:${session.sessionId}:join:setdelay`),
+            ],
+            [
+              btn("🔁 Batch", `session:${session.sessionId}:join:setbatch`),
+              btn("↻ Retry", `session:${session.sessionId}:join:setretry`),
+            ],
+            [
+              btn(
+                "⚡ Concurrency",
+                `session:${session.sessionId}:join:setconcurrency`,
+              ),
+            ],
+            [btn("‹ Join Manager", `session:${session.sessionId}:joinmgr`)],
+          ]),
         );
+      }
+      if (
+        operation === "setlimit" ||
+        operation === "setdelay" ||
+        operation === "setbatch" ||
+        operation === "setretry" ||
+        operation === "setconcurrency"
+      ) {
+        const current = getWorkspaceDefaults(user.workspaceId);
+        const patch =
+          operation === "setlimit"
+            ? {
+                defaultJoinTargetCount:
+                  [100, 250, 500, 1000][
+                    ([100, 250, 500, 1000].indexOf(
+                      current.defaultJoinTargetCount,
+                    ) +
+                      1) %
+                      4
+                  ] ?? 100,
+              }
+            : operation === "setdelay"
+              ? {
+                  defaultJoinDelayMs:
+                    [0, 5000, 10000, 30000][
+                      ([0, 5000, 10000, 30000].indexOf(
+                        current.defaultJoinDelayMs,
+                      ) +
+                        1) %
+                        4
+                    ] ?? 5000,
+                }
+              : operation === "setbatch"
+                ? {
+                    defaultJoinBatchCycles:
+                      [1, 2, 5, 10][
+                        ([1, 2, 5, 10].indexOf(current.defaultJoinBatchCycles) +
+                          1) %
+                          4
+                      ] ?? 1,
+                  }
+                : operation === "setretry"
+                  ? {
+                      defaultJoinRetryLimit:
+                        [0, 1, 2, 3][
+                          ([0, 1, 2, 3].indexOf(current.defaultJoinRetryLimit) +
+                            1) %
+                            4
+                        ] ?? 2,
+                    }
+                  : {
+                      defaultJoinMaxConcurrency:
+                        [1, 2, 3, 5][
+                          ([1, 2, 3, 5].indexOf(
+                            current.defaultJoinMaxConcurrency,
+                          ) +
+                            1) %
+                            4
+                        ] ?? 2,
+                    };
+        const next = updateWorkspaceDefaults(user.workspaceId, patch);
+        return edit(
+          ctx,
+          pageText(
+            "Join Manager · Settings",
+            successResponse(
+              "Setting Updated",
+              `<b>Target:</b> ${next.defaultJoinTargetCount} · <b>Delay:</b> ${Math.round(next.defaultJoinDelayMs / 1000)}s · <b>Batch:</b> ${next.defaultJoinBatchCycles} · <b>Concurrency:</b> ${next.defaultJoinMaxConcurrency} · <b>Retries:</b> ${next.defaultJoinRetryLimit}`,
+            ),
+          ),
+          keyboard([
+            [
+              btn(
+                "⚙ More Settings",
+                `session:${session.sessionId}:join:settings`,
+              ),
+            ],
+            [btn("‹ Join Manager", `session:${session.sessionId}:joinmgr`)],
+          ]),
+        );
+      }
       await showJoinManager(ctx, session.sessionId);
     },
   );
@@ -2081,6 +2610,18 @@ async function showSessionGroups(
         ),
       ),
       keyboard([
+        [
+          btn(
+            "＋ Create Group",
+            `session:${session.sessionId}:action:creategroup`,
+            "success",
+          ),
+          btn(
+            "↪ Leave Group",
+            `session:${session.sessionId}:group:leave`,
+            "danger",
+          ),
+        ],
         [
           btn(
             "↻ Refresh Groups",
