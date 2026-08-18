@@ -7,6 +7,7 @@ import { hydrateControlPlane } from "./core/control-plane.js";
 import { startWorkerRuntime } from "./jobs/runtime.js";
 import { closeMongo, ensureMongoIndexes } from "./persistence/mongo.js";
 import type { JobOrchestrator } from "./jobs/job-orchestrator.js";
+import { DurableScheduler } from "./jobs/scheduler.js";
 
 async function main(): Promise<void> {
   assertProductionSecrets();
@@ -28,7 +29,12 @@ async function main(): Promise<void> {
   await hydrateControlPlane();
   const bot = createTelegramBot();
   let workers: JobOrchestrator | undefined;
-  if (env.TELEGRAM_BOT_TOKEN) workers = startWorkerRuntime();
+  let scheduler: DurableScheduler | undefined;
+  if (env.TELEGRAM_BOT_TOKEN) {
+    workers = startWorkerRuntime();
+    scheduler = new DurableScheduler(workers);
+    scheduler.start();
+  }
   await bot.launch();
   console.log("[pappy-omega-mini] Telegram gateway online.");
 
@@ -38,6 +44,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log(`[pappy-omega-mini] ${signal} received; stopping new work.`);
     bot.stop(signal);
+    await scheduler?.close();
     await workers?.close();
     shutdownWhatsAppSessions();
     await closeMongo();

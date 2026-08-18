@@ -23,6 +23,19 @@ interface UserDocument extends User, mongoose.Document {}
 interface WorkspaceDocument extends Workspace, mongoose.Document {}
 interface SessionDocument extends WhatsAppSession, mongoose.Document {}
 interface AuditDocument extends AuditEvent, mongoose.Document {}
+interface ScheduleDocument extends mongoose.Document {
+  scheduleId: string;
+  workspaceId: string;
+  sessionId?: string;
+  kind: "allstatus" | "allchat" | "tag" | "link-validation" | "join-manager";
+  payload: Record<string, unknown>;
+  timezone: string;
+  nextRunAt: number;
+  intervalMs?: number;
+  enabled: boolean;
+  lastRunAt?: number;
+  updatedAt: number;
+}
 interface EmergencyDocument extends EmergencyState, mongoose.Document {}
 interface PairingRequestDocument extends mongoose.Document {
   telegramUserId: string;
@@ -95,6 +108,22 @@ const sessionSchema = new mongoose.Schema<SessionDocument>(
   { collection: "whatsapp_sessions", versionKey: false },
 );
 sessionSchema.index({ workspaceId: 1, status: 1 });
+const scheduleSchema = new mongoose.Schema<ScheduleDocument>(
+  {
+    scheduleId: { type: String, required: true, unique: true, index: true },
+    workspaceId: { type: String, required: true, index: true },
+    sessionId: String,
+    kind: { type: String, required: true },
+    payload: { type: mongoose.Schema.Types.Mixed, required: true },
+    timezone: { type: String, required: true },
+    nextRunAt: { type: Number, required: true, index: true },
+    intervalMs: Number,
+    enabled: { type: Boolean, required: true, index: true },
+    lastRunAt: Number,
+    updatedAt: { type: Number, required: true },
+  },
+  { collection: "schedules", versionKey: false },
+);
 const auditSchema = new mongoose.Schema<AuditDocument>(
   {
     correlationId: { type: String, required: true, unique: true, index: true },
@@ -141,6 +170,7 @@ let WorkspaceModel: Model<WorkspaceDocument> | undefined;
 let SessionModel: Model<SessionDocument> | undefined;
 let PairingRequestModel: Model<PairingRequestDocument> | undefined;
 let AuditModel: Model<AuditDocument> | undefined;
+let ScheduleModel: Model<ScheduleDocument> | undefined;
 let EmergencyModel: Model<EmergencyDocument> | undefined;
 
 export async function connectMongo(): Promise<typeof mongoose> {
@@ -175,6 +205,11 @@ function sessionModel(): Model<SessionDocument> {
     mongoose.models.WhatsAppSession ??
     mongoose.model<SessionDocument>("WhatsAppSession", sessionSchema));
 }
+function scheduleModel(): Model<ScheduleDocument> {
+  return (ScheduleModel ??=
+    mongoose.models.Schedule ??
+    mongoose.model<ScheduleDocument>("Schedule", scheduleSchema));
+}
 function auditModel(): Model<AuditDocument> {
   return (AuditModel ??=
     mongoose.models.AuditEvent ??
@@ -203,6 +238,7 @@ export async function ensureMongoIndexes(): Promise<void> {
     sessionModel().createIndexes(),
     pairingRequestModel().createIndexes(),
     auditModel().createIndexes(),
+    scheduleModel().createIndexes(),
     emergencyModel().createIndexes(),
   ]);
 }
@@ -221,6 +257,68 @@ export async function persistWorkspace(workspace: Workspace): Promise<void> {
     { upsert: true },
   );
 }
+export interface ScheduleRecord {
+  scheduleId: string;
+  workspaceId: string;
+  sessionId?: string;
+  kind: "allstatus" | "allchat" | "tag" | "link-validation" | "join-manager";
+  payload: Record<string, unknown>;
+  timezone: string;
+  nextRunAt: number;
+  intervalMs?: number;
+  enabled: boolean;
+  lastRunAt?: number;
+  updatedAt: number;
+}
+export async function saveSchedule(schedule: ScheduleRecord): Promise<void> {
+  await connectMongo();
+  await scheduleModel().replaceOne(
+    { scheduleId: schedule.scheduleId },
+    schedule,
+    { upsert: true },
+  );
+}
+export async function listDueSchedules(
+  now = Date.now(),
+  limit = 25,
+): Promise<ScheduleRecord[]> {
+  await connectMongo();
+  return scheduleModel()
+    .find({ enabled: true, nextRunAt: { $lte: now } })
+    .sort({ nextRunAt: 1 })
+    .limit(limit)
+    .lean<ScheduleRecord[]>()
+    .exec();
+}
+export async function claimSchedule(
+  scheduleId: string,
+  now = Date.now(),
+): Promise<ScheduleRecord | undefined> {
+  await connectMongo();
+  const current = await scheduleModel()
+    .findOne({ scheduleId, enabled: true, nextRunAt: { $lte: now } })
+    .lean<ScheduleRecord>()
+    .exec();
+  if (!current) return undefined;
+  const nextRunAt = current.intervalMs ? now + current.intervalMs : now;
+  const updated = await scheduleModel()
+    .findOneAndUpdate(
+      { scheduleId, enabled: true, nextRunAt: current.nextRunAt },
+      {
+        $set: {
+          lastRunAt: now,
+          nextRunAt,
+          ...(current.intervalMs ? {} : { enabled: false }),
+          updatedAt: now,
+        },
+      },
+      { new: true },
+    )
+    .lean<ScheduleRecord>()
+    .exec();
+  return updated ?? undefined;
+}
+
 export async function persistAuditEvent(event: AuditEvent): Promise<void> {
   await connectMongo();
   await auditModel().replaceOne({ correlationId: event.correlationId }, event, {
