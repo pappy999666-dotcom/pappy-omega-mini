@@ -7,6 +7,7 @@ import type {
   MenuMedia,
   MenuMediaSettings,
 } from "../types/domain.js";
+import { loadMenuMedia, persistMenuMedia } from "../persistence/mongo.js";
 
 const allowedTypes: Record<MediaKind, Set<string>> = {
   image: new Set(["image/jpeg", "image/png", "image/webp"]),
@@ -60,7 +61,21 @@ export async function addMenuMedia(input: {
     updatedAt: Date.now(),
   };
   catalog.set(mediaId, media);
+  try {
+    if (process.env.VITEST !== "true" && env.NODE_ENV !== "test") {
+      await persistMenuMedia(media);
+    }
+  } catch (error) {
+    // The file remains usable during a transient Mongo outage; startup hydration
+    // will reconcile durable metadata once the database is healthy again.
+    console.warn("[menu-media] durable catalog write deferred", error);
+  }
   return media;
+}
+
+export async function hydrateMenuMedia(): Promise<void> {
+  const media = await loadMenuMedia();
+  for (const item of media) catalog.set(item.mediaId, item);
 }
 
 export function listMenuMedia(workspaceId: string): MenuMedia[] {

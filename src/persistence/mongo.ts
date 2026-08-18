@@ -3,6 +3,7 @@ import mongoose, { type Model } from "mongoose";
 import { env } from "../config/env.js";
 import type { User, WhatsAppSession, Workspace } from "../types/domain.js";
 import type { AuditEvent, EmergencyState } from "../types/v2.js";
+import type { MenuMedia } from "../types/domain.js";
 
 export interface ForceJoinTargetRecord {
   targetId: string;
@@ -23,6 +24,7 @@ interface UserDocument extends User, mongoose.Document {}
 interface WorkspaceDocument extends Workspace, mongoose.Document {}
 interface SessionDocument extends WhatsAppSession, mongoose.Document {}
 interface AuditDocument extends AuditEvent, mongoose.Document {}
+interface MediaDocument extends MenuMedia, mongoose.Document {}
 interface ScheduleDocument extends mongoose.Document {
   scheduleId: string;
   workspaceId: string;
@@ -108,6 +110,21 @@ const sessionSchema = new mongoose.Schema<SessionDocument>(
   { collection: "whatsapp_sessions", versionKey: false },
 );
 sessionSchema.index({ workspaceId: 1, status: 1 });
+const mediaSchema = new mongoose.Schema<MediaDocument>(
+  {
+    mediaId: { type: String, required: true, unique: true, index: true },
+    workspaceId: { type: String, required: true, index: true },
+    kind: { type: String, required: true },
+    fileName: { type: String, required: true },
+    mimeType: { type: String, required: true },
+    filePath: { type: String, required: true },
+    bytes: { type: Number, required: true },
+    enabled: { type: Boolean, required: true },
+    createdAt: { type: Number, required: true },
+    updatedAt: { type: Number, required: true },
+  },
+  { collection: "menu_media", versionKey: false },
+);
 const scheduleSchema = new mongoose.Schema<ScheduleDocument>(
   {
     scheduleId: { type: String, required: true, unique: true, index: true },
@@ -171,6 +188,7 @@ let SessionModel: Model<SessionDocument> | undefined;
 let PairingRequestModel: Model<PairingRequestDocument> | undefined;
 let AuditModel: Model<AuditDocument> | undefined;
 let ScheduleModel: Model<ScheduleDocument> | undefined;
+let MediaModel: Model<MediaDocument> | undefined;
 let EmergencyModel: Model<EmergencyDocument> | undefined;
 
 export async function connectMongo(): Promise<typeof mongoose> {
@@ -204,6 +222,11 @@ function sessionModel(): Model<SessionDocument> {
   return (SessionModel ??=
     mongoose.models.WhatsAppSession ??
     mongoose.model<SessionDocument>("WhatsAppSession", sessionSchema));
+}
+function mediaModel(): Model<MediaDocument> {
+  return (MediaModel ??=
+    mongoose.models.MenuMedia ??
+    mongoose.model<MediaDocument>("MenuMedia", mediaSchema));
 }
 function scheduleModel(): Model<ScheduleDocument> {
   return (ScheduleModel ??=
@@ -239,6 +262,7 @@ export async function ensureMongoIndexes(): Promise<void> {
     pairingRequestModel().createIndexes(),
     auditModel().createIndexes(),
     scheduleModel().createIndexes(),
+    mediaModel().createIndexes(),
     emergencyModel().createIndexes(),
   ]);
 }
@@ -257,6 +281,24 @@ export async function persistWorkspace(workspace: Workspace): Promise<void> {
     { upsert: true },
   );
 }
+export async function persistMenuMedia(media: MenuMedia): Promise<void> {
+  await connectMongo();
+  await mediaModel().replaceOne({ mediaId: media.mediaId }, media, {
+    upsert: true,
+  });
+}
+export async function loadMenuMedia(
+  workspaceId?: string,
+): Promise<MenuMedia[]> {
+  await connectMongo();
+  const filter = workspaceId ? { workspaceId } : {};
+  return mediaModel()
+    .find(filter)
+    .sort({ updatedAt: -1 })
+    .lean<MenuMedia[]>()
+    .exec();
+}
+
 export interface ScheduleRecord {
   scheduleId: string;
   workspaceId: string;

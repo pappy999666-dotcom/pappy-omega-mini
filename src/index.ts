@@ -8,6 +8,7 @@ import { startWorkerRuntime } from "./jobs/runtime.js";
 import { closeMongo, ensureMongoIndexes } from "./persistence/mongo.js";
 import type { JobOrchestrator } from "./jobs/job-orchestrator.js";
 import { DurableScheduler } from "./jobs/scheduler.js";
+import { hydrateMenuMedia } from "./media/menu-media-store.js";
 
 async function main(): Promise<void> {
   assertProductionSecrets();
@@ -25,6 +26,7 @@ async function main(): Promise<void> {
   }
 
   await ensureMongoIndexes();
+  await hydrateMenuMedia();
   await hydrateSessionRegistry();
   await hydrateControlPlane();
   const bot = createTelegramBot();
