@@ -393,6 +393,7 @@ export function createTelegramBot(): Telegraf<Context> {
     if (action === "bridge") return showSessionBridge(ctx, session.sessionId);
     if (action === "join") return showJoinManager(ctx, session.sessionId);
     if (action === "groups") return showSessionGroups(ctx, session.sessionId);
+    if (action === "health") return showSessionHealth(ctx, session.sessionId);
     await edit(
       ctx,
       pageText(
@@ -1532,6 +1533,41 @@ async function handleForceJoinAdminInput(
     },
   });
   await showAdminForceJoin(ctx);
+}
+
+async function showSessionHealth(
+  ctx: Context,
+  sessionId: string,
+): Promise<void> {
+  const session = ownedSession(ctx, sessionId);
+  if (!session) return deny(ctx);
+  const jobs = (await getWorkerRuntime()?.listRecent(100)) ?? [];
+  const activeJobs = jobs.filter(
+    (job) =>
+      job.workspaceId === session.workspaceId &&
+      job.sessionId === session.sessionId &&
+      ["QUEUED", "RUNNING", "PAUSED", "RETRYING"].includes(job.state),
+  );
+  await edit(
+    ctx,
+    pageText(
+      `${session.sessionName} · Health`,
+      infoResponse(
+        "Session Diagnostics",
+        `<b>Status:</b> ${escapeHtml(session.status)}\n<b>Phone:</b> ${escapeHtml(session.phoneNumber ?? "not paired")}\n<b>Prefix:</b> <code>${escapeHtml(session.prefix || "none")}</code>\n<b>Connected:</b> ${session.connectedAt ? new Date(session.connectedAt).toLocaleString() : "not recorded"}\n<b>Last healthy:</b> ${session.lastHealthyAt ? new Date(session.lastHealthyAt).toLocaleString() : "not recorded"}\n<b>Active jobs:</b> ${activeJobs.length}\n<b>Reconnect note:</b> ${escapeHtml(session.disconnectReason ?? "none")}`,
+      ),
+    ),
+    keyboard([
+      [
+        btn(
+          "↻ Refresh Health",
+          `session:${session.sessionId}:action:health`,
+          "primary",
+        ),
+      ],
+      [btn("‹ Session", `session:${session.sessionId}:menu`)],
+    ]),
+  );
 }
 
 async function showSessionGroups(
