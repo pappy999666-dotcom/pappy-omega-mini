@@ -6,6 +6,7 @@ import {
   updateSession,
 } from "../src/core/session-registry.js";
 import { buildSessionMenu, renderAsciiMenu } from "../src/menus/menu-model.js";
+import { buildWhatsappMenuPayload } from "../src/menus/whatsapp-menu.js";
 import {
   addMenuMedia,
   getWhatsappMenuSettings,
@@ -40,6 +41,23 @@ describe("shared session menu", () => {
     );
     expect(renderAsciiMenu(model)).toContain("PAPPY OMEGA MINI");
     expect(renderAsciiMenu(model)).toContain("autojoin");
+  });
+
+  it("renders a compact WhatsApp-native main menu", async () => {
+    const user = resolveUser(`wa-menu-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "Jesus",
+    });
+    const payload = await buildWhatsappMenuPayload(session, true);
+    expect(payload.text).toContain("COMMANDS");
+    expect(payload.text).toContain(".profile");
+    expect(payload.text).toContain(".allstatusx <text>");
+    expect(payload.text).not.toContain("╔");
+    expect(payload.text).not.toContain(
+      "One command surface, two polished interfaces.",
+    );
+    expect(payload.text.length).toBeLessThan(500);
   });
 
   it("keeps session changes inside the owning workspace", () => {

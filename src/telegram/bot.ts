@@ -948,7 +948,7 @@ export function createTelegramBot(): Telegraf<Context> {
           `${session.sessionName} · PFP`,
           infoResponse(
             "Change Profile Picture",
-            "Send an HTTPS image URL now. The next message updates this WhatsApp profile picture.",
+            "Send a photo here, or send an HTTPS image URL. The next input updates this WhatsApp profile picture.",
           ),
         ),
         keyboard([[btn("Cancel", `session:${session.sessionId}:action:pfp`)]]),
@@ -1216,7 +1216,7 @@ export function createTelegramBot(): Telegraf<Context> {
           `${session.sessionName} · PFP`,
           infoResponse(
             "Profile Picture Controls",
-            "Get the current picture, change it with an HTTPS image URL, or remove it.",
+            "Get the current picture, send a real photo or HTTPS image URL to change it, or remove it.",
           ),
         ),
         keyboard([
