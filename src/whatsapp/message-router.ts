@@ -66,6 +66,10 @@ export async function routeWhatsAppText(
   if (!raw.trim()) return null;
 
   const commandName = raw.trim().split(/\s+/, 1)[0]?.toLowerCase();
+  const isOwner = isOwnerFor(message, session);
+  // WhatsApp is a private command surface: public and unauthorized senders
+  // receive no reply and cannot open the menu.
+  if (!isOwner) return null;
   if (commandName === "menu" || commandName === "help" || commandName === "m") {
     const payload = await buildWhatsappMenuPayload(
       session,
@@ -76,7 +80,6 @@ export async function routeWhatsAppText(
       : { text: payload.text };
   }
 
-  const isOwner = isOwnerFor(message, session);
   const runtime = getWorkerRuntime();
   const commandContext = {
     workspaceId: message.workspaceId,
@@ -132,5 +135,6 @@ export async function routeWhatsAppText(
         }
       : {}),
   };
-  return executeCommand(registry, raw, commandContext);
+  const response = await executeCommand(registry, raw, commandContext);
+  return response.startsWith("Unknown command.") ? null : response;
 }

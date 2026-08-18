@@ -7,6 +7,7 @@ import {
 } from "../src/core/session-registry.js";
 import { buildSessionMenu, renderAsciiMenu } from "../src/menus/menu-model.js";
 import { buildWhatsappMenuPayload } from "../src/menus/whatsapp-menu.js";
+import { routeWhatsAppText } from "../src/whatsapp/message-router.js";
 import {
   addMenuMedia,
   getWhatsappMenuSettings,
@@ -76,6 +77,41 @@ describe("shared session menu", () => {
         autoJoinEnabled: false,
       }),
     ).toThrow(/workspace/);
+  });
+});
+
+describe("WhatsApp command privacy", () => {
+  it("silences public and unknown WhatsApp commands", async () => {
+    const user = resolveUser(`wa-auth-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "private",
+      phoneNumber: "2348012345678",
+    });
+    expect(
+      await routeWhatsAppText({
+        workspaceId: user.workspaceId,
+        sessionId: session.sessionId,
+        senderJid: "2348099999999@s.whatsapp.net",
+        text: ".unknown",
+      }),
+    ).toBeNull();
+    expect(
+      await routeWhatsAppText({
+        workspaceId: user.workspaceId,
+        sessionId: session.sessionId,
+        senderJid: "2348012345678@s.whatsapp.net",
+        text: ".unknown",
+      }),
+    ).toBeNull();
+    expect(
+      await routeWhatsAppText({
+        workspaceId: user.workspaceId,
+        sessionId: session.sessionId,
+        senderJid: "2348012345678@s.whatsapp.net",
+        text: ".ping",
+      }),
+    ).toContain("ONLINE");
   });
 });
 
