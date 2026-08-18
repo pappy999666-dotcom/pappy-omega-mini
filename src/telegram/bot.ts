@@ -64,6 +64,7 @@ const globalBridgeActive = new Set<string>();
 const joinStates = new Map<string, "idle" | "running" | "paused" | "stopped">();
 const joinJobs = new Map<string, string>();
 const liveLoops = new Map<string, ReturnType<typeof setInterval>>();
+const validatorLiveStates = new Map<string, boolean>();
 const pendingGlobalCommand = new Map<
   string,
   { workspaceId: string; chatId: number; messageId: number }
@@ -471,10 +472,10 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.action("bucket:live", async (ctx) => {
     await ctx.answerCbQuery();
-    await showValidatorLiveLog(ctx, true);
+    await showValidatorLiveLog(ctx, false);
   });
   bot.action("bucket:live:on", async (ctx) => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery("Live log enabled");
     await showValidatorLiveLog(ctx, true);
   });
   bot.action("bucket:live:off", async (ctx) => {
@@ -483,7 +484,11 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.action("bucket:live:refresh", async (ctx) => {
     await ctx.answerCbQuery();
-    await showValidatorLiveLog(ctx, true);
+    const workspaceId = resolveTelegramUser(ctx).workspaceId;
+    await showValidatorLiveLog(
+      ctx,
+      validatorLiveStates.get(workspaceId) === true,
+    );
   });
   bot.action(/^bucket:(view|purge|merge|downloads)/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -857,8 +862,8 @@ export function createTelegramBot(): Telegraf<Context> {
         pageText(
           "Admin Module",
           infoResponse(
-            "Owner Operation",
-            `<code>${escapeHtml(action.replace("admin:", ""))}</code> is restricted to the owner and recorded in the audit stream.`,
+            "Owner Verified",
+            `<b>Action:</b> <code>${escapeHtml(action.replace("admin:", ""))}</code>\n\nOwner authorization confirmed. This control is available in the Admin Control Plane and every operation is recorded in the audit stream.`,
           ),
         ),
         keyboard([[btn(ui.back, "admin:panel")]]),
@@ -939,6 +944,8 @@ async function showValidatorLiveLog(
   active: boolean,
 ): Promise<void> {
   const user = resolveTelegramUser(ctx);
+  validatorLiveStates.set(user.workspaceId, active);
+  if (!active) stopValidatorLiveLoops(user.workspaceId);
   const snapshot = await getValidatorSnapshot(user.workspaceId);
   await edit(
     ctx,
@@ -952,10 +959,14 @@ async function showValidatorLiveLog(
   const messageId =
     message && "message_id" in message ? message.message_id : undefined;
   if (!active || !chatId || !messageId) return;
-  const loopKey = `validator-live:${chatId}:${messageId}`;
+  const loopKey = `validator-live:${user.workspaceId}:${chatId}:${messageId}`;
   const previous = liveLoops.get(loopKey);
   if (previous) clearInterval(previous);
   const interval = setInterval(() => {
+    if (validatorLiveStates.get(user.workspaceId) !== true) {
+      stopValidatorLiveLoops(user.workspaceId);
+      return;
+    }
     void getValidatorSnapshot(user.workspaceId)
       .then((nextSnapshot) => {
         void ctx.telegram
@@ -982,6 +993,15 @@ async function showValidatorLiveLog(
       liveLoops.delete(loopKey);
     }
   }, 120000);
+}
+
+function stopValidatorLiveLoops(workspaceId: string): void {
+  for (const [key, interval] of liveLoops) {
+    if (key.startsWith(`validator-live:${workspaceId}:`)) {
+      clearInterval(interval);
+      liveLoops.delete(key);
+    }
+  }
 }
 
 async function showGlobalBridge(ctx: Context): Promise<void> {

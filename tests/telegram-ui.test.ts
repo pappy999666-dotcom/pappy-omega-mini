@@ -4,6 +4,7 @@ import {
   globalBridgeKeyboard,
   pageText,
   sessionKeyboard,
+  validatorLiveKeyboard,
 } from "../src/telegram/ui.js";
 import type { WhatsAppSession } from "../src/types/domain.js";
 
@@ -52,6 +53,14 @@ describe("Telegram UI authorization", () => {
     expect(pageText("Status", "Ready")).toContain(
       "<blockquote>Ready</blockquote>",
     );
+  });
+
+  it("keeps Validator Live Log off until explicitly enabled", () => {
+    const off = JSON.stringify(validatorLiveKeyboard(false));
+    const on = JSON.stringify(validatorLiveKeyboard(true));
+    expect(off).toContain("bucket:live:on");
+    expect(off).not.toContain("bucket:live:off");
+    expect(on).toContain("bucket:live:off");
   });
 
   it("keeps the per-session sudo action owner-only", () => {
