@@ -149,6 +149,30 @@ describe("Telegram UI authorization", () => {
     expect(on).toContain("bucket:live:off");
   });
 
+  it("covers every operational per-session action without generic placeholders", () => {
+    const userSession = JSON.stringify(sessionKeyboard(session, false));
+    for (const action of [
+      "profile",
+      "pfp",
+      "creategroup",
+      "name",
+      "bio",
+      "groups",
+      "gpp",
+      "autojoin",
+      "join",
+      "prefix",
+      "health",
+      "purge",
+    ]) {
+      expect(userSession).toContain(`session:session-1:action:${action}`);
+    }
+    expect(userSession).not.toContain("session:session-1:action:sudo");
+    expect(userSession).not.toContain("Owner Verified");
+    expect(userSession).not.toContain("Coming soon");
+    expect(userSession).not.toContain("placeholder");
+  });
+
   it("keeps the per-session sudo action owner-only and exposes purge to users", () => {
     const userSession = callbackData(sessionKeyboard(session, false)).join(" ");
     expect(userSession).not.toContain("session:session-1:action:sudo");
