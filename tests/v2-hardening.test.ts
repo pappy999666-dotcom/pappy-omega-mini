@@ -42,3 +42,22 @@ describe("V2 hardening", () => {
     expect(() => assertOperationAllowed("join")).not.toThrow();
   });
 });
+
+describe("Global Sudo policy", () => {
+  it("persists workspace identities and removes them cleanly", async () => {
+    const { resolveUser, getWorkspaceSudo, updateWorkspaceSudo } =
+      await import("../src/core/session-registry.js");
+    const user = resolveUser(`sudo-${Date.now()}-${Math.random()}`);
+    expect(getWorkspaceSudo(user.workspaceId)).toEqual([]);
+    updateWorkspaceSudo(user.workspaceId, "add", "15551234567@s.whatsapp.net");
+    expect(getWorkspaceSudo(user.workspaceId)).toContain(
+      "15551234567@s.whatsapp.net",
+    );
+    updateWorkspaceSudo(
+      user.workspaceId,
+      "remove",
+      "15551234567@s.whatsapp.net",
+    );
+    expect(getWorkspaceSudo(user.workspaceId)).toEqual([]);
+  });
+});

@@ -131,7 +131,7 @@ export function updateWorkspaceSudo(
 ): string[] {
   const workspace = workspaces.get(workspaceId);
   if (!workspace) throw new Error("Workspace not found.");
-  const normalized = identity.replace(/[^0-9:@.-]/g, "");
+  const normalized = identity.replace(/[^0-9A-Za-z:_.@-]/g, "");
   if (!normalized) throw new Error("Invalid WhatsApp identity.");
   const current = workspace.globalSudoList ?? [];
   const globalSudoList =

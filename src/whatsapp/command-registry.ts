@@ -279,7 +279,10 @@ export function createCommandRegistry(): RegisteredCommand[] {
           return session(ctx).sudoList.length
             ? `Session sudo identities:\n${session(ctx).sudoList.join("\n")}`
             : "No session sudo identities configured.";
-        const identity = ctx.args[offset + 1]?.replace(/[^0-9:@.-]/g, "");
+        const identity = ctx.args[offset + 1]?.replace(
+          /[^0-9A-Za-z:_.@-]/g,
+          "",
+        );
         if (!identity || !["add", "remove"].includes(action ?? ""))
           return "Usage: .setsudo add|remove|list <WhatsApp identity> or .setsudo global add|remove|list <WhatsApp identity>.";
         if (global) {
