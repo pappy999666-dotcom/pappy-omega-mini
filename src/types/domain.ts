@@ -13,6 +13,7 @@ export type MediaKind = "image" | "video";
 export interface Workspace {
   workspaceId: string;
   ownerTelegramUserId: string;
+  globalSudoList: string[];
   createdAt: number;
 }
 

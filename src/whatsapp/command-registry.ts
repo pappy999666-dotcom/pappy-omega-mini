@@ -1,5 +1,10 @@
 import type { WhatsAppSession } from "../types/domain.js";
-import { getSession, updateSession } from "../core/session-registry.js";
+import {
+  getSession,
+  getWorkspaceSudo,
+  updateSession,
+  updateWorkspaceSudo,
+} from "../core/session-registry.js";
 import { buildSessionMenu, renderAsciiMenu } from "../menus/menu-model.js";
 import {
   listGroups,
@@ -261,21 +266,37 @@ export function createCommandRegistry(): RegisteredCommand[] {
       description: "Manage per-session sudo numbers.",
       ownerOnly: true,
       run: async (ctx) => {
-        const action = ctx.args[0]?.toLowerCase();
-        if (action === "list")
+        const global = ctx.args[0]?.toLowerCase() === "global";
+        const offset = global ? 1 : 0;
+        const action = ctx.args[offset]?.toLowerCase();
+        if (global && action === "list") {
+          const identities = getWorkspaceSudo(ctx.workspaceId);
+          return identities.length
+            ? `Global sudo identities:\n${identities.join("\n")}`
+            : "No global sudo identities configured.";
+        }
+        if (!global && action === "list")
           return session(ctx).sudoList.length
-            ? `Sudo identities:\n${session(ctx).sudoList.join("\n")}`
-            : "No sudo identities configured.";
-        const identity = ctx.args[1]?.replace(/[^0-9:@.-]/g, "");
+            ? `Session sudo identities:\n${session(ctx).sudoList.join("\n")}`
+            : "No session sudo identities configured.";
+        const identity = ctx.args[offset + 1]?.replace(/[^0-9:@.-]/g, "");
         if (!identity || !["add", "remove"].includes(action ?? ""))
-          return "Usage: .setsudo add|remove|list <WhatsApp identity>.";
+          return "Usage: .setsudo add|remove|list <WhatsApp identity> or .setsudo global add|remove|list <WhatsApp identity>.";
+        if (global) {
+          const next = updateWorkspaceSudo(
+            ctx.workspaceId,
+            action as "add" | "remove",
+            identity,
+          );
+          return `Global sudo ${action} complete for ${identity}.\nInherited by ${next.length} configured identity${next.length === 1 ? "" : "ies"}.`;
+        }
         const current = session(ctx).sudoList;
         const next =
           action === "add"
             ? [...new Set([...current, identity])]
             : current.filter((item) => item !== identity);
         updateSession(ctx.workspaceId, ctx.sessionId, { sudoList: next });
-        return `Sudo ${action} complete for ${identity}.`;
+        return `Session sudo ${action} complete for ${identity}.`;
       },
     },
   ];

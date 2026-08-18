@@ -1,5 +1,5 @@
 import { executeCommand, createCommandRegistry } from "./command-registry.js";
-import { getSession } from "../core/session-registry.js";
+import { getSession, getWorkspaceSudo } from "../core/session-registry.js";
 import { createHash } from "node:crypto";
 import { getWorkerRuntime } from "../jobs/runtime.js";
 import { listGroups } from "./transport-adapter.js";
@@ -31,7 +31,8 @@ function isOwnerFor(
 ): boolean {
   return (
     message.senderJid === session.phoneNumber ||
-    session.sudoList.includes(message.senderJid)
+    session.sudoList.includes(message.senderJid) ||
+    getWorkspaceSudo(session.workspaceId).includes(message.senderJid)
   );
 }
 
