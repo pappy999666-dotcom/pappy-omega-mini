@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { env, assertProductionSecrets } from "./config/env.js";
 import { createTelegramBot } from "./telegram/bot.js";
 import {
+  hasPersistedWhatsAppAuth,
   shutdownWhatsAppSessions,
   startWhatsAppSession,
 } from "./whatsapp/session-manager.js";
@@ -36,13 +37,18 @@ async function main(): Promise<void> {
   await hydrateSessionRegistry();
   await hydrateControlPlane();
   const persistedSessions = listAllSessions();
+  const recoverableSessions = [];
+  for (const session of persistedSessions) {
+    if (await hasPersistedWhatsAppAuth(session.workspaceId, session.sessionId))
+      recoverableSessions.push(session);
+  }
   await Promise.allSettled(
-    persistedSessions.map((session) =>
+    recoverableSessions.map((session) =>
       startWhatsAppSession(session.workspaceId, session.sessionId),
     ),
   );
   console.log(
-    `[pappy-omega-mini] WhatsApp session recovery scheduled for ${persistedSessions.length} persisted session(s).`,
+    `[pappy-omega-mini] WhatsApp recovery scheduled for ${recoverableSessions.length} paired session(s); ${persistedSessions.length - recoverableSessions.length} session(s) await pairing.`,
   );
   const bot = createTelegramBot();
   let workers: JobOrchestrator | undefined;

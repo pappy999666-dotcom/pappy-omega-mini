@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises";
+import { access, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import makeWASocket, {
   makeCacheManagerAuthState,
@@ -353,6 +353,23 @@ async function openWhatsAppSession(
   );
 
   runtimes.set(key, { socket, stop: () => socket.end() });
+}
+
+export async function hasPersistedWhatsAppAuth(
+  workspaceId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const authRoot = join(env.SESSION_ROOT, workspaceId, sessionId);
+  const credsPath = join(
+    authRoot,
+    `${encodeURIComponent(`${sessionId}:creds`)}.json`,
+  );
+  try {
+    await access(credsPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function startWhatsAppSession(
