@@ -25,6 +25,9 @@ export interface GroupSummary {
 function socketFor(workspaceId: string, sessionId: string): WASocket {
   return getWhatsAppSocket(workspaceId, sessionId);
 }
+function ownJid(socket: WASocket): string {
+  return (socket as WASocket & { user?: { id?: string } }).user?.id ?? "me";
+}
 
 function method(
   socket: WASocket,
@@ -58,9 +61,10 @@ export async function getProfilePictureUrl(
   workspaceId: string,
   sessionId: string,
 ): Promise<string | undefined> {
-  const get = method(socketFor(workspaceId, sessionId), "profilePictureUrl");
+  const socket = socketFor(workspaceId, sessionId);
+  const get = method(socket, "profilePictureUrl");
   if (!get) throw new Error("Unsupported capability: profilePicture");
-  const result = await get("me", "image");
+  const result = await get(ownJid(socket), "image");
   return typeof result === "string" ? result : undefined;
 }
 
@@ -69,24 +73,20 @@ export async function updateProfilePicture(
   sessionId: string,
   imageUrl: string,
 ): Promise<void> {
-  const update = method(
-    socketFor(workspaceId, sessionId),
-    "updateProfilePicture",
-  );
+  const socket = socketFor(workspaceId, sessionId);
+  const update = method(socket, "updateProfilePicture");
   if (!update) throw new Error("Unsupported capability: profilePicture");
-  await update("me", { url: imageUrl });
+  await update(ownJid(socket), { url: imageUrl });
 }
 
 export async function removeProfilePicture(
   workspaceId: string,
   sessionId: string,
 ): Promise<void> {
-  const remove = method(
-    socketFor(workspaceId, sessionId),
-    "removeProfilePicture",
-  );
+  const socket = socketFor(workspaceId, sessionId);
+  const remove = method(socket, "removeProfilePicture");
   if (!remove) throw new Error("Unsupported capability: profilePicture");
-  await remove("me");
+  await remove(ownJid(socket));
 }
 
 export async function createWhatsAppGroup(

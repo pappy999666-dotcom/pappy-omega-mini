@@ -166,9 +166,19 @@ export function createCommandRegistry(): RegisteredCommand[] {
       name: "setgpp",
       aliases: ["gpp"],
       description:
-        "Change the current group profile picture from quoted media.",
-      run: async () =>
-        "Unsupported capability: groupProfilePicture. The installed Baileys transport does not expose a safe group-picture operation.",
+        "Change a WhatsApp group profile picture from an HTTPS image URL.",
+      run: async (ctx) => {
+        const jid = ctx.args[0];
+        const url = ctx.args[1];
+        if (!jid || !url || !/^https:\/\//i.test(url))
+          return "Usage: .setgpp <groupJid> <https image URL>";
+        try {
+          await updateProfilePicture(ctx.workspaceId, ctx.sessionId, url);
+          return `Group profile picture update requested for ${jid}.`;
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      },
     },
     {
       name: "setname",
