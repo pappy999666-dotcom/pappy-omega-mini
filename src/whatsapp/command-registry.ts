@@ -258,7 +258,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
     },
     {
       name: "allstatus",
-      aliases: [],
+      aliases: ["allstatusx", "gstatusx"],
       description: "Queue bounded delivery to all eligible groups.",
       ownerOnly: true,
       run: async (ctx) => {
@@ -284,7 +284,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
     },
     {
       name: "allchat",
-      aliases: [],
+      aliases: ["allchatx"],
       description: "Queue bounded delivery to all eligible group chats.",
       ownerOnly: true,
       run: async (ctx) => {
