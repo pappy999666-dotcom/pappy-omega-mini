@@ -836,13 +836,10 @@ export function createTelegramBot(): Telegraf<Context> {
     await updateSupportTicket(ctx.match[1] ?? "", { status: "closed" });
     await showAdminSupport(ctx);
   });
-  bot.action("ui:schedule", async (ctx) =>
-    showFeature(
-      ctx,
-      "Scheduled Jobs",
-      "Create timezone-aware jobs for owned sessions.",
-    ),
-  );
+  bot.action("ui:schedule", async (ctx) => {
+    await ctx.answerCbQuery();
+    await showSchedulePanel(ctx);
+  });
   bot.action("ui:settings", async (ctx) => {
     await ctx.answerCbQuery();
     const settings = getWorkspaceDefaults(resolveTelegramUser(ctx).workspaceId);
@@ -870,13 +867,10 @@ export function createTelegramBot(): Telegraf<Context> {
       keyboard([[btn("Cancel", "menu:main", "danger")]]),
     );
   });
-  bot.action("ui:join", async (ctx) =>
-    showFeature(
-      ctx,
-      "Join Manager",
-      "Open a session first. Join Manager is permanently bound to the selected WhatsApp session and uses the Active bucket.",
-    ),
-  );
+  bot.action("ui:join", async (ctx) => {
+    await ctx.answerCbQuery();
+    await sendSessions(ctx, 0);
+  });
 
   bot.action(/^session:([^:]+):bridge:(start|stop)$/, async (ctx) => {
     await ctx.answerCbQuery();
