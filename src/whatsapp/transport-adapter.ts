@@ -71,26 +71,32 @@ export async function getProfilePictureUrl(
 export async function updateProfilePicture(
   workspaceId: string,
   sessionId: string,
-  imageUrl: string,
+  imageUrl: string | Buffer,
 ): Promise<void> {
   const socket = socketFor(workspaceId, sessionId);
   const update = method(socket, "updateProfilePicture");
   if (!update) throw new Error("Unsupported capability: profilePicture");
-  await update(ownJid(socket), { url: imageUrl });
+  await update(
+    ownJid(socket),
+    Buffer.isBuffer(imageUrl) ? imageUrl : { url: imageUrl },
+  );
 }
 
 export async function updateGroupProfilePicture(
   workspaceId: string,
   sessionId: string,
   groupJid: string,
-  imageUrl: string,
+  imageUrl: string | Buffer,
 ): Promise<void> {
   const update = method(
     socketFor(workspaceId, sessionId),
     "updateProfilePicture",
   );
   if (!update) throw new Error("Unsupported capability: groupProfilePicture");
-  await update(groupJid, { url: imageUrl });
+  await update(
+    groupJid,
+    Buffer.isBuffer(imageUrl) ? imageUrl : { url: imageUrl },
+  );
 }
 
 export async function removeProfilePicture(

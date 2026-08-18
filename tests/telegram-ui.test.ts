@@ -158,6 +158,7 @@ describe("Telegram UI authorization", () => {
       "name",
       "bio",
       "groups",
+      "bridge",
       "gpp",
       "autojoin",
       "join",

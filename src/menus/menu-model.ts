@@ -57,6 +57,12 @@ export function buildSessionMenu(
       description: "Browse groups with pagination.",
     },
     {
+      id: "bridge",
+      label: "Session Bridge",
+      command: "bridge",
+      description: "Bind bridge traffic to this WhatsApp session only.",
+    },
+    {
       id: "gpp",
       label: "Group Picture",
       command: "setgpp",

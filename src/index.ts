@@ -1,8 +1,14 @@
 import { mkdir } from "node:fs/promises";
 import { env, assertProductionSecrets } from "./config/env.js";
 import { createTelegramBot } from "./telegram/bot.js";
-import { shutdownWhatsAppSessions } from "./whatsapp/session-manager.js";
-import { hydrateSessionRegistry } from "./core/session-registry.js";
+import {
+  shutdownWhatsAppSessions,
+  startWhatsAppSession,
+} from "./whatsapp/session-manager.js";
+import {
+  hydrateSessionRegistry,
+  listAllSessions,
+} from "./core/session-registry.js";
 import { hydrateControlPlane } from "./core/control-plane.js";
 import { startWorkerRuntime } from "./jobs/runtime.js";
 import { closeMongo, ensureMongoIndexes } from "./persistence/mongo.js";
@@ -29,6 +35,15 @@ async function main(): Promise<void> {
   await hydrateMenuMedia();
   await hydrateSessionRegistry();
   await hydrateControlPlane();
+  const persistedSessions = listAllSessions();
+  await Promise.allSettled(
+    persistedSessions.map((session) =>
+      startWhatsAppSession(session.workspaceId, session.sessionId),
+    ),
+  );
+  console.log(
+    `[pappy-omega-mini] WhatsApp session recovery scheduled for ${persistedSessions.length} persisted session(s).`,
+  );
   const bot = createTelegramBot();
   let workers: JobOrchestrator | undefined;
   let scheduler: DurableScheduler | undefined;

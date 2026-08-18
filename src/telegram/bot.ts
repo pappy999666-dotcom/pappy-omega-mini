@@ -663,8 +663,52 @@ export function createTelegramBot(): Telegraf<Context> {
     })();
   });
   bot.on("photo", async (ctx) => {
+    const userId = String(ctx.from.id);
+    const profilePicture = pendingProfilePicture.get(userId);
+    if (profilePicture) {
+      pendingProfilePicture.delete(userId);
+      try {
+        const photo = ctx.message.photo.at(-1);
+        if (!photo)
+          throw new Error("Telegram did not provide the uploaded image.");
+        const file = await ctx.telegram.getFileLink(photo.file_id);
+        const response = await fetch(file.href);
+        if (!response.ok)
+          throw new Error(
+            `Telegram image download failed (${response.status}).`,
+          );
+        await updateProfilePicture(
+          profilePicture.workspaceId,
+          profilePicture.sessionId,
+          Buffer.from(await response.arrayBuffer()),
+        );
+        return ctx.reply(
+          pageText(
+            "Profile Picture",
+            successResponse(
+              "Updated",
+              "The uploaded image is now the WhatsApp profile picture.",
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+      } catch (error) {
+        return ctx.reply(
+          pageText(
+            "Profile Picture",
+            dangerResponse(
+              "Update Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+      }
+    }
     if (!requireAdmin(ctx)) return;
-    const kind = pendingMedia.get(String(ctx.from.id));
+    const kind = pendingMedia.get(userId);
     if (kind !== "image")
       return ctx.reply("Open Admin Panel → Media → Add Image first.");
     const photo = ctx.message.photo.at(-1);
