@@ -11,6 +11,7 @@ import {
 } from "../whatsapp/transport-adapter.js";
 import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
+import { createDefaultPreviewManager } from "../preview/default-adapter.js";
 
 interface LinkValidationPayload {
   urls?: string[];
@@ -72,6 +73,7 @@ export function startWorkerRuntime(): JobOrchestrator {
   activeRuntime = orchestrator;
   const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
   const buckets = new LinkBucketStore(redis);
+  const previewManager = createDefaultPreviewManager(redis);
   orchestrator.addCloseHook(async () => {
     await redis.quit();
   });
@@ -311,6 +313,7 @@ export function startWorkerRuntime(): JobOrchestrator {
                 sessionId,
                 jid,
                 text,
+                previewManager,
               );
             else
               await sendGroupMentions(
@@ -319,6 +322,7 @@ export function startWorkerRuntime(): JobOrchestrator {
                 jid,
                 text,
                 payload.count,
+                previewManager,
               );
             return { status: "success" as const };
           } catch {
