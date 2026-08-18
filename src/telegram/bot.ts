@@ -25,9 +25,12 @@ import {
 } from "../core/control-plane.js";
 import { getValidatorSnapshot } from "../links/validator-snapshot.js";
 import {
+  deletePairingRequest,
+  getPairingRequest,
   listForceJoinTargets,
   listUsers,
   removeForceJoinTarget,
+  savePairingRequest,
   setForceJoinTargetEnabled,
   setUserStatus,
   upsertForceJoinTarget,
@@ -169,7 +172,9 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.on("text", async (ctx) => {
     const userId = String(ctx.from.id);
-    const pairing = pendingPairing.get(userId);
+    const pairing =
+      pendingPairing.get(userId) ??
+      (await getPairingRequest(userId).catch(() => undefined));
     if (pairing && !ctx.message.text.startsWith("/")) {
       await handlePairingText(ctx, pairing, ctx.message.text.trim());
       return;
@@ -320,7 +325,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     const session = ownedSession(ctx, ctx.match[1] ?? "");
     if (!session) return deny(ctx);
-    pendingPairing.set(String(ctx.from?.id ?? ""), {
+    savePendingPairing(String(ctx.from?.id ?? ""), {
       stage: "phone",
       chatId: ctx.chat?.id ?? 0,
       sessionId: session.sessionId,
@@ -1174,6 +1179,28 @@ export function createTelegramBot(): Telegraf<Context> {
   return bot;
 }
 
+function savePendingPairing(
+  telegramUserId: string,
+  state: {
+    stage: "label" | "phone";
+    chatId: number;
+    messageId?: number;
+    sessionId?: string;
+  },
+): void {
+  pendingPairing.set(telegramUserId, state);
+  void savePairingRequest({
+    ...state,
+    telegramUserId,
+    updatedAt: Date.now(),
+  }).catch(() => undefined);
+}
+
+function clearPendingPairing(telegramUserId: string): void {
+  pendingPairing.delete(telegramUserId);
+  void deletePairingRequest(telegramUserId).catch(() => undefined);
+}
+
 async function startPairing(
   ctx: Context,
   requestedName: string,
@@ -1199,7 +1226,7 @@ async function startPairing(
     workspaceId: user.workspaceId,
     sessionName: normalizedName,
   });
-  pendingPairing.set(String(ctx.from?.id ?? ""), {
+  savePendingPairing(String(ctx.from?.id ?? ""), {
     stage: "phone",
     chatId: ctx.chat?.id ?? 0,
     sessionId: session.sessionId,
@@ -1223,7 +1250,7 @@ async function beginPairingWizard(ctx: Context): Promise<void> {
     ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : 0);
   const messageId =
     message && "message_id" in message ? message.message_id : undefined;
-  pendingPairing.set(String(ctx.from?.id ?? ""), {
+  savePendingPairing(String(ctx.from?.id ?? ""), {
     stage: "label",
     chatId,
     ...(messageId ? { messageId } : {}),
@@ -1254,13 +1281,13 @@ async function handlePairingText(
   const userId = String(ctx.from?.id ?? "");
   if (!text) return;
   if (pending.stage === "label") {
-    pendingPairing.delete(userId);
+    clearPendingPairing(userId);
     await startPairing(ctx, text);
     return;
   }
   const sessionId = pending.sessionId;
   if (!sessionId) {
-    pendingPairing.delete(userId);
+    clearPendingPairing(userId);
     await beginPairingWizard(ctx);
     return;
   }
@@ -1285,7 +1312,7 @@ async function handlePairingText(
       phoneNumber: normalizedPhone,
       status: "PAIRING",
     });
-    pendingPairing.delete(userId);
+    clearPendingPairing(userId);
     const code = await requestWhatsAppPairingCode(
       session.workspaceId,
       session.sessionId,

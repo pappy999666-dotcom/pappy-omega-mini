@@ -21,6 +21,14 @@ interface ForceJoinTargetDocument
 interface UserDocument extends User, mongoose.Document {}
 interface WorkspaceDocument extends Workspace, mongoose.Document {}
 interface SessionDocument extends WhatsAppSession, mongoose.Document {}
+interface PairingRequestDocument extends mongoose.Document {
+  telegramUserId: string;
+  stage: "label" | "phone";
+  chatId: number;
+  messageId?: number;
+  sessionId?: string;
+  updatedAt: number;
+}
 
 const forceJoinSchema = new mongoose.Schema<ForceJoinTargetDocument>(
   {
@@ -84,12 +92,24 @@ const sessionSchema = new mongoose.Schema<SessionDocument>(
   { collection: "whatsapp_sessions", versionKey: false },
 );
 sessionSchema.index({ workspaceId: 1, status: 1 });
+const pairingRequestSchema = new mongoose.Schema<PairingRequestDocument>(
+  {
+    telegramUserId: { type: String, required: true, unique: true, index: true },
+    stage: { type: String, enum: ["label", "phone"], required: true },
+    chatId: { type: Number, required: true },
+    messageId: Number,
+    sessionId: String,
+    updatedAt: { type: Number, required: true, index: true },
+  },
+  { collection: "pairing_requests", versionKey: false },
+);
 
 let connectionPromise: Promise<typeof mongoose> | undefined;
 let ForceJoinTarget: Model<ForceJoinTargetDocument> | undefined;
 let UserModel: Model<UserDocument> | undefined;
 let WorkspaceModel: Model<WorkspaceDocument> | undefined;
 let SessionModel: Model<SessionDocument> | undefined;
+let PairingRequestModel: Model<PairingRequestDocument> | undefined;
 
 export async function connectMongo(): Promise<typeof mongoose> {
   if (mongoose.connection.readyState === 1) return mongoose;
@@ -123,6 +143,14 @@ function sessionModel(): Model<SessionDocument> {
     mongoose.models.WhatsAppSession ??
     mongoose.model<SessionDocument>("WhatsAppSession", sessionSchema));
 }
+function pairingRequestModel(): Model<PairingRequestDocument> {
+  return (PairingRequestModel ??=
+    mongoose.models.PairingRequest ??
+    mongoose.model<PairingRequestDocument>(
+      "PairingRequest",
+      pairingRequestSchema,
+    ));
+}
 
 export async function ensureMongoIndexes(): Promise<void> {
   await connectMongo();
@@ -131,6 +159,7 @@ export async function ensureMongoIndexes(): Promise<void> {
     userModel().createIndexes(),
     workspaceModel().createIndexes(),
     sessionModel().createIndexes(),
+    pairingRequestModel().createIndexes(),
   ]);
 }
 
@@ -148,6 +177,42 @@ export async function persistWorkspace(workspace: Workspace): Promise<void> {
     { upsert: true },
   );
 }
+export interface PairingRequestRecord {
+  telegramUserId: string;
+  stage: "label" | "phone";
+  chatId: number;
+  messageId?: number;
+  sessionId?: string;
+  updatedAt: number;
+}
+
+export async function savePairingRequest(
+  request: PairingRequestRecord,
+): Promise<void> {
+  await connectMongo();
+  await pairingRequestModel().replaceOne(
+    { telegramUserId: request.telegramUserId },
+    request,
+    { upsert: true },
+  );
+}
+export async function getPairingRequest(
+  telegramUserId: string,
+): Promise<PairingRequestRecord | undefined> {
+  await connectMongo();
+  const record = await pairingRequestModel()
+    .findOne({ telegramUserId })
+    .lean<PairingRequestRecord>()
+    .exec();
+  return record ?? undefined;
+}
+export async function deletePairingRequest(
+  telegramUserId: string,
+): Promise<void> {
+  await connectMongo();
+  await pairingRequestModel().deleteOne({ telegramUserId });
+}
+
 export async function listUsers(limit = 50, skip = 0): Promise<User[]> {
   await connectMongo();
   return userModel()
