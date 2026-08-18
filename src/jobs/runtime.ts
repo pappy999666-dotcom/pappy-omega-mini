@@ -2,6 +2,11 @@ import { Redis } from "ioredis";
 import { env } from "../config/env.js";
 import { LinkBucketStore } from "../links/link-bucket-store.js";
 import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
+import {
+  sendGroupMentions,
+  sendGroupStatus,
+  sendGroupText,
+} from "../whatsapp/transport-adapter.js";
 import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
 
@@ -159,6 +164,52 @@ export function startWorkerRuntime(): JobOrchestrator {
       },
     });
   });
+
+  for (const kind of ["allstatus", "allchat", "tag"] as const) {
+    orchestrator.register(kind, async (context) => {
+      const sessionId = context.job.sessionId;
+      if (!sessionId) throw new Error(`${kind} requires a WhatsApp session.`);
+      const payload = context.job.payload as {
+        groups?: string[];
+        text?: string;
+        count?: number;
+      };
+      const groups = payload.groups ?? [];
+      const text = payload.text?.trim();
+      if (!text) throw new Error(`${kind} requires a non-empty text payload.`);
+      return runBoundedBatch({
+        items: groups,
+        concurrency: 1,
+        context,
+        processItem: async (jid) => {
+          try {
+            if (kind === "allstatus")
+              await sendGroupStatus(context.job.workspaceId, sessionId, jid, {
+                text,
+              });
+            else if (kind === "allchat")
+              await sendGroupText(
+                context.job.workspaceId,
+                sessionId,
+                jid,
+                text,
+              );
+            else
+              await sendGroupMentions(
+                context.job.workspaceId,
+                sessionId,
+                jid,
+                text,
+                payload.count,
+              );
+            return { status: "success" as const };
+          } catch {
+            return { status: "failed" as const };
+          }
+        },
+      });
+    });
+  }
 
   orchestrator.register("cleanup", async (context) => {
     await context.report({

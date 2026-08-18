@@ -1,12 +1,22 @@
 import type { WhatsAppSession } from "../types/domain.js";
 import { getSession, updateSession } from "../core/session-registry.js";
 import { buildSessionMenu, renderAsciiMenu } from "../menus/menu-model.js";
+import {
+  listGroups,
+  updateProfileBio,
+  updateProfileName,
+} from "./transport-adapter.js";
 
 export interface CommandContext {
   workspaceId: string;
   sessionId: string;
   isOwner: boolean;
   args: string[];
+  enqueueJob?: (input: {
+    kind: "allstatus" | "allchat" | "tag";
+    payload: Record<string, unknown>;
+  }) => Promise<string>;
+  cancelJobs?: (kind: "allstatus" | "allchat" | "tag") => Promise<number>;
 }
 
 export interface RegisteredCommand {
@@ -91,7 +101,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
       description:
         "Get or change the session profile picture from quoted media.",
       run: async () =>
-        "PFP controls are ready: send a quoted image with .setpfp to apply it, or use .pfp to view the current picture.",
+        "Unsupported capability: profilePicture. The installed Baileys transport does not expose a safe profile-picture operation.",
     },
     {
       name: "setgpp",
@@ -99,32 +109,144 @@ export function createCommandRegistry(): RegisteredCommand[] {
       description:
         "Change the current group profile picture from quoted media.",
       run: async () =>
-        "Group picture controls are ready: quote an image and send .setgpp in the target group.",
+        "Unsupported capability: groupProfilePicture. The installed Baileys transport does not expose a safe group-picture operation.",
     },
     {
       name: "setname",
       aliases: ["name"],
       description: "Read or update the WhatsApp display name.",
-      run: async (ctx) =>
-        ctx.args.length
-          ? `Display name change queued: ${ctx.args.join(" ")}`
-          : "Current display name is managed by the session profile flow.",
+      run: async (ctx) => {
+        if (!ctx.args.length) return "Usage: .setname <new display name>.";
+        try {
+          await updateProfileName(
+            ctx.workspaceId,
+            ctx.sessionId,
+            ctx.args.join(" "),
+          );
+          return `Display name updated to: ${ctx.args.join(" ")}`;
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      },
     },
     {
       name: "setbio",
       aliases: ["bio"],
       description: "Read or update the WhatsApp bio.",
-      run: async (ctx) =>
-        ctx.args.length
-          ? "Bio change queued."
-          : "Current bio is managed by the session profile flow.",
+      run: async (ctx) => {
+        if (!ctx.args.length) return "Usage: .setbio <new bio>.";
+        try {
+          await updateProfileBio(
+            ctx.workspaceId,
+            ctx.sessionId,
+            ctx.args.join(" "),
+          );
+          return "Bio updated successfully.";
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      },
     },
     {
       name: "groups",
       aliases: ["mygroups"],
       description: "Browse groups with pagination.",
-      run: async () =>
-        "Group browser: use the Telegram session menu or .groups page 1. Large lists are paginated.",
+      run: async (ctx) => {
+        try {
+          const groups = await listGroups(ctx.workspaceId, ctx.sessionId);
+          if (!groups.length) return "No WhatsApp groups were returned.";
+          return groups
+            .slice(0, 40)
+            .map(
+              (group, index) =>
+                `${index + 1}. ${group.subject} · ${group.participantCount} members\n${group.jid}`,
+            )
+            .join("\n");
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      },
+    },
+    {
+      name: "allstatus",
+      aliases: [],
+      description: "Queue bounded delivery to all eligible groups.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
+        const text = ctx.args.join(" ").trim();
+        if (!text) return "Usage: .allstatus <text>.";
+        const jobId = await ctx.enqueueJob({
+          kind: "allstatus",
+          payload: { text },
+        });
+        return `All-status job queued: ${jobId}`;
+      },
+    },
+    {
+      name: "stopstatus",
+      aliases: [],
+      description: "Cancel active all-status work.",
+      ownerOnly: true,
+      run: async (ctx) =>
+        ctx.cancelJobs
+          ? `Cancelled ${await ctx.cancelJobs("allstatus")} all-status job(s).`
+          : "Queue runtime is unavailable.",
+    },
+    {
+      name: "allchat",
+      aliases: [],
+      description: "Queue bounded delivery to all eligible group chats.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
+        const text = ctx.args.join(" ").trim();
+        if (!text) return "Usage: .allchat <text>.";
+        const jobId = await ctx.enqueueJob({
+          kind: "allchat",
+          payload: { text },
+        });
+        return `All-chat job queued: ${jobId}`;
+      },
+    },
+    {
+      name: "stopchat",
+      aliases: [],
+      description: "Cancel active all-chat work.",
+      ownerOnly: true,
+      run: async (ctx) =>
+        ctx.cancelJobs
+          ? `Cancelled ${await ctx.cancelJobs("allchat")} all-chat job(s).`
+          : "Queue runtime is unavailable.",
+    },
+    {
+      name: "tag",
+      aliases: [],
+      description: "Queue safe WhatsApp mention entities in each group.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
+        const count = /^\d+$/.test(ctx.args[0] ?? "")
+          ? Number(ctx.args.shift())
+          : undefined;
+        const text = ctx.args.join(" ").trim();
+        if (!text) return "Usage: .tag [count] <text>.";
+        const jobId = await ctx.enqueueJob({
+          kind: "tag",
+          payload: { text, ...(count ? { count } : {}) },
+        });
+        return `Tag job queued: ${jobId}`;
+      },
+    },
+    {
+      name: "stoptag",
+      aliases: [],
+      description: "Cancel active tag work.",
+      ownerOnly: true,
+      run: async (ctx) =>
+        ctx.cancelJobs
+          ? `Cancelled ${await ctx.cancelJobs("tag")} tag job(s).`
+          : "Queue runtime is unavailable.",
     },
     {
       name: "health",
@@ -138,8 +260,23 @@ export function createCommandRegistry(): RegisteredCommand[] {
       aliases: ["sudo"],
       description: "Manage per-session sudo numbers.",
       ownerOnly: true,
-      run: async () =>
-        "Sudo management is owner-only. Use .setsudo add|remove|list <number>.",
+      run: async (ctx) => {
+        const action = ctx.args[0]?.toLowerCase();
+        if (action === "list")
+          return session(ctx).sudoList.length
+            ? `Sudo identities:\n${session(ctx).sudoList.join("\n")}`
+            : "No sudo identities configured.";
+        const identity = ctx.args[1]?.replace(/[^0-9:@.-]/g, "");
+        if (!identity || !["add", "remove"].includes(action ?? ""))
+          return "Usage: .setsudo add|remove|list <WhatsApp identity>.";
+        const current = session(ctx).sudoList;
+        const next =
+          action === "add"
+            ? [...new Set([...current, identity])]
+            : current.filter((item) => item !== identity);
+        updateSession(ctx.workspaceId, ctx.sessionId, { sudoList: next });
+        return `Sudo ${action} complete for ${identity}.`;
+      },
     },
   ];
 }
