@@ -6,6 +6,7 @@ import {
   listSessions,
   createSession,
   getSession,
+  updateSession,
   getWorkspaceDefaults,
   updateWorkspaceDefaults,
 } from "../core/session-registry.js";
@@ -20,6 +21,7 @@ import {
   setEmergencyState,
 } from "../core/control-plane.js";
 import { getValidatorSnapshot } from "../links/validator-snapshot.js";
+import { requestWhatsAppPairingCode } from "../whatsapp/session-manager.js";
 import {
   createCommandRegistry,
   executeCommand,
@@ -65,6 +67,15 @@ const joinStates = new Map<string, "idle" | "running" | "paused" | "stopped">();
 const joinJobs = new Map<string, string>();
 const liveLoops = new Map<string, ReturnType<typeof setInterval>>();
 const validatorLiveStates = new Map<string, boolean>();
+const pendingPairing = new Map<
+  string,
+  {
+    stage: "label" | "phone";
+    chatId: number;
+    messageId?: number;
+    sessionId?: string;
+  }
+>();
 const pendingGlobalCommand = new Map<
   string,
   { workspaceId: string; chatId: number; messageId: number }
@@ -100,6 +111,11 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.on("text", async (ctx) => {
     const userId = String(ctx.from.id);
+    const pairing = pendingPairing.get(userId);
+    if (pairing && !ctx.message.text.startsWith("/")) {
+      await handlePairingText(ctx, pairing, ctx.message.text.trim());
+      return;
+    }
     const pending = pendingGlobalCommand.get(userId);
     if (!pending || ctx.message.text.startsWith("/")) return;
     const user = resolveTelegramUser(ctx);
@@ -228,22 +244,17 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.action("session:new", async (ctx) => {
     await ctx.answerCbQuery();
-    await edit(
-      ctx,
-      pageText(
-        "New WhatsApp Session",
-        infoResponse(
-          "Session Setup",
-          "Send a short label such as <code>main</code>, <code>business</code>, or <code>support-1</code>. The next step requests a country-code phone number.",
-        ),
-      ),
-      keyboard([[btn(ui.close, "menu:main", "danger")]]),
-    );
+    await beginPairingWizard(ctx);
   });
   bot.action(/^pair:number:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const session = ownedSession(ctx, ctx.match[1] ?? "");
     if (!session) return deny(ctx);
+    pendingPairing.set(String(ctx.from?.id ?? ""), {
+      stage: "phone",
+      chatId: ctx.chat?.id ?? 0,
+      sessionId: session.sessionId,
+    });
     await edit(
       ctx,
       pageText(
@@ -881,34 +892,149 @@ async function startPairing(
   ctx: Context,
   requestedName: string,
 ): Promise<void> {
+  if (!requestedName.trim()) return beginPairingWizard(ctx);
   const user = resolveTelegramUser(ctx);
+  const normalizedName = requestedName.trim().replace(/\s+/g, "-");
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,47}$/.test(normalizedName)) {
+    await sendOrEdit(
+      ctx,
+      pageText(
+        "Pairing Request",
+        dangerResponse(
+          "Invalid Session Label",
+          "Use 2–48 letters, numbers, hyphens, or underscores, beginning with a letter or number.",
+        ),
+      ),
+      keyboard([[btn(ui.back, "menu:main")]]),
+    );
+    return;
+  }
   const session = createSession({
     workspaceId: user.workspaceId,
-    sessionName:
-      requestedName || `session-${listSessions(user.workspaceId).length + 1}`,
+    sessionName: normalizedName,
   });
-  await ctx.reply(
+  pendingPairing.set(String(ctx.from?.id ?? ""), {
+    stage: "phone",
+    chatId: ctx.chat?.id ?? 0,
+    sessionId: session.sessionId,
+  });
+  await sendOrEdit(
+    ctx,
     pageText(
-      "Pairing Request",
-      successResponse(
+      "Pairing · Phone Number",
+      infoResponse(
         "Session Created",
-        `<b>${escapeHtml(session.sessionName)}</b> is ready for phone-number pairing.`,
+        `<b>${escapeHtml(session.sessionName)}</b> is ready. Send the full WhatsApp number in country-code format, for example <code>2348012345678</code>.`,
       ),
     ),
-    {
-      parse_mode: "HTML",
-      reply_markup: keyboard([
-        [
-          btn(
-            "Enter Phone Number",
-            `pair:number:${session.sessionId}`,
-            "success",
-          ),
-        ],
-        [btn(ui.close, "menu:main", "danger")],
-      ]),
-    },
+    keyboard([[btn(ui.close, "menu:main", "danger")]]),
   );
+}
+
+async function beginPairingWizard(ctx: Context): Promise<void> {
+  const message = ctx.callbackQuery?.message;
+  const chatId =
+    ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : 0);
+  const messageId =
+    message && "message_id" in message ? message.message_id : undefined;
+  pendingPairing.set(String(ctx.from?.id ?? ""), {
+    stage: "label",
+    chatId,
+    ...(messageId ? { messageId } : {}),
+  });
+  await sendOrEdit(
+    ctx,
+    pageText(
+      "New WhatsApp Session",
+      infoResponse(
+        "Step 1 of 2 · Session Label",
+        "Send a short label such as <code>main</code>, <code>business</code>, or <code>support-1</code>. You will then enter the WhatsApp number.",
+      ),
+    ),
+    keyboard([[btn(ui.close, "menu:main", "danger")]]),
+  );
+}
+
+async function handlePairingText(
+  ctx: Context,
+  pending: {
+    stage: "label" | "phone";
+    chatId: number;
+    messageId?: number;
+    sessionId?: string;
+  },
+  text: string,
+): Promise<void> {
+  const userId = String(ctx.from?.id ?? "");
+  if (!text) return;
+  if (pending.stage === "label") {
+    pendingPairing.delete(userId);
+    await startPairing(ctx, text);
+    return;
+  }
+  const sessionId = pending.sessionId;
+  if (!sessionId) {
+    pendingPairing.delete(userId);
+    await beginPairingWizard(ctx);
+    return;
+  }
+  const normalizedPhone = text.replace(/[^0-9]/g, "");
+  if (!/^[1-9][0-9]{6,14}$/.test(normalizedPhone)) {
+    await sendOrEdit(
+      ctx,
+      pageText(
+        "Pairing · Phone Number",
+        dangerResponse(
+          "Invalid Number",
+          "Send digits only in international country-code format, for example <code>2348012345678</code>.",
+        ),
+      ),
+      keyboard([[btn(ui.close, "menu:main", "danger")]]),
+    );
+    return;
+  }
+  try {
+    const session = getSession(resolveTelegramUser(ctx).workspaceId, sessionId);
+    updateSession(resolveTelegramUser(ctx).workspaceId, sessionId, {
+      phoneNumber: normalizedPhone,
+      status: "PAIRING",
+    });
+    pendingPairing.delete(userId);
+    const code = await requestWhatsAppPairingCode(
+      session.workspaceId,
+      session.sessionId,
+      normalizedPhone,
+    );
+    await sendOrEdit(
+      ctx,
+      pageText(
+        "Pairing · Code Ready",
+        successResponse(
+          "Enter This Code in WhatsApp",
+          `<b>${escapeHtml(session.sessionName)}</b> is waiting for pairing.\n\n<code>${escapeHtml(code)}</code>\n\nOpen WhatsApp → Linked Devices → Link a Device → Link with phone number, then enter the code. This screen will remain recoverable if the network is temporarily unavailable.`,
+        ),
+      ),
+      keyboard([
+        [btn("↻ Session Status", `session:${session.sessionId}:menu`)],
+        [btn(ui.back, "sessions:list:0")],
+      ]),
+    );
+  } catch (error) {
+    await sendOrEdit(
+      ctx,
+      pageText(
+        "Pairing · Could Not Start",
+        dangerResponse(
+          "Pairing Unavailable",
+          escapeHtml(error instanceof Error ? error.message : String(error)),
+        ),
+      ),
+      keyboard([
+        [btn("↻ Retry Phone Number", `pair:number:${sessionId}`, "success")],
+        [btn(ui.back, "sessions:list:0")],
+      ]),
+    );
+  }
 }
 
 async function sendSessions(ctx: Context, page: number): Promise<void> {

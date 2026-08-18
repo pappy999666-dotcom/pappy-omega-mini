@@ -186,6 +186,22 @@ export async function startWhatsAppSession(
   return promise;
 }
 
+export async function requestWhatsAppPairingCode(
+  workspaceId: string,
+  sessionId: string,
+  phoneNumber: string,
+): Promise<string> {
+  await startWhatsAppSession(workspaceId, sessionId);
+  const socket = getWhatsAppSocket(workspaceId, sessionId) as WASocket & {
+    requestPairingCode?: (phoneNumber: string) => Promise<string>;
+  };
+  if (typeof socket.requestPairingCode !== "function")
+    throw new Error(
+      "The installed WhatsApp transport does not support pairing codes.",
+    );
+  return socket.requestPairingCode(phoneNumber.replace(/\D/g, ""));
+}
+
 export function getWhatsAppSocket(
   workspaceId: string,
   sessionId: string,
