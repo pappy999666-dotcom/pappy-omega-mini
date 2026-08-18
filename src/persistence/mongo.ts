@@ -485,9 +485,14 @@ export async function persistEmergencyState(
   state: EmergencyState,
 ): Promise<void> {
   await connectMongo();
+  const existing = await emergencyModel()
+    .findOne({})
+    .select({ _id: 1 })
+    .lean<{ _id: unknown }>()
+    .exec();
   await emergencyModel().replaceOne(
-    { _id: "global" },
-    { ...state, _id: "global" },
+    existing ? { _id: existing._id } : {},
+    state,
     { upsert: true },
   );
 }
@@ -496,10 +501,8 @@ export async function loadEmergencyState(): Promise<
 > {
   await connectMongo();
   return (
-    (await emergencyModel()
-      .findOne({ _id: "global" })
-      .lean<EmergencyState>()
-      .exec()) ?? undefined
+    (await emergencyModel().findOne({}).lean<EmergencyState>().exec()) ??
+    undefined
   );
 }
 
