@@ -149,6 +149,29 @@ export async function sendGroupMentions(
   await send(jid, { text: `${mentionText}\n${text}`, mentions: selected });
 }
 
+export async function validateInviteLink(
+  workspaceId: string,
+  sessionId: string,
+  inviteCode: string,
+): Promise<{ subject?: string; participantCount?: number }> {
+  const inspect = method(
+    socketFor(workspaceId, sessionId),
+    "groupGetInviteInfo",
+  );
+  if (!inspect) throw new Error("Unsupported capability: inviteValidation");
+  const result = (await inspect(inviteCode)) as {
+    subject?: string;
+    size?: number;
+    participantsCount?: number;
+  };
+  return {
+    ...(result.subject ? { subject: result.subject } : {}),
+    ...((result.participantsCount ?? result.size) !== undefined
+      ? { participantCount: result.participantsCount ?? result.size }
+      : {}),
+  };
+}
+
 export async function getGroupInviteLink(
   workspaceId: string,
   sessionId: string,

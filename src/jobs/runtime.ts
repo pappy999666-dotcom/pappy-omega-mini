@@ -2,10 +2,12 @@ import { Redis } from "ioredis";
 import { env } from "../config/env.js";
 import { LinkBucketStore } from "../links/link-bucket-store.js";
 import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
+import { listSessions } from "../core/session-registry.js";
 import {
   sendGroupMentions,
   sendGroupStatus,
   sendGroupText,
+  validateInviteLink,
 } from "../whatsapp/transport-adapter.js";
 import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
@@ -40,23 +42,69 @@ export function startWorkerRuntime(): JobOrchestrator {
       concurrency: env.QUEUE_CONCURRENCY,
       context,
       processItem: async (url) => {
+        const raw = url.trim();
         try {
-          const parsed = new URL(url.trim());
+          const parsed = new URL(raw);
           if (!["http:", "https:"].includes(parsed.protocol))
             return { status: "failed" as const };
           const canonicalUrl = parsed.toString();
+          const inviteCode = canonicalUrl.match(
+            /chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/,
+          )?.[1];
+          const sourceSessionId =
+            payload.sourceSessionId ??
+            listSessions(context.job.workspaceId).find(
+              (session) => session.status === "ACTIVE",
+            )?.sessionId;
+          if (!inviteCode || !sourceSessionId)
+            throw new Error(
+              "No safe WhatsApp validation session is available.",
+            );
+          const metadata = await validateInviteLink(
+            context.job.workspaceId,
+            sourceSessionId,
+            inviteCode,
+          );
           await buckets.upsert({
             canonicalUrl,
-            originalUrl: url,
+            originalUrl: raw,
             bucket: "active",
             workspaceId: context.job.workspaceId,
             sourceUserId: payload.sourceUserId ?? "worker",
-            ...(payload.sourceSessionId
-              ? { sourceSessionId: payload.sourceSessionId }
-              : {}),
+            sourceSessionId,
+            lastCheckedAt: Date.now(),
+            metadata: {
+              ...(metadata.subject ? { title: metadata.subject } : {}),
+              ...(metadata.participantCount !== undefined
+                ? { memberCount: metadata.participantCount }
+                : {}),
+            },
           });
           return { status: "success" as const };
-        } catch {
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          const parsed = (() => {
+            try {
+              return new URL(raw).toString();
+            } catch {
+              return raw;
+            }
+          })();
+          await buckets
+            .move(
+              context.job.workspaceId,
+              parsed,
+              message.toLowerCase().includes("not found") ||
+                message.toLowerCase().includes("expired")
+                ? "dead"
+                : "error",
+              {
+                validationError: message.slice(0, 240),
+                lastCheckedAt: Date.now(),
+              },
+            )
+            .catch(() => undefined);
           return { status: "failed" as const };
         }
       },
