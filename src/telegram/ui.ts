@@ -1,48 +1,69 @@
-import { Markup } from "telegraf";
+import type { InlineKeyboardMarkup } from "telegraf/types";
 import type { WhatsAppSession } from "../types/domain.js";
 import { buildSessionMenu } from "../menus/menu-model.js";
 import { renderTelegramSessionMenu } from "../menus/renderers.js";
 
+export type ButtonStyle = "primary" | "success" | "danger";
+type InlineButton = InlineKeyboardMarkup["inline_keyboard"][number][number] & {
+  style?: ButtonStyle;
+  copy_text?: { text: string };
+};
+type Button = InlineButton;
+
 export const ui = {
   brand: "✦ PAPPY OMEGA MINI",
-  divider: "━━━━━━━━━━━━━━━━━━━━",
+  divider: "<code>──────────────────────────────</code>",
   success: "✅",
   danger: "⛔",
+  warning: "⚠️",
   info: "◆",
-  back: "‹ Back",
-  close: "× Close",
+  back: "🔙 Back",
+  close: "❌ Close",
 };
 
-type Button = ReturnType<typeof Markup.button.callback>;
-type Keyboard = ReturnType<typeof Markup.inlineKeyboard>;
-
-export function dashboardKeyboard(isAdmin: boolean): Keyboard {
-  const rows: Button[][] = [
-    [
-      Markup.button.callback("▣ Help", "ui:help"),
-      Markup.button.callback("⚡ Pair", "pair:start"),
-    ],
-    [
-      Markup.button.callback("◈ Sessions", "sessions:page:0"),
-      Markup.button.callback("↔ Bridge", "ui:bridge"),
-    ],
-    [
-      Markup.button.callback("⌁ Validator Hub", "ui:validator"),
-      Markup.button.callback("⇢ Join Manager", "ui:join"),
-    ],
-    [
-      Markup.button.callback("◷ Scheduled Jobs", "ui:schedule"),
-      Markup.button.callback("⚙ Settings", "ui:settings"),
-    ],
-    [Markup.button.callback("◌ Support", "ui:support")],
-  ];
-  if (isAdmin)
-    rows.push([Markup.button.callback("♛ Admin Control", "admin:home")]);
-  return Markup.inlineKeyboard(rows);
+export function btn(
+  text: string,
+  callback_data: string,
+  style: ButtonStyle = "primary",
+): Button {
+  return { text, callback_data, style };
 }
 
-export function simpleBackKeyboard(target = "home"): Keyboard {
-  return Markup.inlineKeyboard([[Markup.button.callback(ui.back, target)]]);
+export function copyBtn(
+  text: string,
+  copy_text: string,
+  style: ButtonStyle = "primary",
+): Button {
+  return { text, copy_text: { text: copy_text }, style } as Button;
+}
+
+export function urlBtn(
+  text: string,
+  url: string,
+  style: ButtonStyle = "primary",
+): Button {
+  return { text, url, style };
+}
+
+export function keyboard(rows: Button[][]): InlineKeyboardMarkup {
+  return { inline_keyboard: rows } as InlineKeyboardMarkup;
+}
+
+export function dashboardKeyboard(isAdmin: boolean): InlineKeyboardMarkup {
+  const rows: Button[][] = [
+    [
+      btn("⚡ Pair Number", "session:new", "success"),
+      btn("▣ Sessions", "sessions:list:0"),
+    ],
+    [
+      btn("⌁ Validator Hub", "bucket:status"),
+      btn("🌉 Global Bridge", "bridge:global"),
+    ],
+    [btn("◷ Scheduled Jobs", "jobs:list"), btn("⚙ Settings", "settings:menu")],
+    [btn("◌ Support", "support:menu"), btn("▤ Help", "help:main")],
+  ];
+  if (isAdmin) rows.push([btn("♛ Admin Panel", "admin:panel")]);
+  return keyboard(rows);
 }
 
 export function sessionsKeyboard(
@@ -50,36 +71,65 @@ export function sessionsKeyboard(
   page: number,
   pageSize = 5,
   isAdmin = false,
-): Keyboard {
+): InlineKeyboardMarkup {
   const start = page * pageSize;
-  const current = sessions.slice(start, start + pageSize);
-  const rows: Button[][] = current.map((session) => [
-    Markup.button.callback(
-      `${session.status === "ACTIVE" ? "●" : "○"} ${session.sessionName}`,
-      `session:view:${session.sessionId}`,
+  const rows: Button[][] = sessions
+    .slice(start, start + pageSize)
+    .map((session) => [
+      btn(
+        `${statusIcon(session.status)} ${session.sessionName}`,
+        `session:${session.sessionId}:menu`,
+      ),
+    ]);
+  const nav: Button[] = [];
+  if (page > 0) nav.push(btn("◀ Prev", `sessions:list:${page - 1}`));
+  if (start + pageSize < sessions.length)
+    nav.push(btn("Next ▶", `sessions:list:${page + 1}`));
+  if (nav.length) rows.push(nav);
+  rows.push([btn("➕ New Session", "session:new", "success")]);
+  if (isAdmin) rows.push([btn("♛ Admin Panel", "admin:panel")]);
+  rows.push([btn(ui.back, "menu:main")]);
+  return keyboard(rows);
+}
+
+export function globalBridgeKeyboard(
+  sessionCount: number,
+): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("➕ Add Session", "session:new", "success")],
+    ...(sessionCount > 0
+      ? [
+          [btn("▣ Choose Sessions", "bridge:global:select")],
+          [btn("▶ Start Global Bridge", "bridge:global:start", "success")],
+        ]
+      : []),
+    [btn("⏹ Stop Global Bridge", "bridge:global:stop", "danger")],
+    [btn(ui.back, "menu:main")],
+  ]);
+}
+
+export function bridgeSessionPicker(
+  sessions: WhatsAppSession[],
+  selected: Set<string>,
+): InlineKeyboardMarkup {
+  const rows: Button[][] = sessions.map((session) => [
+    btn(
+      `${selected.has(session.sessionId) ? "☑" : "☐"} ${session.sessionName}`,
+      `bridge:global:toggle:${session.sessionId}`,
     ),
   ]);
-  const navigation: Button[] = [];
-  if (page > 0)
-    navigation.push(
-      Markup.button.callback("‹ Previous", `sessions:page:${page - 1}`),
-    );
-  if (start + pageSize < sessions.length)
-    navigation.push(
-      Markup.button.callback("Next ›", `sessions:page:${page + 1}`),
-    );
-  if (navigation.length) rows.push(navigation);
-  rows.push([Markup.button.callback("⚡ Pair New", "pair:start")]);
-  if (isAdmin)
-    rows.push([Markup.button.callback("♛ Admin Control", "admin:home")]);
-  rows.push([Markup.button.callback(ui.back, "home")]);
-  return Markup.inlineKeyboard(rows);
+  rows.push([
+    btn("▶ Start Selected", "bridge:global:start", "success"),
+    btn("↻ Clear", "bridge:global:clear"),
+  ]);
+  rows.push([btn(ui.back, "bridge:global")]);
+  return keyboard(rows);
 }
 
 export function sessionKeyboard(
   session: WhatsAppSession,
   isOwner: boolean,
-): Keyboard {
+): InlineKeyboardMarkup {
   const actions = buildSessionMenu(session, isOwner).actions;
   const rows: Button[][] = [];
   for (let i = 0; i < actions.length; i += 2) {
@@ -87,89 +137,155 @@ export function sessionKeyboard(
       actions
         .slice(i, i + 2)
         .map((action) =>
-          Markup.button.callback(
-            action.label,
-            `session:action:${session.sessionId}:${action.id}`,
+          btn(
+            `${action.label}`,
+            `session:${session.sessionId}:action:${action.id}`,
+            action.id === "gpp" ? "danger" : "primary",
           ),
         ),
     );
   }
   rows.push([
-    Markup.button.callback("↻ Refresh", `session:view:${session.sessionId}`),
-    Markup.button.callback("‹ Sessions", "sessions:page:0"),
+    btn("↻ Refresh", `session:${session.sessionId}:menu`),
+    btn("‹ Sessions", "sessions:list:0"),
   ]);
-  return Markup.inlineKeyboard(rows);
+  return keyboard(rows);
 }
 
-export function adminKeyboard(): Keyboard {
-  return Markup.inlineKeyboard([
-    [
-      Markup.button.callback("⚙ Force Join", "admin:forcejoin"),
-      Markup.button.callback("◉ Users", "admin:users"),
-    ],
-    [
-      Markup.button.callback("▣ Media", "admin:media"),
-      Markup.button.callback("↔ Global Bridge", "admin:bridge"),
-    ],
-    [
-      Markup.button.callback("◷ Global Jobs", "admin:jobs"),
-      Markup.button.callback("▤ Master Bucket", "admin:bucket"),
-    ],
-    [
-      Markup.button.callback("▥ Broadcast", "admin:broadcast"),
-      Markup.button.callback("▤ Audit Log", "admin:audit"),
-    ],
-    [Markup.button.callback("⚠ Emergency Mode", "admin:safe")],
-    [Markup.button.callback(ui.back, "home")],
+export function linkCollectionKeyboard(
+  sessionId: string,
+): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("📊 Refresh Statistics", `session:${sessionId}:collect`, "success")],
+    [btn("📡 Live Collection Log", `session:${sessionId}:collect:live`)],
+    [btn(ui.back, `session:${sessionId}:menu`)],
   ]);
 }
 
-export function mediaKeyboard(): Keyboard {
-  return Markup.inlineKeyboard([
+export function bucketKeyboard(): InlineKeyboardMarkup {
+  return keyboard([
     [
-      Markup.button.callback("＋ Add Image", "admin:media:add:image"),
-      Markup.button.callback("＋ Add Video", "admin:media:add:video"),
+      btn("📡 Live Validation Log", "bucket:live", "success"),
+      btn("🔄 Refresh", "bucket:status"),
     ],
     [
-      Markup.button.callback(
-        "▣ Select WhatsApp Menu Media",
-        "admin:media:select",
+      btn("📦 Main / Master", "bucket:view:main"),
+      btn("✅ Active", "bucket:view:active"),
+    ],
+    [btn("💀 Dead", "bucket:view:dead"), btn("⚠️ Error", "bucket:view:error")],
+    [btn("🔀 Merge Active + Error → Main", "bucket:merge:main", "success")],
+    [btn("⬇️ Downloads", "bucket:downloads")],
+    [
+      btn("🗑 Purge Dead", "bucket:purge:dead", "danger"),
+      btn("🗑 Purge Error", "bucket:purge:error", "danger"),
+    ],
+    [btn("🗑 Purge Everything", "bucket:purge:master", "danger")],
+    [btn(ui.back, "menu:main")],
+  ]);
+}
+
+export function joinManagerKeyboard(
+  sessionId: string,
+  status: string,
+): InlineKeyboardMarkup {
+  const controls: Button[] = [];
+  if (status === "running")
+    controls.push(btn("⏸ Pause", `session:${sessionId}:join:pause`, "danger"));
+  else
+    controls.push(
+      btn(
+        status === "paused" ? "▶ Resume" : "▶ Start",
+        `session:${sessionId}:join:start`,
+        "success",
       ),
+    );
+  if (status === "running" || status === "paused")
+    controls.push(btn("⏹ Stop", `session:${sessionId}:join:stop`, "danger"));
+  const rows: Button[][] = [controls];
+  if (status !== "running")
+    rows.push([
+      btn("🎯 Target Groups", `session:${sessionId}:join:setlimit`),
+      btn("⏱ Delay", `session:${sessionId}:join:setdelay`),
+    ]);
+  if (status !== "running")
+    rows.push([btn("🔁 Batch Cycles", `session:${sessionId}:join:setbatch`)]);
+  rows.push([btn("🔄 Refresh", `session:${sessionId}:joinmgr`)]);
+  rows.push([
+    btn(
+      status === "running" ? "🔙 Back (keeps running)" : ui.back,
+      `session:${sessionId}:menu`,
+    ),
+  ]);
+  return keyboard(rows);
+}
+
+export function adminKeyboard(): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("⚙ Force Join", "admin:forcejoin"), btn("◉ Users", "admin:users")],
+    [
+      btn("▣ Media", "admin:media"),
+      btn("🌉 Global Bridge Ops", "admin:bridge"),
     ],
-    [Markup.button.callback(ui.back, "admin:home")],
+    [
+      btn("◷ Global Jobs", "admin:jobs"),
+      btn("▤ Master Bucket", "admin:bucket"),
+    ],
+    [btn("▥ Broadcast", "admin:broadcast"), btn("▤ Audit Log", "admin:audit")],
+    [btn("⚠ Emergency Mode", "admin:safe", "danger")],
+    [btn(ui.back, "menu:main")],
   ]);
 }
 
-export function pageText(title: string, body: string): string {
-  return `<b>${ui.brand}</b>\n${ui.divider}\n<b>${escapeHtml(title)}</b>\n\n${body}`;
-}
-
-export function dashboardText(isAdmin: boolean): string {
-  const role = isAdmin ? "Owner control plane" : "Personal workspace";
-  return pageText(
-    "Command Center",
-    `Your isolated workspace is ready.\n\n<b>Mode:</b> ${role}\n<b>Transport:</b> Telegram + WhatsApp\n<b>Security:</b> workspace-scoped`,
-  );
+export function mediaKeyboard(): InlineKeyboardMarkup {
+  return keyboard([
+    [
+      btn("＋ Add Image", "admin:media:add:image", "success"),
+      btn("＋ Add Video", "admin:media:add:video", "success"),
+    ],
+    [btn("▣ Select WhatsApp Menu Media", "admin:media:select")],
+    [btn(ui.back, "admin:panel")],
+  ]);
 }
 
 export function sessionText(session: WhatsAppSession): string {
   const model = buildSessionMenu(session, false);
   const rendered = renderTelegramSessionMenu(model);
   return pageText(
-    "Session Overview",
+    "Per-Session Control",
     rendered.text.replace(/<b>.*?<\/b>\n?/s, "").trim(),
+  );
+}
+
+export function dashboardText(isAdmin: boolean): string {
+  return pageText(
+    "Command Center",
+    `${isAdmin ? "<b>Owner control plane</b>" : "<b>Personal workspace</b>"}\n\nChoose a workspace-wide action or open one of your isolated WhatsApp sessions.\n\n${ui.info} <b>Scope:</b> workspace-safe\n${ui.info} <b>Bridge:</b> global or per-session\n${ui.info} <b>Queues:</b> bounded and recoverable`,
   );
 }
 
 export function helpText(): string {
   return pageText(
     "Help & Shortcuts",
-    "<b>Pairing</b> — Pair one or more WhatsApp sessions from Telegram.\n<b>Session</b> — Open an isolated session control panel.\n<b>WhatsApp</b> — Use .menu, .ping, .autojoin on/off, .pfp, .setgpp, .groups, .health, .setname, .setbio, .setsudo, and .setprefix.\n<b>Safety</b> — Long operations are designed for bounded queues and recoverable execution.",
+    "<b>Workspace</b> — Global Bridge, Validator Hub, Scheduled Jobs, Settings, Support.\n<b>Session</b> — Pairing, profile controls, link collection, Join Manager, and per-session Bridge.\n<b>WhatsApp</b> — <code>.menu</code>, <code>.ping</code>, <code>.autojoin on|off</code>, <code>.pfp</code>, <code>.setgpp</code>, <code>.groups</code>, <code>.health</code>, <code>.setname</code>, <code>.setbio</code>, <code>.setsudo</code>, and <code>.setprefix</code>.\n\n${ui.info} <b>Security:</b> Admin controls are never rendered for ordinary users and are checked again on every callback.",
   );
+}
+
+export function pageText(title: string, body: string): string {
+  return `<b>${ui.brand}</b>\n${ui.divider}\n\n<b>${escapeHtml(title)}</b>\n\n<blockquote>${body}</blockquote>`;
 }
 
 export function featureText(title: string, body: string): string {
   return pageText(title, body);
+}
+
+function statusIcon(status: WhatsAppSession["status"]): string {
+  return status === "ACTIVE"
+    ? "🟢"
+    : status === "PAIRING"
+      ? "🟡"
+      : status === "ERROR"
+        ? "🔴"
+        : "⚪";
 }
 
 function escapeHtml(value: string): string {
