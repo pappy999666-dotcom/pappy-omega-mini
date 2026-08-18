@@ -11,7 +11,7 @@ import type {
   WorkerHandler,
 } from "./job-contracts.js";
 
-const QUEUE_NAME = "pappy-omega-mini:jobs";
+const QUEUE_NAME = "pappy-omega-mini-jobs";
 const STORE_PREFIX = "pappy-omega-mini:job:";
 
 export class RedisJobStore {
