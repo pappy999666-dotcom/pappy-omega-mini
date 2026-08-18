@@ -2,6 +2,8 @@ import { mkdir } from "node:fs/promises";
 import { env, assertProductionSecrets } from "./config/env.js";
 import { createTelegramBot } from "./telegram/bot.js";
 import { shutdownWhatsAppSessions } from "./whatsapp/session-manager.js";
+import { startWorkerRuntime } from "./jobs/runtime.js";
+import type { JobOrchestrator } from "./jobs/job-orchestrator.js";
 
 async function main(): Promise<void> {
   assertProductionSecrets();
@@ -19,6 +21,8 @@ async function main(): Promise<void> {
   }
 
   const bot = createTelegramBot();
+  let workers: JobOrchestrator | undefined;
+  if (env.TELEGRAM_BOT_TOKEN) workers = startWorkerRuntime();
   await bot.launch();
   console.log("[pappy-omega-mini] Telegram gateway online.");
 
@@ -28,6 +32,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log(`[pappy-omega-mini] ${signal} received; stopping new work.`);
     bot.stop(signal);
+    await workers?.close();
     shutdownWhatsAppSessions();
     console.log("[pappy-omega-mini] transports closed; shutdown complete.");
   };
