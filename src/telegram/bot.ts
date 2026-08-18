@@ -21,6 +21,10 @@ import {
 } from "../core/control-plane.js";
 import { getValidatorSnapshot } from "../links/validator-snapshot.js";
 import {
+  createCommandRegistry,
+  executeCommand,
+} from "../whatsapp/command-registry.js";
+import {
   adminKeyboard,
   bucketKeyboard,
   workspaceSettingsKeyboard,
@@ -31,6 +35,10 @@ import {
   dashboardText,
   featureText,
   globalBridgeKeyboard,
+  globalBridgeText,
+  globalBridgeResultText,
+  validatorLiveKeyboard,
+  validatorLiveText,
   helpText,
   joinManagerKeyboard,
   linkCollectionKeyboard,
@@ -56,6 +64,10 @@ const globalBridgeActive = new Set<string>();
 const joinStates = new Map<string, "idle" | "running" | "paused" | "stopped">();
 const joinJobs = new Map<string, string>();
 const liveLoops = new Map<string, ReturnType<typeof setInterval>>();
+const pendingGlobalCommand = new Map<
+  string,
+  { workspaceId: string; chatId: number; messageId: number }
+>();
 
 export function createTelegramBot(): Telegraf<Context> {
   if (!env.TELEGRAM_BOT_TOKEN)
@@ -83,6 +95,55 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.command("adminmedia", async (ctx) => {
     if (!requireAdmin(ctx)) return;
     await sendAdminMedia(ctx);
+  });
+
+  bot.on("text", async (ctx) => {
+    const userId = String(ctx.from.id);
+    const pending = pendingGlobalCommand.get(userId);
+    if (!pending || ctx.message.text.startsWith("/")) return;
+    const user = resolveTelegramUser(ctx);
+    if (user.workspaceId !== pending.workspaceId) return;
+    const selected =
+      globalBridgeSelections.get(user.workspaceId) ?? new Set<string>();
+    const sessions = listSessions(user.workspaceId).filter((session) =>
+      selected.has(session.sessionId),
+    );
+    const registry = createCommandRegistry();
+    const results = await Promise.all(
+      sessions.map(async (session) => {
+        try {
+          const output = await executeCommand(registry, ctx.message.text, {
+            workspaceId: user.workspaceId,
+            sessionId: session.sessionId,
+            isOwner: isAdmin(ctx),
+            args: [],
+          });
+          return { sessionName: session.sessionName, ok: true, output };
+        } catch (error) {
+          return {
+            sessionName: session.sessionName,
+            ok: false,
+            output: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }),
+    );
+    pendingGlobalCommand.delete(userId);
+    await ctx.telegram
+      .editMessageText(
+        pending.chatId,
+        pending.messageId,
+        undefined,
+        globalBridgeResultText(ctx.message.text, results),
+        {
+          parse_mode: "HTML",
+          reply_markup: keyboard([
+            [btn("↻ Run Another Command", "bridge:global:command")],
+            [btn("‹ Global Command Desk", "bridge:global")],
+          ]),
+        },
+      )
+      .catch(() => undefined);
   });
 
   bot.on("photo", async (ctx) => {
@@ -306,7 +367,44 @@ export function createTelegramBot(): Telegraf<Context> {
     globalBridgeSelections.delete(resolveTelegramUser(ctx).workspaceId);
     await showGlobalBridge(ctx);
   });
-  bot.action("bridge:global:start", async (ctx) => {
+  bot.action("bridge:global:command", async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = resolveTelegramUser(ctx);
+    const selected =
+      globalBridgeSelections.get(user.workspaceId) ?? new Set<string>();
+    if (!selected.size)
+      return edit(
+        ctx,
+        globalBridgeText(0, false),
+        bridgeSessionPicker(listSessions(user.workspaceId), selected),
+      );
+    if (!globalBridgeActive.has(user.workspaceId))
+      return edit(
+        ctx,
+        globalBridgeText(selected.size, false).replace(
+          "</blockquote>",
+          "\n\n⚠️ Turn Fan-Out ON before sending a command.</blockquote>",
+        ),
+        globalBridgeKeyboard(listSessions(user.workspaceId).length, false),
+      );
+    const message = ctx.callbackQuery?.message;
+    const chatId = ctx.chat?.id;
+    if (!message || !("message_id" in message) || !chatId) return;
+    pendingGlobalCommand.set(String(ctx.from?.id ?? ""), {
+      workspaceId: user.workspaceId,
+      chatId,
+      messageId: message.message_id,
+    });
+    await edit(
+      ctx,
+      globalBridgeText(selected.size, true).replace(
+        "</blockquote>",
+        "\n\n✍️ Send one WhatsApp command now, for example <code>ping</code> or <code>autojoin on</code>.</blockquote>",
+      ),
+      keyboard([[btn("✖ Cancel Input", "bridge:global")]]),
+    );
+  });
+  bot.action("bridge:global:toggle", async (ctx) => {
     await ctx.answerCbQuery();
     const workspaceId = resolveTelegramUser(ctx).workspaceId;
     const selected =
@@ -314,42 +412,52 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!selected.size)
       return edit(
         ctx,
-        pageText(
-          "Global Bridge",
-          warningResponse(
-            "Choose at least one session",
-            "The general bridge operates only on sessions owned by this workspace.",
-          ),
-        ),
-        globalBridgeKeyboard(listSessions(workspaceId).length),
+        globalBridgeText(0, false),
+        bridgeSessionPicker(listSessions(workspaceId), selected),
+      );
+    if (globalBridgeActive.has(workspaceId))
+      globalBridgeActive.delete(workspaceId);
+    else globalBridgeActive.add(workspaceId);
+    await edit(
+      ctx,
+      globalBridgeText(selected.size, globalBridgeActive.has(workspaceId)),
+      globalBridgeKeyboard(
+        listSessions(workspaceId).length,
+        globalBridgeActive.has(workspaceId),
+      ),
+    );
+  });
+  bot.action("bridge:global:start", async (ctx) => {
+    await ctx.answerCbQuery();
+    const workspaceId = resolveTelegramUser(ctx).workspaceId;
+    if (!globalBridgeSelections.get(workspaceId)?.size)
+      return edit(
+        ctx,
+        globalBridgeText(0, false),
+        bridgeSessionPicker(listSessions(workspaceId), new Set<string>()),
       );
     globalBridgeActive.add(workspaceId);
     await edit(
       ctx,
-      pageText(
-        "Global Bridge",
-        successResponse(
-          "Bridge Started",
-          `${selected.size} owned session${selected.size === 1 ? "" : "s"} selected. Use Stop to end the workspace bridge.`,
-        ),
+      globalBridgeText(
+        globalBridgeSelections.get(workspaceId)?.size ?? 0,
+        true,
       ),
-      globalBridgeKeyboard(listSessions(workspaceId).length),
+      globalBridgeKeyboard(listSessions(workspaceId).length, true),
     );
   });
   bot.action("bridge:global:stop", async (ctx) => {
     await ctx.answerCbQuery();
     const workspaceId = resolveTelegramUser(ctx).workspaceId;
     globalBridgeActive.delete(workspaceId);
+    pendingGlobalCommand.delete(String(ctx.from?.id ?? ""));
     await edit(
       ctx,
-      pageText(
-        "Global Bridge",
-        successResponse(
-          "Bridge Stopped",
-          "The workspace-wide bridge is no longer accepting traffic.",
-        ),
+      globalBridgeText(
+        globalBridgeSelections.get(workspaceId)?.size ?? 0,
+        false,
       ),
-      globalBridgeKeyboard(listSessions(workspaceId).length),
+      globalBridgeKeyboard(listSessions(workspaceId).length, false),
     );
   });
 
@@ -361,7 +469,23 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     await showValidatorHub(ctx);
   });
-  bot.action(/^bucket:(view|purge|merge|downloads|live)/, async (ctx) => {
+  bot.action("bucket:live", async (ctx) => {
+    await ctx.answerCbQuery();
+    await showValidatorLiveLog(ctx, true);
+  });
+  bot.action("bucket:live:on", async (ctx) => {
+    await ctx.answerCbQuery();
+    await showValidatorLiveLog(ctx, true);
+  });
+  bot.action("bucket:live:off", async (ctx) => {
+    await ctx.answerCbQuery("Live log stopped");
+    await showValidatorLiveLog(ctx, false);
+  });
+  bot.action("bucket:live:refresh", async (ctx) => {
+    await ctx.answerCbQuery();
+    await showValidatorLiveLog(ctx, true);
+  });
+  bot.action(/^bucket:(view|purge|merge|downloads)/, async (ctx) => {
     await ctx.answerCbQuery();
     await edit(
       ctx,
@@ -808,14 +932,27 @@ async function showValidatorHub(ctx: Context): Promise<void> {
   const user = resolveTelegramUser(ctx);
   const snapshot = await getValidatorSnapshot(user.workspaceId);
   await edit(ctx, validatorDashboardText(snapshot), bucketKeyboard());
+}
+
+async function showValidatorLiveLog(
+  ctx: Context,
+  active: boolean,
+): Promise<void> {
+  const user = resolveTelegramUser(ctx);
+  const snapshot = await getValidatorSnapshot(user.workspaceId);
+  await edit(
+    ctx,
+    validatorLiveText(snapshot, active),
+    validatorLiveKeyboard(active),
+  );
   const message = ctx.callbackQuery?.message;
   const chatId =
     ctx.chat?.id ??
     (message && "chat" in message ? message.chat.id : undefined);
   const messageId =
     message && "message_id" in message ? message.message_id : undefined;
-  if (!chatId || !messageId) return;
-  const loopKey = `${chatId}:${messageId}`;
+  if (!active || !chatId || !messageId) return;
+  const loopKey = `validator-live:${chatId}:${messageId}`;
   const previous = liveLoops.get(loopKey);
   if (previous) clearInterval(previous);
   const interval = setInterval(() => {
@@ -826,12 +963,12 @@ async function showValidatorHub(ctx: Context): Promise<void> {
             chatId,
             messageId,
             undefined,
-            validatorDashboardText(nextSnapshot),
-            { parse_mode: "HTML", reply_markup: bucketKeyboard() },
+            validatorLiveText(nextSnapshot, true),
+            { parse_mode: "HTML", reply_markup: validatorLiveKeyboard(true) },
           )
           .catch(() => {
-            const active = liveLoops.get(loopKey);
-            if (active) clearInterval(active);
+            const current = liveLoops.get(loopKey);
+            if (current) clearInterval(current);
             liveLoops.delete(loopKey);
           });
       })
@@ -839,8 +976,8 @@ async function showValidatorHub(ctx: Context): Promise<void> {
   }, 2500);
   liveLoops.set(loopKey, interval);
   setTimeout(() => {
-    const active = liveLoops.get(loopKey);
-    if (active === interval) {
+    const current = liveLoops.get(loopKey);
+    if (current === interval) {
       clearInterval(interval);
       liveLoops.delete(loopKey);
     }

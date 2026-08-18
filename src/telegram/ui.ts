@@ -95,18 +95,62 @@ export function sessionsKeyboard(
 
 export function globalBridgeKeyboard(
   sessionCount: number,
+  active = false,
 ): InlineKeyboardMarkup {
   return keyboard([
-    [btn("➕ Add Session", "session:new", "success")],
+    [btn("➕ Add WhatsApp Session", "session:new", "success")],
     ...(sessionCount > 0
       ? [
-          [btn("▣ Choose Sessions", "bridge:global:select")],
-          [btn("▶ Start Global Bridge", "bridge:global:start", "success")],
+          [btn("1️⃣ Choose Sessions", "bridge:global:select")],
+          [
+            btn(
+              "✉️ Send One Command to Selected",
+              "bridge:global:command",
+              "success",
+            ),
+          ],
         ]
       : []),
-    [btn("⏹ Stop Global Bridge", "bridge:global:stop", "danger")],
+    [
+      btn(
+        active ? "⏹ Stop Fan-Out" : "▶ Start Fan-Out",
+        "bridge:global:toggle",
+        active ? "danger" : "success",
+      ),
+    ],
+    ...(sessionCount > 0
+      ? [[btn("⏹ Stop Fan-Out", "bridge:global:stop", "danger")]]
+      : []),
     [btn(ui.back, "menu:main")],
   ]);
+}
+export function globalBridgeText(selected = 0, active = false): string {
+  return pageText(
+    "Global Command Fan-Out",
+    infoResponse(
+      "One action · many owned sessions",
+      `<b>What this does:</b> run one WhatsApp command across every session you select.\n<b>Selected:</b> ${selected} session${selected === 1 ? "" : "s"}\n<b>Status:</b> ${active ? "ON — accepting fan-out commands" : "OFF — nothing is running"}\n\nThis is not the per-session Bridge. It is your workspace-wide command desk.`,
+    ),
+  );
+}
+
+export function globalBridgeResultText(
+  command: string,
+  results: Array<{ sessionName: string; ok: boolean; output: string }>,
+): string {
+  const lines = results
+    .map(
+      (result) =>
+        `${result.ok ? "✅" : "⛔"} <b>${escapeHtml(result.sessionName)}</b>\n<code>${escapeHtml(result.output.slice(0, 500))}</code>`,
+    )
+    .join("\n\n");
+  return pageText(
+    "Fan-Out Result",
+    infoResponse(
+      `Command completed: ${escapeHtml(command)}`,
+      lines || "No session returned a result.",
+    ),
+  );
 }
 
 export function bridgeSessionPicker(
@@ -120,8 +164,8 @@ export function bridgeSessionPicker(
     ),
   ]);
   rows.push([
-    btn("▶ Start Selected", "bridge:global:start", "success"),
-    btn("↻ Clear", "bridge:global:clear"),
+    btn("✉️ Send Command", "bridge:global:command", "success"),
+    btn("↻ Clear Selection", "bridge:global:clear"),
   ]);
   rows.push([btn(ui.back, "bridge:global")]);
   return keyboard(rows);
@@ -183,6 +227,45 @@ export function validatorDashboardText(snapshot: {
       `<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Active:</b> ${snapshot.counts.active ?? 0}\n<b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Error:</b> ${snapshot.counts.error ?? 0}\n<b>Master:</b> ${snapshot.counts.master ?? 0}\n\n<b>Recent records</b>\n${recent}\n\n<i>Updated ${new Date(snapshot.capturedAt).toISOString()}</i>`,
     ),
   );
+}
+
+export function validatorLiveText(
+  snapshot: {
+    counts: Record<string, number>;
+    recent: Array<{ canonicalUrl: string; bucket: string }>;
+    capturedAt: number;
+  },
+  active = false,
+): string {
+  const recent =
+    snapshot.recent
+      .slice(0, 10)
+      .map(
+        (record) =>
+          `• <code>${escapeHtml(record.canonicalUrl.slice(0, 72))}</code> <i>${escapeHtml(record.bucket)}</i>`,
+      )
+      .join("\n") || "Waiting for link activity.";
+  return pageText(
+    "Validator Live Log",
+    infoResponse(
+      active ? "Live feed is ON" : "Live feed is OFF",
+      `<b>What you see:</b> link collection and validation changes for this workspace.\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Error:</b> ${snapshot.counts.error ?? 0}\n\n${recent}\n\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+    ),
+  );
+}
+
+export function validatorLiveKeyboard(active = false): InlineKeyboardMarkup {
+  return keyboard([
+    [
+      btn(
+        active ? "⏹ Turn Live Log Off" : "▶ Turn Live Log On",
+        active ? "bucket:live:off" : "bucket:live:on",
+        active ? "danger" : "success",
+      ),
+    ],
+    [btn("🔄 Refresh Log", "bucket:live:refresh")],
+    [btn("‹ Validator Hub", "bucket:status")],
+  ]);
 }
 
 export function bucketKeyboard(): InlineKeyboardMarkup {
