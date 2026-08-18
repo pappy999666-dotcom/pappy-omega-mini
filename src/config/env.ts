@@ -22,6 +22,7 @@ const envSchema = z.object({
     .positive()
     .default(50 * 1024 * 1024),
   QUEUE_CONCURRENCY: z.coerce.number().int().positive().max(32).default(4),
+  PAIRING_CUSTOM_CODE: z.string().default("PAPPYBOT"),
 });
 
 export const env = envSchema.parse(process.env);

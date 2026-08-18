@@ -54,6 +54,58 @@ export function hasTransportCapability(
   return methods[capability].some((name) => Boolean(method(socket, name)));
 }
 
+export async function getProfilePictureUrl(
+  workspaceId: string,
+  sessionId: string,
+): Promise<string | undefined> {
+  const get = method(socketFor(workspaceId, sessionId), "profilePictureUrl");
+  if (!get) throw new Error("Unsupported capability: profilePicture");
+  const result = await get("me", "image");
+  return typeof result === "string" ? result : undefined;
+}
+
+export async function updateProfilePicture(
+  workspaceId: string,
+  sessionId: string,
+  imageUrl: string,
+): Promise<void> {
+  const update = method(
+    socketFor(workspaceId, sessionId),
+    "updateProfilePicture",
+  );
+  if (!update) throw new Error("Unsupported capability: profilePicture");
+  await update("me", { url: imageUrl });
+}
+
+export async function removeProfilePicture(
+  workspaceId: string,
+  sessionId: string,
+): Promise<void> {
+  const remove = method(
+    socketFor(workspaceId, sessionId),
+    "removeProfilePicture",
+  );
+  if (!remove) throw new Error("Unsupported capability: profilePicture");
+  await remove("me");
+}
+
+export async function createWhatsAppGroup(
+  workspaceId: string,
+  sessionId: string,
+  subject: string,
+  participants: string[] = [],
+): Promise<string> {
+  const create = method(socketFor(workspaceId, sessionId), "groupCreate");
+  if (!create) throw new Error("Unsupported capability: groupCreate");
+  const result = (await create(subject, participants)) as {
+    gid?: { user?: string; server?: string } | string;
+  };
+  if (typeof result.gid === "string") return result.gid;
+  if (result.gid?.user && result.gid.server)
+    return `${result.gid.user}@${result.gid.server}`;
+  throw new Error("WhatsApp did not return the new group identifier.");
+}
+
 export async function updateProfileName(
   workspaceId: string,
   sessionId: string,

@@ -28,9 +28,15 @@ export function buildSessionMenu(
     },
     {
       id: "pfp",
-      label: "Profile Picture",
+      label: "PFP",
       command: "pfp",
-      description: "Get or change the WhatsApp profile picture.",
+      description: "Get, change, or remove the WhatsApp profile picture.",
+    },
+    {
+      id: "creategroup",
+      label: "Create Group",
+      command: "creategroup",
+      description: "Create a WhatsApp group with optional members.",
     },
     {
       id: "name",

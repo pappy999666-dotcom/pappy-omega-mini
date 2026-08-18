@@ -60,6 +60,14 @@ interface RuntimeSession {
 
 const runtimes = new Map<string, RuntimeSession>();
 const sessionLocks = new Map<string, SessionLock>();
+const pairingNotifications = new Map<string, number>();
+let pairingNotifier:
+  ((chatId: number, message: string) => Promise<void>) | undefined;
+export function setPairingNotifier(
+  notifier: (chatId: number, message: string) => Promise<void>,
+): void {
+  pairingNotifier = notifier;
+}
 export interface DisconnectClassification {
   code?: number;
   label: string;
@@ -306,6 +314,14 @@ async function openWhatsAppSession(
           connectedAt: Date.now(),
           lastHealthyAt: Date.now(),
         });
+        const chatId = pairingNotifications.get(key);
+        if (chatId && pairingNotifier) {
+          pairingNotifications.delete(key);
+          void pairingNotifier(
+            chatId,
+            `✅ WhatsApp paired successfully. Session <b>${sessionId.slice(0, 12)}</b> is now online and ready to receive commands.`,
+          ).catch(() => undefined);
+        }
         return;
       }
       if (update.connection !== "close") return;
@@ -352,8 +368,15 @@ export async function requestWhatsAppPairingCode(
   workspaceId: string,
   sessionId: string,
   phoneNumber: string,
+  customCode = env.PAIRING_CUSTOM_CODE,
+  telegramChatId?: number,
 ): Promise<string> {
   await startWhatsAppSession(workspaceId, sessionId);
+  if (telegramChatId)
+    pairingNotifications.set(
+      lifecycleKey(workspaceId, sessionId),
+      telegramChatId,
+    );
   await new Promise((resolve) => setTimeout(resolve, 1_500));
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -362,13 +385,26 @@ export async function requestWhatsAppPairingCode(
         workspaceId,
         sessionId,
       ) as RuntimeSocket & {
-        requestPairingCode?: (phoneNumber: string) => Promise<string>;
+        requestPairingCode?: (
+          phoneNumber: string,
+          customCode?: string,
+        ) => Promise<string>;
       };
       if (typeof socket.requestPairingCode !== "function")
         throw new Error(
           "The installed WhatsApp transport does not support pairing codes.",
         );
-      return await socket.requestPairingCode(phoneNumber.replace(/\D/g, ""));
+      const normalizedCode = customCode
+        .replace(/[^a-zA-Z0-9]/g, "")
+        .toUpperCase();
+      if (normalizedCode.length !== 8)
+        throw new Error(
+          "PAIRING_CUSTOM_CODE must contain exactly 8 letters or numbers for Baileys.",
+        );
+      return await socket.requestPairingCode(
+        phoneNumber.replace(/\D/g, ""),
+        normalizedCode,
+      );
     } catch (error) {
       lastError = error;
       if (attempt < 2)

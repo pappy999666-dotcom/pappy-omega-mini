@@ -48,8 +48,16 @@ import {
 import {
   purgeWhatsAppSession,
   requestWhatsAppPairingCode,
+  setPairingNotifier,
 } from "../whatsapp/session-manager.js";
-import { listGroups, sendDirectText } from "../whatsapp/transport-adapter.js";
+import {
+  createWhatsAppGroup,
+  getProfilePictureUrl,
+  listGroups,
+  removeProfilePicture,
+  sendDirectText,
+  updateProfilePicture,
+} from "../whatsapp/transport-adapter.js";
 import {
   createCommandRegistry,
   executeCommand,
@@ -120,6 +128,14 @@ const pendingAdminBroadcasts = new Map<
 const pendingScheduleInput = new Map<string, { workspaceId: string }>();
 const pendingSupportInput = new Map<string, { workspaceId: string }>();
 const pendingSupportReply = new Map<string, { ticketId: string }>();
+const pendingGroupCreate = new Map<
+  string,
+  { workspaceId: string; sessionId: string }
+>();
+const pendingProfilePicture = new Map<
+  string,
+  { workspaceId: string; sessionId: string }
+>();
 const pendingPairing = new Map<
   string,
   {
@@ -138,7 +154,13 @@ export function createTelegramBot(): Telegraf<Context> {
   if (!env.TELEGRAM_BOT_TOKEN)
     throw new Error("TELEGRAM_BOT_TOKEN is not configured.");
   const bot = new Telegraf<Context>(env.TELEGRAM_BOT_TOKEN);
-
+  setPairingNotifier(async (chatId, message) => {
+    await bot.telegram.sendMessage(
+      chatId,
+      `✦ <b>PAPPY OMEGA MINI</b>\n──────────────────────────────\n\n${message}`,
+      { parse_mode: "HTML" },
+    );
+  });
   bot.use(async (ctx, next) => {
     if (isAdmin(ctx) || !ctx.from) return next();
     const user = resolveTelegramUser(ctx);
@@ -198,6 +220,78 @@ export function createTelegramBot(): Telegraf<Context> {
     const supportInput = pendingSupportInput.get(userId);
     if (supportInput && !ctx.message.text.startsWith("/")) {
       await handleSupportInput(ctx, supportInput, ctx.message.text.trim());
+      return;
+    }
+    const profilePicture = pendingProfilePicture.get(userId);
+    if (profilePicture && !ctx.message.text.startsWith("/")) {
+      pendingProfilePicture.delete(userId);
+      try {
+        await updateProfilePicture(
+          profilePicture.workspaceId,
+          profilePicture.sessionId,
+          ctx.message.text.trim(),
+        );
+        await ctx.reply(
+          pageText(
+            "Profile Picture",
+            successResponse(
+              "Updated",
+              "The WhatsApp profile picture was changed.",
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+      } catch (error) {
+        await ctx.reply(
+          pageText(
+            "Profile Picture",
+            dangerResponse(
+              "Update Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+      }
+      return;
+    }
+    const groupCreate = pendingGroupCreate.get(userId);
+    if (groupCreate && !ctx.message.text.startsWith("/")) {
+      pendingGroupCreate.delete(userId);
+      const [subject, ...participants] = ctx.message.text.trim().split(/\s+/);
+      try {
+        const jid = await createWhatsAppGroup(
+          groupCreate.workspaceId,
+          groupCreate.sessionId,
+          subject ?? "",
+          participants,
+        );
+        await ctx.reply(
+          pageText(
+            "Create Group",
+            successResponse(
+              "Group Created",
+              `<b>${escapeHtml(subject ?? "")}</b>\n<code>${escapeHtml(jid)}</code>`,
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+      } catch (error) {
+        await ctx.reply(
+          pageText(
+            "Create Group",
+            dangerResponse(
+              "Creation Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+      }
       return;
     }
     const supportReply = pendingSupportReply.get(userId);
@@ -561,6 +655,81 @@ export function createTelegramBot(): Telegraf<Context> {
       );
     }
   });
+  bot.action(/^session:([^:]+):pfp:(get|remove|change)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = ownedSession(ctx, ctx.match[1] ?? "");
+    if (!session) return deny(ctx);
+    const action = ctx.match[2] ?? "get";
+    try {
+      if (action === "get") {
+        const url = await getProfilePictureUrl(
+          session.workspaceId,
+          session.sessionId,
+        );
+        return edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · PFP`,
+            infoResponse(
+              "Current Profile Picture",
+              url
+                ? `<a href="${escapeHtml(url)}">Open profile picture</a>`
+                : "No profile picture is set.",
+            ),
+          ),
+          keyboard([
+            [btn("✎ Change URL", `session:${session.sessionId}:pfp:change`)],
+            [
+              btn(
+                "🗑 Remove",
+                `session:${session.sessionId}:pfp:remove`,
+                "danger",
+              ),
+            ],
+            [btn("‹ Session", `session:${session.sessionId}:menu`)],
+          ]),
+        );
+      }
+      if (action === "remove") {
+        await removeProfilePicture(session.workspaceId, session.sessionId);
+        return edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · PFP`,
+            successResponse("Removed", "The profile picture was removed."),
+          ),
+          keyboard([[btn("‹ Session", `session:${session.sessionId}:menu`)]]),
+        );
+      }
+      pendingProfilePicture.set(String(ctx.from?.id ?? ""), {
+        workspaceId: session.workspaceId,
+        sessionId: session.sessionId,
+      });
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · PFP`,
+          infoResponse(
+            "Change Profile Picture",
+            "Send an HTTPS image URL now. The next message updates this WhatsApp profile picture.",
+          ),
+        ),
+        keyboard([[btn("Cancel", `session:${session.sessionId}:action:pfp`)]]),
+      );
+    } catch (error) {
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · PFP`,
+          dangerResponse(
+            "Operation Failed",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        keyboard([[btn("‹ Session", `session:${session.sessionId}:menu`)]]),
+      );
+    }
+  });
   bot.action(/^session:([^:]+):action:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const session = ownedSession(ctx, ctx.match[1] ?? "");
@@ -571,6 +740,57 @@ export function createTelegramBot(): Telegraf<Context> {
     if (action === "join") return showJoinManager(ctx, session.sessionId);
     if (action === "groups") return showSessionGroups(ctx, session.sessionId);
     if (action === "health") return showSessionHealth(ctx, session.sessionId);
+    if (action === "pfp")
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · PFP`,
+          infoResponse(
+            "Profile Picture Controls",
+            "Get the current picture, change it with an HTTPS image URL, or remove it.",
+          ),
+        ),
+        keyboard([
+          [
+            btn("◉ Get", `session:${session.sessionId}:pfp:get`, "primary"),
+            btn(
+              "✎ Change",
+              `session:${session.sessionId}:pfp:change`,
+              "success",
+            ),
+          ],
+          [
+            btn(
+              "🗑 Remove",
+              `session:${session.sessionId}:pfp:remove`,
+              "danger",
+            ),
+          ],
+          [btn("‹ Session", `session:${session.sessionId}:menu`)],
+        ]),
+      );
+    if (action === "creategroup") {
+      pendingGroupCreate.set(String(ctx.from?.id ?? ""), {
+        workspaceId: session.workspaceId,
+        sessionId: session.sessionId,
+      });
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Create Group`,
+          infoResponse(
+            "Group Composer",
+            "Send the group name followed by optional participant JIDs separated by spaces.",
+          ),
+        ),
+        keyboard([
+          [
+            btn("Cancel", `session:${session.sessionId}:menu`),
+            btn("‹ Session", `session:${session.sessionId}:menu`),
+          ],
+        ]),
+      );
+    }
     if (action === "purge")
       return edit(
         ctx,
@@ -1650,6 +1870,8 @@ async function handlePairingText(
       session.workspaceId,
       session.sessionId,
       normalizedPhone,
+      undefined,
+      ctx.chat?.id,
     );
     await sendOrEdit(
       ctx,
@@ -2337,6 +2559,9 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
   const user = resolveTelegramUser(ctx);
   const key = `${user.workspaceId}:${session.sessionId}`;
   const runtime = getWorkerRuntime();
+  const totalGroups = await listGroups(session.workspaceId, session.sessionId)
+    .then((groups) => groups.length)
+    .catch(() => undefined);
   const jobId = joinJobs.get(key);
   const job = jobId ? await runtime?.get(jobId) : undefined;
   const status = job
@@ -2347,7 +2572,7 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
       "Join Manager",
       infoResponse(
         "Live Session-Bound Join Worker",
-        `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Source:</b> Active bucket\n<b>Status:</b> ${status}\n<b>Job:</b> <code>${escapeHtml(currentJob?.jobId ?? "not started")}</code>\n<b>Progress:</b> ${currentJob?.progress.completed ?? 0}/${currentJob?.progress.total ?? "—"}\n<b>Joined:</b> ${currentJob?.progress.success ?? 0}  <b>Failed:</b> ${currentJob?.progress.failed ?? 0}\n<b>Retrying:</b> ${currentJob?.progress.retrying ?? 0}  <b>Rate:</b> ${currentJob?.progress.rate ? currentJob.progress.rate.toFixed(2) : "0.00"}/s\n<b>Worker state:</b> ${escapeHtml(currentJob?.state ?? status)}\n\nThe view updates in place while the worker is active.`,
+        `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Connected groups:</b> ${totalGroups ?? "unavailable"}\n<b>Source:</b> Active bucket\n<b>Status:</b> ${status}\n<b>Job:</b> <code>${escapeHtml(currentJob?.jobId ?? "not started")}</code>\n<b>Progress:</b> ${currentJob?.progress.completed ?? 0}/${currentJob?.progress.total ?? "—"}\n<b>Joined:</b> ${currentJob?.progress.success ?? 0}  <b>Failed:</b> ${currentJob?.progress.failed ?? 0}\n<b>Skipped:</b> ${currentJob?.progress.skipped ?? 0}  <b>Retrying:</b> ${currentJob?.progress.retrying ?? 0}\n<b>Rate:</b> ${currentJob?.progress.rate ? currentJob.progress.rate.toFixed(2) : "0.00"}/s\n<b>Worker state:</b> ${escapeHtml(currentJob?.state ?? status)}\n\nThe view updates in place while the worker is active.`,
       ),
     );
   await edit(ctx, render(), joinManagerKeyboard(session.sessionId, status));

@@ -9,9 +9,13 @@ import {
 import { buildSessionMenu, renderAsciiMenu } from "../menus/menu-model.js";
 import { createSupportTicket } from "../persistence/mongo.js";
 import {
+  createWhatsAppGroup,
+  getProfilePictureUrl,
   listGroups,
+  removeProfilePicture,
   updateProfileBio,
   updateProfileName,
+  updateProfilePicture,
 } from "./transport-adapter.js";
 
 export interface CommandContext {
@@ -128,10 +132,35 @@ export function createCommandRegistry(): RegisteredCommand[] {
     {
       name: "pfp",
       aliases: ["setpfp"],
-      description:
-        "Get or change the session profile picture from quoted media.",
-      run: async () =>
-        "Unsupported capability: profilePicture. The installed Baileys transport does not expose a safe profile-picture operation.",
+      description: "Get, change, or remove the session profile picture.",
+      run: async (ctx) => {
+        try {
+          const action = (ctx.args[0] ?? "get").toLowerCase();
+          if (action === "get") {
+            const url = await getProfilePictureUrl(
+              ctx.workspaceId,
+              ctx.sessionId,
+            );
+            return url
+              ? `Profile picture: ${url}`
+              : "No profile picture is currently set.";
+          }
+          if (action === "remove" || action === "delete") {
+            await removeProfilePicture(ctx.workspaceId, ctx.sessionId);
+            return "Profile picture removed.";
+          }
+          if (action === "set" || action === "change") {
+            const url = ctx.args[1];
+            if (!url || !/^https:\/\//i.test(url))
+              return "Usage: .pfp set <https image URL>";
+            await updateProfilePicture(ctx.workspaceId, ctx.sessionId, url);
+            return "Profile picture updated.";
+          }
+          return "Usage: .pfp get | .pfp set <https image URL> | .pfp remove";
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      },
     },
     {
       name: "setgpp",
@@ -172,6 +201,26 @@ export function createCommandRegistry(): RegisteredCommand[] {
             ctx.args.join(" "),
           );
           return "Bio updated successfully.";
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      },
+    },
+    {
+      name: "creategroup",
+      aliases: ["newgroup", "groupcreate"],
+      description: "Create a WhatsApp group with optional participant JIDs.",
+      run: async (ctx) => {
+        const subject = ctx.args[0];
+        if (!subject) return "Usage: .creategroup <name> [participantJid ...]";
+        try {
+          const jid = await createWhatsAppGroup(
+            ctx.workspaceId,
+            ctx.sessionId,
+            subject,
+            ctx.args.slice(1),
+          );
+          return `Group created: ${subject}\\n${jid}`;
         } catch (error) {
           return error instanceof Error ? error.message : String(error);
         }
