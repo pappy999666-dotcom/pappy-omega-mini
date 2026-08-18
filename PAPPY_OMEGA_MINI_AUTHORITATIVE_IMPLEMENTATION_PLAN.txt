@@ -1,0 +1,125 @@
+PAPPY OMEGA MINI — AUTHORITATIVE IMPLEMENTATION PLAN
+====================================================
+Version: 1.0
+Source of truth: pasted_content.txt supplied by the product owner
+Implementation target: pappy-omega-mini
+Primary runtime: Ubuntu VPS, Node.js, PM2 or Docker Compose
+Primary WhatsApp transport: @crysnovax/baileys
+
+0. PRODUCT PROMISE
+------------------
+PAPPY OMEGA MINI is a Telegram-first SaaS control plane for multiple isolated WhatsApp sessions. Telegram provides onboarding, pairing, session management, bridges, link validation, scheduling, administration, support, and broadcasts. WhatsApp provides the operational command surface for group status, all-group messaging, tagging, profile/group controls, and session-local commands.
+
+The quality order is: session and authentication integrity, workspace isolation, safe platform interaction, data integrity, queue/recovery reliability, preview reliability, user-visible correctness, performance, aesthetics, and feature breadth. Cosmetic changes must never touch authentication persistence.
+
+1. TENANCY AND SECURITY CONTRACT
+--------------------------------
+Every Telegram user resolves to exactly one workspace. Every WhatsApp session belongs to exactly one workspace. Every query and job carries workspaceId and, when applicable, sessionId. Callback data is never treated as authorization; the server resolves the actor, workspace, resource, role, and callback expiry before execution.
+
+Owner, admin, user, sudo, and global-owner permissions are explicit. Destructive actions require confirmation. Secrets, tokens, encryption keys, auth state, uploaded media, exports, and database credentials never enter source control or logs. Auth state is encrypted at rest and is never purged because of a transient reconnect failure.
+
+2. TELEGRAM USER FLOW
+---------------------
+/start creates or resolves the Telegram user, checks banned status, loads all enabled force-join targets, renders honest join buttons, verifies membership where Telegram permits, and unlocks the main dashboard only after required targets are satisfied. Force-join has no artificial allocation count. Each target stores an internal ID, username or invite link, display name, type, enabled state, required state, button label, and sort order.
+
+The main dashboard is capability-generated and includes Help, Pair, Sessions, Bridge, Validator Hub, Join Manager, Scheduled Jobs, Settings, and Support. It uses current Telegram formatting where supported and falls back cleanly to ordinary Bot API messages.
+
+Pairing is an interactive flow: choose a normalized session name, enter a country-aware WhatsApp number, request a pairing code through the verified Baileys API, show copy-friendly instructions, display progress, wait for confirmation, persist workspace ownership, notify Telegram, and notify the newly paired WhatsApp account. Pair failures preserve reusable state unless failure is terminal. Multiple sessions are supported and session lists are paginated.
+
+3. PER-SESSION TELEGRAM MENU
+----------------------------
+Each session has an isolated submenu showing name, phone, status, uptime/last healthy, prefix, sudo count, group count, and active jobs. Actions are:
+
+Profile; get/change PFP with HD upload and no unnecessary crop; get/set WhatsApp name; get/set bio; username only if the installed Baileys API supports it; paginated groups; smart create-group flow; My Groups; confirmed leave-group; per-session sudo; Join Manager; Session Health; Bridge; and confirmed Delete Session.
+
+Create Group asks for name, participant(s), optional HD PFP, description, then creates the group and returns a link. It generates a cryptographically random, single-use, short-expiry admin promotion code scoped to that group. My Groups exposes lock, approval mode, announcement mode, PFP, name, description, and leave controls. Leave-group resolves the submitted link before confirmation and execution.
+
+4. JOIN MANAGER
+---------------
+Join Manager has Start, Pause, Stop, Refresh, Settings, and live progress. Settings include delay, bounded concurrency, retry/backoff, cooldown, maximum joins, and stop-on-repeated-failure. Links are read from the workspace Active bucket. Dead links return to Main only after validation classification; uncertain failures go to Error. Joining must use conservative rate controls and must not be designed to bypass WhatsApp anti-abuse systems.
+
+5. LINK COLLECTION, BUCKETS, AND VALIDATOR HUB
+----------------------------------------------
+All sessions can collect WhatsApp group links from messages, quoted messages, files, forwarded content, and batches. Collection normalizes and deduplicates links immediately into Main. A canonical link has one record per workspace; repeated sightings update metadata and duplicate count.
+
+Buckets are Main, Active, Dead, Error, and the global owner Master bucket. Validator workers use available sessions to verify links without joining them, then classify records into Active or Dead; uncertain or failed attempts enter Error with retry metadata. Validation is asynchronous, bounded, resumable, and visible through a live dashboard showing totals, pending, active, dead, errors, rate, retries, current worker, current link, and meaningful ETA.
+
+Bucket actions include styled TXT and HTML downloads, metadata cards with available group picture/name/member count, merge Active back to Main, remerge Dead/Error, and confirmed purge. Large batches never block Telegram handlers and never become one unbounded in-memory array.
+
+6. BRIDGE, GLOBAL SUDO, AND SCHEDULING
+--------------------------------------
+The user bridge selects owned session(s), selects an action or command, confirms scope, enqueues work, and shows progress and results. Global sudo applies to all sessions owned by the Telegram account. Global auto-promote schedules a command payload for all sessions under that user, targeting allstatus or allchat, with configurable media/link/text, delay, run count, days/months, and Africa/Lagos timezone support. A maximum of 24 user jobs is a product default, enforced centrally through the quota service rather than scattered in commands.
+
+The global owner has an all-user bridge, global auto-promote over every active session, Master bucket access, unlimited administrative job configuration subject to safe queue limits, force-join management, usage dashboard, user list, ban/unban, support inbox, broadcasts, emergency mode, and audit access.
+
+7. WHATSAPP COMMAND ENGINE
+--------------------------
+The installed @crysnovax/baileys package is the authoritative transport. The command engine resolves the session-local prefix, owner/sudo permission, quoted-message context, quoted media/text/caption, and command aliases. .ping and .menu are always registered dynamically. Prefixes may be arbitrary safe strings or empty; “my prefix” and “no prefix” are supported.
+
+Core commands include .ping, .menu, .gstatus, .allstatus, .stopstatus, .allchat, .stopchat, .tag, .stoptag, .setsudo, .setprefix, .pair, .pfp, .setpfp, .setname, .setbio, .groups, .setgpp, .autojoin, .join, .health, .allstatusx, .gstatusx, and .allchatx. Every command that operates on a message prefers quoted content when present. Mention rendering uses usable real JIDs and never exposes LID values.
+
+GSTATUS posts text, image, video, audio where supported, document where supported, captions, links, previews, and mentions to the current group status using the native package implementation. ALLSTATUS posts to every group with pagination, bounded workers, per-group retry, progress, cancellation, and a final success/failed/skipped report. ALLCHAT sends to every group chat with the same protections. TAG supports quoted text/media, repeated calls, numeric limits, chunking, backpressure, and a stop command; “fast” never means bypassing platform limits. X commands repeat per group count with cooldown and cancellation.
+
+8. PAIRING FROM WHATSAPP
+-------------------------
+.pair begins an interactive pairing flow using the installed package’s supported custom pairing-code path. The code uses the configured PAPPY style where supported. The new session inherits the workspace of the Telegram-created session flow, sends immediate Telegram success notification, and sends immediate confirmation to the WhatsApp account that executed .pair. No reusable pairing state is purged before terminal failure is known.
+
+9. LINK PREVIEW MANAGER
+-----------------------
+Every outgoing URL-bearing path calls the centralized Preview Manager: ordinary messages, captions, gstatus, allstatus, allchat, tag, schedules, bridges, broadcasts, and future senders. Complete existing previews are preserved exactly. Raw or partial previews are hydrated only for missing metadata or thumbnails. Preview records are cached with schemaVersion, checksum/key, timestamps, and host information.
+
+The manager tracks cache hits, hydration success, thumbnail success, metadata success, fallback usage, latency, host failures, and preview-related send failures. Per-host circuit breakers reduce fetching after repeated failure, reuse valid cached previews, allow sending without preview when needed, and recover after cooldown. One broken site must never stall mass operations. Media with URL captions remains media and receives preview metadata where supported.
+
+10. MEDIA SERVICE AND ADMIN MEDIA
+---------------------------------
+Admin Media is a shared workspace-scoped MediaService used by WhatsApp menus, Telegram broadcasts, PFP, group PFP, schedules, exports, and future web control. Each record stores mediaId, workspaceId, type, MIME, byte size, checksum, storage reference, creator, timestamps, and metadata. MIME and content are validated before processing. Size limits are checked before buffering. Originals are preserved, writes are atomic, duplicates may be safely deduplicated by checksum, and temporary files are cleaned.
+
+The WhatsApp menu may use an admin-selected image or video; if none is selected it falls back to the polished ASCII menu. Media upload and selection require owner authorization and server-side workspace resolution.
+
+11. QUEUES, IDEMPOTENCY, AND BACKPRESSURE
+------------------------------------------
+Redis and BullMQ or an equivalent durable queue are used for pairing, link collection, validation, downloads/exports, allstatus, allchat, tag, broadcasts, schedules, preview hydration, media processing, group synchronization, and cleanup. Job states are QUEUED, RUNNING, PAUSED, CANCELLING, CANCELLED, COMPLETED, PARTIAL, FAILED, and RETRYING.
+
+Each job exposes completed, total when known, success, failed, skipped, retrying, rate, elapsed, and meaningful ETA. Queue pressure reduces concurrency, stops new work where appropriate, preserves session-health priority, and reports pressure in dashboards. Mass work uses at-least-once execution with a deterministic operation key based on workspaceId, sessionId, jobId, targetJid, and payloadHash. Completed targets are skipped on retry; uncertain states are persisted rather than repeated blindly.
+
+12. SESSION MANAGER HARDENING
+-----------------------------
+There is one authoritative runtime per sessionId. Socket creation requires a distributed lock. Reconnect uses bounded backoff and jitter. Each session has normalized connection state, heartbeat/lastHealthyAt, stale-runtime detection, graceful shutdown, encrypted auth persistence, and an isolated transport service API.
+
+Transient states are DEGRADED, RECONNECTING, and ERROR. Terminal states are LOGGED_OUT, BANNED, and PURGED. A true logout or ban stops workers and can purge credentials under explicit policy. A transient network failure never purges a session. Shutdown stops new jobs, stops schedulers, drains critical auth writes, closes sockets, releases locks, and closes infrastructure connections.
+
+13. ERROR, AUDIT, QUOTA, AND EMERGENCY MODE
+--------------------------------------------
+Errors use USER_INPUT_ERROR, PERMISSION_DENIED, SESSION_NOT_READY, SESSION_LOGGED_OUT, SESSION_BANNED, RATE_LIMITED, NETWORK_TRANSIENT, PLATFORM_REJECTED, MEDIA_INVALID, MEDIA_TOO_LARGE, PREVIEW_FAILED, GROUP_NOT_FOUND, QUEUE_FULL, and INTERNAL_ERROR. Each has a safe user message, internal diagnostic, retryable flag, severity, and correlation ID.
+
+Audit records include actor, workspace, session, action, timestamp, success/failure, reason, correlation ID, and safe metadata. Audit pairing, deletion, sudo, prefix, global actions, bans, broadcasts, force-join, destructive group actions, exports, and purges.
+
+A centralized Plan/Quota service owns max sessions, scheduled jobs, validator links, join concurrency, broadcast recipients, media size, storage, and mass-operation concurrency. Emergency mode can pause mass sends, joins, broadcasts, scheduler, global bridge, and new pairing while preserving healthy sessions. The UI shows SAFE MODE visibly and supports recovery without re-pairing.
+
+14. DEPLOYMENT AND SETUP
+------------------------
+Deployment is interactive and asks for Telegram bot token, owner Telegram IDs, database URL, Redis URL, encryption secret, timezone, session/media/export directories, optional domain/webhook, and optional object storage. It validates Node, Telegram identity, owners, Redis, database, storage permissions, encryption, Baileys auth directory, and workers. It generates .env without source edits and never commits it.
+
+The supported deployment modes are PM2 on Ubuntu or Docker Compose with persistent session/media/Redis/Mongo volumes, health checks, graceful shutdown, and restart policy. `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm lint`, and `pnpm doctor --ci` are required gates. CI fails on TypeScript errors, failed tests, build errors, detected secrets, migration failures, unsupported Baileys imports, and workspace-isolation regressions.
+
+15. IMPLEMENTATION ORDER
+------------------------
+Phase A: preserve and verify session/auth boundaries; add typed configuration, setup wizard, doctor, encryption, and graceful shutdown.
+
+Phase B: complete Telegram force-join, pairing progress, paginated sessions, per-session menus, bridge, support, and admin panel.
+
+Phase C: complete WhatsApp command registry, quoted-message/media resolution, profile/group controls, pairing-from-WhatsApp, join manager, and safe command responses.
+
+Phase D: implement Redis/BullMQ job contracts, bounded workers, idempotency, progress dashboards, cancellation, retry, and recovery.
+
+Phase E: implement Main/Active/Dead/Error/Master buckets, collector, validator, downloads, styled exports, and live validation view.
+
+Phase F: implement centralized preview manager, cache, circuit breakers, metrics, and all outgoing sender integration.
+
+Phase G: implement user/global scheduling, auto-promote, broadcasts, emergency mode, audit, quotas, cleanup workers, and admin analytics.
+
+Phase H: add Docker/Compose, migrations, CI gates, setup wizard, doctor, deployment automation, and regression coverage for every fixed reliability issue.
+
+16. ACCEPTANCE STANDARD
+-----------------------
+The system is not considered complete because a menu renders or a process starts. It is complete only when healthy long-lived sessions survive restarts and transient failures, user workspaces remain isolated, pairing and force-join are honest and recoverable, large operations are queued and cancellable, previews are centralized and resilient, media is validated and workspace-scoped, admin operations are audited, secrets are protected, and deployment can be repeated through validated setup rather than manual source edits.
