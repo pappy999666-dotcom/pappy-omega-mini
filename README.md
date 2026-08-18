@@ -62,3 +62,20 @@ The parser follows the configured session prefix and keeps quoted-message handli
 ## Architecture contract
 
 The attached master architecture remains the source of truth for multi-tenancy, explicit owner permissions, session recovery, queue behavior, preview centralization, destructive-action confirmation, and the requirement not to purge recoverable WhatsApp sessions after transient failures. The current repository is the clean implementation target: `pappy999666-dotcom/pappy-omega-mini`.
+
+
+## V2 hardening now included
+
+The V2 foundation adds structured error codes with correlation IDs, workspace-scoped audit events, centralized quota definitions, emergency safe-mode controls, AES-256-GCM encrypted auth-state values, a `doctor` command, and Docker/Compose deployment artifacts with persistent volumes. The production configuration requires `ENCRYPTION_SECRET` in addition to the Telegram token and owner IDs.
+
+Run the quality gates with:
+
+```bash
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm lint
+pnpm doctor
+```
+
+The VPS deployment also verifies Telegram identity, Redis, MongoDB, storage permissions, encryption configuration, and PM2 health. Emergency controls are designed to pause mass sends, joins, broadcasts, scheduling, or new pairing without destroying healthy sessions.
