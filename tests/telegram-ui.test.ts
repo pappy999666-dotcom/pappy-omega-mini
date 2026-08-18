@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  adminJobsKeyboard,
+  adminJobsText,
   dashboardKeyboard,
   globalBridgeKeyboard,
   pageText,
@@ -53,6 +55,32 @@ describe("Telegram UI authorization", () => {
     expect(pageText("Status", "Ready")).toContain(
       "<blockquote>Ready</blockquote>",
     );
+  });
+
+  it("renders a real Admin Jobs control panel", () => {
+    const jobs = [
+      {
+        jobId: "1234567890abcdef",
+        kind: "allchat",
+        workspaceId: "workspace-1",
+        state: "RUNNING",
+        progress: {
+          completed: 3,
+          total: 10,
+          success: 3,
+          failed: 0,
+          skipped: 0,
+          retrying: 0,
+          rate: 1,
+        },
+        createdAt: Date.now(),
+      },
+    ];
+    expect(adminJobsText(jobs)).toContain("Admin Jobs Control");
+    expect(JSON.stringify(adminJobsKeyboard(jobs))).toContain(
+      "admin:jobs:cancel:1234567890abcdef",
+    );
+    expect(adminJobsText(jobs)).not.toContain("Owner Verified");
   });
 
   it("keeps Validator Live Log off until explicitly enabled", () => {

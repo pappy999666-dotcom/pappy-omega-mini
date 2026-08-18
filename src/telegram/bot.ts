@@ -28,6 +28,8 @@ import {
 } from "../whatsapp/command-registry.js";
 import {
   adminKeyboard,
+  adminJobsKeyboard,
+  adminJobsText,
   bucketKeyboard,
   workspaceSettingsKeyboard,
   workspaceSettingsText,
@@ -775,6 +777,31 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!requireAdmin(ctx)) return;
     await sendAdminMedia(ctx);
   });
+  bot.action("admin:jobs", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    await showAdminJobs(ctx);
+  });
+  bot.action("admin:jobs:refresh", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    await showAdminJobs(ctx);
+  });
+  bot.action(/^admin:jobs:cancel:([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Cancellation requested");
+    if (!requireAdmin(ctx)) return;
+    const runtime = getWorkerRuntime();
+    const jobId = ctx.match[1] ?? "";
+    const cancelled = runtime ? await runtime.cancel(jobId) : undefined;
+    recordAudit({
+      workspaceId: resolveTelegramUser(ctx).workspaceId,
+      actorTelegramUserId: String(ctx.from?.id ?? ""),
+      action: "admin.job.cancel",
+      success: Boolean(cancelled),
+      metadata: { jobId },
+    });
+    await showAdminJobs(ctx);
+  });
   bot.action(/^admin:media:add:(image|video)$/, async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
@@ -1057,6 +1084,11 @@ async function sendSessions(ctx: Context, page: number): Promise<void> {
     body,
     sessionsKeyboard(sessions, page, 5, isAdmin(ctx)),
   );
+}
+
+async function showAdminJobs(ctx: Context): Promise<void> {
+  const jobs = (await getWorkerRuntime()?.listRecent(100)) ?? [];
+  await edit(ctx, adminJobsText(jobs), adminJobsKeyboard(jobs));
 }
 
 async function showValidatorHub(ctx: Context): Promise<void> {

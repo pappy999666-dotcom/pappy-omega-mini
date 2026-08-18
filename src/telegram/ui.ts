@@ -372,6 +372,66 @@ export function adminKeyboard(): InlineKeyboardMarkup {
   ]);
 }
 
+export interface AdminJobView {
+  jobId: string;
+  kind: string;
+  workspaceId: string;
+  state: string;
+  progress: {
+    completed: number;
+    total?: number;
+    success: number;
+    failed: number;
+    skipped: number;
+    retrying: number;
+    rate: number;
+  };
+  createdAt: number;
+  error?: string;
+}
+
+export function adminJobsText(jobs: AdminJobView[]): string {
+  const counts = jobs.reduce<Record<string, number>>((acc, job) => {
+    acc[job.state] = (acc[job.state] ?? 0) + 1;
+    return acc;
+  }, {});
+  const summary = Object.entries(counts)
+    .map(([state, count]) => `<b>${escapeHtml(state)}:</b> ${count}`)
+    .join("  ");
+  const rows = jobs
+    .slice(0, 12)
+    .map((job) => {
+      const total = job.progress.total ?? "?";
+      return `${jobStatusIcon(job.state)} <code>${escapeHtml(job.kind)}</code> · <b>${escapeHtml(job.state)}</b>\n<code>${escapeHtml(job.jobId.slice(0, 8))}</code> · ${job.progress.completed}/${total} done · ${job.progress.success} ok · ${job.progress.failed} failed`;
+    })
+    .join("\n\n");
+  return pageText(
+    "Admin Jobs Control",
+    infoResponse(
+      "Owner Queue Overview",
+      `<b>Recent jobs:</b> ${jobs.length}\n${summary || "<b>No jobs recorded.</b>"}\n\n${rows || "No queued, running, or completed jobs are available yet."}\n\n<i>Updated ${new Date().toISOString()}</i>`,
+    ),
+  );
+}
+
+export function adminJobsKeyboard(jobs: AdminJobView[]): InlineKeyboardMarkup {
+  const rows: Button[][] = jobs
+    .filter((job) =>
+      ["QUEUED", "RUNNING", "PAUSED", "RETRYING"].includes(job.state),
+    )
+    .slice(0, 8)
+    .map((job) => [
+      btn(
+        `⏹ Cancel ${job.kind} · ${job.jobId.slice(0, 6)}`,
+        `admin:jobs:cancel:${job.jobId}`,
+        "danger",
+      ),
+    ]);
+  rows.push([btn("↻ Refresh Jobs", "admin:jobs:refresh", "primary")]);
+  rows.push([btn(ui.back, "admin:panel")]);
+  return keyboard(rows);
+}
+
 export function mediaKeyboard(): InlineKeyboardMarkup {
   return keyboard([
     [
@@ -426,6 +486,18 @@ export function pageText(title: string, body: string): string {
 
 export function featureText(title: string, body: string): string {
   return pageText(title, body);
+}
+
+function jobStatusIcon(state: string): string {
+  return state === "COMPLETED"
+    ? "✅"
+    : state === "FAILED" || state === "CANCELLED"
+      ? "⛔"
+      : state === "RUNNING"
+        ? "🟢"
+        : state === "PAUSED"
+          ? "⏸️"
+          : "🟡";
 }
 
 function statusIcon(status: WhatsAppSession["status"]): string {

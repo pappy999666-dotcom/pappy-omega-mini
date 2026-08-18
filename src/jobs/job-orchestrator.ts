@@ -29,6 +29,36 @@ export class RedisJobStore {
     );
   }
 
+  async list(limit = 100): Promise<JobRecord[]> {
+    let cursor = "0";
+    const keys: string[] = [];
+    do {
+      const result = await this.redis.scan(
+        cursor,
+        "MATCH",
+        `${STORE_PREFIX}*`,
+        "COUNT",
+        Math.max(25, limit),
+      );
+      cursor = result[0];
+      keys.push(...result[1]);
+    } while (cursor !== "0" && keys.length < limit * 2);
+    const records = (
+      await Promise.all(
+        keys
+          .slice(0, limit * 2)
+          .map((key) =>
+            this.redis
+              .get(key)
+              .then((value) =>
+                value ? (JSON.parse(value) as JobRecord) : undefined,
+              ),
+          ),
+      )
+    ).filter((record): record is JobRecord => Boolean(record));
+    return records.sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+  }
+
   async update(
     jobId: string,
     patch: Partial<JobRecord>,
@@ -137,6 +167,10 @@ export class JobOrchestrator {
 
   async get(jobId: string): Promise<JobRecord | undefined> {
     return this.store.get(jobId);
+  }
+
+  async listRecent(limit = 100): Promise<JobRecord[]> {
+    return this.store.list(limit);
   }
 
   async cancel(jobId: string): Promise<JobRecord | undefined> {
