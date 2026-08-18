@@ -1535,9 +1535,10 @@ async function handlePairingText(
     );
     return;
   }
+  const workspaceId = resolveTelegramUser(ctx).workspaceId;
+  const session = getSession(workspaceId, sessionId);
   try {
-    const session = getSession(resolveTelegramUser(ctx).workspaceId, sessionId);
-    updateSession(resolveTelegramUser(ctx).workspaceId, sessionId, {
+    updateSession(workspaceId, sessionId, {
       phoneNumber: normalizedPhone,
       status: "PAIRING",
     });
@@ -1562,6 +1563,14 @@ async function handlePairingText(
       ]),
     );
   } catch (error) {
+    updateSession(workspaceId, sessionId, {
+      status: "ERROR",
+      disconnectReason:
+        `pairing failed: ${error instanceof Error ? error.message : String(error)}`.slice(
+          0,
+          240,
+        ),
+    });
     await sendOrEdit(
       ctx,
       pageText(
@@ -1573,6 +1582,13 @@ async function handlePairingText(
       ),
       keyboard([
         [btn("↻ Retry Phone Number", `pair:number:${sessionId}`, "success")],
+        [
+          btn(
+            "🗑 Purge Failed Session",
+            `session:${sessionId}:action:purge`,
+            "danger",
+          ),
+        ],
         [btn(ui.back, "sessions:list:0")],
       ]),
     );
