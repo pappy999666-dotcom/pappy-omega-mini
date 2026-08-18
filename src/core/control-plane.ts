@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { env } from "../config/env.js";
+import {
+  loadAuditEvents,
+  loadEmergencyState,
+  persistAuditEvent,
+  persistEmergencyState,
+} from "../persistence/mongo.js";
 import type {
   AuditEvent,
   EmergencyState,
@@ -51,6 +57,7 @@ export function recordAudit(
   };
   audits.push(event);
   if (audits.length > 10_000) audits.splice(0, audits.length - 10_000);
+  void persistAuditEvent(event).catch(() => undefined);
   return event;
 }
 
@@ -76,7 +83,17 @@ export function setEmergencyState(
     updatedAt: Date.now(),
     updatedBy: actorTelegramUserId,
   });
+  void persistEmergencyState(emergency).catch(() => undefined);
   return getEmergencyState();
+}
+
+export async function hydrateControlPlane(): Promise<void> {
+  const [persistedEmergency, persistedAudit] = await Promise.all([
+    loadEmergencyState(),
+    loadAuditEvents("__all__", 0).catch(() => []),
+  ]);
+  if (persistedEmergency) Object.assign(emergency, persistedEmergency);
+  if (persistedAudit.length) audits.push(...persistedAudit);
 }
 
 export function assertOperationAllowed(

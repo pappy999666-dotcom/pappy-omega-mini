@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import mongoose, { type Model } from "mongoose";
 import { env } from "../config/env.js";
 import type { User, WhatsAppSession, Workspace } from "../types/domain.js";
+import type { AuditEvent, EmergencyState } from "../types/v2.js";
 
 export interface ForceJoinTargetRecord {
   targetId: string;
@@ -21,6 +22,8 @@ interface ForceJoinTargetDocument
 interface UserDocument extends User, mongoose.Document {}
 interface WorkspaceDocument extends Workspace, mongoose.Document {}
 interface SessionDocument extends WhatsAppSession, mongoose.Document {}
+interface AuditDocument extends AuditEvent, mongoose.Document {}
+interface EmergencyDocument extends EmergencyState, mongoose.Document {}
 interface PairingRequestDocument extends mongoose.Document {
   telegramUserId: string;
   stage: "label" | "phone";
@@ -92,6 +95,33 @@ const sessionSchema = new mongoose.Schema<SessionDocument>(
   { collection: "whatsapp_sessions", versionKey: false },
 );
 sessionSchema.index({ workspaceId: 1, status: 1 });
+const auditSchema = new mongoose.Schema<AuditDocument>(
+  {
+    correlationId: { type: String, required: true, unique: true, index: true },
+    actorTelegramUserId: { type: String, required: true, index: true },
+    workspaceId: { type: String, required: true, index: true },
+    sessionId: String,
+    action: { type: String, required: true, index: true },
+    success: { type: Boolean, required: true },
+    reason: String,
+    metadata: { type: mongoose.Schema.Types.Mixed, required: true },
+    timestamp: { type: Number, required: true, index: true },
+  },
+  { collection: "audit_events", versionKey: false },
+);
+const emergencySchema = new mongoose.Schema<EmergencyDocument>(
+  {
+    enabled: { type: Boolean, required: true },
+    pauseMassSends: { type: Boolean, required: true },
+    pauseJoins: { type: Boolean, required: true },
+    pauseBroadcasts: { type: Boolean, required: true },
+    pauseScheduler: { type: Boolean, required: true },
+    disablePairing: { type: Boolean, required: true },
+    updatedAt: { type: Number, required: true },
+    updatedBy: { type: String, required: true },
+  },
+  { collection: "emergency_state", versionKey: false },
+);
 const pairingRequestSchema = new mongoose.Schema<PairingRequestDocument>(
   {
     telegramUserId: { type: String, required: true, unique: true, index: true },
@@ -110,6 +140,8 @@ let UserModel: Model<UserDocument> | undefined;
 let WorkspaceModel: Model<WorkspaceDocument> | undefined;
 let SessionModel: Model<SessionDocument> | undefined;
 let PairingRequestModel: Model<PairingRequestDocument> | undefined;
+let AuditModel: Model<AuditDocument> | undefined;
+let EmergencyModel: Model<EmergencyDocument> | undefined;
 
 export async function connectMongo(): Promise<typeof mongoose> {
   if (mongoose.connection.readyState === 1) return mongoose;
@@ -143,6 +175,16 @@ function sessionModel(): Model<SessionDocument> {
     mongoose.models.WhatsAppSession ??
     mongoose.model<SessionDocument>("WhatsAppSession", sessionSchema));
 }
+function auditModel(): Model<AuditDocument> {
+  return (AuditModel ??=
+    mongoose.models.AuditEvent ??
+    mongoose.model<AuditDocument>("AuditEvent", auditSchema));
+}
+function emergencyModel(): Model<EmergencyDocument> {
+  return (EmergencyModel ??=
+    mongoose.models.EmergencyState ??
+    mongoose.model<EmergencyDocument>("EmergencyState", emergencySchema));
+}
 function pairingRequestModel(): Model<PairingRequestDocument> {
   return (PairingRequestModel ??=
     mongoose.models.PairingRequest ??
@@ -160,6 +202,8 @@ export async function ensureMongoIndexes(): Promise<void> {
     workspaceModel().createIndexes(),
     sessionModel().createIndexes(),
     pairingRequestModel().createIndexes(),
+    auditModel().createIndexes(),
+    emergencyModel().createIndexes(),
   ]);
 }
 
@@ -177,6 +221,44 @@ export async function persistWorkspace(workspace: Workspace): Promise<void> {
     { upsert: true },
   );
 }
+export async function persistAuditEvent(event: AuditEvent): Promise<void> {
+  await connectMongo();
+  await auditModel().replaceOne({ correlationId: event.correlationId }, event, {
+    upsert: true,
+  });
+}
+export async function loadAuditEvents(
+  workspaceId?: string,
+  limit = 100,
+): Promise<AuditEvent[]> {
+  await connectMongo();
+  const filter = workspaceId ? { workspaceId } : {};
+  const query = auditModel().find(filter).sort({ timestamp: -1 });
+  if (limit > 0) query.limit(limit);
+  return query.lean<AuditEvent[]>().exec();
+}
+export async function persistEmergencyState(
+  state: EmergencyState,
+): Promise<void> {
+  await connectMongo();
+  await emergencyModel().replaceOne(
+    { _id: "global" },
+    { ...state, _id: "global" },
+    { upsert: true },
+  );
+}
+export async function loadEmergencyState(): Promise<
+  EmergencyState | undefined
+> {
+  await connectMongo();
+  return (
+    (await emergencyModel()
+      .findOne({ _id: "global" })
+      .lean<EmergencyState>()
+      .exec()) ?? undefined
+  );
+}
+
 export interface PairingRequestRecord {
   telegramUserId: string;
   stage: "label" | "phone";

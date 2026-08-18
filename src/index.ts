@@ -3,6 +3,7 @@ import { env, assertProductionSecrets } from "./config/env.js";
 import { createTelegramBot } from "./telegram/bot.js";
 import { shutdownWhatsAppSessions } from "./whatsapp/session-manager.js";
 import { hydrateSessionRegistry } from "./core/session-registry.js";
+import { hydrateControlPlane } from "./core/control-plane.js";
 import { startWorkerRuntime } from "./jobs/runtime.js";
 import { closeMongo, ensureMongoIndexes } from "./persistence/mongo.js";
 import type { JobOrchestrator } from "./jobs/job-orchestrator.js";
@@ -24,6 +25,7 @@ async function main(): Promise<void> {
 
   await ensureMongoIndexes();
   await hydrateSessionRegistry();
+  await hydrateControlPlane();
   const bot = createTelegramBot();
   let workers: JobOrchestrator | undefined;
   if (env.TELEGRAM_BOT_TOKEN) workers = startWorkerRuntime();
