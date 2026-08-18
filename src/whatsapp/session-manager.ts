@@ -371,6 +371,11 @@ export async function requestWhatsAppPairingCode(
   customCode = env.PAIRING_CUSTOM_CODE,
   telegramChatId?: number,
 ): Promise<string> {
+  // Startup recovery can leave an unpaired socket reconnecting. Replace it
+  // before issuing a new code so the code belongs to this pairing attempt.
+  stopWhatsAppSession(workspaceId, sessionId);
+  resetWhatsAppSessionLifecycle(workspaceId, sessionId);
+  await new Promise((resolve) => setTimeout(resolve, 500));
   await startWhatsAppSession(workspaceId, sessionId);
   if (telegramChatId)
     pairingNotifications.set(
