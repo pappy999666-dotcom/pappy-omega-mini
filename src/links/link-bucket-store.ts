@@ -18,6 +18,13 @@ export interface LinkRecord {
     memberCount?: number;
     imageUrl?: string;
     inviteCode?: string;
+    joinClassification?:
+      | "already-member"
+      | "invalid-invite"
+      | "forbidden"
+      | "rate-limit"
+      | "transport";
+    joinRetryable?: boolean;
   };
   validationError?: string;
 }

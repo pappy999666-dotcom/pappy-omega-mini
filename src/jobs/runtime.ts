@@ -18,6 +18,48 @@ interface LinkValidationPayload {
   sourceSessionId?: string;
 }
 
+type JoinFailureClass =
+  | "already-member"
+  | "invalid-invite"
+  | "forbidden"
+  | "rate-limit"
+  | "transport";
+function classifyJoinFailure(error: unknown): {
+  classification: JoinFailureClass;
+  retryable: boolean;
+  message: string;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("already") ||
+    lower.includes("participant") ||
+    lower.includes("409")
+  )
+    return { classification: "already-member", retryable: false, message };
+  if (
+    lower.includes("invalid") ||
+    lower.includes("not found") ||
+    lower.includes("invite")
+  )
+    return { classification: "invalid-invite", retryable: false, message };
+  if (
+    lower.includes("forbidden") ||
+    lower.includes("not allowed") ||
+    lower.includes("unauthorized")
+  )
+    return { classification: "forbidden", retryable: false, message };
+  if (lower.includes("rate") || lower.includes("429"))
+    return { classification: "rate-limit", retryable: true, message };
+  if (
+    lower.includes("timeout") ||
+    lower.includes("tempor") ||
+    lower.includes("network")
+  )
+    return { classification: "transport", retryable: true, message };
+  return { classification: "transport", retryable: true, message };
+}
+
 let activeRuntime: JobOrchestrator | undefined;
 
 export function getWorkerRuntime(): JobOrchestrator | undefined {
@@ -199,13 +241,41 @@ export function startWorkerRuntime(): JobOrchestrator {
             await new Promise((resolve) => setTimeout(resolve, delayMs));
           return { status: "success" as const };
         } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error);
+          const classified = classifyJoinFailure(error);
+          if (classified.classification === "already-member") {
+            await buckets.move(
+              context.job.workspaceId,
+              record.canonicalUrl,
+              "active",
+              {
+                lastCheckedAt: Date.now(),
+                metadata: {
+                  ...record.metadata,
+                  joinClassification: classified.classification,
+                  joinRetryable: false,
+                },
+              },
+            );
+            return { status: "success" as const };
+          }
+          if (classified.retryable) {
+            await context.report({
+              retrying: (context.job.progress.retrying ?? 0) + 1,
+            });
+          }
           await buckets.move(
             context.job.workspaceId,
             record.canonicalUrl,
-            message.toLowerCase().includes("rate") ? "error" : "dead",
-            { validationError: message.slice(0, 240) },
+            classified.retryable ? "error" : "dead",
+            {
+              validationError: classified.message.slice(0, 240),
+              metadata: {
+                ...record.metadata,
+                joinClassification: classified.classification,
+                joinRetryable: classified.retryable,
+              },
+              lastCheckedAt: Date.now(),
+            },
           );
           return { status: "failed" as const };
         }

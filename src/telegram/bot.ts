@@ -2158,7 +2158,7 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
       "Join Manager",
       infoResponse(
         "Live Session-Bound Join Worker",
-        `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Source:</b> Active bucket\n<b>Status:</b> ${status}\n<b>Job:</b> <code>${escapeHtml(currentJob?.jobId ?? "not started")}</code>\n<b>Progress:</b> ${currentJob?.progress.completed ?? 0}/${currentJob?.progress.total ?? "—"}\n<b>Joined:</b> ${currentJob?.progress.success ?? 0}  <b>Failed:</b> ${currentJob?.progress.failed ?? 0}\n<b>Rate:</b> ${currentJob?.progress.rate ? currentJob.progress.rate.toFixed(2) : "0.00"}/s\n\nThe view updates in place while the worker is active.`,
+        `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Source:</b> Active bucket\n<b>Status:</b> ${status}\n<b>Job:</b> <code>${escapeHtml(currentJob?.jobId ?? "not started")}</code>\n<b>Progress:</b> ${currentJob?.progress.completed ?? 0}/${currentJob?.progress.total ?? "—"}\n<b>Joined:</b> ${currentJob?.progress.success ?? 0}  <b>Failed:</b> ${currentJob?.progress.failed ?? 0}\n<b>Retrying:</b> ${currentJob?.progress.retrying ?? 0}  <b>Rate:</b> ${currentJob?.progress.rate ? currentJob.progress.rate.toFixed(2) : "0.00"}/s\n<b>Worker state:</b> ${escapeHtml(currentJob?.state ?? status)}\n\nThe view updates in place while the worker is active.`,
       ),
     );
   await edit(ctx, render(), joinManagerKeyboard(session.sessionId, status));
