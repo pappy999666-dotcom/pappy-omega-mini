@@ -17,7 +17,7 @@ import {
   removeEncryptedJson,
   writeEncryptedJson,
 } from "../core/encrypted-store.js";
-import { routeWhatsAppText } from "./message-router.js";
+import { routeWhatsAppText, type WhatsAppReply } from "./message-router.js";
 import {
   clearLifecycle,
   getLifecycleState,
@@ -157,10 +157,21 @@ async function openWhatsAppSession(
           text,
           ...(quotedText ? { quotedText } : {}),
         }).then((reply) => {
-          if (reply)
-            void socket.sendMessage(message.key?.remoteJid ?? "", {
-              text: reply,
+          if (!reply) return;
+          const jid = message.key?.remoteJid ?? "";
+          if (typeof reply === "string") {
+            void socket.sendMessage(jid, { text: reply });
+            return;
+          }
+          const mediaReply = reply as WhatsAppReply;
+          if (mediaReply.media) {
+            void socket.sendMessage(jid, {
+              [mediaReply.media.kind]: mediaReply.media.bytes,
+              caption: mediaReply.caption ?? "",
             });
+          } else if (mediaReply.text) {
+            void socket.sendMessage(jid, { text: mediaReply.text });
+          }
         });
       }
     },

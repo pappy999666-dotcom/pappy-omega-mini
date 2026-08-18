@@ -3,6 +3,7 @@ import { getSession } from "../core/session-registry.js";
 import { createHash } from "node:crypto";
 import { getWorkerRuntime } from "../jobs/runtime.js";
 import { listGroups } from "./transport-adapter.js";
+import { buildWhatsappMenuPayload } from "../menus/whatsapp-menu.js";
 
 const registry = createCommandRegistry();
 
@@ -13,10 +14,30 @@ export interface IncomingTextMessage {
   text: string;
   quotedText?: string;
 }
+export interface WhatsAppReply {
+  text?: string;
+  media?: {
+    kind: "image" | "video";
+    bytes: Buffer;
+    mimeType: string;
+    fileName: string;
+  };
+  caption?: string;
+}
+
+function isOwnerFor(
+  message: IncomingTextMessage,
+  session: ReturnType<typeof getSession>,
+): boolean {
+  return (
+    message.senderJid === session.phoneNumber ||
+    session.sudoList.includes(message.senderJid)
+  );
+}
 
 export async function routeWhatsAppText(
   message: IncomingTextMessage,
-): Promise<string | null> {
+): Promise<string | WhatsAppReply | null> {
   const session = getSession(message.workspaceId, message.sessionId);
   const source =
     message.quotedText && !message.text.trim()
@@ -28,9 +49,18 @@ export async function routeWhatsAppText(
   const raw = prefix ? trimmed.slice(prefix.length) : trimmed;
   if (!raw.trim()) return null;
 
-  const isOwner =
-    message.senderJid === session.phoneNumber ||
-    session.sudoList.includes(message.senderJid);
+  const commandName = raw.trim().split(/\s+/, 1)[0]?.toLowerCase();
+  if (commandName === "menu" || commandName === "help" || commandName === "m") {
+    const payload = await buildWhatsappMenuPayload(
+      session,
+      isOwnerFor(message, session),
+    );
+    return payload.media
+      ? { media: payload.media, caption: payload.caption }
+      : { text: payload.text };
+  }
+
+  const isOwner = isOwnerFor(message, session);
   const runtime = getWorkerRuntime();
   const commandContext = {
     workspaceId: message.workspaceId,
