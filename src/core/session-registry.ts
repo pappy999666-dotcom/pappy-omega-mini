@@ -87,6 +87,10 @@ export function listSessions(workspaceId: string): WhatsAppSession[] {
   );
 }
 
+export function listAllSessions(): WhatsAppSession[] {
+  return [...sessions.values()];
+}
+
 export function getSession(
   workspaceId: string,
   sessionId: string,

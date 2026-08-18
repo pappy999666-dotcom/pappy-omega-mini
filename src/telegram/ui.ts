@@ -488,6 +488,109 @@ export function adminUsersKeyboard(
   return keyboard(rows);
 }
 
+export function adminBucketText(snapshot: {
+  counts: Record<string, number>;
+  recent: Array<{
+    canonicalUrl: string;
+    bucket: string;
+    validationError?: string;
+  }>;
+  capturedAt: number;
+}): string {
+  const counts = Object.entries(snapshot.counts)
+    .map(([bucket, count]) => `<b>${escapeHtml(bucket)}:</b> ${count}`)
+    .join("  ");
+  const recent = snapshot.recent.length
+    ? snapshot.recent
+        .map(
+          (record) =>
+            `${record.bucket === "active" ? "✅" : record.bucket === "dead" ? "⛔" : "•"} <code>${escapeHtml(record.canonicalUrl.slice(0, 80))}</code>${record.validationError ? `\n<i>${escapeHtml(record.validationError.slice(0, 120))}</i>` : ""}`,
+        )
+        .join("\n\n")
+    : "No master-bucket records are available.";
+  return pageText(
+    "Admin · Master Bucket",
+    infoResponse(
+      "Validator Workspace Snapshot",
+      `${counts}\n\n<b>Recent records</b>\n${recent}\n\n<i>Captured ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+    ),
+  );
+}
+
+export function adminBucketKeyboard(): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("↻ Refresh Bucket", "admin:bucket", "primary")],
+    [btn(ui.back, "admin:panel")],
+  ]);
+}
+
+export function adminBridgeText(sessions: WhatsAppSession[]): string {
+  const body = sessions.length
+    ? sessions
+        .map(
+          (session) =>
+            `${statusIcon(session.status)} <b>${escapeHtml(session.sessionName)}</b>\n<code>${escapeHtml(session.sessionId.slice(0, 12))}</code> · workspace <code>${escapeHtml(session.workspaceId.slice(0, 12))}</code>\n${escapeHtml(session.phoneNumber ?? "phone pending")}`,
+        )
+        .join("\n\n")
+    : "No WhatsApp sessions are currently persisted.";
+  return pageText(
+    "Admin · Global Bridge",
+    infoResponse(
+      "Owner Cross-Workspace Control",
+      `${body}\n\nSelect a session only after confirming the workspace and intended operation. Destructive fan-out remains bounded and auditable.`,
+    ),
+  );
+}
+
+export function adminBridgeKeyboard(
+  sessions: WhatsAppSession[],
+): InlineKeyboardMarkup {
+  const rows: Button[][] = sessions.map((session) => [
+    btn(
+      `Open ${session.sessionName}`,
+      `admin:bridge:session:${session.workspaceId}:${session.sessionId}`,
+      "primary",
+    ),
+  ]);
+  rows.push([btn("↻ Refresh", "admin:bridge", "primary")]);
+  rows.push([btn(ui.back, "admin:panel")]);
+  return keyboard(rows);
+}
+
+export interface AdminAuditView {
+  action: string;
+  actorTelegramUserId: string;
+  success: boolean;
+  timestamp: number;
+  correlationId: string;
+  metadata?: Record<string, string | number | boolean>;
+}
+
+export function adminAuditText(events: AdminAuditView[]): string {
+  const body = events.length
+    ? events
+        .map(
+          (event) =>
+            `${event.success ? "✅" : "⛔"} <b>${escapeHtml(event.action)}</b>\n<code>${escapeHtml(event.correlationId.slice(0, 12))}</code> · actor ${escapeHtml(event.actorTelegramUserId)} · ${new Date(event.timestamp).toISOString()}`,
+        )
+        .join("\n\n")
+    : "No audit events are recorded for this workspace.";
+  return pageText(
+    "Admin · Audit",
+    infoResponse(
+      "Recent Control-Plane Events",
+      `${body}\n\n<i>Secrets and private message content are intentionally redacted.</i>`,
+    ),
+  );
+}
+
+export function adminAuditKeyboard(): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("↻ Refresh Audit", "admin:audit", "primary")],
+    [btn(ui.back, "admin:panel")],
+  ]);
+}
+
 export function adminKeyboard(): InlineKeyboardMarkup {
   return keyboard([
     [btn("⚙ Force Join", "admin:forcejoin"), btn("◉ Users", "admin:users")],

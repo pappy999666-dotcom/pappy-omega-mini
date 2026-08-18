@@ -4,6 +4,7 @@ import { env, ownerTelegramIds } from "../config/env.js";
 import {
   resolveUser,
   listSessions,
+  listAllSessions,
   createSession,
   getSession,
   updateSession,
@@ -18,6 +19,7 @@ import {
 import { getWorkerRuntime } from "../jobs/runtime.js";
 import {
   getEmergencyState,
+  listAuditEvents,
   recordAudit,
   setEmergencyState,
 } from "../core/control-plane.js";
@@ -42,6 +44,12 @@ import {
   adminJobsText,
   adminForceJoinKeyboard,
   adminForceJoinText,
+  adminAuditKeyboard,
+  adminAuditText,
+  adminBucketKeyboard,
+  adminBucketText,
+  adminBridgeKeyboard,
+  adminBridgeText,
   adminUsersKeyboard,
   adminUsersText,
   bucketKeyboard,
@@ -85,7 +93,14 @@ const joinStates = new Map<string, "idle" | "running" | "paused" | "stopped">();
 const joinJobs = new Map<string, string>();
 const liveLoops = new Map<string, ReturnType<typeof setInterval>>();
 const validatorLiveStates = new Map<string, boolean>();
-const pendingAdminInput = new Map<string, "forcejoin:add">();
+const pendingAdminInput = new Map<
+  string,
+  "forcejoin:add" | "broadcast:compose"
+>();
+const pendingAdminBroadcasts = new Map<
+  string,
+  { text: string; workspaceId: string }
+>();
 const pendingPairing = new Map<
   string,
   {
@@ -162,6 +177,13 @@ export function createTelegramBot(): Telegraf<Context> {
     const adminInput = pendingAdminInput.get(userId);
     if (adminInput === "forcejoin:add" && !ctx.message.text.startsWith("/")) {
       await handleForceJoinAdminInput(ctx, ctx.message.text.trim());
+      return;
+    }
+    if (
+      adminInput === "broadcast:compose" &&
+      !ctx.message.text.startsWith("/")
+    ) {
+      await handleAdminBroadcastDraft(ctx, ctx.message.text.trim());
       return;
     }
     const pending = pendingGlobalCommand.get(userId);
@@ -840,6 +862,55 @@ export function createTelegramBot(): Telegraf<Context> {
     });
     await showAdminUsers(ctx, 0);
   });
+  bot.action("admin:bucket", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const snapshot = await getValidatorSnapshot(
+      resolveTelegramUser(ctx).workspaceId,
+    );
+    await edit(ctx, adminBucketText(snapshot), adminBucketKeyboard());
+  });
+  bot.action("admin:bridge", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const sessions = listAllSessions();
+    await edit(ctx, adminBridgeText(sessions), adminBridgeKeyboard(sessions));
+  });
+  bot.action(/^admin:bridge:session:([^:]+):([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const workspaceId = ctx.match[1] ?? "";
+    const sessionId = ctx.match[2] ?? "";
+    const session = listAllSessions().find(
+      (item) =>
+        item.workspaceId === workspaceId && item.sessionId === sessionId,
+    );
+    if (!session) return deny(ctx);
+    recordAudit({
+      workspaceId,
+      actorTelegramUserId: String(ctx.from?.id ?? ""),
+      action: "admin.bridge.session.open",
+      success: true,
+      metadata: { sessionId },
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Admin · Session Bridge",
+        infoResponse(
+          "Explicit Target Selected",
+          `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Workspace:</b> <code>${escapeHtml(workspaceId)}</code>\n<b>Status:</b> ${escapeHtml(session.status)}\n\nThis target is selected for inspection. Start/cancel operations remain subject to the same bounded queue and audit policies as user operations.`,
+        ),
+      ),
+      keyboard([[btn("↻ Back to Global Bridge", "admin:bridge", "primary")]]),
+    );
+  });
+  bot.action("admin:audit", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const events = listAuditEvents(resolveTelegramUser(ctx).workspaceId, 100);
+    await edit(ctx, adminAuditText(events), adminAuditKeyboard());
+  });
   bot.action("admin:forcejoin", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
@@ -1032,32 +1103,70 @@ export function createTelegramBot(): Telegraf<Context> {
       mediaKeyboard(),
     );
   });
-  for (const action of [
-    "admin:forcejoin",
-    "admin:users",
-    "admin:bridge",
-    "admin:jobs",
-    "admin:bucket",
-    "admin:broadcast",
-    "admin:audit",
-    "admin:safe",
-  ]) {
-    bot.action(action, async (ctx) => {
-      await ctx.answerCbQuery();
-      if (!requireAdmin(ctx)) return;
-      await edit(
-        ctx,
-        pageText(
-          "Admin Module",
-          infoResponse(
-            "Owner Verified",
-            `<b>Action:</b> <code>${escapeHtml(action.replace("admin:", ""))}</code>\n\nOwner authorization confirmed. This control is available in the Admin Control Plane and every operation is recorded in the audit stream.`,
-          ),
+  bot.action("admin:broadcast", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    pendingAdminInput.set(String(ctx.from?.id ?? ""), "broadcast:compose");
+    await edit(
+      ctx,
+      pageText(
+        "Admin · Broadcast",
+        infoResponse(
+          "Compose Owner Broadcast",
+          "Send the message text now. The next screen is a preview; no user will receive anything until you confirm.",
         ),
-        keyboard([[btn(ui.back, "admin:panel")]]),
-      );
+      ),
+      keyboard([[btn("Cancel", "admin:panel", "danger")]]),
+    );
+  });
+  bot.action("admin:broadcast:cancel", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    pendingAdminBroadcasts.delete(String(ctx.from?.id ?? ""));
+    pendingAdminInput.delete(String(ctx.from?.id ?? ""));
+    await showAdminPanel(ctx);
+  });
+  bot.action("admin:broadcast:confirm", async (ctx) => {
+    await ctx.answerCbQuery("Broadcasting…");
+    if (!requireAdmin(ctx)) return;
+    const actorId = String(ctx.from?.id ?? "");
+    const draft = pendingAdminBroadcasts.get(actorId);
+    if (!draft) return showAdminPanel(ctx);
+    const recipients = (await listUsers(1000)).filter(
+      (user) => user.status === "active",
+    );
+    let success = 0;
+    let failed = 0;
+    for (const recipient of recipients) {
+      try {
+        await ctx.telegram.sendMessage(recipient.telegramUserId, draft.text);
+        success += 1;
+      } catch {
+        failed += 1;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 75));
+    }
+    recordAudit({
+      workspaceId: draft.workspaceId,
+      actorTelegramUserId: actorId,
+      action: "admin.broadcast.execute",
+      success: failed === 0,
+      metadata: { recipients: recipients.length, delivered: success, failed },
     });
-  }
+    pendingAdminBroadcasts.delete(actorId);
+    pendingAdminInput.delete(actorId);
+    await edit(
+      ctx,
+      pageText(
+        "Admin · Broadcast Result",
+        successResponse(
+          "Broadcast Complete",
+          `<b>Recipients:</b> ${recipients.length}\n<b>Delivered:</b> ${success}\n<b>Failed:</b> ${failed}`,
+        ),
+      ),
+      keyboard([[btn("‹ Admin Panel", "admin:panel")]]),
+    );
+  });
 
   bot.catch((error, ctx) =>
     console.error(`[telegram] update ${ctx.updateType} failed`, error),
@@ -1236,6 +1345,20 @@ async function sendSessions(ctx: Context, page: number): Promise<void> {
   );
 }
 
+async function showAdminPanel(ctx: Context): Promise<void> {
+  await edit(
+    ctx,
+    pageText(
+      "Admin Control Plane",
+      infoResponse(
+        "Owner Only",
+        "Platform-wide operations, media management, audit, force-join, emergency mode, and global operations are restricted to the owner.",
+      ),
+    ),
+    adminKeyboard(),
+  );
+}
+
 async function showAdminUsers(ctx: Context, page: number): Promise<void> {
   const users = await listUsers(20, Math.max(0, page) * 20);
   const views = users.map((user) => ({
@@ -1298,6 +1421,48 @@ async function handleForceJoinAdminInput(
     },
   });
   await showAdminForceJoin(ctx);
+}
+
+async function handleAdminBroadcastDraft(
+  ctx: Context,
+  text: string,
+): Promise<void> {
+  const actorId = String(ctx.from?.id ?? "");
+  pendingAdminInput.delete(actorId);
+  if (!text || text.length > 4096) {
+    await edit(
+      ctx,
+      pageText(
+        "Admin · Broadcast",
+        dangerResponse(
+          "Invalid Broadcast",
+          "Send between 1 and 4096 characters.",
+        ),
+      ),
+      keyboard([[btn("↻ Compose Again", "admin:broadcast", "primary")]]),
+    );
+    return;
+  }
+  const workspaceId = resolveTelegramUser(ctx).workspaceId;
+  pendingAdminBroadcasts.set(actorId, { text, workspaceId });
+  const recipients = (await listUsers(1000)).filter(
+    (user) => user.status === "active",
+  );
+  await edit(
+    ctx,
+    pageText(
+      "Admin · Broadcast Preview",
+      infoResponse(
+        "Confirm Before Sending",
+        `<b>Recipients:</b> ${recipients.length}\n<b>Length:</b> ${text.length} characters\n\n<blockquote>${escapeHtml(text)}</blockquote>\n\nNo delivery has occurred yet.`,
+      ),
+    ),
+    keyboard([
+      [btn("✅ Confirm Broadcast", "admin:broadcast:confirm", "danger")],
+      [btn("✎ Edit", "admin:broadcast", "primary")],
+      [btn("Cancel", "admin:broadcast:cancel", "danger")],
+    ]),
+  );
 }
 
 async function getForceJoinGate(ctx: Context): Promise<{
