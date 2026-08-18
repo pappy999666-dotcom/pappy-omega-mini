@@ -1,4 +1,4 @@
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import makeWASocket, {
   makeCacheManagerAuthState,
@@ -8,6 +8,11 @@ import makeWASocket, {
 import { env } from "../config/env.js";
 import { getSession, updateSession } from "../core/session-registry.js";
 import { routeWhatsAppText } from "./message-router.js";
+import {
+  readEncryptedJson,
+  removeEncryptedJson,
+  writeEncryptedJson,
+} from "../core/encrypted-store.js";
 
 interface RuntimeEvents {
   on(event: string, listener: (payload: any) => void): void;
@@ -35,7 +40,7 @@ class FileAuthStore implements CacheManagerStore {
 
   async get(key: string): Promise<unknown> {
     try {
-      return JSON.parse(await readFile(this.path(key), "utf8"));
+      return await readEncryptedJson(this.path(key));
     } catch {
       return undefined;
     }
@@ -43,13 +48,13 @@ class FileAuthStore implements CacheManagerStore {
 
   async set(key: string, value: unknown): Promise<unknown> {
     await mkdir(this.root, { recursive: true });
-    await writeFile(this.path(key), JSON.stringify(value), "utf8");
+    await writeEncryptedJson(this.path(key), value);
     return value;
   }
 
   async delete(key: string): Promise<boolean> {
     try {
-      await unlink(this.path(key));
+      await removeEncryptedJson(this.path(key));
       return true;
     } catch {
       return false;

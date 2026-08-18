@@ -10,6 +10,9 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "prettier --check package.json tsconfig.json src tests README.md",
+    "doctor": "tsx src/doctor.ts",
+    "doctor:ci": "tsx src/doctor.ts",
     "format": "prettier --write ."
   },
   "dependencies": {

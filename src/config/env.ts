@@ -4,6 +4,10 @@ import { z } from "zod";
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1).optional(),
   OWNER_TELEGRAM_IDS: z.string().default(""),
+  ENCRYPTION_SECRET: z.string().min(32).optional(),
+  OPTIONAL_DOMAIN: z.string().optional(),
+  TELEGRAM_WEBHOOK_URL: z.string().url().optional(),
+  OBJECT_STORAGE_BUCKET: z.string().optional(),
   MONGODB_URI: z.string().default("mongodb://127.0.0.1:27017/pappy_omega_mini"),
   REDIS_URL: z.string().default("redis://127.0.0.1:6379"),
   NODE_ENV: z
@@ -31,5 +35,10 @@ export const ownerTelegramIds = new Set(
 export function assertProductionSecrets(): void {
   if (env.NODE_ENV === "production" && !env.TELEGRAM_BOT_TOKEN) {
     throw new Error("TELEGRAM_BOT_TOKEN is required in production.");
+  }
+  if (env.NODE_ENV === "production" && !env.ENCRYPTION_SECRET) {
+    throw new Error(
+      "ENCRYPTION_SECRET with at least 32 characters is required in production.",
+    );
   }
 }

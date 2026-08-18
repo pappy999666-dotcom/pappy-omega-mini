@@ -1,0 +1,55 @@
+services:
+  pappy-omega-mini:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    volumes:
+      - pappy_sessions:/app/storage/sessions
+      - pappy_media:/app/data/media
+    healthcheck:
+      test: ["CMD", "node", "dist/src/doctor.js"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - pappy_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo:
+    image: mongo:8
+    restart: unless-stopped
+    volumes:
+      - pappy_mongo:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "--eval",
+          "db.adminCommand({ ping: 1 }).ok",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pappy_sessions:
+  pappy_media:
+  pappy_redis:
+  pappy_mongo:
