@@ -129,41 +129,25 @@ export function sessionsKeyboard(
 
 export function globalBridgeKeyboard(
   sessionCount: number,
-  active = false,
+  _active = false,
 ): InlineKeyboardMarkup {
   return keyboard([
     [btn("➕ Add WhatsApp Session", "session:new", "success")],
     ...(sessionCount > 0
       ? [
-          [btn("1️⃣ Choose Sessions", "bridge:global:select")],
-          [
-            btn(
-              "✉️ Send One Command to Selected",
-              "bridge:global:command",
-              "success",
-            ),
-          ],
+          [btn("1️⃣ Choose ACTIVE Sessions", "bridge:global:select")],
+          [btn("✉️ Send Command", "bridge:global:command", "success")],
         ]
-      : []),
-    [
-      btn(
-        active ? "⏹ Stop Fan-Out" : "▶ Start Fan-Out",
-        "bridge:global:toggle",
-        active ? "danger" : "success",
-      ),
-    ],
-    ...(sessionCount > 0
-      ? [[btn("⏹ Stop Fan-Out", "bridge:global:stop", "danger")]]
       : []),
     [btn(ui.back, "menu:main")],
   ]);
 }
 export function globalBridgeText(selected = 0, active = false): string {
   return pageText(
-    "Global Command Fan-Out",
+    "Global Command Bridge",
     infoResponse(
-      "One action · many owned sessions",
-      `<b>What this does:</b> run one WhatsApp command across every session you select.\n<b>Selected:</b> ${selected} session${selected === 1 ? "" : "s"}\n<b>Status:</b> ${active ? "ON — accepting fan-out commands" : "OFF — nothing is running"}\n\nThis is not the per-session Bridge. It is your workspace-wide command desk.`,
+      "One command · selected ACTIVE sessions",
+      `<b>What this does:</b> send one WhatsApp command to the ACTIVE sessions you select.\n<b>Selected:</b> ${selected} session${selected === 1 ? "" : "s"}\n<b>Status:</b> ${active ? "READY — listening for one command" : "IDLE — no command input is open"}\n\nThis is not the per-session Bridge. It is the workspace-wide command desk.`,
     ),
   );
 }
@@ -179,7 +163,7 @@ export function globalBridgeResultText(
     )
     .join("\n\n");
   return pageText(
-    "Fan-Out Result",
+    "Global Bridge Result",
     infoResponse(
       `Command completed: ${escapeHtml(command)}`,
       lines || "No session returned a result.",
@@ -663,12 +647,12 @@ export function adminBridgeText(sessions: WhatsAppSession[]): string {
             `${statusIcon(session.status)} <b>${escapeHtml(session.sessionName)}</b>\n<code>${escapeHtml(session.sessionId.slice(0, 12))}</code> · workspace <code>${escapeHtml(session.workspaceId.slice(0, 12))}</code>\n${escapeHtml(session.phoneNumber ?? "phone pending")}`,
         )
         .join("\n\n")
-    : "No WhatsApp sessions are currently persisted. Create and pair a session first; once it is stored here, Global Bridge Ops will list it as an explicit target.";
+    : "No ACTIVE WhatsApp sessions are available for Bridge. Pair or recover a session first.";
   return pageText(
     "Admin · Global Bridge",
     infoResponse(
-      "Owner Cross-Workspace Control",
-      `${body}\n\nSelect one or more sessions, then send one command to the selected targets. Destructive fan-out remains bounded and auditable. Open is for one session; the selection checkboxes are for Global Bridge fan-out.`,
+      "Active Session Command Bridge",
+      `${body}\n\nSelect the ACTIVE sessions that should receive one command, then press Send Command. Pairing, reconnecting, logged-out, and failed sessions are intentionally hidden.`,
     ),
   );
 }
@@ -697,16 +681,12 @@ export function adminBridgeKeyboard(
         `admin:bridge:toggle:${token}`,
         selected.has(token) ? "success" : "primary",
       ),
-      btn("Open", `admin:bridge:open:${token}`),
     ];
   });
   if (!sessions.length)
-    rows.push([btn("＋ Create Session", "session:new", "success")]);
+    rows.push([btn("＋ Pair Session", "session:new", "success")]);
   if (sessions.length)
-    rows.push([
-      btn("✉ Send to Selected", "admin:bridge:command", "success"),
-      btn("Clear", "admin:bridge:clear", "danger"),
-    ]);
+    rows.push([btn("✉ Send Command", "admin:bridge:command", "success")]);
   rows.push([btn("↻ Refresh", "admin:bridge", "primary")]);
   rows.push([btn(ui.back, "admin:panel")]);
   return keyboard(rows);

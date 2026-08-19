@@ -156,6 +156,7 @@ export function createSession(input: {
     joinSettings: joinSettingsFromWorkspace(input.workspaceId),
     autoCollectLinks: true,
     autoValidateLinks: true,
+    createdAt: Date.now(),
     collectedLinkCount: 0,
     validatedLinkCount: 0,
   };

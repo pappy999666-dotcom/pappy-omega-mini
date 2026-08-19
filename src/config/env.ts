@@ -23,6 +23,12 @@ const envSchema = z.object({
     .default(50 * 1024 * 1024),
   QUEUE_CONCURRENCY: z.coerce.number().int().positive().max(32).default(4),
   PAIRING_CUSTOM_CODE: z.string().default("PAPPYBOT"),
+  PAIRING_REQUEST_TTL_MS: z.coerce
+    .number()
+    .int()
+    .min(5 * 60 * 1000)
+    .max(7 * 24 * 60 * 60 * 1000)
+    .default(30 * 60 * 1000),
   WHATSAPP_READY_TIMEOUT_MS: z.coerce
     .number()
     .int()

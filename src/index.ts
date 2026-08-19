@@ -7,6 +7,7 @@ import {
 } from "./telegram/moderator.js";
 import {
   hasPersistedWhatsAppAuth,
+  purgeWhatsAppSession,
   startWhatsAppSession,
   shutdownWhatsAppSessions,
   waitForWhatsAppSessionReady,
@@ -18,7 +19,12 @@ import {
 } from "./core/session-registry.js";
 import { hydrateControlPlane } from "./core/control-plane.js";
 import { startWorkerRuntime } from "./jobs/runtime.js";
-import { closeMongo, ensureMongoIndexes } from "./persistence/mongo.js";
+import {
+  closeMongo,
+  deletePairingRequest,
+  ensureMongoIndexes,
+  listExpiredPairingRequests,
+} from "./persistence/mongo.js";
 import type { JobOrchestrator } from "./jobs/job-orchestrator.js";
 import { DurableScheduler } from "./jobs/scheduler.js";
 import { hydrateMenuMedia } from "./media/menu-media-store.js";
@@ -46,11 +52,19 @@ async function main(): Promise<void> {
   await hydrateControlPlane();
   let workers: JobOrchestrator | undefined;
   let scheduler: DurableScheduler | undefined;
+  let pairingCleanupTimer: NodeJS.Timeout | undefined;
   if (env.TELEGRAM_BOT_TOKEN) {
     workers = startWorkerRuntime();
     scheduler = new DurableScheduler(workers);
     scheduler.start();
   }
+  await cleanupExpiredPairingSessions();
+  await cleanupLoggedOutSessions();
+  pairingCleanupTimer = setInterval(() => {
+    void cleanupExpiredPairingSessions();
+    void cleanupLoggedOutSessions();
+  }, 5 * 60 * 1000);
+  pairingCleanupTimer.unref?.();
   const persistedSessions = listAllSessions();
   const recoverableSessions = [];
   for (const session of persistedSessions) {
@@ -84,6 +98,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log(`[pappy-omega-mini] ${signal} received; stopping new work.`);
     bot.stop(signal);
+    if (pairingCleanupTimer) clearInterval(pairingCleanupTimer);
     stopModeratorReconciliation();
     await scheduler?.close();
     await workers?.close();
@@ -95,6 +110,68 @@ async function main(): Promise<void> {
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
+}
+
+async function cleanupLoggedOutSessions(): Promise<void> {
+  const terminal = listAllSessions().filter(
+    (session) =>
+      session.status === "LOGGED_OUT" ||
+      (session.authHealth === "INVALID" && session.status !== "ACTIVE"),
+  );
+  for (const session of terminal) {
+    await purgeWhatsAppSession(session.workspaceId, session.sessionId).catch(
+      (error) => {
+        console.error(
+          `[pappy-omega-mini] logged-out session purge failed session=${session.sessionId}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      },
+    );
+  }
+  if (terminal.length)
+    console.info(
+      `[pappy-omega-mini] logged-out cleanup sessionsPurged=${terminal.length}`,
+    );
+}
+
+async function cleanupExpiredPairingSessions(): Promise<void> {
+  const cutoffAt = Date.now() - env.PAIRING_REQUEST_TTL_MS;
+  const expiredRequests = await listExpiredPairingRequests(cutoffAt);
+  const expiredIds = new Set(
+    expiredRequests
+      .map((request) => request.sessionId)
+      .filter((sessionId): sessionId is string => Boolean(sessionId)),
+  );
+  const candidates = listAllSessions().filter(
+    (session) =>
+      session.status === "PAIRING" &&
+      typeof session.createdAt === "number" &&
+      session.createdAt < cutoffAt,
+  );
+  let purged = 0;
+  for (const session of candidates) {
+    const hasAuth = await hasPersistedWhatsAppAuth(
+      session.workspaceId,
+      session.sessionId,
+    );
+    if (hasAuth) continue;
+    await purgeWhatsAppSession(session.workspaceId, session.sessionId).catch(
+      (error) => {
+        console.error(
+          `[pappy-omega-mini] expired pairing purge failed session=${session.sessionId}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      },
+    );
+    expiredIds.delete(session.sessionId);
+    purged += 1;
+  }
+  for (const request of expiredRequests)
+    await deletePairingRequest(request.telegramUserId).catch(() => undefined);
+  if (expiredRequests.length || purged)
+    console.info(
+      `[pappy-omega-mini] expired pairing cleanup requests=${expiredRequests.length} sessionsPurged=${purged} orphanRequestSessions=${expiredIds.size}`,
+    );
 }
 
 async function startRecoverableSessions(

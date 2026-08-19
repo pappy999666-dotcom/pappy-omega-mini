@@ -53,12 +53,12 @@ describe("Telegram UI authorization", () => {
     expect(dashboard).not.toContain("admin:bridge");
   });
 
-  it("preserves primary, success, and danger button semantics", () => {
+  it("preserves primary and success button semantics", () => {
     const dashboard = JSON.stringify(dashboardKeyboard(true));
     expect(dashboard).toContain('"style":"success"');
     expect(dashboard).toContain('"style":"primary"');
     expect(JSON.stringify(globalBridgeKeyboard(1))).toContain(
-      '"style":"danger"',
+      '"style":"success"',
     );
   });
 
@@ -97,7 +97,8 @@ describe("Telegram UI authorization", () => {
     const bridge = JSON.stringify(adminBridgeKeyboard([session]));
     const token = adminBridgeTargetToken(session.workspaceId, session.sessionId);
     expect(bridge).toContain(`admin:bridge:toggle:${token}`);
-    expect(bridge).toContain(`admin:bridge:open:${token}`);
+    expect(bridge).toContain("admin:bridge:command");
+    expect(bridge).not.toContain(`admin:bridge:open:${token}`);
     for (const callback of bridge.match(/admin:[a-zA-Z0-9:_-]+/g) ?? []) {
       expect(callback.length).toBeLessThanOrEqual(64);
     }
@@ -197,6 +198,23 @@ describe("Telegram UI authorization", () => {
     expect(text).toContain("Validator Hub · Live");
     expect(text).toContain("AB12CD34");
     expect(text).toContain("Live validation workers");
+  });
+
+  it("keeps Admin Bridge focused on active-session selection and Send Command", () => {
+    const admin = JSON.stringify(adminBridgeKeyboard([session]));
+    expect(admin).toContain("admin:bridge:toggle:");
+    expect(admin).toContain("admin:bridge:command");
+    expect(admin).not.toContain('callback_data":"admin:bridge:open:');
+    expect(admin).not.toContain("admin:bridge:clear");
+  });
+
+  it("removes the old Global Bridge fan-out protocol", () => {
+    const global = JSON.stringify(globalBridgeKeyboard(1));
+    expect(global).toContain("bridge:global:select");
+    expect(global).toContain("bridge:global:command");
+    expect(global).not.toContain("bridge:global:start");
+    expect(global).not.toContain("bridge:global:stop");
+    expect(global).not.toContain("bridge:global:toggle");
   });
 
   it("renders editable Join Manager controls instead of fixed setting cycles", () => {

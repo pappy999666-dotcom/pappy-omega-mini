@@ -171,6 +171,8 @@ describe("Session-scoped Join Manager settings", () => {
     const workspaceId = `join-settings-${Date.now()}-${Math.random()}`;
     const first = createSession({ workspaceId, sessionName: "first" });
     const second = createSession({ workspaceId, sessionName: "second" });
+    expect(first.createdAt).toEqual(expect.any(Number));
+    expect(second.createdAt).toEqual(expect.any(Number));
     const beforeSecond = getSessionJoinSettings(workspaceId, second.sessionId);
     updateSessionJoinSettings(workspaceId, first.sessionId, {
       targetCount: 1000,

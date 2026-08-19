@@ -144,6 +144,10 @@ export class JobOrchestrator {
     this.reaperTimer.unref?.();
   }
 
+  async recoverStaleJobsNow(): Promise<void> {
+    await this.reapStaleJobs();
+  }
+
   register(kind: JobKind, handler: WorkerHandler): void {
     this.handlers.set(kind, handler);
   }

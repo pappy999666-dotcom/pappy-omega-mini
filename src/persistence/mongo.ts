@@ -258,6 +258,7 @@ const sessionSchema = new mongoose.Schema<SessionDocument>(
     },
     autoCollectLinks: { type: Boolean, default: true },
     autoValidateLinks: { type: Boolean, default: true },
+    createdAt: { type: Number, index: true },
     collectedLinkCount: { type: Number, default: 0 },
     validatedLinkCount: { type: Number, default: 0 },
     lastLinkCollectedAt: Number,
@@ -907,6 +908,26 @@ export async function deletePairingRequest(
 ): Promise<void> {
   await connectMongo();
   await pairingRequestModel().deleteOne({ telegramUserId });
+}
+
+export async function listExpiredPairingRequests(
+  cutoffAt: number,
+): Promise<PairingRequestRecord[]> {
+  await connectMongo();
+  return pairingRequestModel()
+    .find({ updatedAt: { $lt: cutoffAt } })
+    .lean<PairingRequestRecord[]>()
+    .exec();
+}
+
+export async function deleteExpiredPairingRequests(
+  cutoffAt: number,
+): Promise<number> {
+  await connectMongo();
+  const result = await pairingRequestModel().deleteMany({
+    updatedAt: { $lt: cutoffAt },
+  });
+  return result.deletedCount ?? 0;
 }
 
 export async function listUsers(limit = 50, skip = 0): Promise<User[]> {

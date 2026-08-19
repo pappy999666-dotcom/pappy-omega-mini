@@ -54,6 +54,7 @@ export interface WhatsAppSession {
   joinSettings?: SessionJoinSettings;
   autoCollectLinks?: boolean;
   autoValidateLinks?: boolean;
+  createdAt?: number;
   collectedLinkCount?: number;
   validatedLinkCount?: number;
   lastLinkCollectedAt?: number;

@@ -980,19 +980,19 @@ export function createTelegramBot(): Telegraf<Context> {
             adminGlobalBridge.chatId,
             adminGlobalBridge.messageId,
             undefined,
-            adminBridgeText(listAllSessions()),
-            { parse_mode: "HTML", reply_markup: adminBridgeKeyboard(listAllSessions(), selected) },
+            adminBridgeText(activeAllSessions()),
+            { parse_mode: "HTML", reply_markup: adminBridgeKeyboard(activeAllSessions(), selected) },
           )
           .catch(async () => {
-            await ctx.reply(adminBridgeText(listAllSessions()), {
+            await ctx.reply(adminBridgeText(activeAllSessions()), {
               parse_mode: "HTML",
-              reply_markup: adminBridgeKeyboard(listAllSessions(), selected),
+              reply_markup: adminBridgeKeyboard(activeAllSessions(), selected),
             }).catch(() => undefined);
           });
         return;
       }
       const selected = adminBridgeSelections.get(userId) ?? new Set<string>();
-      const targets = listAllSessions().filter((item) =>
+      const targets = activeAllSessions().filter((item) =>
         selected.has(adminBridgeTargetToken(item.workspaceId, item.sessionId)),
       );
       const results: Array<{ sessionName: string; ok: boolean; output: string }> = [];
@@ -1056,7 +1056,7 @@ export function createTelegramBot(): Telegraf<Context> {
     if (adminBridge && !ctx.message.text.startsWith("/")) {
       pendingAdminBridge.delete(userId);
       if (!isAdmin(ctx)) return deny(ctx);
-      const session = listAllSessions().find(
+      const session = activeAllSessions().find(
         (item) =>
           item.workspaceId === adminBridge.workspaceId &&
           item.sessionId === adminBridge.sessionId,
@@ -1372,9 +1372,24 @@ export function createTelegramBot(): Telegraf<Context> {
     if (user.workspaceId !== pending.workspaceId) return;
     const selected =
       globalBridgeSelections.get(user.workspaceId) ?? new Set<string>();
-    const sessions = listSessions(user.workspaceId).filter((session) =>
+    const sessions = activeWorkspaceSessions(user.workspaceId).filter((session) =>
       selected.has(session.sessionId),
     );
+    if (!sessions.length) {
+      pendingGlobalCommand.delete(userId);
+      await ctx.telegram
+        .editMessageText(
+          pending.chatId,
+          pending.messageId,
+          undefined,
+          globalBridgeResultText(ctx.message.text, [
+            { sessionName: "Bridge", ok: false, output: "No selected ACTIVE session is available; no command was dispatched." },
+          ]),
+          { parse_mode: "HTML", reply_markup: keyboard([[btn("‹ Global Command Desk", "bridge:global")]]) },
+        )
+        .catch(() => undefined);
+      return;
+    }
     const results = await Promise.all(
       sessions.map(async (session) => {
         try {
@@ -2508,40 +2523,32 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("bridge:global:select", async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
-    const selected =
-      globalBridgeSelections.get(user.workspaceId) ?? new Set<string>();
+    const selected = globalBridgeSelections.get(user.workspaceId) ?? new Set<string>();
     await edit(
       ctx,
       pageText(
         "Global Bridge · Choose Sessions",
-        infoResponse(
-          "Workspace Bridge",
-          "Select any owned sessions for one general bridge. This is separate from each session’s own Bridge control.",
-        ),
+        infoResponse("Active Session Bridge", "Select the ACTIVE WhatsApp sessions that should receive the next command, then press Send Command."),
       ),
-      bridgeSessionPicker(listSessions(user.workspaceId), selected),
+      bridgeSessionPicker(activeWorkspaceSessions(user.workspaceId), selected),
     );
   });
   bot.action(/^bridge:global:toggle:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
     const session = ownedSession(ctx, ctx.match[1] ?? "");
-    if (!session) return deny(ctx);
-    const selected =
-      globalBridgeSelections.get(user.workspaceId) ?? new Set<string>();
+    if (!session || !isBridgeReadySession(session)) {
+      await ctx.answerCbQuery("Only ACTIVE sessions can be bridged.", { show_alert: true });
+      return;
+    }
+    const selected = globalBridgeSelections.get(user.workspaceId) ?? new Set<string>();
     if (selected.has(session.sessionId)) selected.delete(session.sessionId);
     else selected.add(session.sessionId);
     globalBridgeSelections.set(user.workspaceId, selected);
     await edit(
       ctx,
-      pageText(
-        "Global Bridge · Choose Sessions",
-        infoResponse(
-          "Selection Updated",
-          `${selected.size} session${selected.size === 1 ? "" : "s"} selected.`,
-        ),
-      ),
-      bridgeSessionPicker(listSessions(user.workspaceId), selected),
+      pageText("Global Bridge · Choose Sessions", infoResponse("Selection Updated", `${selected.size} ACTIVE session${selected.size === 1 ? "" : "s"} selected.`)),
+      bridgeSessionPicker(activeWorkspaceSessions(user.workspaceId), selected),
     );
   });
   bot.action("bridge:global:clear", async (ctx) => {
@@ -2552,23 +2559,12 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("bridge:global:command", async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
-    const selected =
-      globalBridgeSelections.get(user.workspaceId) ?? new Set<string>();
+    const active = activeWorkspaceSessions(user.workspaceId);
+    const selected = globalBridgeSelections.get(user.workspaceId) ?? new Set<string>();
+    for (const id of [...selected])
+      if (!active.some((session) => session.sessionId === id)) selected.delete(id);
     if (!selected.size)
-      return edit(
-        ctx,
-        globalBridgeText(0, false),
-        bridgeSessionPicker(listSessions(user.workspaceId), selected),
-      );
-    if (!globalBridgeActive.has(user.workspaceId))
-      return edit(
-        ctx,
-        globalBridgeText(selected.size, false).replace(
-          "</blockquote>",
-          "\n\n⚠️ Turn Fan-Out ON before sending a command.</blockquote>",
-        ),
-        globalBridgeKeyboard(listSessions(user.workspaceId).length, false),
-      );
+      return edit(ctx, globalBridgeText(0, false), bridgeSessionPicker(active, selected));
     const message = ctx.callbackQuery?.message;
     const chatId = ctx.chat?.id;
     if (!message || !("message_id" in message) || !chatId) return;
@@ -2579,69 +2575,22 @@ export function createTelegramBot(): Telegraf<Context> {
     });
     await edit(
       ctx,
-      globalBridgeText(selected.size, true).replace(
-        "</blockquote>",
-        "\n\n✍️ Send one WhatsApp command now, for example <code>ping</code> or <code>autojoin on</code>.</blockquote>",
-      ),
-      keyboard([[btn("✖ Cancel Input", "bridge:global")]]),
+      globalBridgeText(selected.size, true).replace("</blockquote>", "\n\n✍️ Send one WhatsApp command now.</blockquote>"),
+      keyboard([[btn("✖ Close Bridge", "bridge:global")]]),
     );
   });
-  bot.action("bridge:global:toggle", async (ctx) => {
-    await ctx.answerCbQuery();
-    const workspaceId = resolveTelegramUser(ctx).workspaceId;
-    const selected =
-      globalBridgeSelections.get(workspaceId) ?? new Set<string>();
-    if (!selected.size)
-      return edit(
-        ctx,
-        globalBridgeText(0, false),
-        bridgeSessionPicker(listSessions(workspaceId), selected),
-      );
-    if (globalBridgeActive.has(workspaceId))
-      globalBridgeActive.delete(workspaceId);
-    else globalBridgeActive.add(workspaceId);
-    await edit(
-      ctx,
-      globalBridgeText(selected.size, globalBridgeActive.has(workspaceId)),
-      globalBridgeKeyboard(
-        listSessions(workspaceId).length,
-        globalBridgeActive.has(workspaceId),
-      ),
-    );
-  });
-  bot.action("bridge:global:start", async (ctx) => {
-    await ctx.answerCbQuery();
-    const workspaceId = resolveTelegramUser(ctx).workspaceId;
-    if (!globalBridgeSelections.get(workspaceId)?.size)
-      return edit(
-        ctx,
-        globalBridgeText(0, false),
-        bridgeSessionPicker(listSessions(workspaceId), new Set<string>()),
-      );
-    globalBridgeActive.add(workspaceId);
-    await edit(
-      ctx,
-      globalBridgeText(
-        globalBridgeSelections.get(workspaceId)?.size ?? 0,
-        true,
-      ),
-      globalBridgeKeyboard(listSessions(workspaceId).length, true),
-    );
-  });
-  bot.action("bridge:global:stop", async (ctx) => {
-    await ctx.answerCbQuery();
-    const workspaceId = resolveTelegramUser(ctx).workspaceId;
-    globalBridgeActive.delete(workspaceId);
-    pendingGlobalCommand.delete(String(ctx.from?.id ?? ""));
-    await edit(
-      ctx,
-      globalBridgeText(
-        globalBridgeSelections.get(workspaceId)?.size ?? 0,
-        false,
-      ),
-      globalBridgeKeyboard(listSessions(workspaceId).length, false),
-    );
-  });
+  // Compatibility routes for old messages: the new Bridge has no start/stop protocol.
+  for (const action of ["bridge:global:toggle", "bridge:global:start", "bridge:global:stop"] as const) {
+    bot.action(action, async (ctx) => {
+      await ctx.answerCbQuery();
+      if (action === "bridge:global:stop") {
+        const workspaceId = resolveTelegramUser(ctx).workspaceId;
+        globalBridgeSelections.delete(workspaceId);
+        pendingGlobalCommand.delete(String(ctx.from?.id ?? ""));
+      }
+      await showGlobalBridge(ctx);
+    });
+  }
 
   bot.action("bucket:status", async (ctx) => {
     await ctx.answerCbQuery();
@@ -3750,7 +3699,10 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("admin:bridge", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
-    const sessions = listAllSessions();
+    const userId = String(ctx.from?.id ?? "");
+    pendingAdminGlobalBridge.delete(userId);
+    pendingAdminBridge.delete(userId);
+    const sessions = activeAllSessions();
     const selected = adminBridgeSelections.get(String(ctx.from?.id ?? "")) ?? new Set<string>();
     await edit(ctx, adminBridgeText(sessions), adminBridgeKeyboard(sessions, selected));
   });
@@ -3761,8 +3713,8 @@ export function createTelegramBot(): Telegraf<Context> {
     adminBridgeSelections.delete(userId);
     await edit(
       ctx,
-      adminBridgeText(listAllSessions()),
-      adminBridgeKeyboard(listAllSessions()),
+      adminBridgeText(activeAllSessions()),
+      adminBridgeKeyboard(activeAllSessions()),
     );
   });
   bot.action(/^admin:bridge:toggle:([A-Z0-9]+)$/, async (ctx) => {
@@ -3770,7 +3722,7 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!requireAdmin(ctx)) return;
     const userId = String(ctx.from?.id ?? "");
     const token = String(ctx.match[1] ?? "").toUpperCase();
-    const session = listAllSessions().find(
+    const session = activeAllSessions().find(
       (item) => adminBridgeTargetToken(item.workspaceId, item.sessionId) === token,
     );
     if (!session) {
@@ -3783,8 +3735,8 @@ export function createTelegramBot(): Telegraf<Context> {
     adminBridgeSelections.set(userId, selected);
     await edit(
       ctx,
-      adminBridgeText(listAllSessions()),
-      adminBridgeKeyboard(listAllSessions(), selected),
+      adminBridgeText(activeAllSessions()),
+      adminBridgeKeyboard(activeAllSessions(), selected),
     );
   });
   bot.action("admin:bridge:command", async (ctx) => {
@@ -3792,7 +3744,7 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!requireAdmin(ctx)) return;
     const userId = String(ctx.from?.id ?? "");
     const selected = adminBridgeSelections.get(userId) ?? new Set<string>();
-    const targets = listAllSessions().filter((item) =>
+    const targets = activeAllSessions().filter((item) =>
       selected.has(adminBridgeTargetToken(item.workspaceId, item.sessionId)),
     );
     if (!targets.length) {
@@ -3802,7 +3754,7 @@ export function createTelegramBot(): Telegraf<Context> {
           "Admin · Global Bridge",
           warningResponse("Select at least one session", "Choose one or more session targets before sending a command."),
         ),
-        adminBridgeKeyboard(listAllSessions(), selected),
+        adminBridgeKeyboard(activeAllSessions(), selected),
       );
       return;
     }
@@ -3827,7 +3779,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
     const token = String(ctx.match[1] ?? "").toUpperCase();
-    const session = listAllSessions().find(
+    const session = activeAllSessions().find(
       (item) => adminBridgeTargetToken(item.workspaceId, item.sessionId) === token,
     );
     if (!session) return deny(ctx);
@@ -3850,7 +3802,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
     const token = String(ctx.match[1] ?? "").toUpperCase();
-    const session = listAllSessions().find(
+    const session = activeAllSessions().find(
       (item) => adminBridgeTargetToken(item.workspaceId, item.sessionId) === token,
     );
     if (!session) return deny(ctx);
@@ -3881,7 +3833,7 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!requireAdmin(ctx)) return;
     const workspaceId = ctx.match[1] ?? "";
     const sessionId = ctx.match[2] ?? "";
-    const session = listAllSessions().find(
+    const session = activeAllSessions().find(
       (item) =>
         item.workspaceId === workspaceId && item.sessionId === sessionId,
     );
@@ -3916,7 +3868,7 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!requireAdmin(ctx)) return;
     const workspaceId = ctx.match[1] ?? "";
     const sessionId = ctx.match[2] ?? "";
-    const session = listAllSessions().find(
+    const session = activeAllSessions().find(
       (item) =>
         item.workspaceId === workspaceId && item.sessionId === sessionId,
     );
@@ -5054,16 +5006,18 @@ function stopValidatorLiveLoops(workspaceId: string): void {
 
 async function showGlobalBridge(ctx: Context): Promise<void> {
   const user = resolveTelegramUser(ctx);
+  pendingGlobalCommand.delete(String(ctx.from?.id ?? ""));
+  globalBridgeActive.delete(user.workspaceId);
   await edit(
     ctx,
     pageText(
       "Global Bridge",
       infoResponse(
-        "General Workspace Bridge",
-        "Select multiple owned WhatsApp sessions for one workspace-wide bridge. For a bridge tied to one WhatsApp session, open Sessions and use that session’s Bridge action.",
+        "Active Session Command Bridge",
+        "Select ACTIVE WhatsApp sessions, then press Send Command. The Bridge listens only while the command input view is open; closing it stops routing immediately.",
       ),
     ),
-    globalBridgeKeyboard(listSessions(user.workspaceId).length),
+    globalBridgeKeyboard(activeWorkspaceSessions(user.workspaceId).length),
   );
 }
 
@@ -5291,6 +5245,18 @@ function ownedSession(ctx: Context, sessionId: string) {
   } catch {
     return undefined;
   }
+}
+
+function isBridgeReadySession(session: ReturnType<typeof listAllSessions>[number]): boolean {
+  return session.status === "ACTIVE";
+}
+
+function activeWorkspaceSessions(workspaceId: string) {
+  return listSessions(workspaceId).filter(isBridgeReadySession);
+}
+
+function activeAllSessions() {
+  return listAllSessions().filter(isBridgeReadySession);
 }
 
 function isAdmin(ctx: Context): boolean {
