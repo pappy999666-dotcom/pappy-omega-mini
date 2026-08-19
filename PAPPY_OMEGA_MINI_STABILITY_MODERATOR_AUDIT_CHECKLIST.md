@@ -25,7 +25,7 @@ The prompt explicitly requires WhatsApp stability before moderator expansion. No
 
 | ID | Requirement | Status |
 |---|---|---|
-| B1 | Group registration, permission check, setup status, Quick Protect/Custom Setup | PARTIAL — group settings auto-register on first protected command; guided setup/dashboard remains |
+| B1 | Group registration, permission check, setup status, Quick Protect/Custom Setup | PARTIAL — durable auto-registration, admin verification, Quick Protect, and Custom Setup dashboard are deployed; guided onboarding, threshold editing, and full setup acceptance remain |
 | B2 | Protected grouped moderator UX and command scopes | PARTIAL — administrator-only slash scope and `/moderation` menu deployed |
 | B3 | Durable per-group settings, rules, welcome/goodbye, staff, whitelist, filters, lock state | PARTIAL — settings, rules, staff, whitelist, welcome/goodbye durable; filters/lock remain |
 | B4 | Unified DETECT → CLASSIFY → EXEMPTION → RECORD → ACTION → EXECUTE → NOTIFY → CLEANUP engine | PARTIAL — protected manual actions and anti-link/anti-spam paths; unified engine remains |
@@ -42,7 +42,7 @@ The prompt explicitly requires WhatsApp stability before moderator expansion. No
 | B15 | Raid/join flood protection with temporary lockdown and recovery | PARTIAL — Redis join-window detection and temporary lockdown are live; operator controls, richer recovery telemetry, and full acceptance coverage remain |
 | B16 | Admin-only moderation logs with result/failure reason | PARTIAL — durable logs with success/failure reasons and admin-gated `/logs` deployed |
 | B17 | Group/member exemptions and bot self-protection | PARTIAL — admin/staff/whitelist/trusted exemptions deployed across protection and tag-all; explicit bot self-protection and full automatic-action coverage remain |
-| B18 | Moderator dashboard with real counts and grouped controls | PARTIAL — grouped dashboard, live warning/event counts, toggles, group-start entry, expiry reconciliation, and tag-all entry exist; Quick Protect, Custom Setup, raid state controls, and pagination remain |
+| B18 | Moderator dashboard with real counts and grouped controls | PARTIAL — grouped dashboard, live warning/event counts, toggles, group-start entry, expiry reconciliation, tag-all entry, Quick Protect, and Custom Setup exist; pagination, richer live progress, and full acceptance remain |
 
 ## Acceptance matrix
 
