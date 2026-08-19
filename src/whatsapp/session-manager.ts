@@ -254,6 +254,9 @@ async function openWhatsAppSession(
         };
       }>;
     }) => {
+      console.log(
+        `[pappy-omega-mini] WhatsApp inbound upsert session=${sessionId} count=${event.messages?.length ?? 0}`,
+      );
       for (const message of event.messages ?? []) {
         if (!message.key?.remoteJid) continue;
         const text =
@@ -292,23 +295,30 @@ async function openWhatsAppSession(
               message.key.remoteJid),
           text,
           ...(quotedText ? { quotedText } : {}),
-        }).then((reply) => {
-          if (!reply) return;
-          const jid = message.key?.remoteJid ?? "";
-          if (typeof reply === "string") {
-            void socket.sendMessage(jid, { text: reply });
-            return;
-          }
-          const mediaReply = reply as WhatsAppReply;
-          if (mediaReply.media) {
-            void socket.sendMessage(jid, {
-              [mediaReply.media.kind]: mediaReply.media.bytes,
-              caption: mediaReply.caption ?? "",
-            });
-          } else if (mediaReply.text) {
-            void socket.sendMessage(jid, { text: mediaReply.text });
-          }
-        });
+        })
+          .then((reply) => {
+            if (!reply) return;
+            const jid = message.key?.remoteJid ?? "";
+            if (typeof reply === "string") {
+              void socket.sendMessage(jid, { text: reply });
+              return;
+            }
+            const mediaReply = reply as WhatsAppReply;
+            if (mediaReply.media) {
+              void socket.sendMessage(jid, {
+                [mediaReply.media.kind]: mediaReply.media.bytes,
+                caption: mediaReply.caption ?? "",
+              });
+            } else if (mediaReply.text) {
+              void socket.sendMessage(jid, { text: mediaReply.text });
+            }
+          })
+          .catch((error) => {
+            console.error(
+              `[pappy-omega-mini] WhatsApp command/reply failure session=${sessionId}:`,
+              error instanceof Error ? error.message : String(error),
+            );
+          });
       }
     },
   );
@@ -320,6 +330,9 @@ async function openWhatsAppSession(
       lastDisconnect?: { error?: { output?: { statusCode?: number } } };
     }) => {
       if (update.connection === "open") {
+        console.log(
+          `[pappy-omega-mini] WhatsApp authenticated open workspace=${workspaceId} session=${sessionId}`,
+        );
         markConnected(key);
         startHeartbeat({ key, workspaceId, sessionId });
         updateSession(workspaceId, sessionId, {
@@ -339,6 +352,9 @@ async function openWhatsAppSession(
       }
       if (update.connection !== "close") return;
       const classification = classifyDisconnect(update.lastDisconnect?.error);
+      console.warn(
+        `[pappy-omega-mini] WhatsApp close workspace=${workspaceId} session=${sessionId} code=${classification.code ?? "unknown"} state=${classification.status}`,
+      );
       const code = classification.code;
       const terminal = classification.terminal;
       markClosed(key);
