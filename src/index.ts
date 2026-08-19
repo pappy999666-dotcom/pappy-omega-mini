@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { env, assertProductionSecrets } from "./config/env.js";
 import { createTelegramBot } from "./telegram/bot.js";
+import { startModeratorReconciliation, stopModeratorReconciliation } from "./telegram/moderator.js";
 import {
   hasPersistedWhatsAppAuth,
   shutdownWhatsAppSessions,
@@ -51,6 +52,7 @@ async function main(): Promise<void> {
     `[pappy-omega-mini] WhatsApp recovery scheduled for ${recoverableSessions.length} paired session(s); ${persistedSessions.length - recoverableSessions.length} session(s) await pairing.`,
   );
   const bot = createTelegramBot();
+  startModeratorReconciliation(bot);
   let workers: JobOrchestrator | undefined;
   let scheduler: DurableScheduler | undefined;
   if (env.TELEGRAM_BOT_TOKEN) {
@@ -67,6 +69,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log(`[pappy-omega-mini] ${signal} received; stopping new work.`);
     bot.stop(signal);
+    stopModeratorReconciliation();
     await scheduler?.close();
     await workers?.close();
     shutdownWhatsAppSessions();

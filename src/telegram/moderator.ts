@@ -8,6 +8,7 @@ import {
   countModeratorWarnings,
   countModeratorWarningsForGroup,
   deleteModeratorWarnings,
+  listDueModeratorGroups,
   listModeratorEvents,
   listModeratorWarnings,
   loadModeratorGroup,
@@ -20,6 +21,7 @@ import {
 const ADMIN_STATUSES = new Set(["creator", "administrator"]);
 const GROUP_TYPES = new Set(["group", "supergroup"]);
 let protectionRedis: Redis | undefined;
+let moderatorReconciliationTimer: ReturnType<typeof setInterval> | undefined;
 
 type DestructiveConfirmation = {
   token: string;
@@ -198,6 +200,71 @@ async function restore(ctx: Context, target: string): Promise<boolean> {
   } catch (error) {
     return false;
   }
+}
+
+async function reconcileModeratorExpiries(bot: Telegraf<Context>, now = Date.now()): Promise<void> {
+  const groups = await listDueModeratorGroups(now).catch(() => []);
+  for (const group of groups) {
+    const muteExpired = group.groupMuteUntil !== undefined && group.groupMuteUntil <= now;
+    const lockExpired = group.groupLockUntil !== undefined && group.groupLockUntil <= now;
+    if (!muteExpired && !lockExpired) continue;
+    const next = { ...group };
+    if (muteExpired) delete next.groupMuteUntil;
+    if (lockExpired) {
+      delete next.groupLockUntil;
+      delete next.groupLockReason;
+    }
+    const muteStillActive = next.groupMuteUntil !== undefined && next.groupMuteUntil > now;
+    const lockStillActive = next.groupLockUntil !== undefined && next.groupLockUntil > now;
+    let success = true;
+    if (!muteStillActive && !lockStillActive) {
+      try {
+        await bot.telegram.setChatPermissions(Number(group.groupId), {
+          can_send_messages: true,
+          can_send_audios: true,
+          can_send_documents: true,
+          can_send_photos: true,
+          can_send_videos: true,
+          can_send_video_notes: true,
+          can_send_voice_notes: true,
+          can_send_polls: true,
+          can_send_other_messages: true,
+          can_add_web_page_previews: true,
+          can_invite_users: true,
+          can_pin_messages: false,
+          can_change_info: false,
+        });
+      } catch {
+        success = false;
+      }
+    }
+    if (success) {
+      next.updatedAt = now;
+      await saveModeratorGroup(next);
+    }
+    await saveModeratorEvent({
+      eventId: randomUUID(),
+      groupId: group.groupId,
+      actorId: "scheduler",
+      rule: "expiry",
+      action: muteExpired ? "group_mute_expired" : "group_lock_expired",
+      success,
+      ...(success ? {} : { failureReason: "Telegram setChatPermissions failed" }),
+      timestamp: now,
+    }).catch(() => undefined);
+  }
+}
+
+export function startModeratorReconciliation(bot: Telegraf<Context>): void {
+  if (moderatorReconciliationTimer) return;
+  moderatorReconciliationTimer = setInterval(() => void reconcileModeratorExpiries(bot), 15_000);
+  moderatorReconciliationTimer.unref?.();
+  void reconcileModeratorExpiries(bot);
+}
+
+export function stopModeratorReconciliation(): void {
+  if (moderatorReconciliationTimer) clearInterval(moderatorReconciliationTimer);
+  moderatorReconciliationTimer = undefined;
 }
 
 export function installModeratorProtection(bot: Telegraf<Context>): void {
