@@ -16,9 +16,14 @@ import {
 
 const ADMIN_STATUSES = new Set(["creator", "administrator"]);
 const GROUP_TYPES = new Set(["group", "supergroup"]);
-const protectionRedis = new Redis(env.REDIS_URL, {
-  maxRetriesPerRequest: null,
-});
+let protectionRedis: Redis | undefined;
+function getProtectionRedis(): Redis {
+  return (protectionRedis ??= (() => {
+    const client = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
+    client.on("error", () => undefined);
+    return client;
+  })());
+}
 const LINK_PATTERN =
   /(?:https?:\/\/|www\.|t\.me\/|telegram\.me\/|chat\.whatsapp\.com\/|wa\.me\/)/i;
 
@@ -226,14 +231,15 @@ export function installModeratorProtection(bot: Telegraf<Context>): void {
     if (group.antiSpam) {
       const key = `pappy:moderator:spam:${id}:${sender}`;
       const now = Date.now();
-      await protectionRedis.zadd(
+      const redis = getProtectionRedis();
+      await redis.zadd(
         key,
         now,
         `${now}:${message.message_id ?? randomUUID()}`,
       );
-      await protectionRedis.zremrangebyscore(key, 0, now - 10_000);
-      await protectionRedis.expire(key, 30);
-      const count = await protectionRedis.zcard(key);
+      await redis.zremrangebyscore(key, 0, now - 10_000);
+      await redis.expire(key, 30);
+      const count = await redis.zcard(key);
       if (count >= 5) {
         const muted = await restrict(
           ctx,
