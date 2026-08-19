@@ -2,7 +2,7 @@ import { executeCommand, createCommandRegistry } from "./command-registry.js";
 import { getSession, getWorkspaceSudo } from "../core/session-registry.js";
 import { createHash } from "node:crypto";
 import { getWorkerRuntime } from "../jobs/runtime.js";
-import { listGroups } from "./transport-adapter.js";
+import { listGroups, sendGroupStatus } from "./transport-adapter.js";
 import { buildWhatsappMenuPayload } from "../menus/whatsapp-menu.js";
 
 const registry = createCommandRegistry();
@@ -120,10 +120,32 @@ export async function routeWhatsAppText(
               payload: enrichedPayload,
               idempotencyKey: `${message.workspaceId}:${message.sessionId}:${kind}:${payloadHash}`,
             });
+            if (kind === "allstatus")
+              await runtime.waitForStarted(record.jobId);
             return record.jobCode ?? record.jobId;
           },
         }
       : {}),
+    sendCurrentGroupStatus: async ({
+      text,
+      repeat,
+    }: {
+      text: string;
+      repeat: number;
+    }) => {
+      if (!message.chatJid || !message.chatJid.endsWith("@g.us"))
+        throw new Error("This command must be used inside a WhatsApp group.");
+      for (let index = 0; index < repeat; index += 1) {
+        if (index > 0)
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        await sendGroupStatus(
+          message.workspaceId,
+          message.sessionId,
+          message.chatJid,
+          { text },
+        );
+      }
+    },
     ...(runtime
       ? {
           cancelJobs: async (

@@ -37,6 +37,10 @@ export interface CommandContext {
     kind: "gstatus" | "allstatus" | "allchat" | "tag";
     payload: Record<string, unknown>;
   }) => Promise<string>;
+  sendCurrentGroupStatus?: (input: {
+    text: string;
+    repeat: number;
+  }) => Promise<void>;
   cancelJobs?: (
     kind: "gstatus" | "allstatus" | "allchat" | "tag",
   ) => Promise<number>;
@@ -344,9 +348,10 @@ export function createCommandRegistry(): RegisteredCommand[] {
       description: "Queue status delivery for the current WhatsApp group.",
       ownerOnly: true,
       run: async (ctx) => {
-        if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
         if (!ctx.chatJid || !ctx.chatJid.endsWith("@g.us"))
           return "This command must be used inside a WhatsApp group.";
+        if (!ctx.sendCurrentGroupStatus)
+          return "WhatsApp transport is unavailable.";
         const repeat =
           ctx.args[0] && /^\d+$/.test(ctx.args[0])
             ? Number(ctx.args.shift())
@@ -354,11 +359,8 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const count = Math.max(1, Math.min(20, repeat));
         const text = ctx.args.join(" ").trim();
         if (!text) return "Usage: .gstatus [count] <text>.";
-        const jobId = await ctx.enqueueJob({
-          kind: "gstatus",
-          payload: { text, groups: [ctx.chatJid], count },
-        });
-        return `Group-status job queued: ${jobId}`;
+        await ctx.sendCurrentGroupStatus({ text, repeat: count });
+        return `Group status sent directly to this group${count > 1 ? ` (${count}×)` : ""}.`;
       },
     },
     {

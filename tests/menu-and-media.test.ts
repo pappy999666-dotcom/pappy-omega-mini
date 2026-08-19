@@ -152,15 +152,14 @@ describe("WhatsApp command privacy", () => {
 });
 
 describe("WhatsApp command registry", () => {
-  it("queues gstatus for the current group and bounds repeat count", async () => {
+  it("sends gstatus directly to the current group and bounds repeat count", async () => {
     const user = resolveUser(`gstatus-${Date.now()}-${Math.random()}`);
     const session = createSession({
       workspaceId: user.workspaceId,
       sessionName: "group-status",
       phoneNumber: "2348012345678",
     });
-    let captured:
-      { kind: string; payload: Record<string, unknown> } | undefined;
+    let captured: { text: string; repeat: number } | undefined;
     const result = await executeCommand(
       createCommandRegistry(),
       "gstatus 999 hello",
@@ -170,18 +169,15 @@ describe("WhatsApp command registry", () => {
         isOwner: true,
         chatJid: "120363000000000000@g.us",
         args: [],
-        enqueueJob: async (input) => {
+        sendCurrentGroupStatus: async (input) => {
           captured = input;
-          return "job-gstatus";
         },
       },
     );
-    expect(result).toContain("job-gstatus");
-    expect(captured?.kind).toBe("gstatus");
-    expect(captured?.payload).toMatchObject({
+    expect(result).toContain("sent directly");
+    expect(captured).toMatchObject({
       text: "hello",
-      groups: ["120363000000000000@g.us"],
-      count: 20,
+      repeat: 20,
     });
   });
 

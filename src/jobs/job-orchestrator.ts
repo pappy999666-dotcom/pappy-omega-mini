@@ -194,6 +194,19 @@ export class JobOrchestrator {
     return this.store.get(jobId);
   }
 
+  async waitForStarted(
+    jobId: string,
+    timeoutMs = 3000,
+  ): Promise<JobRecord | undefined> {
+    const deadline = Date.now() + timeoutMs;
+    let current = await this.get(jobId);
+    while (current && current.state === "QUEUED" && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      current = await this.get(jobId);
+    }
+    return current;
+  }
+
   async getByCode(
     workspaceId: string,
     code: string,
