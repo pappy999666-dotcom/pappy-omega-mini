@@ -104,6 +104,10 @@ async function ensureGroup(
     filters: [],
     whitelist: [],
     staff: [],
+    trustedUsers: [],
+    raidEnabled: false,
+    raidJoinThreshold: 8,
+    raidWindowSeconds: 30,
     updatedAt: Date.now(),
   };
   await saveModeratorGroup(created);
@@ -268,6 +272,41 @@ export function stopModeratorReconciliation(): void {
 }
 
 export function installModeratorProtection(bot: Telegraf<Context>): void {
+  bot.on("new_chat_members", async (ctx, next) => {
+    const id = groupId(ctx);
+    if (!id) return next();
+    const group = await loadModeratorGroup(id).catch(() => undefined);
+    if (!group?.raidEnabled) return next();
+    const message = ctx.message as unknown as { message_id?: number; new_chat_members?: Array<{ id?: number; is_bot?: boolean }> };
+    const joined = (message.new_chat_members ?? []).filter((member) => !member.is_bot && member.id !== undefined);
+    if (!joined.length) return next();
+    const now = Date.now();
+    const redis = getProtectionRedis();
+    const key = `pappy:moderator:raid:${id}`;
+    for (const member of joined) await redis.zadd(key, now, `${now}:${member.id}:${randomUUID()}`);
+    await redis.zremrangebyscore(key, 0, now - Math.max(10, group.raidWindowSeconds ?? 30) * 1000);
+    await redis.expire(key, Math.max(30, (group.raidWindowSeconds ?? 30) * 2));
+    const count = await redis.zcard(key);
+    const threshold = Math.max(2, group.raidJoinThreshold ?? 8);
+    if (count < threshold || (group.groupLockUntil !== undefined && group.groupLockUntil > now)) return next();
+    const lockUntil = now + 60_000;
+    let success = true;
+    try {
+      await ctx.telegram.setChatPermissions(Number(id), { can_send_messages: false });
+      group.groupLockUntil = lockUntil;
+      group.groupLockReason = `join flood: ${count} joins in ${group.raidWindowSeconds ?? 30}s`;
+      group.updatedAt = now;
+      await saveModeratorGroup(group);
+    } catch {
+      success = false;
+    }
+    await saveModeratorEvent({
+      eventId: randomUUID(), groupId: id, actorId: "system", rule: "raid", action: "temporary_lockdown",
+      success, ...(success ? {} : { failureReason: "Telegram setChatPermissions failed" }), timestamp: now,
+    }).catch(() => undefined);
+    return next();
+  });
+
   bot.on("message", async (ctx, next) => {
     const id = groupId(ctx);
     if (!id) return next();
