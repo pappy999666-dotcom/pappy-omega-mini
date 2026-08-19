@@ -17,6 +17,7 @@ import {
   getWhatsappMenuSettings,
   setWhatsappMenuMedia,
 } from "../src/media/menu-media-store.js";
+import { moderatorCommandScopes } from "../src/telegram/moderator.js";
 
 beforeEach(() => {
   // Tests use unique Telegram IDs/workspaces, so state remains tenant-safe without global resets.
@@ -82,6 +83,25 @@ describe("shared session menu", () => {
         autoJoinEnabled: false,
       }),
     ).toThrow(/workspace/);
+  });
+});
+
+describe("Telegram group moderator command surface", () => {
+  it("publishes protected moderation commands including mute", () => {
+    const commands = moderatorCommandScopes.map((entry) => entry.command);
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        "moderation",
+        "mute",
+        "unmute",
+        "warn",
+        "warns",
+        "settings",
+        "protection",
+        "antilink",
+        "logs",
+      ]),
+    );
   });
 });
 
