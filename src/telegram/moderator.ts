@@ -4,6 +4,7 @@ import type { Context, Telegraf } from "telegraf";
 import { env } from "../config/env.js";
 import {
   countModeratorWarnings,
+  deleteModeratorWarnings,
   listModeratorEvents,
   listModeratorWarnings,
   loadModeratorGroup,
@@ -428,16 +429,15 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
       );
       return;
     }
+    const deleted = await deleteModeratorWarnings(group.groupId, target);
     await recordEvent(ctx, {
       rule: "warning",
       action: "reset",
       targetId: target,
-      success: false,
-      failureReason: "Warning deletion endpoint not yet enabled",
+      success: true,
+      reason: String(deleted),
     });
-    await ctx.reply(
-      "Warning reset is recorded but requires the warning deletion migration before it can remove durable records.",
-    );
+    await ctx.reply(`✅ Reset ${deleted} warning record(s) for ${target}.`);
   });
 
   bot.command("rules", async (ctx) => {

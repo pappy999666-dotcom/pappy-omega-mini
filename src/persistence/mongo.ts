@@ -641,6 +641,16 @@ export async function saveModeratorWarning(
     { upsert: true },
   );
 }
+export async function deleteModeratorWarnings(
+  groupId: string,
+  userId: string,
+): Promise<number> {
+  await connectMongo();
+  const result = await moderatorWarningModel()
+    .deleteMany({ groupId, userId })
+    .exec();
+  return result.deletedCount ?? 0;
+}
 export async function listModeratorWarnings(
   groupId: string,
   userId?: string,
