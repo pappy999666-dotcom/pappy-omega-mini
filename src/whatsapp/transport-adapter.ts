@@ -308,8 +308,16 @@ export async function sendGroupStatus(
   const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: groupStatus");
   if (payload.media) {
+    const mediaContent = messagePayload(text, payload.media);
+    const preparedMedia = await prepareCanonicalPreviewContent({
+      text,
+      content: mediaContent,
+      target: "group-status",
+      socket,
+      cacheScope: `${workspaceId}:${sessionId}`,
+    });
     await send(jid, {
-      groupStatusMessage: messagePayload(text, payload.media),
+      groupStatusMessage: preparedMedia,
     });
     return;
   }

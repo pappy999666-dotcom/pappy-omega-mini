@@ -5,6 +5,8 @@ import {
   adminJobsText,
   adminForceJoinKeyboard,
   adminForceJoinText,
+  adminBridgeKeyboard,
+  adminBridgeTargetToken,
   adminUsersKeyboard,
   adminUsersText,
   dashboardKeyboard,
@@ -88,6 +90,16 @@ describe("Telegram UI authorization", () => {
     expect(JSON.stringify(adminForceJoinKeyboard(targets))).toContain(
       "admin:forcejoin:toggle:target-1",
     );
+  });
+
+  it("keeps Admin Global Bridge callbacks short and actionable", () => {
+    const bridge = JSON.stringify(adminBridgeKeyboard([session]));
+    const token = adminBridgeTargetToken(session.workspaceId, session.sessionId);
+    expect(bridge).toContain(`admin:bridge:toggle:${token}`);
+    expect(bridge).toContain(`admin:bridge:open:${token}`);
+    for (const callback of bridge.match(/admin:[a-zA-Z0-9:_-]+/g) ?? []) {
+      expect(callback.length).toBeLessThanOrEqual(64);
+    }
   });
 
   it("keeps Support Inbox inside the Admin Control Plane", () => {

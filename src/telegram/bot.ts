@@ -104,6 +104,7 @@ import {
   adminBucketKeyboard,
   adminBucketText,
   adminBridgeKeyboard,
+  adminBridgeTargetToken,
   adminBridgeText,
   adminUsersKeyboard,
   adminUsersText,
@@ -221,6 +222,11 @@ const pendingAdminBridge = new Map<
   string,
   { workspaceId: string; sessionId: string; chatId: number; messageId: number }
 >();
+const adminBridgeSelections = new Map<string, Set<string>>();
+const pendingAdminGlobalBridge = new Map<
+  string,
+  { chatId: number; messageId: number }
+>();
 const pendingLiveJobCode = new Map<
   string,
   { workspaceId: string; chatId: number; messageId: number }
@@ -244,6 +250,7 @@ function clearPendingInputs(userId: string): void {
   pendingGlobalCommand.delete(userId);
   pendingSessionBridge.delete(userId);
   pendingAdminBridge.delete(userId);
+  pendingAdminGlobalBridge.delete(userId);
   pendingLiveJobCode.delete(userId);
 }
 
@@ -488,6 +495,15 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.on("text", async (ctx) => {
     const userId = String(ctx.from.id);
+    const text = ctx.message.text.trim();
+    if (text.startsWith("/")) {
+      // A new Telegram command always closes the previous guided flow first.
+      // This prevents an abandoned Bridge/PFP/Join/Support input from
+      // consuming a later unrelated message.
+      clearPendingInputs(userId);
+      passiveIntakeSuspended.delete(userId);
+      return;
+    }
     const pairing =
       pendingPairing.get(userId) ??
       (await getPairingRequest(userId).catch(() => undefined));
@@ -855,6 +871,89 @@ export function createTelegramBot(): Telegraf<Context> {
       }
       return;
     }
+    const adminGlobalBridge = pendingAdminGlobalBridge.get(userId);
+    if (adminGlobalBridge) {
+      pendingAdminGlobalBridge.delete(userId);
+      const input = text;
+      if (input.toLowerCase() === "cancel") {
+        const selected = adminBridgeSelections.get(userId) ?? new Set<string>();
+        await ctx.telegram
+          .editMessageText(
+            adminGlobalBridge.chatId,
+            adminGlobalBridge.messageId,
+            undefined,
+            adminBridgeText(listAllSessions()),
+            { parse_mode: "HTML", reply_markup: adminBridgeKeyboard(listAllSessions(), selected) },
+          )
+          .catch(async () => {
+            await ctx.reply(adminBridgeText(listAllSessions()), {
+              parse_mode: "HTML",
+              reply_markup: adminBridgeKeyboard(listAllSessions(), selected),
+            }).catch(() => undefined);
+          });
+        return;
+      }
+      const selected = adminBridgeSelections.get(userId) ?? new Set<string>();
+      const targets = listAllSessions().filter((item) =>
+        selected.has(adminBridgeTargetToken(item.workspaceId, item.sessionId)),
+      );
+      const results: Array<{ sessionName: string; ok: boolean; output: string }> = [];
+      for (const session of targets) {
+        try {
+          const command =
+            session.prefix && !input.startsWith(session.prefix)
+              ? `${session.prefix}${input}`
+              : input;
+          const routed = await routeWhatsAppText({
+            workspaceId: session.workspaceId,
+            sessionId: session.sessionId,
+            senderJid: session.phoneNumber ?? "admin-global-bridge",
+            text: command,
+            bridgeAuthorized: true,
+          });
+          const accepted = routed !== null;
+          results.push({
+            sessionName: session.sessionName,
+            ok: accepted,
+            output: accepted
+              ? typeof routed === "string"
+                ? routed
+                : (routed?.text ?? routed?.caption ?? "Command completed without text output.")
+              : "No recognized command was dispatched to this session.",
+          });
+        } catch (error) {
+          results.push({
+            sessionName: session.sessionName,
+            ok: false,
+            output: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      await ctx.telegram
+        .editMessageText(
+          adminGlobalBridge.chatId,
+          adminGlobalBridge.messageId,
+          undefined,
+          globalBridgeResultText(input, results),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [btn("↻ Run Another Command", "admin:bridge:command", "primary")],
+              [btn("‹ Admin Global Bridge", "admin:bridge")],
+            ]),
+          },
+        )
+        .catch(async () => {
+          await ctx.reply(globalBridgeResultText(input, results), {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [btn("↻ Run Another Command", "admin:bridge:command", "primary")],
+              [btn("‹ Admin Global Bridge", "admin:bridge")],
+            ]),
+          }).catch(() => undefined);
+        });
+      return;
+    }
     const adminBridge = pendingAdminBridge.get(userId);
     if (adminBridge && !ctx.message.text.startsWith("/")) {
       pendingAdminBridge.delete(userId);
@@ -1179,13 +1278,13 @@ export function createTelegramBot(): Telegraf<Context> {
             text: command,
             bridgeAuthorized: true,
           });
-          const output =
-            typeof routed === "string"
+          const accepted = routed !== null;
+          const output = accepted
+            ? typeof routed === "string"
               ? routed
-              : (routed?.text ??
-                routed?.caption ??
-                "Command completed without text output.");
-          return { sessionName: session.sessionName, ok: true, output };
+              : (routed?.text ?? routed?.caption ?? "Command completed without text output.")
+            : "No recognized command was dispatched to this session.";
+          return { sessionName: session.sessionName, ok: accepted, output };
         } catch (error) {
           return {
             sessionName: session.sessionName,
@@ -3476,7 +3575,130 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
     const sessions = listAllSessions();
-    await edit(ctx, adminBridgeText(sessions), adminBridgeKeyboard(sessions));
+    const selected = adminBridgeSelections.get(String(ctx.from?.id ?? "")) ?? new Set<string>();
+    await edit(ctx, adminBridgeText(sessions), adminBridgeKeyboard(sessions, selected));
+  });
+  bot.action("admin:bridge:clear", async (ctx) => {
+    await ctx.answerCbQuery("Selection cleared");
+    if (!requireAdmin(ctx)) return;
+    const userId = String(ctx.from?.id ?? "");
+    adminBridgeSelections.delete(userId);
+    await edit(
+      ctx,
+      adminBridgeText(listAllSessions()),
+      adminBridgeKeyboard(listAllSessions()),
+    );
+  });
+  bot.action(/^admin:bridge:toggle:([A-Z0-9]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const userId = String(ctx.from?.id ?? "");
+    const token = String(ctx.match[1] ?? "").toUpperCase();
+    const session = listAllSessions().find(
+      (item) => adminBridgeTargetToken(item.workspaceId, item.sessionId) === token,
+    );
+    if (!session) {
+      await ctx.answerCbQuery("Session target is no longer available.", { show_alert: true });
+      return;
+    }
+    const selected = adminBridgeSelections.get(userId) ?? new Set<string>();
+    if (selected.has(token)) selected.delete(token);
+    else selected.add(token);
+    adminBridgeSelections.set(userId, selected);
+    await edit(
+      ctx,
+      adminBridgeText(listAllSessions()),
+      adminBridgeKeyboard(listAllSessions(), selected),
+    );
+  });
+  bot.action("admin:bridge:command", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const userId = String(ctx.from?.id ?? "");
+    const selected = adminBridgeSelections.get(userId) ?? new Set<string>();
+    const targets = listAllSessions().filter((item) =>
+      selected.has(adminBridgeTargetToken(item.workspaceId, item.sessionId)),
+    );
+    if (!targets.length) {
+      await edit(
+        ctx,
+        pageText(
+          "Admin · Global Bridge",
+          warningResponse("Select at least one session", "Choose one or more session targets before sending a command."),
+        ),
+        adminBridgeKeyboard(listAllSessions(), selected),
+      );
+      return;
+    }
+    const message = ctx.callbackQuery?.message;
+    const chatId = ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : undefined);
+    const messageId = message && "message_id" in message ? message.message_id : undefined;
+    if (!chatId || !messageId) return;
+    pendingAdminGlobalBridge.set(userId, { chatId, messageId });
+    await edit(
+      ctx,
+      pageText(
+        "Admin · Global Bridge",
+        infoResponse(
+          "Send One Command",
+          `<b>Targets:</b> ${targets.length}\nSend a command such as <code>ping</code> or <code>health</code>. Send <code>cancel</code> to close this input without routing anything.`,
+        ),
+      ),
+      keyboard([[btn("✖ Cancel Input", "admin:bridge")]]),
+    );
+  });
+  bot.action(/^admin:bridge:open:([A-Z0-9]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const token = String(ctx.match[1] ?? "").toUpperCase();
+    const session = listAllSessions().find(
+      (item) => adminBridgeTargetToken(item.workspaceId, item.sessionId) === token,
+    );
+    if (!session) return deny(ctx);
+    await edit(
+      ctx,
+      pageText(
+        "Admin · Session Bridge",
+        infoResponse(
+          "Explicit Target Selected",
+          `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Workspace:</b> <code>${escapeHtml(session.workspaceId)}</code>\n<b>Status:</b> ${escapeHtml(session.status)}\n\nThis is the single-session command surface. Use Global Bridge to select multiple targets.`,
+        ),
+      ),
+      keyboard([
+        [btn("✉ Send Command", `admin:bridge:send:${token}`, "success")],
+        [btn("‹ Admin Global Bridge", "admin:bridge", "primary")],
+      ]),
+    );
+  });
+  bot.action(/^admin:bridge:send:([A-Z0-9]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const token = String(ctx.match[1] ?? "").toUpperCase();
+    const session = listAllSessions().find(
+      (item) => adminBridgeTargetToken(item.workspaceId, item.sessionId) === token,
+    );
+    if (!session) return deny(ctx);
+    const message = ctx.callbackQuery?.message;
+    const chatId = ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : undefined);
+    const messageId = message && "message_id" in message ? message.message_id : undefined;
+    if (!chatId || !messageId) return;
+    pendingAdminBridge.set(String(ctx.from?.id ?? ""), {
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+      chatId,
+      messageId,
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Admin Bridge",
+        infoResponse(
+          "Send One Command",
+          `Send a command for <b>${escapeHtml(session.sessionName)}</b>, such as <code>ping</code> or <code>health</code>. Send <code>cancel</code> to close this input.`,
+        ),
+      ),
+      keyboard([[btn("✖ Cancel", "admin:bridge")]]),
+    );
   });
   bot.action(/^admin:bridge:command:([^:]+):([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();

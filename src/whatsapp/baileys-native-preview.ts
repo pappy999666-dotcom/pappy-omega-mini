@@ -15,7 +15,7 @@ const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 const NORMALIZED_PREVIEW_MAX_DIMENSION = 1920;
 const NORMALIZED_PREVIEW_MAX_BYTES = 512 * 1024;
 const MAX_REDIRECTS = 4;
-const URL_PATTERN = /https?:\/\/[^\s<>"']+/gi;
+const URL_PATTERN = /(?:https?:\/\/|(?:www\.)?\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+(?:\/[^\s<>"']*)?)/gi;
 const TRAILING_URL_PUNCTUATION = /[),.;!?]+$/;
 
 const imagePriorities = new Map([
@@ -103,8 +103,11 @@ export function firstHttpUrl(text: string): string | undefined {
 
 function cleanUrl(value: string): string | undefined {
   const cleaned = value.replace(TRAILING_URL_PUNCTUATION, "");
+  const withScheme = /^https?:\/\//i.test(cleaned)
+    ? cleaned
+    : `https://${cleaned}`;
   try {
-    return canonicalizePreviewUrl(cleaned);
+    return canonicalizePreviewUrl(withScheme);
   } catch {
     return undefined;
   }
@@ -572,6 +575,13 @@ function hasMedia(content: Record<string, unknown>): boolean {
   return ["image", "video", "audio", "document", "sticker"].some((key) => key in content);
 }
 
+function mediaCaptionCanCarryPreview(content: Record<string, unknown>): boolean {
+  return (
+    typeof content.caption === "string" &&
+    ["image", "video", "document"].some((key) => key in content)
+  );
+}
+
 export function isCompletePreview(preview: Record<string, unknown> | undefined): boolean {
   if (!preview) return false;
   return Boolean(
@@ -661,7 +671,13 @@ export async function prepareCanonicalPreviewContent(
   const text = input.text ?? readText(content);
   const url = text ? firstHttpUrl(text) : undefined;
   const existing = readExistingPreview(content);
-  if (!text || !url || (existing && isCompletePreview(existing)) || hasMedia(content)) return content;
+  if (
+    !text ||
+    !url ||
+    (existing && isCompletePreview(existing)) ||
+    (hasMedia(content) && !mediaCaptionCanCarryPreview(content))
+  )
+    return content;
 
   const snapshotBase: PreviewDebugSnapshot = {
     url,

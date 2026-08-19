@@ -296,18 +296,56 @@ describe("canonical Baileys-native preview pipeline", () => {
     }
   });
 
-  it("preserves media captions and original payload when the native hybrid is unsupported", async () => {
-    const content = {
-      image: Buffer.from("image"),
-      caption: "See https://example.com/article",
-    };
-    await expect(
-      prepareCanonicalPreviewContent({
+  it("resolves a bare domain into a native preview", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input) => {
+      expect(String(input)).toBe("https://example.com/article");
+      return new Response(
+        '<meta property="og:title" content="Bare domain"><meta property="og:description" content="Resolved safely">',
+        { status: 200, headers: { "content-type": "text/html" } },
+      );
+    }) as typeof fetch;
+    try {
+      const content = { text: "Read example.com/article" };
+      const prepared = await prepareCanonicalPreviewContent({
+        text: content.text,
+        content,
+        cacheScope: `test-bare-domain-${Date.now()}`,
+      });
+      expect(prepared.linkPreview).toMatchObject({
+        "matched-text": "https://example.com/article",
+        "canonical-url": "https://example.com/article",
+        title: "Bare domain",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("preserves media bytes and adds a preview for a caption URL", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        '<meta property="og:title" content="Caption link"><meta property="og:description" content="Native caption preview">',
+        { status: 200, headers: { "content-type": "text/html" } },
+      ),
+    ) as typeof fetch;
+    try {
+      const content = {
+        image: Buffer.from("image"),
+        caption: "See https://example.com/article",
+      };
+      const prepared = await prepareCanonicalPreviewContent({
         text: content.caption,
         content,
         cacheScope: `test-media-${Date.now()}`,
-      }),
-    ).resolves.toEqual(content);
+      });
+      expect(prepared.image).toBe(content.image);
+      expect(prepared.caption).toBe(content.caption);
+      expect(prepared.linkPreview).toMatchObject({ title: "Caption link" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("does not alter an already complete preview", async () => {

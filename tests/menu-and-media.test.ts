@@ -177,6 +177,14 @@ describe("WhatsApp command privacy", () => {
         workspaceId: user.workspaceId,
         sessionId: session.sessionId,
         senderJid: "2348012345678@s.whatsapp.net",
+        text: "ordinary text without a command",
+      }),
+    ).toBeNull();
+    expect(
+      await routeWhatsAppText({
+        workspaceId: user.workspaceId,
+        sessionId: session.sessionId,
+        senderJid: "2348012345678@s.whatsapp.net",
         text: ".ping",
       }),
     ).toContain("ACTIVE");

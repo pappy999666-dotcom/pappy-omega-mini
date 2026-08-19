@@ -668,23 +668,45 @@ export function adminBridgeText(sessions: WhatsAppSession[]): string {
     "Admin · Global Bridge",
     infoResponse(
       "Owner Cross-Workspace Control",
-      `${body}\n\nSelect a session only after confirming the workspace and intended operation. Destructive fan-out remains bounded and auditable.`,
+      `${body}\n\nSelect one or more sessions, then send one command to the selected targets. Destructive fan-out remains bounded and auditable. Open is for one session; the selection checkboxes are for Global Bridge fan-out.`,
     ),
   );
 }
 
+export function adminBridgeTargetToken(
+  workspaceId: string,
+  sessionId: string,
+): string {
+  let hash = 2166136261;
+  for (const char of `${workspaceId}:${sessionId}`) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).toUpperCase().padStart(7, "0");
+}
+
 export function adminBridgeKeyboard(
   sessions: WhatsAppSession[],
+  selected: Set<string> = new Set(),
 ): InlineKeyboardMarkup {
-  const rows: Button[][] = sessions.map((session) => [
-    btn(
-      `Open ${session.sessionName}`,
-      `admin:bridge:session:${session.workspaceId}:${session.sessionId}`,
-      "primary",
-    ),
-  ]);
+  const rows: Button[][] = sessions.map((session) => {
+    const token = adminBridgeTargetToken(session.workspaceId, session.sessionId);
+    return [
+      btn(
+        `${selected.has(token) ? "☑" : "☐"} ${session.sessionName}`,
+        `admin:bridge:toggle:${token}`,
+        selected.has(token) ? "success" : "primary",
+      ),
+      btn("Open", `admin:bridge:open:${token}`),
+    ];
+  });
   if (!sessions.length)
     rows.push([btn("＋ Create Session", "session:new", "success")]);
+  if (sessions.length)
+    rows.push([
+      btn("✉ Send to Selected", "admin:bridge:command", "success"),
+      btn("Clear", "admin:bridge:clear", "danger"),
+    ]);
   rows.push([btn("↻ Refresh", "admin:bridge", "primary")]);
   rows.push([btn(ui.back, "admin:panel")]);
   return keyboard(rows);
