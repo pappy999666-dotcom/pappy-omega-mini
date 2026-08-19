@@ -16,6 +16,18 @@ const imageKeys = new Map([
   ["twitter:image:src", 30],
 ]);
 const maxThumbnailBytes = 8 * 1024 * 1024;
+const maxGroupThumbnailBytes = 512 * 1024;
+const groupThumbnailEdge = 1920;
+
+export interface WhatsAppGroupPreviewSocket {
+  groupGetInviteInfo?: (code: string) => Promise<{
+    id?: string;
+    subject?: string;
+    size?: number;
+    [key: string]: unknown;
+  }>;
+  profilePictureUrl?: (jid: string, type: string) => Promise<string | null>;
+}
 
 function attribute(tag: string, name: string): string | undefined {
   const match = tag.match(new RegExp(`${name}=["']([^"']*)["']`, "i"));
@@ -120,6 +132,150 @@ async function normalizeImageBuffer(input: Buffer): Promise<Buffer> {
     .sharpen({ sigma: 0.7, m1: 0.5, m2: 1.2 })
     .jpeg({ quality: 94, chromaSubsampling: "4:4:4" })
     .toBuffer();
+}
+
+async function normalizeGroupImageBuffer(
+  input: Buffer,
+): Promise<Buffer | undefined> {
+  try {
+    const metadata = await sharp(input, {
+      limitInputPixels: 40_000_000,
+    }).metadata();
+    if (
+      !metadata.width ||
+      !metadata.height ||
+      metadata.width < 100 ||
+      metadata.height < 100
+    )
+      return undefined;
+    const attempts = [
+      { quality: 95, mozjpeg: true },
+      { quality: 90, mozjpeg: true },
+      { quality: 85, mozjpeg: true },
+    ];
+    for (const attempt of attempts) {
+      const output = await sharp(input, { limitInputPixels: 40_000_000 })
+        .rotate()
+        .resize({
+          width: groupThumbnailEdge,
+          height: groupThumbnailEdge,
+          fit: "inside",
+          withoutEnlargement: true,
+          kernel: "lanczos3",
+        })
+        .sharpen({ sigma: 0.55, m1: 0.4, m2: 1.1 })
+        .jpeg({ ...attempt, chromaSubsampling: "4:4:4" })
+        .toBuffer();
+      if (output.length <= maxGroupThumbnailBytes) return output;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function imageUrlFromValue(value: unknown, depth = 0): string | undefined {
+  if (depth > 3 || !value) return undefined;
+  if (typeof value === "string" && /^https?:\/\//i.test(value)) return value;
+  if (typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  for (const key of [
+    "url",
+    "url_direct",
+    "directPath",
+    "direct_path",
+    "imageUrl",
+    "image_url",
+    "profilePictureUrl",
+    "profile_picture_url",
+    "thumbnail",
+    "picture",
+    "image",
+    "preview",
+  ]) {
+    const candidate = imageUrlFromValue(record[key], depth + 1);
+    if (candidate) return candidate;
+  }
+  return undefined;
+}
+
+function groupInviteCode(url: string): string | undefined {
+  return url.match(/chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/i)?.[1];
+}
+
+async function downloadGroupImage(
+  imageUrl: string,
+): Promise<{ thumbnailUrl: string; thumbnailData: string } | undefined> {
+  try {
+    const { response, finalUrl } = await fetchWithSafeRedirects(imageUrl, {
+      accept: "image/avif,image/webp,image/jpeg,image/png,image/*;q=0.8",
+    });
+    if (!response.ok) return undefined;
+    const contentLength = Number(response.headers.get("content-length") ?? 0);
+    if (contentLength > maxGroupThumbnailBytes) return undefined;
+    const input = Buffer.from(await response.arrayBuffer());
+    if (!input.length || input.length > maxGroupThumbnailBytes)
+      return undefined;
+    const normalized = await normalizeGroupImageBuffer(input);
+    return normalized
+      ? { thumbnailUrl: finalUrl, thumbnailData: normalized.toString("base64") }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function resolveWhatsAppGroupInvitePreview(
+  url: string,
+  socket: WhatsAppGroupPreviewSocket,
+): Promise<
+  | Pick<
+      PreviewRecord,
+      | "canonicalUrl"
+      | "title"
+      | "description"
+      | "thumbnailUrl"
+      | "thumbnailData"
+    >
+  | undefined
+> {
+  const code = groupInviteCode(url);
+  if (!code || !socket.groupGetInviteInfo || !socket.profilePictureUrl)
+    return undefined;
+  try {
+    const info = await socket.groupGetInviteInfo(code);
+    if (!info?.id) return undefined;
+    const invite = info as Record<string, unknown>;
+    const candidates = [
+      imageUrlFromValue(invite.profilePic),
+      imageUrlFromValue(invite.profile_picture),
+      imageUrlFromValue(invite.profilePicture),
+      imageUrlFromValue(invite.profilePictureUrl),
+      imageUrlFromValue(invite.profile_picture_url),
+      imageUrlFromValue(invite.picture),
+      imageUrlFromValue(invite.image),
+      imageUrlFromValue(invite.thumbnail),
+      imageUrlFromValue(invite.preview),
+    ].filter((candidate): candidate is string => Boolean(candidate));
+    const profileUrl = await socket
+      .profilePictureUrl(info.id, "image")
+      .catch(() => null);
+    if (profileUrl && !candidates.includes(profileUrl))
+      candidates.push(profileUrl);
+    let thumbnail: { thumbnailUrl: string; thumbnailData: string } | undefined;
+    for (const candidate of [...new Set(candidates)]) {
+      thumbnail = await downloadGroupImage(candidate);
+      if (thumbnail) break;
+    }
+    return {
+      canonicalUrl: url,
+      title: String(info.subject ?? "WhatsApp Group"),
+      description: `${Number(info.size ?? 0) || 0} members`,
+      ...(thumbnail ?? {}),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function telegramPublicUsername(url: string): string | undefined {

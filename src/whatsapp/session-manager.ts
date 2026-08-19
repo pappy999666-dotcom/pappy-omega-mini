@@ -342,6 +342,7 @@ async function openWhatsAppSession(
       const outbound = await prepareOutboundContent({
         ...(text ? { text } : {}),
         content: content as Record<string, unknown>,
+        socket,
       });
       await socket.sendMessage(jid, outbound);
       const sentAt = noteOutboundMessage(key);

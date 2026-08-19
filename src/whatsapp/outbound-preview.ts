@@ -3,6 +3,8 @@ import { env } from "../config/env.js";
 import {
   createDefaultPreviewManager,
   firstHttpUrl,
+  resolveWhatsAppGroupInvitePreview,
+  type WhatsAppGroupPreviewSocket,
 } from "../preview/default-adapter.js";
 import type { PreviewRecord } from "../preview/preview-manager.js";
 
@@ -11,6 +13,7 @@ export interface OutboundPreviewInput {
   content: Record<string, unknown>;
   existingPreview?: Record<string, unknown>;
   target?: "group-status";
+  socket?: unknown;
 }
 
 let redis: Redis | undefined;
@@ -47,19 +50,38 @@ export async function prepareOutboundContent(
   const supplied = input.existingPreview ?? readExistingPreview(content);
   if (isCompletePreview(supplied)) return content;
 
-  let record: PreviewRecord;
-  try {
-    record = await resolveOnce(url);
-  } catch {
-    return content;
-  }
   const hasMedia = ["image", "video", "audio", "document", "sticker"].some(
     (key) => key in content,
   );
-  if (input.target === "group-status" && !hasMedia && !record.fallback) {
+  if (hasMedia) return content;
+
+  let record: PreviewRecord | undefined;
+  const groupSocket = asWhatsAppGroupPreviewSocket(input.socket);
+  if (groupSocket && /chat\.whatsapp\.com\//i.test(url)) {
+    const groupPreview = await resolveWhatsAppGroupInvitePreview(
+      url,
+      groupSocket,
+    );
+    if (groupPreview) {
+      record = {
+        schemaVersion: 2,
+        ...groupPreview,
+        fetchedAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+        fallback: false,
+      };
+    }
+  }
+  if (!record) {
+    try {
+      record = await resolveOnce(url);
+    } catch {
+      return content;
+    }
+  }
+  if (input.target === "group-status" && !record.fallback) {
     return buildNativeGroupStatusPreviewContent(content, record);
   }
-  if (hasMedia) return content;
   const thumbnail = record.thumbnailData
     ? Buffer.from(record.thumbnailData, "base64")
     : undefined;
@@ -146,6 +168,17 @@ function readExistingPreview(
     };
   }
   return undefined;
+}
+
+function asWhatsAppGroupPreviewSocket(
+  value: unknown,
+): WhatsAppGroupPreviewSocket | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as WhatsAppGroupPreviewSocket;
+  return typeof candidate.groupGetInviteInfo === "function" &&
+    typeof candidate.profilePictureUrl === "function"
+    ? candidate
+    : undefined;
 }
 
 export async function closeOutboundPreview(): Promise<void> {

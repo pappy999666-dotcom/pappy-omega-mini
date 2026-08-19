@@ -226,9 +226,13 @@ export async function sendDirectText(
   jid: string,
   text: string,
 ): Promise<void> {
-  const send = method(socketFor(workspaceId, sessionId), "sendMessage");
+  const socket = socketFor(workspaceId, sessionId);
+  const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: sendMessage");
-  await send(jid, await prepareOutboundContent({ text, content: { text } }));
+  await send(
+    jid,
+    await prepareOutboundContent({ text, content: { text }, socket }),
+  );
 }
 
 export type GroupMediaPayload = WhatsAppMediaPayload;
@@ -267,10 +271,11 @@ export async function sendGroupText(
   text: string,
   media?: GroupMediaPayload,
 ): Promise<void> {
-  const send = method(socketFor(workspaceId, sessionId), "sendMessage");
+  const socket = socketFor(workspaceId, sessionId);
+  const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: sendMessage");
   const content = messagePayload(text, media);
-  await send(jid, await prepareOutboundContent({ text, content }));
+  await send(jid, await prepareOutboundContent({ text, content, socket }));
 }
 
 export async function sendGroupStatus(
@@ -303,6 +308,7 @@ export async function sendGroupStatus(
     text,
     content,
     target: "group-status",
+    socket,
   });
   await send(jid, prepared);
 }
@@ -395,6 +401,7 @@ export async function sendGroupHidetag(
     await prepareOutboundContent({
       text,
       content: { text, mentions: participants },
+      socket,
     }),
   );
 }
@@ -422,6 +429,7 @@ export async function sendGroupMentions(
     await prepareOutboundContent({
       text,
       content: { ...messagePayload(text, media), mentions: selected },
+      socket,
     }),
   );
 }

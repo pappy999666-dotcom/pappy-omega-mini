@@ -4,10 +4,12 @@ import {
   assertSafePreviewUrl,
   canonicalize,
 } from "../src/preview/preview-manager.js";
+import sharp from "sharp";
 import {
   decodeHtmlEntities,
   firstHttpUrl,
   linkPreviewPayload,
+  resolveWhatsAppGroupInvitePreview,
 } from "../src/preview/default-adapter.js";
 import { buildNativeGroupStatusPreviewContent } from "../src/whatsapp/outbound-preview.js";
 import {
@@ -27,6 +29,53 @@ function redisMock() {
 }
 
 describe("preview acceptance safeguards", () => {
+  it("resolves a WhatsApp group avatar from the connected socket at high quality", async () => {
+    const source = await sharp({
+      create: {
+        width: 1500,
+        height: 1000,
+        channels: 3,
+        background: { r: 36, g: 84, b: 140 },
+      },
+    })
+      .jpeg({ quality: 98 })
+      .toBuffer();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const requested = String(input);
+      if (requested === "https://cdn.example.test/group-avatar.jpg") {
+        return new Response(source, {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        });
+      }
+      return new Response(null, { status: 404 });
+    }) as typeof fetch;
+    try {
+      const resolved = await resolveWhatsAppGroupInvitePreview(
+        "https://chat.whatsapp.com/ABC123",
+        {
+          groupGetInviteInfo: async () => ({
+            id: "120363000000000001@g.us",
+            subject: "Earthens",
+            size: 42,
+          }),
+          profilePictureUrl: async () =>
+            "https://cdn.example.test/group-avatar.jpg",
+        },
+      );
+      expect(resolved?.title).toBe("Earthens");
+      expect(resolved?.description).toBe("42 members");
+      expect(resolved?.thumbnailData).toBeTruthy();
+      const output = await sharp(
+        Buffer.from(resolved!.thumbnailData!, "base64"),
+      ).metadata();
+      expect(output.width).toBe(1500);
+      expect(output.height).toBe(1000);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
   it("canonicalizes URLs and removes fragments", () => {
     expect(canonicalize("HTTPS://Example.com/a#fragment")).toBe(
       "https://example.com/a",
