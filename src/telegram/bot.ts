@@ -69,6 +69,7 @@ import {
 import { effectiveSessionStatus } from "../menus/menu-model.js";
 import {
   installModeratorCommands,
+  installModeratorProtection,
   moderatorCommandScopes,
 } from "./moderator.js";
 import {
@@ -213,6 +214,7 @@ export function createTelegramBot(): Telegraf<Context> {
   const bot = new Telegraf<Context>(env.TELEGRAM_BOT_TOKEN);
   void registerTelegramCommandSuggestions(bot);
   installModeratorCommands(bot);
+  installModeratorProtection(bot);
   setPairingNotifier(async (chatId, message) => {
     await bot.telegram.sendMessage(
       chatId,

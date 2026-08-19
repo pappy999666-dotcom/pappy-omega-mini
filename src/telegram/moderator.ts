@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { Redis } from "ioredis";
 import type { Context, Telegraf } from "telegraf";
+import { env } from "../config/env.js";
 import {
   countModeratorWarnings,
   listModeratorEvents,
@@ -13,6 +15,11 @@ import {
 
 const ADMIN_STATUSES = new Set(["creator", "administrator"]);
 const GROUP_TYPES = new Set(["group", "supergroup"]);
+const protectionRedis = new Redis(env.REDIS_URL, {
+  maxRetriesPerRequest: null,
+});
+const LINK_PATTERN =
+  /(?:https?:\/\/|www\.|t\.me\/|telegram\.me\/|chat\.whatsapp\.com\/|wa\.me\/)/i;
 
 type CommandMessage = {
   text?: string;
@@ -166,6 +173,89 @@ async function restore(ctx: Context, target: string): Promise<boolean> {
   } catch (error) {
     return false;
   }
+}
+
+export function installModeratorProtection(bot: Telegraf<Context>): void {
+  bot.on("message", async (ctx, next) => {
+    const id = groupId(ctx);
+    if (!id) return next();
+    const message = ctx.message as unknown as {
+      text?: string;
+      caption?: string;
+      message_id?: number;
+    };
+    const text = message.text ?? message.caption ?? "";
+    if (!text || text.startsWith("/")) return next();
+    const group = await loadModeratorGroup(id).catch(() => undefined);
+    if (!group?.enabled) return next();
+    const sender = actorId(ctx);
+    if (!sender) return next();
+    try {
+      const member = await ctx.telegram.getChatMember(
+        Number(id),
+        Number(sender),
+      );
+      if (
+        ADMIN_STATUSES.has(member.status) ||
+        group.whitelist.includes(sender) ||
+        group.staff.includes(sender)
+      )
+        return next();
+    } catch {
+      return next();
+    }
+    if (group.antiLink && LINK_PATTERN.test(text)) {
+      let success = true;
+      try {
+        await ctx.telegram.deleteMessage(Number(id), message.message_id ?? 0);
+      } catch {
+        success = false;
+      }
+      await recordEvent(ctx, {
+        rule: "anti-link",
+        action: "delete",
+        targetId: sender,
+        success,
+        ...(success ? {} : { failureReason: "Telegram deleteMessage failed" }),
+      });
+      return;
+    }
+    if (group.antiSpam) {
+      const key = `pappy:moderator:spam:${id}:${sender}`;
+      const now = Date.now();
+      await protectionRedis.zadd(
+        key,
+        now,
+        `${now}:${message.message_id ?? randomUUID()}`,
+      );
+      await protectionRedis.zremrangebyscore(key, 0, now - 10_000);
+      await protectionRedis.expire(key, 30);
+      const count = await protectionRedis.zcard(key);
+      if (count >= 5) {
+        const muted = await restrict(
+          ctx,
+          sender,
+          Math.floor(now / 1000) + group.muteDefaultSeconds,
+        );
+        await recordEvent(ctx, {
+          rule: "anti-spam",
+          action: "mute",
+          targetId: sender,
+          success: muted,
+          ...(muted
+            ? {}
+            : { failureReason: "Telegram restrictChatMember failed" }),
+        });
+        try {
+          await ctx.telegram.deleteMessage(Number(id), message.message_id ?? 0);
+        } catch {
+          /* best effort cleanup */
+        }
+        return;
+      }
+    }
+    return next();
+  });
 }
 
 export function installModeratorCommands(bot: Telegraf<Context>): void {
