@@ -396,6 +396,84 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     );
   });
 
+  bot.command("rules", async (ctx) => {
+    const group = await ensureGroup(ctx);
+    if (!group) return;
+    await ctx.reply(group.rules ?? "No group rules have been configured.");
+  });
+
+  bot.command("setrules", async (ctx) => {
+    if (!(await requireModerator(ctx))) return;
+    const group = await ensureGroup(ctx);
+    if (!group) return;
+    const text = args(ctx).join(" ").trim();
+    if (!text) {
+      await ctx.reply("Usage: /setrules your group rules");
+      return;
+    }
+    group.rules = text.slice(0, 4000);
+    group.updatedAt = Date.now();
+    await saveModeratorGroup(group);
+    await recordEvent(ctx, { rule: "rules", action: "update", success: true });
+    await ctx.reply("✅ Group rules updated.");
+  });
+
+  bot.command("staff", async (ctx) => {
+    if (!(await requireModerator(ctx))) return;
+    const group = await ensureGroup(ctx);
+    if (!group) return;
+    const values = args(ctx);
+    const action = values[0]?.toLowerCase();
+    const member = values[1]?.replace(/^@/, "");
+    if (action === "add" && member)
+      group.staff = [...new Set([...group.staff, member])];
+    else if (action === "remove" && member)
+      group.staff = group.staff.filter((id) => id !== member);
+    if (action === "add" || action === "remove") {
+      group.updatedAt = Date.now();
+      await saveModeratorGroup(group);
+      await recordEvent(ctx, {
+        rule: "staff",
+        action,
+        ...(member ? { targetId: member } : {}),
+        success: true,
+      });
+    }
+    await ctx.reply(
+      group.staff.length
+        ? `Staff: ${group.staff.join(", ")}`
+        : "No delegated staff configured.",
+    );
+  });
+
+  bot.command("whitelist", async (ctx) => {
+    if (!(await requireModerator(ctx))) return;
+    const group = await ensureGroup(ctx);
+    if (!group) return;
+    const values = args(ctx);
+    const action = values[0]?.toLowerCase();
+    const member = values[1]?.replace(/^@/, "");
+    if (action === "add" && member)
+      group.whitelist = [...new Set([...group.whitelist, member])];
+    else if (action === "remove" && member)
+      group.whitelist = group.whitelist.filter((id) => id !== member);
+    if (action === "add" || action === "remove") {
+      group.updatedAt = Date.now();
+      await saveModeratorGroup(group);
+      await recordEvent(ctx, {
+        rule: "whitelist",
+        action,
+        ...(member ? { targetId: member } : {}),
+        success: true,
+      });
+    }
+    await ctx.reply(
+      group.whitelist.length
+        ? `Whitelist: ${group.whitelist.join(", ")}`
+        : "Whitelist is empty.",
+    );
+  });
+
   bot.command("settings", async (ctx) => {
     if (!(await requireModerator(ctx))) return;
     const group = await ensureGroup(ctx);
@@ -456,6 +534,10 @@ export const moderatorCommandScopes = [
   { command: "warn", description: "Warn a replied-to member" },
   { command: "warns", description: "View warning records" },
   { command: "settings", description: "View group moderation settings" },
+  { command: "rules", description: "Show group rules" },
+  { command: "setrules", description: "Update group rules" },
+  { command: "staff", description: "Manage delegated staff" },
+  { command: "whitelist", description: "Manage trusted users" },
   { command: "protection", description: "Toggle group protection" },
   { command: "antilink", description: "Toggle anti-link" },
   { command: "logs", description: "View moderation logs" },
