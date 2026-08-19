@@ -314,10 +314,11 @@ async function openWhatsAppSession(
               : undefined;
         const senderJid = message.key.fromMe
           ? ((socket as unknown as { user?: { id?: string } }).user?.id ?? message.key.remoteJid)
-          : (message.key.participantAlt ??
-            message.key.participant ??
-            message.key.remoteJidAlt ??
-            message.key.remoteJid);
+                    : (message.key.participantAlt ??
+              message.key.remoteJidAlt ??
+              message.key.participant ??
+              message.key.remoteJid);
+
         void saveWhatsAppMessageTrace({
           traceId: randomUUID(),
           workspaceId,
