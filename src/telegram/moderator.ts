@@ -25,7 +25,7 @@ let moderatorReconciliationTimer: ReturnType<typeof setInterval> | undefined;
 
 type DestructiveConfirmation = {
   token: string;
-  action: "ban" | "resetwarn";
+  action: "ban" | "resetwarn" | "tagall";
   groupId: string;
   actorId: string;
   targetId: string;
@@ -321,6 +321,11 @@ export function installModeratorProtection(bot: Telegraf<Context>): void {
     if (!group?.enabled) return next();
     const sender = actorId(ctx);
     if (!sender) return next();
+    if (!(group.knownMembers ?? []).includes(sender)) {
+      group.knownMembers = [...(group.knownMembers ?? []), sender].slice(-500);
+      group.updatedAt = Date.now();
+      await saveModeratorGroup(group).catch(() => undefined);
+    }
     try {
       const member = await ctx.telegram.getChatMember(
         Number(id),
@@ -670,6 +675,38 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     );
   });
 
+  bot.command("tagall", async (ctx) => {
+    if (!(await requireModerator(ctx))) return;
+    const group = await ensureGroup(ctx);
+    if (!group) return;
+    const observed = Array.from(new Set(group.knownMembers ?? []));
+    if (!observed.length) {
+      await ctx.reply("No observed members are available yet. The bot builds this bounded list from real group traffic.");
+      return;
+    }
+    const confirmation = createDestructiveConfirmation(ctx, "tagall", "group");
+    if (!confirmation) return;
+    const prompt = await ctx.reply(
+      pageText(
+        "Confirm Tag-All",
+        warningResponse(
+          "Bounded Mention Job",
+          `<b>Observed members:</b> ${observed.length}\n<b>Maximum sent:</b> 50\n<b>Excluded:</b> admins, staff, whitelist, trusted users, and bots\n\nThis uses only members observed by the bot and sends one bounded mention message.`,
+        ),
+      ),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard([
+          [btn("📣 Confirm Tag-All", `mod:confirm:tagall:${confirmation.token}`, "danger")],
+          [btn("Cancel", `mod:cancel:${confirmation.token}`)],
+        ]),
+      },
+    );
+    confirmation.promptMessageId = prompt.message_id;
+    destructiveConfirmations.set(confirmation.token, confirmation);
+    scheduleDelete(ctx.telegram, confirmation.chatId, confirmation.sourceMessageId, 12_000);
+  });
+
   bot.command("ban", async (ctx) => {
     if (!(await requireModerator(ctx))) return;
     const id = groupId(ctx);
@@ -701,7 +738,7 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     scheduleDelete(ctx.telegram, confirmation.chatId, confirmation.sourceMessageId, 12_000);
   });
 
-  bot.action(/^mod:confirm:(ban|resetwarn):([a-f0-9-]+)$/, async (ctx) => {
+  bot.action(/^mod:confirm:(ban|resetwarn|tagall):([a-f0-9-]+)$/, async (ctx) => {
     if (!(await requireModerator(ctx))) return;
     const token = ctx.match[2];
     if (!token) {
@@ -719,17 +756,36 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
       if (confirmation.action === "ban") {
         await ctx.telegram.banChatMember(Number(confirmation.groupId), Number(confirmation.targetId));
         detail = `Member ${confirmation.targetId} banned.`;
-      } else {
+      } else if (confirmation.action === "resetwarn") {
         const deleted = await deleteModeratorWarnings(confirmation.groupId, confirmation.targetId);
         detail = `Cleared ${deleted} warning record(s) for ${confirmation.targetId}.`;
+      } else {
+        const group = await loadModeratorGroup(confirmation.groupId);
+        const admins = await ctx.telegram.getChatAdministrators(Number(confirmation.groupId));
+        const excluded = new Set([
+          ...(group?.staff ?? []),
+          ...(group?.whitelist ?? []),
+          ...(group?.trustedUsers ?? []),
+          ...admins.map((member) => String(member.user.id)),
+        ]);
+        const members = Array.from(new Set(group?.knownMembers ?? []))
+          .filter((member) => !excluded.has(member))
+          .slice(0, 50);
+        if (!members.length) throw new Error("No eligible observed members are available for tag-all.");
+        const mentions = members.map((member) => `<a href="tg://user?id=${encodeURIComponent(member)}">member</a>`).join(" ");
+        await ctx.telegram.sendMessage(Number(confirmation.groupId), `📣 ${mentions}`, {
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
+        });
+        detail = `Tagged ${members.length} eligible observed member(s).`;
       }
     } catch {
       ok = false;
       detail = confirmation.action === "ban" ? "Ban failed; check administrator permissions." : "Clear failed; try again later.";
     }
     await recordEvent(ctx, {
-      rule: confirmation.action === "ban" ? "manual" : "warning",
-      action: confirmation.action === "ban" ? "ban" : "reset",
+      rule: confirmation.action === "ban" ? "manual" : confirmation.action === "resetwarn" ? "warning" : "tagall",
+      action: confirmation.action === "ban" ? "ban" : confirmation.action === "resetwarn" ? "reset" : "tagall",
       targetId: confirmation.targetId,
       success: ok,
       ...(ok ? {} : { failureReason: detail }),

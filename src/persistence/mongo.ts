@@ -89,6 +89,7 @@ export interface ModeratorGroupRecord {
   whitelist: string[];
   staff: string[];
   trustedUsers?: string[];
+  knownMembers?: string[];
   groupMuteUntil?: number;
   groupLockUntil?: number;
   groupLockReason?: string;
@@ -334,6 +335,7 @@ const moderatorGroupSchema = new mongoose.Schema<ModeratorGroupDocument>(
     whitelist: { type: [String], default: [] },
     staff: { type: [String], default: [] },
     trustedUsers: { type: [String], default: [] },
+    knownMembers: { type: [String], default: [] },
     groupMuteUntil: Number,
     groupLockUntil: Number,
     groupLockReason: String,
