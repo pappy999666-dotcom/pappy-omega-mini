@@ -6,6 +6,7 @@ import makeWASocket, {
   type CacheManagerStore,
   type WASocket,
 } from "@crysnovax/baileys";
+import pino from "pino";
 import { downloadMediaMessage } from "@crysnovax/baileys/lib/Utils/messages.js";
 import { env } from "../config/env.js";
 import {
@@ -250,7 +251,37 @@ async function openWhatsAppSession(
     new FileAuthStore(authRoot),
     sessionId,
   );
-  const socket = makeWASocket({ auth: state }) as unknown as RuntimeSocket;
+  let recoverStaleSocket: ((reason: string) => void) | undefined;
+  let staleRecoveryTriggered = false;
+  const logger = pino({
+    level: "info",
+    hooks: {
+      logMethod(inputArgs, method) {
+        const rendered = inputArgs
+          .map((value) =>
+            typeof value === "string"
+              ? value
+              : (() => {
+                  try {
+                    return JSON.stringify(value);
+                  } catch {
+                    return String(value);
+                  }
+                })(),
+          )
+          .join(" ");
+        if (rendered.includes("smax-invalid") && !staleRecoveryTriggered) {
+          staleRecoveryTriggered = true;
+          queueMicrotask(() => recoverStaleSocket?.(rendered));
+        }
+        method.apply(this, inputArgs);
+      },
+    },
+  });
+  const socket = makeWASocket({
+    auth: state,
+    logger,
+  }) as unknown as RuntimeSocket;
   const forceSocketRecovery = (error?: unknown) => {
     const reason =
       error instanceof Error
@@ -265,6 +296,8 @@ async function openWhatsAppSession(
       // The connection.update close handler owns state transition and reconnect scheduling.
     }
   };
+  recoverStaleSocket = (reason) =>
+    forceSocketRecovery(new Error(`Baileys server rejection: ${reason}`));
   socket.ws?.on?.("error", forceSocketRecovery);
   socket.ws?.on?.("close", () => {
     if (runtimes.has(key))
@@ -574,6 +607,7 @@ async function openWhatsAppSession(
           `[pappy-omega-mini] WhatsApp authenticated open workspace=${workspaceId} session=${sessionId}`,
         );
         markConnected(key);
+        staleRecoveryTriggered = false;
         startHeartbeat({
           key,
           workspaceId,
