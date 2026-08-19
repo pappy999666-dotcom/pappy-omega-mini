@@ -70,6 +70,13 @@ export interface ModeratorGroupRecord {
   filters: Array<{ trigger: string; response: string }>;
   whitelist: string[];
   staff: string[];
+  trustedUsers?: string[];
+  groupMuteUntil?: number;
+  groupLockUntil?: number;
+  groupLockReason?: string;
+  raidEnabled?: boolean;
+  raidJoinThreshold?: number;
+  raidWindowSeconds?: number;
   updatedAt: number;
 }
 export interface ModeratorWarningRecord {
@@ -92,6 +99,9 @@ export interface ModeratorEventRecord {
   messageId?: number;
   success: boolean;
   failureReason?: string;
+  correlationId?: string;
+  phase?: string;
+  exemption?: string;
   timestamp: number;
 }
 interface ModeratorGroupDocument
@@ -285,6 +295,13 @@ const moderatorGroupSchema = new mongoose.Schema<ModeratorGroupDocument>(
     },
     whitelist: { type: [String], default: [] },
     staff: { type: [String], default: [] },
+    trustedUsers: { type: [String], default: [] },
+    groupMuteUntil: Number,
+    groupLockUntil: Number,
+    groupLockReason: String,
+    raidEnabled: { type: Boolean, default: false },
+    raidJoinThreshold: { type: Number, default: 8 },
+    raidWindowSeconds: { type: Number, default: 30 },
     updatedAt: { type: Number, required: true },
   },
   { collection: "moderator_groups", versionKey: false },
@@ -313,6 +330,9 @@ const moderatorEventSchema = new mongoose.Schema<ModeratorEventDocument>(
     messageId: Number,
     success: { type: Boolean, required: true },
     failureReason: String,
+    correlationId: String,
+    phase: String,
+    exemption: String,
     timestamp: { type: Number, required: true, index: true },
   },
   { collection: "moderator_events", versionKey: false },
@@ -633,6 +653,21 @@ export async function loadModeratorGroup(
       .lean<ModeratorGroupRecord>()
       .exec()) ?? undefined
   );
+}
+export async function listModeratorGroups(): Promise<ModeratorGroupRecord[]> {
+  await connectMongo();
+  return moderatorGroupModel()
+    .find({})
+    .sort({ updatedAt: -1 })
+    .lean<ModeratorGroupRecord[]>()
+    .exec();
+}
+export async function listDueModeratorGroups(now = Date.now()): Promise<ModeratorGroupRecord[]> {
+  await connectMongo();
+  return moderatorGroupModel()
+    .find({ $or: [{ groupMuteUntil: { $lte: now } }, { groupLockUntil: { $lte: now } }] })
+    .lean<ModeratorGroupRecord[]>()
+    .exec();
 }
 export async function saveModeratorGroup(
   group: ModeratorGroupRecord,

@@ -13,7 +13,10 @@ export type JobKind =
   | "media-processing"
   | "group-sync"
   | "cleanup"
-  | "join-manager";
+  | "join-manager"
+  | "moderator-expiry"
+  | "moderator-raid"
+  | "moderator-tag-all";
 
 export type JobState =
   | "QUEUED"
