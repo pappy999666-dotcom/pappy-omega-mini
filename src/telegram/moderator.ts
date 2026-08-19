@@ -378,7 +378,7 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     );
   });
 
-  bot.command("warns", async (ctx) => {
+  const showWarnings = async (ctx: Context): Promise<void> => {
     if (!(await requireModerator(ctx))) return;
     const group = await ensureGroup(ctx);
     const target = targetId(ctx);
@@ -394,6 +394,49 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
             )
             .join("\n")
         : "No warnings recorded.",
+    );
+  };
+  bot.command("warns", showWarnings);
+  bot.command("warnlist", showWarnings);
+
+  bot.command("warnlimit", async (ctx) => {
+    if (!(await requireModerator(ctx))) return;
+    const group = await ensureGroup(ctx);
+    if (!group) return;
+    const value = Number(args(ctx)[0]);
+    if (Number.isInteger(value) && value >= 1 && value <= 20) {
+      group.warnLimit = value;
+      group.updatedAt = Date.now();
+      await saveModeratorGroup(group);
+      await recordEvent(ctx, {
+        rule: "warning",
+        action: "set_limit",
+        reason: String(value),
+        success: true,
+      });
+    }
+    await ctx.reply(`Warning limit: ${group.warnLimit}`);
+  });
+
+  bot.command("resetwarn", async (ctx) => {
+    if (!(await requireModerator(ctx))) return;
+    const group = await ensureGroup(ctx);
+    const target = targetId(ctx);
+    if (!group || !target) {
+      await ctx.reply(
+        "Reply to a member or provide a numeric Telegram user ID.",
+      );
+      return;
+    }
+    await recordEvent(ctx, {
+      rule: "warning",
+      action: "reset",
+      targetId: target,
+      success: false,
+      failureReason: "Warning deletion endpoint not yet enabled",
+    });
+    await ctx.reply(
+      "Warning reset is recorded but requires the warning deletion migration before it can remove durable records.",
     );
   });
 
@@ -534,6 +577,9 @@ export const moderatorCommandScopes = [
   { command: "unmute", description: "Unmute a replied-to member" },
   { command: "warn", description: "Warn a replied-to member" },
   { command: "warns", description: "View warning records" },
+  { command: "warnlist", description: "List warning records" },
+  { command: "resetwarn", description: "Reset member warnings" },
+  { command: "warnlimit", description: "Set warning escalation limit" },
   { command: "settings", description: "View group moderation settings" },
   { command: "rules", description: "Show group rules" },
   { command: "setrules", description: "Update group rules" },
