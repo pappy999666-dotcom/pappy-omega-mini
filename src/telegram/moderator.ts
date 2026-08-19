@@ -1336,6 +1336,7 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
 
 export const moderatorCommandScopes = [
   { command: "moderation", description: "Open group moderator commands" },
+  { command: "tagall", description: "Bounded mention job for observed members" },
   { command: "mute", description: "Mute a replied-to member" },
   { command: "ban", description: "Ban a replied-to member" },
   { command: "unban", description: "Unban a member" },
