@@ -1109,6 +1109,23 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     );
   });
 
+  bot.command("trusted", async (ctx) => {
+    if (!(await requireModerator(ctx))) return;
+    const group = await ensureGroup(ctx);
+    if (!group) return;
+    const values = args(ctx);
+    const action = values[0]?.toLowerCase();
+    const member = values[1]?.replace(/^@/, "");
+    if (action === "add" && member) group.trustedUsers = [...new Set([...(group.trustedUsers ?? []), member])];
+    else if (action === "remove" && member) group.trustedUsers = (group.trustedUsers ?? []).filter((id) => id !== member);
+    if (action === "add" || action === "remove") {
+      group.updatedAt = Date.now();
+      await saveModeratorGroup(group);
+      await recordEvent(ctx, { rule: "trusted", action, ...(member ? { targetId: member } : {}), success: true });
+    }
+    await ctx.reply(group.trustedUsers?.length ? `Trusted users: ${group.trustedUsers.join(", ")}` : "No trusted users configured.");
+  });
+
   bot.command("whitelist", async (ctx) => {
     if (!(await requireModerator(ctx))) return;
     const group = await ensureGroup(ctx);
