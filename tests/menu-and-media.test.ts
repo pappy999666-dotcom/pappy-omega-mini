@@ -9,6 +9,10 @@ import { buildSessionMenu, renderAsciiMenu } from "../src/menus/menu-model.js";
 import { buildWhatsappMenuPayload } from "../src/menus/whatsapp-menu.js";
 import { routeWhatsAppText } from "../src/whatsapp/message-router.js";
 import {
+  createCommandRegistry,
+  executeCommand,
+} from "../src/whatsapp/command-registry.js";
+import {
   addMenuMedia,
   getWhatsappMenuSettings,
   setWhatsappMenuMedia,
@@ -112,6 +116,57 @@ describe("WhatsApp command privacy", () => {
         text: ".ping",
       }),
     ).toContain("ONLINE");
+  });
+});
+
+describe("WhatsApp command registry", () => {
+  it("queues gstatus for the current group and bounds repeat count", async () => {
+    const user = resolveUser(`gstatus-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "group-status",
+      phoneNumber: "2348012345678",
+    });
+    let captured:
+      { kind: string; payload: Record<string, unknown> } | undefined;
+    const result = await executeCommand(
+      createCommandRegistry(),
+      "gstatus 999 hello",
+      {
+        workspaceId: user.workspaceId,
+        sessionId: session.sessionId,
+        isOwner: true,
+        chatJid: "120363000000000000@g.us",
+        args: [],
+        enqueueJob: async (input) => {
+          captured = input;
+          return "job-gstatus";
+        },
+      },
+    );
+    expect(result).toContain("job-gstatus");
+    expect(captured?.kind).toBe("gstatus");
+    expect(captured?.payload).toMatchObject({
+      text: "hello",
+      groups: ["120363000000000000@g.us"],
+      count: 20,
+    });
+  });
+
+  it("does not pretend WhatsApp-side pairing creates a workspace session", async () => {
+    const user = resolveUser(`pair-command-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "pair-boundary",
+      phoneNumber: "2348012345678",
+    });
+    const result = await executeCommand(createCommandRegistry(), "pair", {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      args: [],
+    });
+    expect(result).toContain("Telegram");
   });
 });
 

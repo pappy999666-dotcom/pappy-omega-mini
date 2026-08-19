@@ -293,7 +293,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
         if (!ctx.chatJid || !ctx.chatJid.endsWith("@g.us"))
           return "This command must be used inside a WhatsApp group.";
         const repeat =
-          ctx.args[0] && /^\\d+$/.test(ctx.args[0])
+          ctx.args[0] && /^\d+$/.test(ctx.args[0])
             ? Number(ctx.args.shift())
             : 1;
         const count = Math.max(1, Math.min(20, repeat));
