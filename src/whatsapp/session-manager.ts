@@ -26,6 +26,10 @@ import { collectLinks } from "../links/link-collector.js";
 import {
   clearLifecycle,
   getLifecycleState,
+  noteCommandProcessed,
+  noteError,
+  noteMessageReceived,
+  noteOutboundMessage,
   getStart,
   lifecycleKey,
   markClosed,
@@ -213,6 +217,13 @@ async function openWhatsAppSession(
   if (runtimes.has(key)) return;
 
   markOpening(key);
+  const openingState = getLifecycleState(key);
+  updateSession(workspaceId, sessionId, {
+    status: "RECONNECTING",
+    socketGeneration: openingState.socketGeneration,
+    reconnectCount: openingState.reconnectAttempt,
+    workerNodeId: process.env.HOSTNAME ?? `pid-${process.pid}`,
+  });
   const lock = await acquireSessionLock(workspaceId, sessionId);
   if (!lock) {
     updateSession(workspaceId, sessionId, {
@@ -230,6 +241,23 @@ async function openWhatsAppSession(
     sessionId,
   );
   const socket = makeWASocket({ auth: state }) as unknown as RuntimeSocket;
+  const sendTrackedMessage = async (
+    jid: string,
+    content: any,
+  ): Promise<void> => {
+    try {
+      await socket.sendMessage(jid, content);
+      const sentAt = noteOutboundMessage(key);
+      updateSession(workspaceId, sessionId, {
+        lastOutboundMessageAt: sentAt,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      noteError(key, reason);
+      updateSession(workspaceId, sessionId, { lastError: reason });
+      throw error;
+    }
+  };
 
   socket.ev.on("creds.update", () => void saveCreds());
   socket.ev.on(
@@ -258,7 +286,12 @@ async function openWhatsAppSession(
         `[pappy-omega-mini] WhatsApp inbound upsert session=${sessionId} count=${event.messages?.length ?? 0}`,
       );
       for (const message of event.messages ?? []) {
+        const receivedAt = noteMessageReceived(key);
+        updateSession(workspaceId, sessionId, {
+          lastMessageReceivedAt: receivedAt,
+        });
         if (!message.key?.remoteJid) continue;
+
         const text =
           message.message?.conversation ??
           message.message?.extendedTextMessage?.text ??
@@ -298,19 +331,23 @@ async function openWhatsAppSession(
         })
           .then((reply) => {
             if (!reply) return;
+            const processedAt = noteCommandProcessed(key);
+            updateSession(workspaceId, sessionId, {
+              lastCommandProcessedAt: processedAt,
+            });
             const jid = message.key?.remoteJid ?? "";
             if (typeof reply === "string") {
-              void socket.sendMessage(jid, { text: reply });
+              void sendTrackedMessage(jid, { text: reply });
               return;
             }
             const mediaReply = reply as WhatsAppReply;
             if (mediaReply.media) {
-              void socket.sendMessage(jid, {
+              void sendTrackedMessage(jid, {
                 [mediaReply.media.kind]: mediaReply.media.bytes,
                 caption: mediaReply.caption ?? "",
               });
             } else if (mediaReply.text) {
-              void socket.sendMessage(jid, { text: mediaReply.text });
+              void sendTrackedMessage(jid, { text: mediaReply.text });
             }
           })
           .catch((error) => {
@@ -339,6 +376,10 @@ async function openWhatsAppSession(
           status: "ACTIVE",
           connectedAt: Date.now(),
           lastHealthyAt: Date.now(),
+          socketGeneration: getLifecycleState(key).socketGeneration,
+          reconnectCount: 0,
+          authHealth: "VALID",
+          workerNodeId: process.env.HOSTNAME ?? `pid-${process.pid}`,
         });
         const chatId = pairingNotifications.get(key);
         if (chatId && pairingNotifier) {
@@ -362,8 +403,13 @@ async function openWhatsAppSession(
       const ownedLock = sessionLocks.get(key);
       sessionLocks.delete(key);
       void ownedLock?.release();
+      const authHealth = terminal ? "INVALID" : "DEGRADED";
       updateSession(workspaceId, sessionId, {
         status: classification.status,
+        authHealth,
+        lastReconnectAt: Date.now(),
+        reconnectCount: getLifecycleState(key).reconnectAttempt,
+        lastError: `transport:${code ?? "unknown"} · ${classification.label}`,
         disconnectReason: `transport:${code ?? "unknown"} · ${classification.label}. ${classification.recovery}`,
       });
       if (!terminal && !getLifecycleState(key).stopping) {

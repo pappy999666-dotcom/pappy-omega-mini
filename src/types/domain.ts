@@ -39,6 +39,15 @@ export interface WhatsAppSession {
   autoJoinEnabled: boolean;
   connectedAt?: number;
   lastHealthyAt?: number;
+  lastMessageReceivedAt?: number;
+  lastCommandProcessedAt?: number;
+  lastOutboundMessageAt?: number;
+  lastReconnectAt?: number;
+  reconnectCount?: number;
+  socketGeneration?: number;
+  authHealth?: "UNKNOWN" | "VALID" | "INVALID" | "DEGRADED";
+  workerNodeId?: string;
+  lastError?: string;
   disconnectReason?: string;
 }
 

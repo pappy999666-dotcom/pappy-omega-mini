@@ -6,6 +6,11 @@ export interface SessionLifecycleState {
   reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   stopping: boolean;
+  socketGeneration: number;
+  lastMessageReceivedAt?: number;
+  lastCommandProcessedAt?: number;
+  lastOutboundMessageAt?: number;
+  lastError?: string;
 }
 
 const states = new Map<string, SessionLifecycleState>();
@@ -24,6 +29,7 @@ export function getLifecycleState(key: string): SessionLifecycleState {
     reconnectTimer: undefined,
     heartbeatTimer: undefined,
     stopping: false,
+    socketGeneration: 0,
   };
   states.set(key, created);
   return created;
@@ -41,7 +47,31 @@ export function setStart(key: string, promise: Promise<void>): void {
 }
 
 export function markOpening(key: string): void {
-  getLifecycleState(key).stopping = false;
+  const state = getLifecycleState(key);
+  state.stopping = false;
+  state.socketGeneration += 1;
+}
+
+export function noteMessageReceived(key: string): number {
+  const state = getLifecycleState(key);
+  state.lastMessageReceivedAt = Date.now();
+  return state.lastMessageReceivedAt;
+}
+
+export function noteCommandProcessed(key: string): number {
+  const state = getLifecycleState(key);
+  state.lastCommandProcessedAt = Date.now();
+  return state.lastCommandProcessedAt;
+}
+
+export function noteOutboundMessage(key: string): number {
+  const state = getLifecycleState(key);
+  state.lastOutboundMessageAt = Date.now();
+  return state.lastOutboundMessageAt;
+}
+
+export function noteError(key: string, error: string): void {
+  getLifecycleState(key).lastError = error.slice(0, 500);
 }
 
 export function markConnected(key: string): void {
