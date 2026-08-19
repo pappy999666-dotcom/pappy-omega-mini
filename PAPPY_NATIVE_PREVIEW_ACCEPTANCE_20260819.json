@@ -1,0 +1,99 @@
+{
+  "generatedAt": "2026-08-19T13:02:29.243Z",
+  "results": [
+    {
+      "url": "https://example.com/",
+      "contentKeys": [
+        "text",
+        "linkPreview"
+      ],
+      "hasRichPreview": false,
+      "hasGroupStatus": false,
+      "hasLinkPreview": true,
+      "debug": {
+        "url": "https://example.com/",
+        "canonicalUrl": "https://example.com/",
+        "title": "Example Domain",
+        "processing": "NONE",
+        "crop": "NO",
+        "compression": "NONE",
+        "nativeFlag": "linkPreview",
+        "payload": "READY",
+        "cache": "MISS",
+        "result": "READY"
+      }
+    },
+    {
+      "url": "https://t.me/pappygcs",
+      "contentKeys": [
+        "text",
+        "richPreview",
+        "previewTitle",
+        "previewDescription",
+        "previewImage"
+      ],
+      "hasRichPreview": true,
+      "hasGroupStatus": false,
+      "hasLinkPreview": false,
+      "debug": {
+        "url": "https://t.me/pappygcs",
+        "canonicalUrl": "https://t.me/pappygcs",
+        "title": "✧ 𝘚𝘰𝘧𝘵 𝘓𝘪𝘧𝘦 𝘚𝘰𝘤𝘪𝘦𝘵𝘺 ✧",
+        "description": "╭─〔 📜 GROUP RULES 〕\t│ ✦ Be respectful to everyone.\t│ ✦ No group links.\t│ ✦ No channel links.\t│ ✦ No mentioning or promoting your GC.\t│ ✦ No status promotion.\t│ ✦ No spam or flooding.\t│ ✦ Keep chats friendly and on-topic.\t╰───────────────",
+        "selectedImageUrl": "https://cdn4.telesco.pe/file/L_vLqGkubhPYoPys6ga4C1sftY5BcCfEt7xbTSxKJKBqBx41GrDSg-GiM9-fXfvEVhVWPqdhQVUC0EZEjUFb9fX_xN0Ku3BiVxrz3P1fTPyUVGa0h9n1MqCZmo77Xeq8_QQ1z0xckTMCWo9QmZizAMxsaujYH5Ug1CDF3xmG41sssX4zJcO0sHe8o52jh_Z7ZvZ9CxNEbbTYj3W_IpSLFGpGnoy-tk6gBOQ1QsiGz0kBLj8J9NDyYyO1VbUF_w5-g5wSP-RMVCKoojDZv0HVO34lNC1jxYXtIoikHdS_PuN0Pdqwvi0xWwc1bgTXEIISMyzukaSHp-Cn6qZ2n89IWw.jpg",
+        "sourceWidth": 320,
+        "sourceHeight": 320,
+        "sourceBytes": 33869,
+        "processing": "NONE",
+        "crop": "NO",
+        "compression": "NONE",
+        "nativeFlag": "richPreview",
+        "payload": "READY",
+        "cache": "MISS",
+        "result": "READY"
+      }
+    },
+    {
+      "url": "https://whatsapp.com/channel/0029VbCSVL9HLHQgReyVeE39",
+      "contentKeys": [
+        "text"
+      ],
+      "hasRichPreview": false,
+      "hasGroupStatus": false,
+      "hasLinkPreview": false,
+      "debug": {
+        "url": "https://whatsapp.com/channel/0029VbCSVL9HLHQgReyVeE39",
+        "canonicalUrl": "https://whatsapp.com/channel/0029VbCSVL9HLHQgReyVeE39",
+        "processing": "NONE",
+        "crop": "NO",
+        "compression": "NONE",
+        "nativeFlag": "NONE",
+        "payload": "FAILED",
+        "cache": "MISS",
+        "result": "FALLBACK",
+        "reason": "no-valid-preview"
+      }
+    },
+    {
+      "url": "https://chat.whatsapp.com/KbDjI6Amhs38wh2nRz4pkN",
+      "contentKeys": [
+        "text"
+      ],
+      "hasRichPreview": false,
+      "hasGroupStatus": false,
+      "hasLinkPreview": false,
+      "debug": {
+        "url": "https://chat.whatsapp.com/KbDjI6Amhs38wh2nRz4pkN",
+        "canonicalUrl": "https://chat.whatsapp.com/KbDjI6Amhs38wh2nRz4pkN",
+        "processing": "NONE",
+        "crop": "NO",
+        "compression": "NONE",
+        "nativeFlag": "NONE",
+        "payload": "FAILED",
+        "cache": "MISS",
+        "result": "FALLBACK",
+        "reason": "no-valid-preview"
+      }
+    }
+  ]
+}

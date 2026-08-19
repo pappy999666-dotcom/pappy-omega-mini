@@ -96,6 +96,35 @@ describe("canonical Baileys-native preview pipeline", () => {
     }
   });
 
+  it("preserves hidden mentions while using the native richPreview path", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        '<html><head><meta property="og:title" content="Mentioned"><meta property="og:description" content="Preview"></head></html>',
+        { status: 200, headers: { "content-type": "text/html" } },
+      ),
+    ) as typeof fetch;
+    try {
+      const text = "https://example.com/mention";
+      const content = await prepareCanonicalPreviewContent({
+        text,
+        content: {
+          text,
+          mentions: ["2347000000000@s.whatsapp.net"],
+        },
+        cacheScope: `test-mentions-${Date.now()}`,
+      });
+      expect(content).toMatchObject({
+        richPreview: true,
+        previewTitle: "Mentioned",
+        previewDescription: "Preview",
+        mentions: ["2347000000000@s.whatsapp.net"],
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("uses native group-status wrapping without replacing the original URL", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async () =>

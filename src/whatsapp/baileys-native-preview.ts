@@ -528,10 +528,6 @@ function hasMedia(content: Record<string, unknown>): boolean {
   return ["image", "video", "audio", "document", "sticker"].some((key) => key in content);
 }
 
-function hasMentions(content: Record<string, unknown>): boolean {
-  return Array.isArray(content.mentions) && content.mentions.length > 0;
-}
-
 export function isCompletePreview(preview: Record<string, unknown> | undefined): boolean {
   if (!preview) return false;
   return Boolean(
@@ -590,7 +586,7 @@ export async function prepareCanonicalPreviewContent(
       return content;
     }
     const image = record.imageData ? Buffer.from(record.imageData, "base64") : undefined;
-    const useRichPreview = !hasMentions(content) && Boolean(record.title && record.description);
+    const useRichPreview = Boolean(record.title && record.description);
     const prepared = useRichPreview
       ? {
           ...content,
