@@ -170,6 +170,7 @@ import {
   autoPromotePostsKeyboard,
   autoPromoteConfirmKeyboard,
   autoPromoteDashboardKeyboard,
+  autoPromoteGlobalTargetsKeyboard,
   autoPromoteText,
   btn,
   copyBtn,
@@ -1930,7 +1931,7 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!session) return deny(ctx);
     await edit(
       ctx,
-      sessionText(session),
+      await renderSessionOverview(ctx, session),
       sessionKeyboard(session, isAdmin(ctx)),
     );
   });
@@ -1944,7 +1945,7 @@ export function createTelegramBot(): Telegraf<Context> {
       if (section === "overview")
         return edit(
           ctx,
-          sessionText(session),
+          await renderSessionOverview(ctx, session),
           sessionKeyboard(session, isAdmin(ctx)),
         );
       if (section === "groups")
@@ -2011,7 +2012,7 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!session) return deny(ctx);
     await edit(
       ctx,
-      sessionText(session),
+      await renderSessionOverview(ctx, session),
       sessionKeyboard(session, isAdmin(ctx)),
     );
   });
@@ -3877,7 +3878,8 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
     const user = resolveTelegramUser(ctx);
-    const targets = listAllSessions().filter((session) => session.status === "ACTIVE").map((session) => session.sessionId);
+    const activeSessions = listAllSessions().filter((session) => session.status === "ACTIVE");
+    const targets: string[] = [];
     pendingAutoPromote.set(String(ctx.from?.id ?? ""), {
       workspaceId: user.workspaceId,
       scope: "GLOBAL",
@@ -3886,7 +3888,39 @@ export function createTelegramBot(): Telegraf<Context> {
       chatId: ctx.chat?.id,
       messageId: ctx.callbackQuery?.message && "message_id" in ctx.callbackQuery.message ? ctx.callbackQuery.message.message_id : undefined,
     });
-    await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Command", `<b>Targets:</b> ${targets.length} active session(s)\nThis owner configuration remains independent from user and session Auto Promote settings.`)), autoPromoteCommandKeyboard());
+    await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Target Sessions", "Select the active WhatsApp sessions this owner job may use. This configuration remains independent from user and session Auto Promote settings.")), autoPromoteGlobalTargetsKeyboard(activeSessions, new Set(targets)));
+  });
+  bot.action(/^autopromote:global:toggle:([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const userId = String(ctx.from?.id ?? "");
+    const current = pendingAutoPromote.get(userId);
+    if (!current || current.scope !== "GLOBAL") return;
+    const selected = new Set(current.targetSessionIds ?? []);
+    const sessionId = ctx.match[1] ?? "";
+    if (selected.has(sessionId)) selected.delete(sessionId); else selected.add(sessionId);
+    pendingAutoPromote.set(userId, { ...current, targetSessionIds: [...selected] });
+    const activeSessions = listAllSessions().filter((session) => session.status === "ACTIVE");
+    await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Target Sessions", `<b>Selected:</b> ${selected.size} active session(s)`)), autoPromoteGlobalTargetsKeyboard(activeSessions, selected));
+  });
+  bot.action("autopromote:global:all", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const userId = String(ctx.from?.id ?? "");
+    const current = pendingAutoPromote.get(userId);
+    if (!current || current.scope !== "GLOBAL") return;
+    const activeSessions = listAllSessions().filter((session) => session.status === "ACTIVE");
+    const selected = activeSessions.map((session) => session.sessionId);
+    pendingAutoPromote.set(userId, { ...current, targetSessionIds: selected });
+    await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Target Sessions", `<b>Selected:</b> ${selected.length} active session(s)`)), autoPromoteGlobalTargetsKeyboard(activeSessions, new Set(selected)));
+  });
+  bot.action("autopromote:global:ready", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const userId = String(ctx.from?.id ?? "");
+    const current = pendingAutoPromote.get(userId);
+    if (!current || current.scope !== "GLOBAL" || !(current.targetSessionIds?.length)) return;
+    await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Command", `<b>Targets:</b> ${current.targetSessionIds.length} selected active session(s)`)), autoPromoteCommandKeyboard());
   });
   bot.action(/^autopromote:scope:SESSION:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -6016,4 +6050,46 @@ function autoPromoteWizardSummary(state: AutoPromoteWizard): string {
       `<b>Schedule:</b> ${slots}\n` +
       `<b>Payload:</b> <blockquote>${escapeHtml(state.payloadText ?? "")}</blockquote>`,
   );
+}
+
+
+async function renderSessionOverview(
+  ctx: Context,
+  session: ReturnType<typeof getSession> extends infer T ? Exclude<T, undefined> : never,
+): Promise<string> {
+  const user = resolveTelegramUser(ctx);
+  const [configs, runs] = await Promise.all([
+    listAutoPromoteConfigs({ limit: 500 }),
+    listAutoPromoteRuns({ sessionId: session.sessionId, limit: 200 }),
+  ]);
+  const sessionConfig = configs.find(
+    (config) => config.scope === "SESSION" && config.sessionId === session.sessionId,
+  );
+  const userConfig = configs.find(
+    (config) => config.scope === "USER" && config.ownerTelegramUserId === user.telegramUserId,
+  );
+  const globalConfig = configs.find(
+    (config) => config.scope === "GLOBAL" && (config.targetSessionIds ?? []).includes(session.sessionId),
+  );
+  const stateFor = (config: typeof sessionConfig): string => {
+    if (!config) return "NONE";
+    const run = runs.find((item) => item.configId === config.id && ["RUNNING", "QUEUED", "COOLDOWN"].includes(item.status));
+    return run?.status ?? config.state;
+  };
+  const relevantRuns = runs.filter((run) => [sessionConfig?.id, userConfig?.id, globalConfig?.id].includes(run.configId));
+  const nextExecution = relevantRuns
+    .filter((run) => run.status === "SCHEDULED" || run.status === "WAITING_FOR_SESSION")
+    .map((run) => run.scheduledAt)
+    .sort((a, b) => a - b)[0];
+  const cooldownUntil = relevantRuns
+    .filter((run) => run.status === "COOLDOWN" && run.cooldownUntil)
+    .map((run) => run.cooldownUntil as number)
+    .sort((a, b) => b - a)[0];
+  return sessionText(session, {
+    sessionState: stateFor(sessionConfig),
+    userState: stateFor(userConfig),
+    globalState: stateFor(globalConfig),
+    ...(nextExecution ? { nextExecution } : {}),
+    ...(cooldownUntil ? { cooldownUntil } : {}),
+  });
 }

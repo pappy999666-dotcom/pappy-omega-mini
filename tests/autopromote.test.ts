@@ -6,6 +6,7 @@ import {
   autoPromoteDaysKeyboard,
   autoPromotePostsKeyboard,
   autoPromoteTimesKeyboard,
+  autoPromoteGlobalTargetsKeyboard,
 } from "../src/telegram/ui.js";
 import {
   DEFAULT_AUTOPROMOTE_SLOT_TIMES,
@@ -59,6 +60,11 @@ describe("Auto Promote scheduling contracts", () => {
     expect(postsData).toContain("autopromote:posts:10");
     expect(confirmData).toContain("autopromote:confirm");
     expect(JSON.stringify(autoPromoteDashboardKeyboard([]))).toContain("autopromote:new");
+    const targetData = JSON.stringify(autoPromoteGlobalTargetsKeyboard([
+      { sessionId: "s1", sessionName: "Main", status: "ACTIVE", authHealth: "HEALTHY", workspaceId: "w1", createdAt: 1, updatedAt: 1 } as never,
+    ], new Set(["s1"])));
+    expect(targetData).toContain("autopromote:global:toggle:s1");
+    expect(targetData).toContain("autopromote:global:ready");
   });
 
 });

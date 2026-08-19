@@ -904,13 +904,27 @@ export function menuMediaPickerKeyboard(
   return keyboard(rows);
 }
 
-export function sessionText(session: WhatsAppSession): string {
+export interface SessionAutoPromoteStatus {
+  sessionState: string;
+  userState: string;
+  globalState: string;
+  nextExecution?: number;
+  cooldownUntil?: number;
+}
+
+export function sessionText(
+  session: WhatsAppSession,
+  autoPromote?: SessionAutoPromoteStatus,
+): string {
   const status = effectiveSessionStatus(session);
+  const autoPromoteText = autoPromote
+    ? `\n\n<b>Auto Promote</b>\n<b>Session:</b> ${escapeHtml(autoPromote.sessionState)}\n<b>User:</b> ${escapeHtml(autoPromote.userState)}\n<b>Global:</b> ${escapeHtml(autoPromote.globalState)}\n<b>Next:</b> ${autoPromote.nextExecution ? escapeHtml(new Date(autoPromote.nextExecution).toISOString()) : "—"}\n<b>Cooldown:</b> ${autoPromote.cooldownUntil ? escapeHtml(new Date(autoPromote.cooldownUntil).toISOString()) : "None"}`
+    : "";
   return pageText(
     "Session Control Plane",
     infoResponse(
       `${statusIcon(session.status)} ${escapeHtml(session.sessionName)}`,
-      `<b>Status:</b> ${escapeHtml(status)}\n<b>WhatsApp:</b> <code>${escapeHtml(session.phoneNumber ?? "pairing required")}</code>\n<b>Prefix:</b> <code>${escapeHtml(session.prefix || "none")}</code>\n<b>Auto-join:</b> ${session.autoJoinEnabled ? "ON" : "OFF"}\n<b>Validator:</b> AUTO · ${session.collectedLinkCount ?? 0} collected / ${session.validatedLinkCount ?? 0} validated\n\nChoose a control area below. Each area edits this message and keeps its own Back path.`,
+      `<b>Status:</b> ${escapeHtml(status)}\n<b>WhatsApp:</b> <code>${escapeHtml(session.phoneNumber ?? "pairing required")}</code>\n<b>Prefix:</b> <code>${escapeHtml(session.prefix || "none")}</code>\n<b>Auto-join:</b> ${session.autoJoinEnabled ? "ON" : "OFF"}\n<b>Validator:</b> AUTO · ${session.collectedLinkCount ?? 0} collected / ${session.validatedLinkCount ?? 0} validated${autoPromoteText}\n\nChoose a control area below. Each area edits this message and keeps its own Back path.`,
     ),
   );
 }
@@ -1075,4 +1089,22 @@ export function autoPromoteText(
       `${configRows}\n\n<b>Recent runs</b>\n${runRows || "No runs yet."}\n\n<i>Timezone-aware occurrences, per-session queue locks, cooldowns, and restart-safe run records are enabled.</i>`,
     ),
   );
+}
+
+
+export function autoPromoteGlobalTargetsKeyboard(
+  sessions: WhatsAppSession[],
+  selected: Set<string>,
+): InlineKeyboardMarkup {
+  const rows: Button[][] = sessions.map((session) => [
+    btn(
+      `${selected.has(session.sessionId) ? "✅" : "□"} ${session.sessionName}`,
+      `autopromote:global:toggle:${session.sessionId}`,
+      selected.has(session.sessionId) ? "success" : "primary",
+    ),
+  ]);
+  rows.push([btn("✅ Use Selected Sessions", "autopromote:global:ready", "success")]);
+  rows.push([btn("✚ Select All Active", "autopromote:global:all", "primary")]);
+  rows.push([btn("Cancel", "autopromote:cancel", "danger")]);
+  return keyboard(rows);
 }
