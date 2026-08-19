@@ -37,7 +37,8 @@ import {
 import {
   collectLinks,
   collectLinksFromChunks,
-  extractUrls,
+  extractWhatsAppGroupInviteUrls,
+  isWhatsAppGroupInviteUrl,
 } from "../links/link-collector.js";
 import { exportBucket } from "../links/link-export.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -151,6 +152,7 @@ const joinStates = new Map<string, "idle" | "running" | "paused" | "stopped">();
 const joinJobs = new Map<string, string>();
 const liveLoops = new Map<string, ReturnType<typeof setInterval>>();
 const validatorLiveStates = new Map<string, boolean>();
+const passiveIntakeSuspended = new Set<string>();
 const pendingAdminInput = new Map<
   string,
   "forcejoin:add" | "broadcast:compose"
@@ -275,8 +277,11 @@ export function createTelegramBot(): Telegraf<Context> {
     throw new Error("TELEGRAM_BOT_TOKEN is not configured.");
   const bot = new Telegraf<Context>(env.TELEGRAM_BOT_TOKEN);
   bot.use(async (ctx, next) => {
-    if (ctx.callbackQuery && ctx.from?.id !== undefined)
-      clearPendingInputs(String(ctx.from.id));
+    if (ctx.callbackQuery && ctx.from?.id !== undefined) {
+      const userId = String(ctx.from.id);
+      clearPendingInputs(userId);
+      passiveIntakeSuspended.add(userId);
+    }
     await next();
   });
   void registerTelegramCommandSuggestions(bot);
@@ -1051,7 +1056,9 @@ export function createTelegramBot(): Telegraf<Context> {
       return;
     }
     if (!ctx.message.text.startsWith("/")) {
-      const urls = extractUrls(ctx.message.text);
+      const passiveUserId = String(ctx.from?.id ?? "");
+      if (passiveIntakeSuspended.delete(passiveUserId)) return;
+      const urls = extractWhatsAppGroupInviteUrls(ctx.message.text);
       if (urls.length) {
         const user = resolveTelegramUser(ctx);
         void collectLinks({
@@ -1061,10 +1068,10 @@ export function createTelegramBot(): Telegraf<Context> {
         }).catch(() => undefined);
         await ctx.reply(
           pageText(
-            "Link Intake",
+            "Validator Hub",
             successResponse(
-              "Links Queued",
-              `${urls.length} link${urls.length === 1 ? "" : "s"} queued into the workspace Main bucket. WhatsApp pairing is not required for Telegram intake.`,
+              "WhatsApp Group Links Queued",
+              `${urls.length} WhatsApp group invite link${urls.length === 1 ? "" : "s"} queued into the workspace Main bucket. Other URLs are ignored by Validator Hub.`,
             ),
           ),
           { parse_mode: "HTML" },
@@ -1131,6 +1138,8 @@ export function createTelegramBot(): Telegraf<Context> {
   });
 
   bot.on("document", async (ctx) => {
+    const passiveUserId = String(ctx.from?.id ?? "");
+    if (passiveIntakeSuspended.delete(passiveUserId)) return;
     const document = ctx.message.document;
     const fileName = document.file_name ?? "document.txt";
     const mimeType = document.mime_type ?? "text/plain";
@@ -1202,7 +1211,7 @@ export function createTelegramBot(): Telegraf<Context> {
                 )
               : warningResponse(
                   "No Links Found",
-                  "The file was read successfully but contained no HTTP(S) links.",
+                  "The file was read successfully but contained no WhatsApp group invite links.",
                 ),
           ),
           { parse_mode: "HTML" },
@@ -2643,7 +2652,7 @@ export function createTelegramBot(): Telegraf<Context> {
         "Scheduled Jobs · New",
         infoResponse(
           "Hourly Link Validation",
-          "Send one or more HTTP, HTTPS, or WhatsApp invite links separated by new lines. The schedule will run hourly until disabled.",
+          "Send one or more WhatsApp group invite links from chat.whatsapp.com separated by new lines. The schedule will run hourly until disabled.",
         ),
       ),
       keyboard([[btn("Cancel", "jobs:list", "danger")]]),
@@ -4082,19 +4091,15 @@ async function handleScheduleInput(
 ): Promise<void> {
   const userId = String(ctx.from?.id ?? "");
   pendingScheduleInput.delete(userId);
-  const urls = text
-    .split(/\s+/)
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .slice(0, 100);
-  if (!urls.length || urls.some((url) => !/^https?:\/\//i.test(url))) {
+  const urls = extractWhatsAppGroupInviteUrls(text).slice(0, 100);
+  if (!urls.length || urls.some((url) => !isWhatsAppGroupInviteUrl(url))) {
     await edit(
       ctx,
       pageText(
         "Scheduled Jobs · Invalid Input",
         dangerResponse(
-          "No Valid Links",
-          "Send HTTP or HTTPS links, one per line.",
+          "No WhatsApp Group Links",
+          "Send WhatsApp group invite links from chat.whatsapp.com, one per line.",
         ),
       ),
       keyboard([[btn("↻ Try Again", "schedule:new:validation", "primary")]]),

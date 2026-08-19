@@ -10,6 +10,23 @@ export function extractUrls(text: string): string[] {
   return [...new Set(matches.map((value) => value.replace(/[),.;!?]+$/, "")))];
 }
 
+export function isWhatsAppGroupInviteUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.hostname.toLowerCase() === "chat.whatsapp.com" &&
+      parsed.pathname.split("/").filter(Boolean).length === 1
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function extractWhatsAppGroupInviteUrls(text: string): string[] {
+  return extractUrls(text).filter(isWhatsAppGroupInviteUrl);
+}
+
 type CollectionInput = {
   workspaceId: string;
   sourceUserId: string;
@@ -24,7 +41,7 @@ export async function collectLinks(
   added: number;
   urls: string[];
 }> {
-  return collectUrlValues(input, extractUrls(input.text));
+  return collectUrlValues(input, extractWhatsAppGroupInviteUrls(input.text));
 }
 
 /**
@@ -66,6 +83,7 @@ async function collectUrlValues(
   let added = 0;
   for (const originalUrl of urls) {
     try {
+      if (!isWhatsAppGroupInviteUrl(originalUrl)) continue;
       const canonicalUrl = new URL(originalUrl).toString();
       const before = await buckets.get(input.workspaceId, canonicalUrl);
       await buckets.upsert({
@@ -83,7 +101,11 @@ async function collectUrlValues(
       // Ignore malformed links while preserving valid links from the same payload.
     }
   }
-  return { found: urls.length, added, urls };
+  return {
+    found: urls.filter(isWhatsAppGroupInviteUrl).length,
+    added,
+    urls: urls.filter(isWhatsAppGroupInviteUrl),
+  };
 }
 
 export async function closeLinkCollector(): Promise<void> {

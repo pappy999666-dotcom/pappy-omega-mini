@@ -63,7 +63,9 @@ export async function prepareOutboundContent(
   };
   if (record.title) enriched.previewTitle = record.title;
   if (record.description) enriched.previewDescription = record.description;
-  if (record.thumbnailUrl) enriched.previewImage = record.thumbnailUrl;
+  if (record.thumbnailData)
+    enriched.previewImage = Buffer.from(record.thumbnailData, "base64");
+  else if (record.thumbnailUrl) enriched.previewImage = record.thumbnailUrl;
   return enriched;
 }
 

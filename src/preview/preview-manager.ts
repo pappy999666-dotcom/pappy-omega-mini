@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 import { Redis } from "ioredis";
 
 export interface PreviewRecord {
-  schemaVersion: 1;
+  schemaVersion: 2;
   canonicalUrl: string;
   title?: string;
   description?: string;
   thumbnailUrl?: string;
+  thumbnailData?: string;
   siteName?: string;
   fetchedAt: number;
   expiresAt: number;
@@ -17,7 +18,10 @@ export interface PreviewAdapter {
   fetch(
     url: string,
   ): Promise<
-    Pick<PreviewRecord, "title" | "description" | "thumbnailUrl" | "siteName">
+    Pick<
+      PreviewRecord,
+      "title" | "description" | "thumbnailUrl" | "thumbnailData" | "siteName"
+    >
   >;
 }
 
@@ -37,7 +41,7 @@ export class PreviewManager {
   async resolve(url: string): Promise<PreviewRecord> {
     const canonicalUrl = canonicalize(url);
     assertSafePreviewUrl(canonicalUrl);
-    const cacheKey = `pappy-omega-mini:preview:v1:${createHash("sha256").update(canonicalUrl).digest("hex")}`;
+    const cacheKey = `pappy-omega-mini:preview:v2:${createHash("sha256").update(canonicalUrl).digest("hex")}`;
     const cached = await this.redis.get(cacheKey);
     if (cached) return JSON.parse(cached) as PreviewRecord;
     const host = new URL(canonicalUrl).hostname;
@@ -50,7 +54,7 @@ export class PreviewManager {
         this.fetchTimeoutMs,
       );
       const record: PreviewRecord = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         canonicalUrl,
         ...metadata,
         fetchedAt: Date.now(),
@@ -73,7 +77,7 @@ export class PreviewManager {
 
   private fallback(canonicalUrl: string): PreviewRecord {
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       canonicalUrl,
       fetchedAt: Date.now(),
       expiresAt: Date.now() + 60_000,

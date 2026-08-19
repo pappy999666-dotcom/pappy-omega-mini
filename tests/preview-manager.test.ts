@@ -4,6 +4,15 @@ import {
   assertSafePreviewUrl,
   canonicalize,
 } from "../src/preview/preview-manager.js";
+import {
+  decodeHtmlEntities,
+  firstHttpUrl,
+  linkPreviewPayload,
+} from "../src/preview/default-adapter.js";
+import {
+  extractWhatsAppGroupInviteUrls,
+  isWhatsAppGroupInviteUrl,
+} from "../src/links/link-collector.js";
 
 function redisMock() {
   const values = new Map<string, string>();
@@ -29,6 +38,49 @@ describe("preview acceptance safeguards", () => {
       assertSafePreviewUrl("http://169.254.169.254/latest/meta-data"),
     ).toThrow();
     expect(() => assertSafePreviewUrl("https://example.com")).not.toThrow();
+  });
+
+  it("decodes escaped metadata and detects URLs embedded in text", () => {
+    expect(decodeHtmlEntities("Channel &#x1f4e2; &amp; news")).toBe(
+      "Channel 📢 & news",
+    );
+    expect(
+      firstHttpUrl("Join this text: https://chat.whatsapp.com/ABC123."),
+    ).toBe("https://chat.whatsapp.com/ABC123");
+  });
+
+  it("accepts only WhatsApp group invite URLs for Validator Hub", () => {
+    expect(isWhatsAppGroupInviteUrl("https://chat.whatsapp.com/ABC123")).toBe(
+      true,
+    );
+    expect(isWhatsAppGroupInviteUrl("https://whatsapp.com/channel/123")).toBe(
+      false,
+    );
+    expect(
+      extractWhatsAppGroupInviteUrls(
+        "https://example.com/a https://chat.whatsapp.com/ABC123",
+      ),
+    ).toEqual(["https://chat.whatsapp.com/ABC123"]);
+  });
+
+  it("emits normalized thumbnail bytes when the resolver has them", () => {
+    const payload = linkPreviewPayload(
+      {
+        schemaVersion: 2,
+        canonicalUrl: "https://example.com/a",
+        title: "Title",
+        description: "Description",
+        thumbnailData: Buffer.from("jpeg").toString("base64"),
+        fetchedAt: Date.now(),
+        expiresAt: Date.now() + 1_000,
+        fallback: false,
+      },
+      "Read https://example.com/a",
+    );
+    expect(payload).toMatchObject({
+      text: "Read https://example.com/a",
+      linkPreview: { title: "Title", jpegThumbnail: Buffer.from("jpeg") },
+    });
   });
 
   it("returns a safe fallback when the adapter fails", async () => {
