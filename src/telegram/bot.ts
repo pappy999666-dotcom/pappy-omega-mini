@@ -68,6 +68,10 @@ import {
 } from "../whatsapp/command-registry.js";
 import { effectiveSessionStatus } from "../menus/menu-model.js";
 import {
+  installModeratorCommands,
+  moderatorCommandScopes,
+} from "./moderator.js";
+import {
   adminKeyboard,
   adminJobsKeyboard,
   adminJobsText,
@@ -192,6 +196,9 @@ async function registerTelegramCommandSuggestions(
     await bot.telegram.setMyCommands(groupCommands, {
       scope: { type: "all_group_chats" },
     });
+    await bot.telegram.setMyCommands(moderatorCommandScopes, {
+      scope: { type: "all_chat_administrators" },
+    });
   } catch (error) {
     console.error(
       "[pappy-omega-mini] Telegram command-scope registration failed:",
@@ -205,6 +212,7 @@ export function createTelegramBot(): Telegraf<Context> {
     throw new Error("TELEGRAM_BOT_TOKEN is not configured.");
   const bot = new Telegraf<Context>(env.TELEGRAM_BOT_TOKEN);
   void registerTelegramCommandSuggestions(bot);
+  installModeratorCommands(bot);
   setPairingNotifier(async (chatId, message) => {
     await bot.telegram.sendMessage(
       chatId,

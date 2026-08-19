@@ -54,6 +54,47 @@ interface ScheduleDocument extends mongoose.Document {
   updatedAt: number;
 }
 interface EmergencyDocument extends EmergencyState, mongoose.Document {}
+export interface ModeratorGroupRecord {
+  groupId: string;
+  title?: string;
+  enabled: boolean;
+  antiLink: boolean;
+  antiSpam: boolean;
+  warnLimit: number;
+  muteDefaultSeconds: number;
+  rules?: string;
+  whitelist: string[];
+  staff: string[];
+  updatedAt: number;
+}
+export interface ModeratorWarningRecord {
+  warningId: string;
+  groupId: string;
+  userId: string;
+  actorId: string;
+  reason: string;
+  count: number;
+  createdAt: number;
+}
+export interface ModeratorEventRecord {
+  eventId: string;
+  groupId: string;
+  actorId: string;
+  targetId?: string;
+  rule: string;
+  action: string;
+  reason?: string;
+  messageId?: number;
+  success: boolean;
+  failureReason?: string;
+  timestamp: number;
+}
+interface ModeratorGroupDocument
+  extends ModeratorGroupRecord, mongoose.Document {}
+interface ModeratorWarningDocument
+  extends ModeratorWarningRecord, mongoose.Document {}
+interface ModeratorEventDocument
+  extends ModeratorEventRecord, mongoose.Document {}
 interface PairingRequestDocument extends mongoose.Document {
   telegramUserId: string;
   stage: "label" | "phone";
@@ -214,6 +255,50 @@ const emergencySchema = new mongoose.Schema<EmergencyDocument>(
   },
   { collection: "emergency_state", versionKey: false },
 );
+const moderatorGroupSchema = new mongoose.Schema<ModeratorGroupDocument>(
+  {
+    groupId: { type: String, required: true, unique: true, index: true },
+    title: String,
+    enabled: { type: Boolean, default: false },
+    antiLink: { type: Boolean, default: false },
+    antiSpam: { type: Boolean, default: false },
+    warnLimit: { type: Number, default: 3 },
+    muteDefaultSeconds: { type: Number, default: 600 },
+    rules: String,
+    whitelist: { type: [String], default: [] },
+    staff: { type: [String], default: [] },
+    updatedAt: { type: Number, required: true },
+  },
+  { collection: "moderator_groups", versionKey: false },
+);
+const moderatorWarningSchema = new mongoose.Schema<ModeratorWarningDocument>(
+  {
+    warningId: { type: String, required: true, unique: true, index: true },
+    groupId: { type: String, required: true, index: true },
+    userId: { type: String, required: true, index: true },
+    actorId: { type: String, required: true },
+    reason: { type: String, required: true },
+    count: { type: Number, required: true },
+    createdAt: { type: Number, required: true, index: true },
+  },
+  { collection: "moderator_warnings", versionKey: false },
+);
+const moderatorEventSchema = new mongoose.Schema<ModeratorEventDocument>(
+  {
+    eventId: { type: String, required: true, unique: true, index: true },
+    groupId: { type: String, required: true, index: true },
+    actorId: { type: String, required: true },
+    targetId: String,
+    rule: { type: String, required: true },
+    action: { type: String, required: true },
+    reason: String,
+    messageId: Number,
+    success: { type: Boolean, required: true },
+    failureReason: String,
+    timestamp: { type: Number, required: true, index: true },
+  },
+  { collection: "moderator_events", versionKey: false },
+);
 const pairingRequestSchema = new mongoose.Schema<PairingRequestDocument>(
   {
     telegramUserId: { type: String, required: true, unique: true, index: true },
@@ -237,6 +322,9 @@ let AuditModel: Model<AuditDocument> | undefined;
 let ScheduleModel: Model<ScheduleDocument> | undefined;
 let MediaModel: Model<MediaDocument> | undefined;
 let EmergencyModel: Model<EmergencyDocument> | undefined;
+let ModeratorGroupModel: Model<ModeratorGroupDocument> | undefined;
+let ModeratorWarningModel: Model<ModeratorWarningDocument> | undefined;
+let ModeratorEventModel: Model<ModeratorEventDocument> | undefined;
 
 export async function connectMongo(): Promise<typeof mongoose> {
   if (mongoose.connection.readyState === 1) return mongoose;
@@ -298,6 +386,30 @@ function emergencyModel(): Model<EmergencyDocument> {
     mongoose.models.EmergencyState ??
     mongoose.model<EmergencyDocument>("EmergencyState", emergencySchema));
 }
+function moderatorGroupModel(): Model<ModeratorGroupDocument> {
+  return (ModeratorGroupModel ??=
+    mongoose.models.ModeratorGroup ??
+    mongoose.model<ModeratorGroupDocument>(
+      "ModeratorGroup",
+      moderatorGroupSchema,
+    ));
+}
+function moderatorWarningModel(): Model<ModeratorWarningDocument> {
+  return (ModeratorWarningModel ??=
+    mongoose.models.ModeratorWarning ??
+    mongoose.model<ModeratorWarningDocument>(
+      "ModeratorWarning",
+      moderatorWarningSchema,
+    ));
+}
+function moderatorEventModel(): Model<ModeratorEventDocument> {
+  return (ModeratorEventModel ??=
+    mongoose.models.ModeratorEvent ??
+    mongoose.model<ModeratorEventDocument>(
+      "ModeratorEvent",
+      moderatorEventSchema,
+    ));
+}
 function pairingRequestModel(): Model<PairingRequestDocument> {
   return (PairingRequestModel ??=
     mongoose.models.PairingRequest ??
@@ -320,6 +432,9 @@ export async function ensureMongoIndexes(): Promise<void> {
     scheduleModel().createIndexes(),
     mediaModel().createIndexes(),
     emergencyModel().createIndexes(),
+    moderatorGroupModel().createIndexes(),
+    moderatorWarningModel().createIndexes(),
+    moderatorEventModel().createIndexes(),
   ]);
 }
 
@@ -490,6 +605,75 @@ export async function loadAuditEvents(
   if (limit > 0) query.limit(limit);
   return query.lean<AuditEvent[]>().exec();
 }
+export async function loadModeratorGroup(
+  groupId: string,
+): Promise<ModeratorGroupRecord | undefined> {
+  await connectMongo();
+  return (
+    (await moderatorGroupModel()
+      .findOne({ groupId })
+      .lean<ModeratorGroupRecord>()
+      .exec()) ?? undefined
+  );
+}
+export async function saveModeratorGroup(
+  group: ModeratorGroupRecord,
+): Promise<void> {
+  await connectMongo();
+  await moderatorGroupModel().replaceOne({ groupId: group.groupId }, group, {
+    upsert: true,
+  });
+}
+export async function countModeratorWarnings(
+  groupId: string,
+  userId: string,
+): Promise<number> {
+  await connectMongo();
+  return moderatorWarningModel().countDocuments({ groupId, userId }).exec();
+}
+export async function saveModeratorWarning(
+  warning: ModeratorWarningRecord,
+): Promise<void> {
+  await connectMongo();
+  await moderatorWarningModel().replaceOne(
+    { warningId: warning.warningId },
+    warning,
+    { upsert: true },
+  );
+}
+export async function listModeratorWarnings(
+  groupId: string,
+  userId?: string,
+): Promise<ModeratorWarningRecord[]> {
+  await connectMongo();
+  return moderatorWarningModel()
+    .find({ groupId, ...(userId ? { userId } : {}) })
+    .sort({ createdAt: -1 })
+    .limit(100)
+    .lean<ModeratorWarningRecord[]>()
+    .exec();
+}
+export async function saveModeratorEvent(
+  event: ModeratorEventRecord,
+): Promise<void> {
+  await connectMongo();
+  await moderatorEventModel().replaceOne({ eventId: event.eventId }, event, {
+    upsert: true,
+  });
+}
+export async function listModeratorEvents(
+  groupId: string,
+  limit = 50,
+): Promise<ModeratorEventRecord[]> {
+  await connectMongo();
+  return moderatorEventModel()
+    .find({ groupId })
+    .sort({ timestamp: -1 })
+    .limit(limit)
+    .lean<ModeratorEventRecord[]>()
+    .exec();
+}
+
 export async function persistEmergencyState(
   state: EmergencyState,
 ): Promise<void> {
