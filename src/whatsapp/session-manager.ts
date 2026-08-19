@@ -50,6 +50,7 @@ interface RuntimeEvents {
 
 interface RuntimeSocket extends WASocket {
   ev: RuntimeEvents;
+  ws?: { isOpen?: boolean };
   end: (error?: unknown) => void;
   waitForConnectionUpdate?: (
     predicate: (update: {
@@ -471,7 +472,10 @@ async function openWhatsAppSession(
           key,
           workspaceId,
           sessionId,
+          intervalMs: 10_000,
           probe: async () => {
+            if (socket.ws && socket.ws.isOpen === false)
+              throw new Error("WhatsApp websocket is closed.");
             const probe = (
               socket as RuntimeSocket & {
                 sendPresenceUpdate?: (presence: string) => Promise<void>;
@@ -479,6 +483,8 @@ async function openWhatsAppSession(
             ).sendPresenceUpdate;
             if (typeof probe === "function") {
               await probe.call(socket, "available");
+              if (socket.ws && socket.ws.isOpen === false)
+                throw new Error("WhatsApp websocket closed during heartbeat.");
               return;
             }
             if (!runtimes.has(key))
