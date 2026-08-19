@@ -3,7 +3,6 @@ import {
   readMenuMedia,
 } from "../media/menu-media-store.js";
 import type { WhatsAppSession } from "../types/domain.js";
-import { createCommandRegistry } from "../whatsapp/command-registry.js";
 
 export interface WhatsappMenuPayload {
   text: string;
@@ -16,33 +15,88 @@ export interface WhatsappMenuPayload {
   caption: string;
 }
 
+function elapsedSince(timestamp?: number): string {
+  if (!timestamp) return "—";
+  const totalSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+function normalizedStatus(session: WhatsAppSession): string {
+  if (session.status === "ACTIVE" && session.authHealth !== "INVALID")
+    return "ONLINE";
+  if (session.status === "RECONNECTING") return "RECOVERING";
+  if (session.status === "PAIRING") return "PAIRING";
+  if (session.status === "LOGGED_OUT") return "OFFLINE";
+  return session.status;
+}
+
+function commandRows(commands: string[], width = 6): string[] {
+  const rows: string[] = [];
+  for (let index = 0; index < commands.length; index += width)
+    rows.push(`│ ${commands.slice(index, index + width).join("  ")}`);
+  return rows;
+}
+
+function section(title: string, commands: string[]): string[] {
+  return [`├─ ${title}`, ...commandRows(commands)];
+}
+
 function compactMenu(session: WhatsAppSession, isOwner: boolean): string {
-  const ownerLine = isOwner ? "OWNER" : "USER";
-  const commands = createCommandRegistry()
-    .filter((command) => !command.ownerOnly || isOwner)
-    .flatMap((command) => {
-      if (command.name === "allstatus") return [".allstatus", ".allstatusx"];
-      if (command.name === "allchat") return [".allchat", ".allchatx"];
-      if (command.name === "gstatus") return [".gstatus", ".gstatusx"];
-      if (command.name === "tag") return [".tag", ".stag"];
-      if (command.name === "pfp") return [".pfp", ".setpfp", ".getpfp"];
-      return [`.${command.name}`];
-    });
-  const commandLines: string[] = [];
-  for (let index = 0; index < commands.length; index += 3)
-    commandLines.push(commands.slice(index, index + 3).join("  "));
-  return [
+  const role = isOwner ? "OWNER / SUDO" : "AUTHORIZED USER";
+  const status = normalizedStatus(session);
+  const prefix = session.prefix || "none";
+  const autoJoin = session.autoJoinEnabled ? "ON" : "OFF";
+  const collected = session.collectedLinkCount ?? 0;
+  const validated = session.validatedLinkCount ?? 0;
+  const healthyFor = elapsedSince(session.connectedAt ?? session.lastHealthyAt);
+  const lines = [
     "✦ PAPPY OMEGA MINI",
-    `${session.sessionName} · ${session.status} · ${ownerLine}`,
-    `Auto-join ${session.autoJoinEnabled ? "ON" : "OFF"}`,
-    "",
-    "COMMANDS",
-    ...commandLines,
-    "",
-    "LOCAL  .gstatus <text/reply>  .tag <payload>",
-    "ALL-GROUP  .allstatus  .allchat  .stag",
-    `Prefix ${session.prefix || "none"} · Use ${session.prefix || "."}help`,
-  ].join("\n");
+    `┌ ${session.sessionName} · ${status} · ${role}`,
+    `│ AJ ${autoJoin} · PFX ${prefix} · HEALTH ${healthyFor} · LINKS ${collected}/${validated}`,
+    ...section("COMMANDS", [".menu", ".ping", ".profile", ".health", ".support"]),
+    ...section("SESSION", [
+      ".autojoin",
+      ".setprefix",
+      ".pfp",
+      ".setgpp",
+      ".setname",
+      ".setbio",
+      ".groups",
+      ".creategroup",
+    ]),
+    ...section("LOCAL", [
+      ".gstatus <text/reply>",
+      ".tag <payload>",
+      ".stag <payload>",
+    ]),
+  ];
+  if (isOwner) {
+    lines.push(
+      ...section("OWNER / SUDO", [
+        ".pair",
+        ".previewdebug",
+        ".broadcastdelay",
+        ".allstatus",
+        ".allstatusx",
+        ".gstatusx",
+        ".stopstatus",
+        ".allchat",
+        ".allchatx",
+        ".stopchat",
+        ".stopstag",
+        ".setsudo",
+      ]),
+    );
+  }
+  lines.push(
+    `└ ${prefix === "none" ? "No prefix" : `Use ${prefix}help`} · .menu`,
+  );
+  return lines.join("\n");
 }
 
 export async function buildWhatsappMenuPayload(
