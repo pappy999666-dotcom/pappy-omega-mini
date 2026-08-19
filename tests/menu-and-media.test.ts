@@ -93,14 +93,21 @@ describe("Telegram group moderator command surface", () => {
       expect.arrayContaining([
         "moderation",
         "mute",
+        "ban",
+        "unban",
         "unmute",
         "warn",
         "warns",
-        "settings",
-        "protection",
-        "antilink",
-        "logs",
+        "warnlist",
+        "resetwarn",
+        "warnlimit",
+        "rules",
+        "staff",
+        "whitelist",
       ]),
+    );
+    expect(commands).not.toEqual(
+      expect.arrayContaining(["settings", "protection", "antilink", "logs"]),
     );
   });
 });

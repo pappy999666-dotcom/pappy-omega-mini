@@ -2,8 +2,11 @@ import { randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
 import type { Context, Telegraf } from "telegraf";
 import { env } from "../config/env.js";
+import { btn, keyboard, pageText, ui } from "./ui.js";
+import { escapeHtml, infoResponse, warningResponse } from "./renderer.js";
 import {
   countModeratorWarnings,
+  countModeratorWarningsForGroup,
   deleteModeratorWarnings,
   listModeratorEvents,
   listModeratorWarnings,
@@ -281,6 +284,64 @@ export function installModeratorProtection(bot: Telegraf<Context>): void {
   });
 }
 
+async function moderatorDashboardText(group: ModeratorGroupRecord): Promise<string> {
+  const [warnings, events] = await Promise.all([
+    countModeratorWarningsForGroup(group.groupId).catch(() => 0),
+    listModeratorEvents(group.groupId, 3).catch(() => []),
+  ]);
+  const recent = events.length
+    ? events.map((event) => `${event.success ? "✅" : "⛔"} ${event.action}${event.targetId ? ` · ${event.targetId}` : ""}`).join("\\n")
+    : "No recent actions.";
+  return pageText(
+    "Group Moderator",
+    infoResponse(
+      "Control Room",
+      `<b>Group:</b> ${escapeHtml(group.title ?? group.groupId)}\\n` +
+        `<b>Protection:</b> ${group.enabled ? "ON" : "OFF"} · <b>Anti-link:</b> ${group.antiLink ? "ON" : "OFF"} · <b>Anti-spam:</b> ${group.antiSpam ? "ON" : "OFF"}\\n` +
+        `<b>Welcome:</b> ${group.welcomeEnabled ? "ON" : "OFF"} · <b>Goodbye:</b> ${group.goodbyeEnabled ? "ON" : "OFF"}\\n` +
+        `<b>Warnings:</b> ${warnings} · <b>Filters:</b> ${group.filters.length} · <b>Staff:</b> ${group.staff.length} · <b>Whitelist:</b> ${group.whitelist.length}\\n\\n` +
+        `<b>Recent activity</b>\\n${escapeHtml(recent)}\\n\\n` +
+        `<i>Reply to a member and use /mute, /unmute, /warn, /ban, or /unban for target actions.</i>`,
+    ),
+  );
+}
+
+function moderatorDashboardKeyboard(group: ModeratorGroupRecord) {
+  return keyboard([
+    [btn(`🛡 Protection: ${group.enabled ? "ON" : "OFF"}`, "mod:toggle:enabled", group.enabled ? "success" : "danger")],
+    [
+      btn(`🔗 Anti-link: ${group.antiLink ? "ON" : "OFF"}`, "mod:toggle:antiLink", group.antiLink ? "success" : "primary"),
+      btn(`⚡ Anti-spam: ${group.antiSpam ? "ON" : "OFF"}`, "mod:toggle:antiSpam", group.antiSpam ? "success" : "primary"),
+    ],
+    [
+      btn(`👋 Welcome: ${group.welcomeEnabled ? "ON" : "OFF"}`, "mod:toggle:welcome", group.welcomeEnabled ? "success" : "primary"),
+      btn(`↩ Goodbye: ${group.goodbyeEnabled ? "ON" : "OFF"}`, "mod:toggle:goodbye", group.goodbyeEnabled ? "success" : "primary"),
+    ],
+    [btn("📜 Rules", "mod:view:rules"), btn("🧰 Filters", "mod:view:filters")],
+    [btn("⚠ Warnings", "mod:view:warnings"), btn("🧾 Logs", "mod:view:logs")],
+    [btn("🔄 Refresh", "mod:refresh")],
+    [btn(ui.close, "menu:main")],
+  ]);
+}
+
+async function editModeratorDashboard(ctx: Context, group: ModeratorGroupRecord): Promise<void> {
+  const text = await moderatorDashboardText(group);
+  await ctx.editMessageText(text, {
+    parse_mode: "HTML",
+    reply_markup: moderatorDashboardKeyboard(group),
+  }).catch(async () => {
+    await ctx.reply(text, {
+      parse_mode: "HTML",
+      reply_markup: moderatorDashboardKeyboard(group),
+    }).catch(() => undefined);
+  });
+}
+
+async function callbackModerator(ctx: Context): Promise<ModeratorGroupRecord | undefined> {
+  if (!(await requireModerator(ctx))) return undefined;
+  return ensureGroup(ctx);
+}
+
 export function installModeratorCommands(bot: Telegraf<Context>): void {
   bot.command("moderation", async (ctx) => {
     if (!(await requireModerator(ctx))) return;
@@ -288,13 +349,79 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
       await ctx.reply("Open this command inside a Telegram group.");
       return;
     }
-    await ctx.reply(
-      "✦ PAPPY OMEGA MINI · GROUP MODERATOR\n\n" +
-        "/mute · /unmute · /warn · /warns\n" +
-        "/settings · /protection · /antilink\n" +
-        "/rules · /logs\n\n" +
-        "Reply to a member’s message for moderation actions. Staff permissions are checked by Telegram.",
-    );
+    const group = await ensureGroup(ctx);
+    if (!group) return;
+    await ctx.reply(await moderatorDashboardText(group), {
+      parse_mode: "HTML",
+      reply_markup: moderatorDashboardKeyboard(group),
+    });
+  });
+
+  bot.action("mod:refresh", async (ctx) => {
+    await ctx.answerCbQuery("Refreshing…");
+    const group = await callbackModerator(ctx);
+    if (group) await editModeratorDashboard(ctx, group);
+  });
+
+  bot.action(/^mod:toggle:(enabled|antiLink|antiSpam|welcome|goodbye)$/, async (ctx) => {
+    const group = await callbackModerator(ctx);
+    if (!group) return;
+    const key = ctx.match[1] as "enabled" | "antiLink" | "antiSpam" | "welcome" | "goodbye";
+    const field = key === "welcome" ? "welcomeEnabled" : key === "goodbye" ? "goodbyeEnabled" : key;
+    group[field] = !group[field];
+    group.updatedAt = Date.now();
+    await saveModeratorGroup(group);
+    await recordEvent(ctx, { rule: "settings", action: `toggle_${key}`, success: true });
+    await ctx.answerCbQuery(`${key} ${group[field] ? "enabled" : "disabled"}`);
+    await editModeratorDashboard(ctx, group);
+  });
+
+  bot.action("mod:view:rules", async (ctx) => {
+    const group = await callbackModerator(ctx);
+    if (!group) return;
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(pageText("Group Rules", infoResponse("Published Rules", group.rules ?? "No group rules have been configured.")), {
+      parse_mode: "HTML",
+      reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
+    });
+  });
+
+  bot.action("mod:view:filters", async (ctx) => {
+    const group = await callbackModerator(ctx);
+    if (!group) return;
+    await ctx.answerCbQuery();
+    const body = group.filters.length
+      ? group.filters.map((entry) => `<code>${escapeHtml(entry.trigger)}</code> → ${escapeHtml(entry.response)}`).join("\\n")
+      : "No keyword filters configured.";
+    await ctx.editMessageText(pageText("Filters", infoResponse("Keyword Filters", body)), {
+      parse_mode: "HTML",
+      reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
+    });
+  });
+
+  bot.action("mod:view:warnings", async (ctx) => {
+    const group = await callbackModerator(ctx);
+    if (!group) return;
+    await ctx.answerCbQuery();
+    const count = await countModeratorWarningsForGroup(group.groupId).catch(() => 0);
+    await ctx.editMessageText(pageText("Warnings", infoResponse("Warning Overview", `<b>Total records:</b> ${count}\\n\\nUse /warns or /warnlist for member-specific records.`)), {
+      parse_mode: "HTML",
+      reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
+    });
+  });
+
+  bot.action("mod:view:logs", async (ctx) => {
+    const group = await callbackModerator(ctx);
+    if (!group) return;
+    await ctx.answerCbQuery();
+    const events = await listModeratorEvents(group.groupId, 15);
+    const body = events.length
+      ? events.map((event) => `${event.success ? "✅" : "⛔"} ${escapeHtml(event.action)} · ${escapeHtml(event.targetId ?? "group")}`).join("\\n")
+      : "No moderation events recorded.";
+    await ctx.editMessageText(pageText("Moderation Logs", infoResponse("Recent Actions", body)), {
+      parse_mode: "HTML",
+      reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
+    });
   });
 
   bot.command("mute", async (ctx) => {
@@ -832,15 +959,7 @@ export const moderatorCommandScopes = [
   { command: "warnlist", description: "List warning records" },
   { command: "resetwarn", description: "Reset member warnings" },
   { command: "warnlimit", description: "Set warning escalation limit" },
-  { command: "settings", description: "View group moderation settings" },
   { command: "rules", description: "Show group rules" },
-  { command: "welcome", description: "Configure welcome messages" },
-  { command: "goodbye", description: "Configure goodbye messages" },
-  { command: "filter", description: "Manage keyword filters" },
-  { command: "setrules", description: "Update group rules" },
   { command: "staff", description: "Manage delegated staff" },
   { command: "whitelist", description: "Manage trusted users" },
-  { command: "protection", description: "Toggle group protection" },
-  { command: "antilink", description: "Toggle anti-link" },
-  { command: "logs", description: "View moderation logs" },
 ];

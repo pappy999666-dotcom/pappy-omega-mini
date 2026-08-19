@@ -649,6 +649,12 @@ export async function countModeratorWarnings(
   await connectMongo();
   return moderatorWarningModel().countDocuments({ groupId, userId }).exec();
 }
+export async function countModeratorWarningsForGroup(
+  groupId: string,
+): Promise<number> {
+  await connectMongo();
+  return moderatorWarningModel().countDocuments({ groupId }).exec();
+}
 export async function saveModeratorWarning(
   warning: ModeratorWarningRecord,
 ): Promise<void> {
