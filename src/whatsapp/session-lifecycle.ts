@@ -64,7 +64,10 @@ export function setStart(key: string, promise: Promise<void>): void {
   });
 }
 
-export function setLifecycleStatus(key: string, status: AuthoritativeLifecycleState): void {
+export function setLifecycleStatus(
+  key: string,
+  status: AuthoritativeLifecycleState,
+): void {
   const state = getLifecycleState(key);
   state.status = status;
   state.lastTransitionAt = Date.now();
@@ -163,18 +166,36 @@ export function startHeartbeat(input: {
   workspaceId: string;
   sessionId: string;
   intervalMs?: number;
+  probe?: () => Promise<void>;
+  onFailure?: (error: unknown) => void;
 }): void {
   const state = getLifecycleState(input.key);
   if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
   state.heartbeatTimer = setInterval(() => {
-    if (!state.stopping)
+    if (state.stopping) return;
+    if (!input.probe) {
       updateSession(input.workspaceId, input.sessionId, {
         lastHealthyAt: Date.now(),
+      });
+      return;
+    }
+    void input
+      .probe()
+      .then(() => {
+        updateSession(input.workspaceId, input.sessionId, {
+          lastHealthyAt: Date.now(),
+        });
+      })
+      .catch((error) => {
+        input.onFailure?.(error);
       });
   }, input.intervalMs ?? 30_000);
 }
 
-export function getLifecycleHealth(key: string, now = Date.now()): {
+export function getLifecycleHealth(
+  key: string,
+  now = Date.now(),
+): {
   status: AuthoritativeLifecycleState;
   connected: boolean;
   socketGeneration: number;
@@ -191,9 +212,15 @@ export function getLifecycleHealth(key: string, now = Date.now()): {
     connected: state.connected,
     socketGeneration: state.socketGeneration,
     reconnectAttempt: state.reconnectAttempt,
-    ...(state.lastMessageReceivedAt !== undefined ? { lastMessageReceivedAt: state.lastMessageReceivedAt } : {}),
-    ...(state.lastCommandProcessedAt !== undefined ? { lastCommandProcessedAt: state.lastCommandProcessedAt } : {}),
-    ...(state.lastOutboundMessageAt !== undefined ? { lastOutboundMessageAt: state.lastOutboundMessageAt } : {}),
+    ...(state.lastMessageReceivedAt !== undefined
+      ? { lastMessageReceivedAt: state.lastMessageReceivedAt }
+      : {}),
+    ...(state.lastCommandProcessedAt !== undefined
+      ? { lastCommandProcessedAt: state.lastCommandProcessedAt }
+      : {}),
+    ...(state.lastOutboundMessageAt !== undefined
+      ? { lastOutboundMessageAt: state.lastOutboundMessageAt }
+      : {}),
     ...(state.lastError ? { lastError: state.lastError } : {}),
     ageSinceHeartbeatMs: Math.max(0, now - state.lastTransitionAt),
   };

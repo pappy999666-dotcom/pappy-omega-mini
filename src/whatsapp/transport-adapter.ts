@@ -117,13 +117,31 @@ export async function createWhatsAppGroup(
 ): Promise<string> {
   const create = method(socketFor(workspaceId, sessionId), "groupCreate");
   if (!create) throw new Error("Unsupported capability: groupCreate");
-  const result = (await create(subject, participants)) as {
+  const normalizedParticipants = participants
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => {
+      if (value.includes("@")) return value;
+      const digits = value.replace(/\D/g, "");
+      return digits ? `${digits}@s.whatsapp.net` : "";
+    })
+    .filter(Boolean);
+  const result = (await create(subject.trim(), normalizedParticipants)) as {
+    id?: string;
     gid?: { user?: string; server?: string } | string;
   };
-  if (typeof result.gid === "string") return result.gid;
-  if (result.gid?.user && result.gid.server)
+  if (typeof result.id === "string" && result.id) return result.id;
+  if (typeof result.gid === "string" && result.gid) return result.gid;
+  if (
+    result.gid &&
+    typeof result.gid === "object" &&
+    result.gid.user &&
+    result.gid.server
+  )
     return `${result.gid.user}@${result.gid.server}`;
-  throw new Error("WhatsApp did not return the new group identifier.");
+  throw new Error(
+    "WhatsApp created the group but returned no group identifier.",
+  );
 }
 
 export async function updateProfileName(

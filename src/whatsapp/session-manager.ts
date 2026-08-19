@@ -313,11 +313,12 @@ async function openWhatsAppSession(
               ? (quoted?.extendedTextMessage as { text: string }).text
               : undefined;
         const senderJid = message.key.fromMe
-          ? ((socket as unknown as { user?: { id?: string } }).user?.id ?? message.key.remoteJid)
-                    : (message.key.participantAlt ??
-              message.key.remoteJidAlt ??
-              message.key.participant ??
-              message.key.remoteJid);
+          ? ((socket as unknown as { user?: { id?: string } }).user?.id ??
+            message.key.remoteJid)
+          : (message.key.participantAlt ??
+            message.key.remoteJidAlt ??
+            message.key.participant ??
+            message.key.remoteJid);
 
         void saveWhatsAppMessageTrace({
           traceId: randomUUID(),
@@ -327,7 +328,9 @@ async function openWhatsAppSession(
           direction: "inbound",
           remoteJid: message.key.remoteJid,
           ...(senderJid ? { senderJid } : {}),
-          ...(text || quotedText ? { normalizedText: [text, quotedText].filter(Boolean).join("\\n") } : {}),
+          ...(text || quotedText
+            ? { normalizedText: [text, quotedText].filter(Boolean).join("\\n") }
+            : {}),
           outcome: text || quotedText ? "received" : "ignored",
           timestamp: receivedAt,
         }).catch(() => undefined);
@@ -338,6 +341,9 @@ async function openWhatsAppSession(
           sourceUserId: message.key.remoteJid,
           sourceSessionId: sessionId,
         }).catch(() => undefined);
+        console.info(
+          `[pappy-omega-mini] WhatsApp command candidate session=${sessionId} chat=${message.key.remoteJid} text=${JSON.stringify(text.slice(0, 160))}`,
+        );
         void routeWhatsAppText({
           workspaceId,
           sessionId,
@@ -354,7 +360,9 @@ async function openWhatsAppSession(
                 sessionId,
                 ...(messageKey.id ? { messageId: messageKey.id } : {}),
                 direction: "outbound",
-                ...(messageKey.remoteJid ? { remoteJid: messageKey.remoteJid } : {}),
+                ...(messageKey.remoteJid
+                  ? { remoteJid: messageKey.remoteJid }
+                  : {}),
                 outcome: "ignored",
                 timestamp: Date.now(),
               }).catch(() => undefined);
@@ -364,21 +372,51 @@ async function openWhatsAppSession(
             updateSession(workspaceId, sessionId, {
               lastCommandProcessedAt: processedAt,
             });
+            void saveWhatsAppMessageTrace({
+              traceId: randomUUID(),
+              workspaceId,
+              sessionId,
+              ...(messageKey.id ? { messageId: messageKey.id } : {}),
+              direction: "inbound",
+              remoteJid: messageKey.remoteJid ?? "unknown",
+              ...(senderJid ? { senderJid } : {}),
+              normalizedText: text.slice(0, 4000),
+              handler: "routeWhatsAppText",
+              outcome: "processed",
+              timestamp: processedAt,
+            }).catch(() => undefined);
             const jid = message.key?.remoteJid ?? "";
             if (typeof reply === "string") {
-              void sendTrackedMessage(jid, { text: reply }).then(() =>
-                saveWhatsAppMessageTrace({
-                  traceId: randomUUID(), workspaceId, sessionId,
-                  ...(messageKey.id ? { messageId: messageKey.id } : {}),
-                  direction: "outbound", remoteJid: jid, normalizedText: reply,
-                  handler: "routeWhatsAppText", outcome: "replied", timestamp: Date.now(),
-                }).catch(() => undefined),
-              ).catch((error) => saveWhatsAppMessageTrace({
-                traceId: randomUUID(), workspaceId, sessionId,
-                ...(messageKey.id ? { messageId: messageKey.id } : {}),
-                direction: "outbound", remoteJid: jid, handler: "routeWhatsAppText",
-                outcome: "failed", failureReason: error instanceof Error ? error.message : String(error), timestamp: Date.now(),
-              }).catch(() => undefined));
+              void sendTrackedMessage(jid, { text: reply })
+                .then(() =>
+                  saveWhatsAppMessageTrace({
+                    traceId: randomUUID(),
+                    workspaceId,
+                    sessionId,
+                    ...(messageKey.id ? { messageId: messageKey.id } : {}),
+                    direction: "outbound",
+                    remoteJid: jid,
+                    normalizedText: reply,
+                    handler: "routeWhatsAppText",
+                    outcome: "replied",
+                    timestamp: Date.now(),
+                  }).catch(() => undefined),
+                )
+                .catch((error) =>
+                  saveWhatsAppMessageTrace({
+                    traceId: randomUUID(),
+                    workspaceId,
+                    sessionId,
+                    ...(messageKey.id ? { messageId: messageKey.id } : {}),
+                    direction: "outbound",
+                    remoteJid: jid,
+                    handler: "routeWhatsAppText",
+                    outcome: "failed",
+                    failureReason:
+                      error instanceof Error ? error.message : String(error),
+                    timestamp: Date.now(),
+                  }).catch(() => undefined),
+                );
               return;
             }
             const mediaReply = reply as WhatsAppReply;
@@ -392,10 +430,27 @@ async function openWhatsAppSession(
             }
           })
           .catch((error) => {
+            const reason =
+              error instanceof Error ? error.message : String(error);
             console.error(
               `[pappy-omega-mini] WhatsApp command/reply failure session=${sessionId}:`,
-              error instanceof Error ? error.message : String(error),
+              reason,
             );
+            void saveWhatsAppMessageTrace({
+              traceId: randomUUID(),
+              workspaceId,
+              sessionId,
+              ...(messageKey.id ? { messageId: messageKey.id } : {}),
+              direction: "inbound",
+              remoteJid: messageKey.remoteJid ?? "unknown",
+              ...(senderJid ? { senderJid } : {}),
+              normalizedText: text.slice(0, 4000),
+              authorized: true,
+              handler: "routeWhatsAppText",
+              outcome: "failed",
+              failureReason: reason.slice(0, 500),
+              timestamp: Date.now(),
+            }).catch(() => undefined);
           });
       }
     },
@@ -412,7 +467,38 @@ async function openWhatsAppSession(
           `[pappy-omega-mini] WhatsApp authenticated open workspace=${workspaceId} session=${sessionId}`,
         );
         markConnected(key);
-        startHeartbeat({ key, workspaceId, sessionId });
+        startHeartbeat({
+          key,
+          workspaceId,
+          sessionId,
+          probe: async () => {
+            const probe = (
+              socket as RuntimeSocket & {
+                sendPresenceUpdate?: (presence: string) => Promise<void>;
+              }
+            ).sendPresenceUpdate;
+            if (typeof probe === "function") {
+              await probe.call(socket, "available");
+              return;
+            }
+            if (!runtimes.has(key))
+              throw new Error("WhatsApp socket is no longer registered.");
+          },
+          onFailure: (error) => {
+            const reason =
+              error instanceof Error ? error.message : String(error);
+            noteError(key, `heartbeat: ${reason}`);
+            updateSession(workspaceId, sessionId, {
+              status: "DEGRADED",
+              lastError: `heartbeat: ${reason}`,
+            });
+            try {
+              socket.end(error);
+            } catch {
+              // The connection.update close handler owns reconnect scheduling.
+            }
+          },
+        });
         updateSession(workspaceId, sessionId, {
           status: "ACTIVE",
           connectedAt: Date.now(),

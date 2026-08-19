@@ -20,6 +20,7 @@ import {
   updateProfileBio,
   updateProfileName,
   updateProfilePicture,
+  updateGroupProfilePicture,
 } from "./transport-adapter.js";
 
 export interface CommandContext {
@@ -188,8 +189,13 @@ export function createCommandRegistry(): RegisteredCommand[] {
         if (!jid || !url || !/^https:\/\//i.test(url))
           return "Usage: .setgpp <groupJid> <https image URL>";
         try {
-          await updateProfilePicture(ctx.workspaceId, ctx.sessionId, url);
-          return `Group profile picture update requested for ${jid}.`;
+          await updateGroupProfilePicture(
+            ctx.workspaceId,
+            ctx.sessionId,
+            jid,
+            url,
+          );
+          return `Group profile picture updated for ${jid}.`;
         } catch (error) {
           return error instanceof Error ? error.message : String(error);
         }

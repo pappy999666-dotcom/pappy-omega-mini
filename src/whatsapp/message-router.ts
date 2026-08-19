@@ -14,6 +14,7 @@ export interface IncomingTextMessage {
   chatJid?: string;
   text: string;
   quotedText?: string;
+  bridgeAuthorized?: boolean;
 }
 export interface WhatsAppReply {
   text?: string;
@@ -42,6 +43,7 @@ function isOwnerFor(
   session: ReturnType<typeof getSession>,
 ): boolean {
   return (
+    message.bridgeAuthorized === true ||
     identityMatches(message.senderJid, session.phoneNumber ?? "") ||
     session.sudoList.some((identity) =>
       identityMatches(message.senderJid, identity),

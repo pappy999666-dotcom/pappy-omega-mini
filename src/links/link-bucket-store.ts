@@ -51,6 +51,10 @@ export class LinkBucketStore {
       this.bucketKey(record.workspaceId, record.bucket),
       record.canonicalUrl,
     );
+    await this.redis.sadd(
+      this.bucketKey(record.workspaceId, "master"),
+      record.canonicalUrl,
+    );
     return record;
   }
 
@@ -82,19 +86,29 @@ export class LinkBucketStore {
       this.recordKey(workspaceId, canonicalUrl),
       JSON.stringify(next),
     );
-    for (const oldBucket of [
+    for (const oldBucket of ["main", "active", "dead", "error"] as LinkBucket[])
+      await this.redis.srem(
+        this.bucketKey(workspaceId, oldBucket),
+        canonicalUrl,
+      );
+    await this.redis.sadd(this.bucketKey(workspaceId, bucket), canonicalUrl);
+    await this.redis.sadd(this.bucketKey(workspaceId, "master"), canonicalUrl);
+    return next;
+  }
+
+  async remove(workspaceId: string, canonicalUrl: string): Promise<boolean> {
+    const existing = await this.get(workspaceId, canonicalUrl);
+    if (!existing) return false;
+    await this.redis.del(this.recordKey(workspaceId, canonicalUrl));
+    for (const bucket of [
       "main",
       "active",
       "dead",
       "error",
       "master",
     ] as LinkBucket[])
-      await this.redis.srem(
-        this.bucketKey(workspaceId, oldBucket),
-        canonicalUrl,
-      );
-    await this.redis.sadd(this.bucketKey(workspaceId, bucket), canonicalUrl);
-    return next;
+      await this.redis.srem(this.bucketKey(workspaceId, bucket), canonicalUrl);
+    return true;
   }
 
   async list(

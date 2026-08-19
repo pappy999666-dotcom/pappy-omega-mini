@@ -3,7 +3,12 @@ import { Redis } from "ioredis";
 import type { Context, Telegraf } from "telegraf";
 import { env } from "../config/env.js";
 import { btn, keyboard, pageText, ui } from "./ui.js";
-import { escapeHtml, infoResponse, successResponse, warningResponse } from "./renderer.js";
+import {
+  escapeHtml,
+  infoResponse,
+  successResponse,
+  warningResponse,
+} from "./renderer.js";
 import {
   countModeratorWarnings,
   countModeratorWarningsForGroup,
@@ -206,11 +211,16 @@ async function restore(ctx: Context, target: string): Promise<boolean> {
   }
 }
 
-async function reconcileModeratorExpiries(bot: Telegraf<Context>, now = Date.now()): Promise<void> {
+async function reconcileModeratorExpiries(
+  bot: Telegraf<Context>,
+  now = Date.now(),
+): Promise<void> {
   const groups = await listDueModeratorGroups(now).catch(() => []);
   for (const group of groups) {
-    const muteExpired = group.groupMuteUntil !== undefined && group.groupMuteUntil <= now;
-    const lockExpired = group.groupLockUntil !== undefined && group.groupLockUntil <= now;
+    const muteExpired =
+      group.groupMuteUntil !== undefined && group.groupMuteUntil <= now;
+    const lockExpired =
+      group.groupLockUntil !== undefined && group.groupLockUntil <= now;
     if (!muteExpired && !lockExpired) continue;
     const next = { ...group };
     if (muteExpired) delete next.groupMuteUntil;
@@ -218,8 +228,10 @@ async function reconcileModeratorExpiries(bot: Telegraf<Context>, now = Date.now
       delete next.groupLockUntil;
       delete next.groupLockReason;
     }
-    const muteStillActive = next.groupMuteUntil !== undefined && next.groupMuteUntil > now;
-    const lockStillActive = next.groupLockUntil !== undefined && next.groupLockUntil > now;
+    const muteStillActive =
+      next.groupMuteUntil !== undefined && next.groupMuteUntil > now;
+    const lockStillActive =
+      next.groupLockUntil !== undefined && next.groupLockUntil > now;
     let success = true;
     if (!muteStillActive && !lockStillActive) {
       try {
@@ -253,7 +265,9 @@ async function reconcileModeratorExpiries(bot: Telegraf<Context>, now = Date.now
       rule: "expiry",
       action: muteExpired ? "group_mute_expired" : "group_lock_expired",
       success,
-      ...(success ? {} : { failureReason: "Telegram setChatPermissions failed" }),
+      ...(success
+        ? {}
+        : { failureReason: "Telegram setChatPermissions failed" }),
       timestamp: now,
     }).catch(() => undefined);
   }
@@ -261,7 +275,10 @@ async function reconcileModeratorExpiries(bot: Telegraf<Context>, now = Date.now
 
 export function startModeratorReconciliation(bot: Telegraf<Context>): void {
   if (moderatorReconciliationTimer) return;
-  moderatorReconciliationTimer = setInterval(() => void reconcileModeratorExpiries(bot), 15_000);
+  moderatorReconciliationTimer = setInterval(
+    () => void reconcileModeratorExpiries(bot),
+    15_000,
+  );
   moderatorReconciliationTimer.unref?.();
   void reconcileModeratorExpiries(bot);
 }
@@ -277,22 +294,38 @@ export function installModeratorProtection(bot: Telegraf<Context>): void {
     if (!id) return next();
     const group = await loadModeratorGroup(id).catch(() => undefined);
     if (!group?.raidEnabled) return next();
-    const message = ctx.message as unknown as { message_id?: number; new_chat_members?: Array<{ id?: number; is_bot?: boolean }> };
-    const joined = (message.new_chat_members ?? []).filter((member) => !member.is_bot && member.id !== undefined);
+    const message = ctx.message as unknown as {
+      message_id?: number;
+      new_chat_members?: Array<{ id?: number; is_bot?: boolean }>;
+    };
+    const joined = (message.new_chat_members ?? []).filter(
+      (member) => !member.is_bot && member.id !== undefined,
+    );
     if (!joined.length) return next();
     const now = Date.now();
     const redis = getProtectionRedis();
     const key = `pappy:moderator:raid:${id}`;
-    for (const member of joined) await redis.zadd(key, now, `${now}:${member.id}:${randomUUID()}`);
-    await redis.zremrangebyscore(key, 0, now - Math.max(10, group.raidWindowSeconds ?? 30) * 1000);
+    for (const member of joined)
+      await redis.zadd(key, now, `${now}:${member.id}:${randomUUID()}`);
+    await redis.zremrangebyscore(
+      key,
+      0,
+      now - Math.max(10, group.raidWindowSeconds ?? 30) * 1000,
+    );
     await redis.expire(key, Math.max(30, (group.raidWindowSeconds ?? 30) * 2));
     const count = await redis.zcard(key);
     const threshold = Math.max(2, group.raidJoinThreshold ?? 8);
-    if (count < threshold || (group.groupLockUntil !== undefined && group.groupLockUntil > now)) return next();
+    if (
+      count < threshold ||
+      (group.groupLockUntil !== undefined && group.groupLockUntil > now)
+    )
+      return next();
     const lockUntil = now + 60_000;
     let success = true;
     try {
-      await ctx.telegram.setChatPermissions(Number(id), { can_send_messages: false });
+      await ctx.telegram.setChatPermissions(Number(id), {
+        can_send_messages: false,
+      });
       group.groupLockUntil = lockUntil;
       group.groupLockReason = `join flood: ${count} joins in ${group.raidWindowSeconds ?? 30}s`;
       group.updatedAt = now;
@@ -301,8 +334,16 @@ export function installModeratorProtection(bot: Telegraf<Context>): void {
       success = false;
     }
     await saveModeratorEvent({
-      eventId: randomUUID(), groupId: id, actorId: "system", rule: "raid", action: "temporary_lockdown",
-      success, ...(success ? {} : { failureReason: "Telegram setChatPermissions failed" }), timestamp: now,
+      eventId: randomUUID(),
+      groupId: id,
+      actorId: "system",
+      rule: "raid",
+      action: "temporary_lockdown",
+      success,
+      ...(success
+        ? {}
+        : { failureReason: "Telegram setChatPermissions failed" }),
+      timestamp: now,
     }).catch(() => undefined);
     return next();
   });
@@ -408,13 +449,20 @@ export function installModeratorProtection(bot: Telegraf<Context>): void {
   });
 }
 
-async function moderatorDashboardText(group: ModeratorGroupRecord): Promise<string> {
+async function moderatorDashboardText(
+  group: ModeratorGroupRecord,
+): Promise<string> {
   const [warnings, events] = await Promise.all([
     countModeratorWarningsForGroup(group.groupId).catch(() => 0),
     listModeratorEvents(group.groupId, 3).catch(() => []),
   ]);
   const recent = events.length
-    ? events.map((event) => `${event.success ? "✅" : "⛔"} ${event.action}${event.targetId ? ` · ${event.targetId}` : ""}`).join("\n")
+    ? events
+        .map(
+          (event) =>
+            `${event.success ? "✅" : "⛔"} ${event.action}${event.targetId ? ` · ${event.targetId}` : ""}`,
+        )
+        .join("\n")
     : "No recent actions.";
   return pageText(
     "Group Moderator",
@@ -423,7 +471,7 @@ async function moderatorDashboardText(group: ModeratorGroupRecord): Promise<stri
       `<b>Group:</b> ${escapeHtml(group.title ?? group.groupId)}\n` +
         `<b>Protection:</b> ${group.enabled ? "ON" : "OFF"} · <b>Anti-link:</b> ${group.antiLink ? "ON" : "OFF"} · <b>Anti-spam:</b> ${group.antiSpam ? "ON" : "OFF"} · <b>Raid:</b> ${group.raidEnabled ? "ON" : "OFF"}\n` +
         `<b>Welcome:</b> ${group.welcomeEnabled ? "ON" : "OFF"} · <b>Goodbye:</b> ${group.goodbyeEnabled ? "ON" : "OFF"}\n` +
-        `<b>Warnings:</b> ${warnings} · <b>Filters:</b> ${group.filters.length} · <b>Staff:</b> ${group.staff.length} · <b>Whitelist:</b> ${group.whitelist.length}\n\n` +
+        `<b>Warnings:</b> ${warnings} · <b>Filters:</b> ${group.filters?.length ?? 0} · <b>Staff:</b> ${group.staff?.length ?? 0} · <b>Whitelist:</b> ${group.whitelist?.length ?? 0}\n\n` +
         `<b>Recent activity</b>\n${escapeHtml(recent)}\n\n` +
         `<i>Reply to a member and use /mute, /unmute, /warn, /ban, or /unban for target actions.</i>`,
     ),
@@ -432,14 +480,37 @@ async function moderatorDashboardText(group: ModeratorGroupRecord): Promise<stri
 
 function moderatorDashboardKeyboard(group: ModeratorGroupRecord) {
   return keyboard([
-    [btn(`🛡 Protection: ${group.enabled ? "ON" : "OFF"}`, "mod:toggle:enabled", group.enabled ? "success" : "danger"), btn("⚡ Quick Protect", "mod:quick-protect", "danger")],
     [
-      btn(`🔗 Anti-link: ${group.antiLink ? "ON" : "OFF"}`, "mod:toggle:antiLink", group.antiLink ? "success" : "primary"),
-      btn(`⚡ Anti-spam: ${group.antiSpam ? "ON" : "OFF"}`, "mod:toggle:antiSpam", group.antiSpam ? "success" : "primary"),
+      btn(
+        `🛡 Protection: ${group.enabled ? "ON" : "OFF"}`,
+        "mod:toggle:enabled",
+        group.enabled ? "success" : "danger",
+      ),
+      btn("⚡ Quick Protect", "mod:quick-protect", "danger"),
     ],
     [
-      btn(`👋 Welcome: ${group.welcomeEnabled ? "ON" : "OFF"}`, "mod:toggle:welcome", group.welcomeEnabled ? "success" : "primary"),
-      btn(`↩ Goodbye: ${group.goodbyeEnabled ? "ON" : "OFF"}`, "mod:toggle:goodbye", group.goodbyeEnabled ? "success" : "primary"),
+      btn(
+        `🔗 Anti-link: ${group.antiLink ? "ON" : "OFF"}`,
+        "mod:toggle:antiLink",
+        group.antiLink ? "success" : "primary",
+      ),
+      btn(
+        `⚡ Anti-spam: ${group.antiSpam ? "ON" : "OFF"}`,
+        "mod:toggle:antiSpam",
+        group.antiSpam ? "success" : "primary",
+      ),
+    ],
+    [
+      btn(
+        `👋 Welcome: ${group.welcomeEnabled ? "ON" : "OFF"}`,
+        "mod:toggle:welcome",
+        group.welcomeEnabled ? "success" : "primary",
+      ),
+      btn(
+        `↩ Goodbye: ${group.goodbyeEnabled ? "ON" : "OFF"}`,
+        "mod:toggle:goodbye",
+        group.goodbyeEnabled ? "success" : "primary",
+      ),
     ],
     [btn("📜 Rules", "mod:view:rules"), btn("🧰 Filters", "mod:view:filters")],
     [btn("⚙ Custom Setup", "mod:view:setup")],
@@ -449,20 +520,29 @@ function moderatorDashboardKeyboard(group: ModeratorGroupRecord) {
   ]);
 }
 
-async function editModeratorDashboard(ctx: Context, group: ModeratorGroupRecord): Promise<void> {
+async function editModeratorDashboard(
+  ctx: Context,
+  group: ModeratorGroupRecord,
+): Promise<void> {
   const text = await moderatorDashboardText(group);
-  await ctx.editMessageText(text, {
-    parse_mode: "HTML",
-    reply_markup: moderatorDashboardKeyboard(group),
-  }).catch(async () => {
-    await ctx.reply(text, {
+  await ctx
+    .editMessageText(text, {
       parse_mode: "HTML",
       reply_markup: moderatorDashboardKeyboard(group),
-    }).catch(() => undefined);
-  });
+    })
+    .catch(async () => {
+      await ctx
+        .reply(text, {
+          parse_mode: "HTML",
+          reply_markup: moderatorDashboardKeyboard(group),
+        })
+        .catch(() => undefined);
+    });
 }
 
-async function callbackModerator(ctx: Context): Promise<ModeratorGroupRecord | undefined> {
+async function callbackModerator(
+  ctx: Context,
+): Promise<ModeratorGroupRecord | undefined> {
   if (!(await requireModerator(ctx))) return undefined;
   return ensureGroup(ctx);
 }
@@ -479,7 +559,12 @@ function callbackMessageId(ctx: Context): number | undefined {
   return message && "message_id" in message ? message.message_id : undefined;
 }
 
-function scheduleDelete(telegram: Context["telegram"], chatId: number, messageId: number | undefined, delayMs = 8_000): void {
+function scheduleDelete(
+  telegram: Context["telegram"],
+  chatId: number,
+  messageId: number | undefined,
+  delayMs = 8_000,
+): void {
   if (!messageId) return;
   setTimeout(() => {
     void telegram.deleteMessage(chatId, messageId).catch(() => undefined);
@@ -552,31 +637,59 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     if (group) await editModeratorDashboard(ctx, group);
   });
 
-  bot.action(/^mod:toggle:(enabled|antiLink|antiSpam|welcome|goodbye|raid)$/, async (ctx) => {
-    const group = await callbackModerator(ctx);
-    if (!group) return;
-    const key = ctx.match[1] as "enabled" | "antiLink" | "antiSpam" | "welcome" | "goodbye" | "raid";
-    const field = key === "welcome" ? "welcomeEnabled" : key === "goodbye" ? "goodbyeEnabled" : key === "raid" ? "raidEnabled" : key;
-    group[field] = !group[field];
-    group.updatedAt = Date.now();
-    await saveModeratorGroup(group);
-    await recordEvent(ctx, { rule: "settings", action: `toggle_${key}`, success: true });
-    await ctx.answerCbQuery(`${key} ${group[field] ? "enabled" : "disabled"}`);
-    await editModeratorDashboard(ctx, group);
-  });
+  bot.action(
+    /^mod:toggle:(enabled|antiLink|antiSpam|welcome|goodbye|raid)$/,
+    async (ctx) => {
+      const group = await callbackModerator(ctx);
+      if (!group) return;
+      const key = ctx.match[1] as
+        "enabled" | "antiLink" | "antiSpam" | "welcome" | "goodbye" | "raid";
+      const field =
+        key === "welcome"
+          ? "welcomeEnabled"
+          : key === "goodbye"
+            ? "goodbyeEnabled"
+            : key === "raid"
+              ? "raidEnabled"
+              : key;
+      group[field] = !group[field];
+      group.updatedAt = Date.now();
+      await saveModeratorGroup(group);
+      await recordEvent(ctx, {
+        rule: "settings",
+        action: `toggle_${key}`,
+        success: true,
+      });
+      await ctx.answerCbQuery(
+        `${key} ${group[field] ? "enabled" : "disabled"}`,
+      );
+      await editModeratorDashboard(ctx, group);
+    },
+  );
 
   bot.action("mod:quick-protect", async (ctx) => {
     const group = await callbackModerator(ctx);
     if (!group) return;
-    const enabled = !(group.enabled && group.antiLink && group.antiSpam && group.raidEnabled);
+    const enabled = !(
+      group.enabled &&
+      group.antiLink &&
+      group.antiSpam &&
+      group.raidEnabled
+    );
     group.enabled = enabled;
     group.antiLink = enabled;
     group.antiSpam = enabled;
     group.raidEnabled = enabled;
     group.updatedAt = Date.now();
     await saveModeratorGroup(group);
-    await recordEvent(ctx, { rule: "settings", action: enabled ? "quick_protect_on" : "quick_protect_off", success: true });
-    await ctx.answerCbQuery(`Quick Protect ${enabled ? "enabled" : "disabled"}`);
+    await recordEvent(ctx, {
+      rule: "settings",
+      action: enabled ? "quick_protect_on" : "quick_protect_off",
+      success: true,
+    });
+    await ctx.answerCbQuery(
+      `Quick Protect ${enabled ? "enabled" : "disabled"}`,
+    );
     await editModeratorDashboard(ctx, group);
   });
 
@@ -584,17 +697,49 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     const group = await callbackModerator(ctx);
     if (!group) return;
     await ctx.answerCbQuery();
-    await ctx.editMessageText(pageText("Custom Setup", infoResponse("Protection Profile", `<b>Protection:</b> ${group.enabled ? "ON" : "OFF"}\n<b>Anti-link:</b> ${group.antiLink ? "ON" : "OFF"}\n<b>Anti-spam:</b> ${group.antiSpam ? "ON" : "OFF"}\n<b>Raid:</b> ${group.raidEnabled ? "ON" : "OFF"}\n<b>Raid threshold:</b> ${group.raidJoinThreshold ?? 8} joins / ${group.raidWindowSeconds ?? 30}s`)), { parse_mode: "HTML", reply_markup: keyboard([[btn(`Raid: ${group.raidEnabled ? "ON" : "OFF"}`, "mod:toggle:raid", group.raidEnabled ? "success" : "primary")], [btn(ui.back, "mod:refresh")]]) }).catch(() => undefined);
+    await ctx
+      .editMessageText(
+        pageText(
+          "Custom Setup",
+          infoResponse(
+            "Protection Profile",
+            `<b>Protection:</b> ${group.enabled ? "ON" : "OFF"}\n<b>Anti-link:</b> ${group.antiLink ? "ON" : "OFF"}\n<b>Anti-spam:</b> ${group.antiSpam ? "ON" : "OFF"}\n<b>Raid:</b> ${group.raidEnabled ? "ON" : "OFF"}\n<b>Raid threshold:</b> ${group.raidJoinThreshold ?? 8} joins / ${group.raidWindowSeconds ?? 30}s`,
+          ),
+        ),
+        {
+          parse_mode: "HTML",
+          reply_markup: keyboard([
+            [
+              btn(
+                `Raid: ${group.raidEnabled ? "ON" : "OFF"}`,
+                "mod:toggle:raid",
+                group.raidEnabled ? "success" : "primary",
+              ),
+            ],
+            [btn(ui.back, "mod:refresh")],
+          ]),
+        },
+      )
+      .catch(() => undefined);
   });
 
   bot.action("mod:view:rules", async (ctx) => {
     const group = await callbackModerator(ctx);
     if (!group) return;
     await ctx.answerCbQuery();
-    await ctx.editMessageText(pageText("Group Rules", infoResponse("Published Rules", group.rules ?? "No group rules have been configured.")), {
-      parse_mode: "HTML",
-      reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
-    });
+    await ctx.editMessageText(
+      pageText(
+        "Group Rules",
+        infoResponse(
+          "Published Rules",
+          group.rules ?? "No group rules have been configured.",
+        ),
+      ),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
+      },
+    );
   });
 
   bot.action("mod:view:filters", async (ctx) => {
@@ -602,23 +747,42 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     if (!group) return;
     await ctx.answerCbQuery();
     const body = group.filters.length
-      ? group.filters.map((entry) => `<code>${escapeHtml(entry.trigger)}</code> → ${escapeHtml(entry.response)}`).join("\n")
+      ? group.filters
+          .map(
+            (entry) =>
+              `<code>${escapeHtml(entry.trigger)}</code> → ${escapeHtml(entry.response)}`,
+          )
+          .join("\n")
       : "No keyword filters configured.";
-    await ctx.editMessageText(pageText("Filters", infoResponse("Keyword Filters", body)), {
-      parse_mode: "HTML",
-      reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
-    });
+    await ctx.editMessageText(
+      pageText("Filters", infoResponse("Keyword Filters", body)),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
+      },
+    );
   });
 
   bot.action("mod:view:warnings", async (ctx) => {
     const group = await callbackModerator(ctx);
     if (!group) return;
     await ctx.answerCbQuery();
-    const count = await countModeratorWarningsForGroup(group.groupId).catch(() => 0);
-    await ctx.editMessageText(pageText("Warnings", infoResponse("Warning Overview", `<b>Total records:</b> ${count}\n\nUse /warns or /warnlist for member-specific records.`)), {
-      parse_mode: "HTML",
-      reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
-    });
+    const count = await countModeratorWarningsForGroup(group.groupId).catch(
+      () => 0,
+    );
+    await ctx.editMessageText(
+      pageText(
+        "Warnings",
+        infoResponse(
+          "Warning Overview",
+          `<b>Total records:</b> ${count}\n\nUse /warns or /warnlist for member-specific records.`,
+        ),
+      ),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
+      },
+    );
   });
 
   bot.action("mod:view:logs", async (ctx) => {
@@ -627,12 +791,20 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     await ctx.answerCbQuery();
     const events = await listModeratorEvents(group.groupId, 15);
     const body = events.length
-      ? events.map((event) => `${event.success ? "✅" : "⛔"} ${escapeHtml(event.action)} · ${escapeHtml(event.targetId ?? "group")}`).join("\n")
+      ? events
+          .map(
+            (event) =>
+              `${event.success ? "✅" : "⛔"} ${escapeHtml(event.action)} · ${escapeHtml(event.targetId ?? "group")}`,
+          )
+          .join("\n")
       : "No moderation events recorded.";
-    await ctx.editMessageText(pageText("Moderation Logs", infoResponse("Recent Actions", body)), {
-      parse_mode: "HTML",
-      reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
-    });
+    await ctx.editMessageText(
+      pageText("Moderation Logs", infoResponse("Recent Actions", body)),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
+      },
+    );
   });
 
   bot.command("mute", async (ctx) => {
@@ -704,7 +876,9 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     if (!group) return;
     const observed = Array.from(new Set(group.knownMembers ?? []));
     if (!observed.length) {
-      await ctx.reply("No observed members are available yet. The bot builds this bounded list from real group traffic.");
+      await ctx.reply(
+        "No observed members are available yet. The bot builds this bounded list from real group traffic.",
+      );
       return;
     }
     const confirmation = createDestructiveConfirmation(ctx, "tagall", "group");
@@ -720,14 +894,25 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
       {
         parse_mode: "HTML",
         reply_markup: keyboard([
-          [btn("📣 Confirm Tag-All", `mod:confirm:tagall:${confirmation.token}`, "danger")],
+          [
+            btn(
+              "📣 Confirm Tag-All",
+              `mod:confirm:tagall:${confirmation.token}`,
+              "danger",
+            ),
+          ],
           [btn("Cancel", `mod:cancel:${confirmation.token}`)],
         ]),
       },
     );
     confirmation.promptMessageId = prompt.message_id;
     destructiveConfirmations.set(confirmation.token, confirmation);
-    scheduleDelete(ctx.telegram, confirmation.chatId, confirmation.sourceMessageId, 12_000);
+    scheduleDelete(
+      ctx.telegram,
+      confirmation.chatId,
+      confirmation.sourceMessageId,
+      12_000,
+    );
   });
 
   bot.command("ban", async (ctx) => {
@@ -735,7 +920,9 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     const id = groupId(ctx);
     const target = targetId(ctx);
     if (!id || !target) {
-      await ctx.reply("Reply to a member or provide a numeric Telegram user ID.");
+      await ctx.reply(
+        "Reply to a member or provide a numeric Telegram user ID.",
+      );
       return;
     }
     const confirmation = createDestructiveConfirmation(ctx, "ban", target);
@@ -751,76 +938,148 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
       {
         parse_mode: "HTML",
         reply_markup: keyboard([
-          [btn("⛔ Confirm Ban", `mod:confirm:ban:${confirmation.token}`, "danger")],
+          [
+            btn(
+              "⛔ Confirm Ban",
+              `mod:confirm:ban:${confirmation.token}`,
+              "danger",
+            ),
+          ],
           [btn("Cancel", `mod:cancel:${confirmation.token}`)],
         ]),
       },
     );
     confirmation.promptMessageId = prompt.message_id;
     destructiveConfirmations.set(confirmation.token, confirmation);
-    scheduleDelete(ctx.telegram, confirmation.chatId, confirmation.sourceMessageId, 12_000);
+    scheduleDelete(
+      ctx.telegram,
+      confirmation.chatId,
+      confirmation.sourceMessageId,
+      12_000,
+    );
   });
 
-  bot.action(/^mod:confirm:(ban|resetwarn|tagall):([a-f0-9-]+)$/, async (ctx) => {
-    if (!(await requireModerator(ctx))) return;
-    const token = ctx.match[2];
-    if (!token) {
-      await ctx.answerCbQuery("Invalid confirmation.", { show_alert: true });
-      return;
-    }
-    const confirmation = consumeDestructiveConfirmation(ctx, token);
-    if (!confirmation || confirmation.action !== ctx.match[1]) {
-      await ctx.answerCbQuery("This confirmation expired or was already used.", { show_alert: true });
-      return;
-    }
-    let ok = true;
-    let detail = "";
-    try {
-      if (confirmation.action === "ban") {
-        await ctx.telegram.banChatMember(Number(confirmation.groupId), Number(confirmation.targetId));
-        detail = `Member ${confirmation.targetId} banned.`;
-      } else if (confirmation.action === "resetwarn") {
-        const deleted = await deleteModeratorWarnings(confirmation.groupId, confirmation.targetId);
-        detail = `Cleared ${deleted} warning record(s) for ${confirmation.targetId}.`;
-      } else {
-        const group = await loadModeratorGroup(confirmation.groupId);
-        const admins = await ctx.telegram.getChatAdministrators(Number(confirmation.groupId));
-        const excluded = new Set([
-          ...(group?.staff ?? []),
-          ...(group?.whitelist ?? []),
-          ...(group?.trustedUsers ?? []),
-          ...admins.map((member) => String(member.user.id)),
-        ]);
-        const members = Array.from(new Set(group?.knownMembers ?? []))
-          .filter((member) => !excluded.has(member))
-          .slice(0, 50);
-        if (!members.length) throw new Error("No eligible observed members are available for tag-all.");
-        const mentions = members.map((member) => `<a href="tg://user?id=${encodeURIComponent(member)}">member</a>`).join(" ");
-        await ctx.telegram.sendMessage(Number(confirmation.groupId), `📣 ${mentions}`, {
-          parse_mode: "HTML",
-          link_preview_options: { is_disabled: true },
-        });
-        detail = `Tagged ${members.length} eligible observed member(s).`;
+  bot.action(
+    /^mod:confirm:(ban|resetwarn|tagall):([a-f0-9-]+)$/,
+    async (ctx) => {
+      if (!(await requireModerator(ctx))) return;
+      const token = ctx.match[2];
+      if (!token) {
+        await ctx.answerCbQuery("Invalid confirmation.", { show_alert: true });
+        return;
       }
-    } catch {
-      ok = false;
-      detail = confirmation.action === "ban" ? "Ban failed; check administrator permissions." : "Clear failed; try again later.";
-    }
-    await recordEvent(ctx, {
-      rule: confirmation.action === "ban" ? "manual" : confirmation.action === "resetwarn" ? "warning" : "tagall",
-      action: confirmation.action === "ban" ? "ban" : confirmation.action === "resetwarn" ? "reset" : "tagall",
-      targetId: confirmation.targetId,
-      success: ok,
-      ...(ok ? {} : { failureReason: detail }),
-    });
-    await ctx.answerCbQuery(ok ? "Completed" : "Action failed", { show_alert: !ok });
-    await ctx.editMessageText(
-      pageText(ok ? "Completed" : "Action Failed", ok ? successResponse("Action Complete", detail) : warningResponse("No Change Applied", detail)),
-      { parse_mode: "HTML", reply_markup: keyboard([[btn(ui.close, "menu:main")]]) },
-    ).catch(() => undefined);
-    scheduleDelete(ctx.telegram, confirmation.chatId, callbackMessageId(ctx), ok ? 8_000 : 12_000);
-    scheduleDelete(ctx.telegram, confirmation.chatId, confirmation.sourceMessageId, 1_000);
-  });
+      const confirmation = consumeDestructiveConfirmation(ctx, token);
+      if (!confirmation || confirmation.action !== ctx.match[1]) {
+        await ctx.answerCbQuery(
+          "This confirmation expired or was already used.",
+          { show_alert: true },
+        );
+        return;
+      }
+      let ok = true;
+      let detail = "";
+      try {
+        if (confirmation.action === "ban") {
+          await ctx.telegram.banChatMember(
+            Number(confirmation.groupId),
+            Number(confirmation.targetId),
+          );
+          detail = `Member ${confirmation.targetId} banned.`;
+        } else if (confirmation.action === "resetwarn") {
+          const deleted = await deleteModeratorWarnings(
+            confirmation.groupId,
+            confirmation.targetId,
+          );
+          detail = `Cleared ${deleted} warning record(s) for ${confirmation.targetId}.`;
+        } else {
+          const group = await loadModeratorGroup(confirmation.groupId);
+          const admins = await ctx.telegram.getChatAdministrators(
+            Number(confirmation.groupId),
+          );
+          const excluded = new Set([
+            ...(group?.staff ?? []),
+            ...(group?.whitelist ?? []),
+            ...(group?.trustedUsers ?? []),
+            ...admins.map((member) => String(member.user.id)),
+          ]);
+          const members = Array.from(new Set(group?.knownMembers ?? []))
+            .filter((member) => !excluded.has(member))
+            .slice(0, 50);
+          if (!members.length)
+            throw new Error(
+              "No eligible observed members are available for tag-all.",
+            );
+          const mentions = members
+            .map(
+              (member) =>
+                `<a href="tg://user?id=${encodeURIComponent(member)}">member</a>`,
+            )
+            .join(" ");
+          await ctx.telegram.sendMessage(
+            Number(confirmation.groupId),
+            `📣 ${mentions}`,
+            {
+              parse_mode: "HTML",
+              link_preview_options: { is_disabled: true },
+            },
+          );
+          detail = `Tagged ${members.length} eligible observed member(s).`;
+        }
+      } catch {
+        ok = false;
+        detail =
+          confirmation.action === "ban"
+            ? "Ban failed; check administrator permissions."
+            : "Clear failed; try again later.";
+      }
+      await recordEvent(ctx, {
+        rule:
+          confirmation.action === "ban"
+            ? "manual"
+            : confirmation.action === "resetwarn"
+              ? "warning"
+              : "tagall",
+        action:
+          confirmation.action === "ban"
+            ? "ban"
+            : confirmation.action === "resetwarn"
+              ? "reset"
+              : "tagall",
+        targetId: confirmation.targetId,
+        success: ok,
+        ...(ok ? {} : { failureReason: detail }),
+      });
+      await ctx.answerCbQuery(ok ? "Completed" : "Action failed", {
+        show_alert: !ok,
+      });
+      await ctx
+        .editMessageText(
+          pageText(
+            ok ? "Completed" : "Action Failed",
+            ok
+              ? successResponse("Action Complete", detail)
+              : warningResponse("No Change Applied", detail),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([[btn(ui.close, "menu:main")]]),
+          },
+        )
+        .catch(() => undefined);
+      scheduleDelete(
+        ctx.telegram,
+        confirmation.chatId,
+        callbackMessageId(ctx),
+        ok ? 8_000 : 12_000,
+      );
+      scheduleDelete(
+        ctx.telegram,
+        confirmation.chatId,
+        confirmation.sourceMessageId,
+        1_000,
+      );
+    },
+  );
 
   bot.action(/^mod:cancel:([a-f0-9-]+)$/, async (ctx) => {
     const token = ctx.match[1];
@@ -830,14 +1089,38 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     }
     const confirmation = consumeDestructiveConfirmation(ctx, token);
     if (!confirmation) {
-      await ctx.answerCbQuery("This confirmation expired or was already used.", { show_alert: true });
+      await ctx.answerCbQuery(
+        "This confirmation expired or was already used.",
+        { show_alert: true },
+      );
       return;
     }
     if (!(await requireModerator(ctx))) return;
     await ctx.answerCbQuery("Cancelled");
-    await ctx.editMessageText(pageText("Cancelled", infoResponse("No Change Applied", "The destructive action was cancelled.")), { parse_mode: "HTML" }).catch(() => undefined);
-    scheduleDelete(ctx.telegram, confirmation.chatId, callbackMessageId(ctx), 2_000);
-    scheduleDelete(ctx.telegram, confirmation.chatId, confirmation.sourceMessageId, 1_000);
+    await ctx
+      .editMessageText(
+        pageText(
+          "Cancelled",
+          infoResponse(
+            "No Change Applied",
+            "The destructive action was cancelled.",
+          ),
+        ),
+        { parse_mode: "HTML" },
+      )
+      .catch(() => undefined);
+    scheduleDelete(
+      ctx.telegram,
+      confirmation.chatId,
+      callbackMessageId(ctx),
+      2_000,
+    );
+    scheduleDelete(
+      ctx.telegram,
+      confirmation.chatId,
+      confirmation.sourceMessageId,
+      1_000,
+    );
   });
 
   bot.command("unban", async (ctx) => {
@@ -1019,27 +1302,47 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     if (!(await requireModerator(ctx))) return;
     const target = targetId(ctx);
     if (!groupId(ctx) || !target) {
-      await ctx.reply("Reply to a member or provide a numeric Telegram user ID.");
+      await ctx.reply(
+        "Reply to a member or provide a numeric Telegram user ID.",
+      );
       return;
     }
-    const confirmation = createDestructiveConfirmation(ctx, "resetwarn", target);
+    const confirmation = createDestructiveConfirmation(
+      ctx,
+      "resetwarn",
+      target,
+    );
     if (!confirmation) return;
     const prompt = await ctx.reply(
       pageText(
         "Clear Warnings",
-        warningResponse("Confirm Clear", `<b>Target:</b> <code>${escapeHtml(target)}</code>\\n\\nThis permanently clears the stored warning records for this member.`),
+        warningResponse(
+          "Confirm Clear",
+          `<b>Target:</b> <code>${escapeHtml(target)}</code>\\n\\nThis permanently clears the stored warning records for this member.`,
+        ),
       ),
       {
         parse_mode: "HTML",
         reply_markup: keyboard([
-          [btn("🧹 Confirm Clear", `mod:confirm:resetwarn:${confirmation.token}`, "danger")],
+          [
+            btn(
+              "🧹 Confirm Clear",
+              `mod:confirm:resetwarn:${confirmation.token}`,
+              "danger",
+            ),
+          ],
           [btn("Cancel", `mod:cancel:${confirmation.token}`)],
         ]),
       },
     );
     confirmation.promptMessageId = prompt.message_id;
     destructiveConfirmations.set(confirmation.token, confirmation);
-    scheduleDelete(ctx.telegram, confirmation.chatId, confirmation.sourceMessageId, 12_000);
+    scheduleDelete(
+      ctx.telegram,
+      confirmation.chatId,
+      confirmation.sourceMessageId,
+      12_000,
+    );
   });
 
   bot.command("rules", async (ctx) => {
@@ -1063,7 +1366,13 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     await saveModeratorGroup(group);
     await recordEvent(ctx, { rule: "rules", action: "draft", success: true });
     await ctx.reply(
-      pageText("Rules Draft", infoResponse("Preview", `<b>${escapeHtml(group.rulesDraft)}</b>\n\nPublish this draft?`)),
+      pageText(
+        "Rules Draft",
+        infoResponse(
+          "Preview",
+          `<b>${escapeHtml(group.rulesDraft)}</b>\n\nPublish this draft?`,
+        ),
+      ),
       {
         parse_mode: "HTML",
         reply_markup: keyboard([
@@ -1078,7 +1387,9 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     const group = await callbackModerator(ctx);
     if (!group) return;
     if (group.groupId !== ctx.match[2]) {
-      await ctx.answerCbQuery("This rules draft belongs to another group.", { show_alert: true });
+      await ctx.answerCbQuery("This rules draft belongs to another group.", {
+        show_alert: true,
+      });
       return;
     }
     if (ctx.match[1] === "cancel") {
@@ -1086,7 +1397,15 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
       group.updatedAt = Date.now();
       await saveModeratorGroup(group);
       await ctx.answerCbQuery("Draft cancelled");
-      await ctx.editMessageText(pageText("Rules", infoResponse("No Change", "The rules draft was discarded.")), { parse_mode: "HTML" }).catch(() => undefined);
+      await ctx
+        .editMessageText(
+          pageText(
+            "Rules",
+            infoResponse("No Change", "The rules draft was discarded."),
+          ),
+          { parse_mode: "HTML" },
+        )
+        .catch(() => undefined);
       return;
     }
     if (!group.rulesDraft) {
@@ -1101,7 +1420,21 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     await saveModeratorGroup(group);
     await recordEvent(ctx, { rule: "rules", action: "publish", success: true });
     await ctx.answerCbQuery("Rules published");
-    await ctx.editMessageText(pageText("Rules", successResponse("Published", `Version ${group.rulesVersion} is now live.`)), { parse_mode: "HTML", reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]) }).catch(() => undefined);
+    await ctx
+      .editMessageText(
+        pageText(
+          "Rules",
+          successResponse(
+            "Published",
+            `Version ${group.rulesVersion} is now live.`,
+          ),
+        ),
+        {
+          parse_mode: "HTML",
+          reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
+        },
+      )
+      .catch(() => undefined);
   });
 
   bot.command("staff", async (ctx) => {
@@ -1139,14 +1472,29 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     const values = args(ctx);
     const action = values[0]?.toLowerCase();
     const member = values[1]?.replace(/^@/, "");
-    if (action === "add" && member) group.trustedUsers = [...new Set([...(group.trustedUsers ?? []), member])];
-    else if (action === "remove" && member) group.trustedUsers = (group.trustedUsers ?? []).filter((id) => id !== member);
+    if (action === "add" && member)
+      group.trustedUsers = [
+        ...new Set([...(group.trustedUsers ?? []), member]),
+      ];
+    else if (action === "remove" && member)
+      group.trustedUsers = (group.trustedUsers ?? []).filter(
+        (id) => id !== member,
+      );
     if (action === "add" || action === "remove") {
       group.updatedAt = Date.now();
       await saveModeratorGroup(group);
-      await recordEvent(ctx, { rule: "trusted", action, ...(member ? { targetId: member } : {}), success: true });
+      await recordEvent(ctx, {
+        rule: "trusted",
+        action,
+        ...(member ? { targetId: member } : {}),
+        success: true,
+      });
     }
-    await ctx.reply(group.trustedUsers?.length ? `Trusted users: ${group.trustedUsers.join(", ")}` : "No trusted users configured.");
+    await ctx.reply(
+      group.trustedUsers?.length
+        ? `Trusted users: ${group.trustedUsers.join(", ")}`
+        : "No trusted users configured.",
+    );
   });
 
   bot.command("whitelist", async (ctx) => {
@@ -1336,7 +1684,10 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
 
 export const moderatorCommandScopes = [
   { command: "moderation", description: "Open group moderator commands" },
-  { command: "tagall", description: "Bounded mention job for observed members" },
+  {
+    command: "tagall",
+    description: "Bounded mention job for observed members",
+  },
   { command: "mute", description: "Mute a replied-to member" },
   { command: "ban", description: "Ban a replied-to member" },
   { command: "unban", description: "Unban a member" },
