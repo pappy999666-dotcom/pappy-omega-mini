@@ -14,6 +14,7 @@ export interface IncomingTextMessage {
   chatJid?: string;
   text: string;
   quotedText?: string;
+  media?: { kind: "image" | "video"; bytes: Buffer; mimeType?: string };
   bridgeAuthorized?: boolean;
 }
 export interface WhatsAppReply {
@@ -28,12 +29,9 @@ export interface WhatsAppReply {
 }
 
 function normalizeIdentity(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/@s\.whatsapp\.net$/, "")
-    .replace(/@c\.us$/, "")
-    .replace(/\D/g, "");
+  const local = value.trim().toLowerCase().split("@")[0] ?? "";
+  const withoutDevice = local.split(":")[0] ?? local;
+  return withoutDevice.replace(/\D/g, "");
 }
 function identityMatches(left: string, right: string): boolean {
   return left === right || normalizeIdentity(left) === normalizeIdentity(right);
@@ -90,6 +88,7 @@ export async function routeWhatsAppText(
     isOwner,
     senderJid: message.senderJid,
     ...(message.chatJid ? { chatJid: message.chatJid } : {}),
+    ...(message.media ? { media: message.media } : {}),
     args: [],
     ...(runtime
       ? {
@@ -121,7 +120,7 @@ export async function routeWhatsAppText(
               payload: enrichedPayload,
               idempotencyKey: `${message.workspaceId}:${message.sessionId}:${kind}:${payloadHash}`,
             });
-            return record.jobId;
+            return record.jobCode ?? record.jobId;
           },
         }
       : {}),

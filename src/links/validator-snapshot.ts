@@ -22,6 +22,7 @@ export async function getValidatorSnapshot(
   });
   const store = new LinkBucketStore(redis);
   try {
+    await store.reconcileMaster(workspaceId);
     const buckets: LinkBucket[] = ["main", "active", "dead", "error", "master"];
     const counts = {} as Record<LinkBucket, number>;
     for (const bucket of buckets)

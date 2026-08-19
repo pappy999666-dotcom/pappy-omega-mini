@@ -1,5 +1,6 @@
 import type { InlineKeyboardMarkup } from "telegraf/types";
 import type { WhatsAppSession } from "../types/domain.js";
+import type { JobRecord } from "../jobs/job-contracts.js";
 import { buildSessionMenu } from "../menus/menu-model.js";
 import { renderTelegramSessionMenu } from "../menus/renderers.js";
 import { infoResponse } from "./renderer.js";
@@ -90,7 +91,11 @@ export function dashboardKeyboard(isAdmin: boolean): InlineKeyboardMarkup {
       btn("⌁ Validator Hub", "bucket:status"),
       btn("🌉 Global Bridge", "bridge:global"),
     ],
-    [btn("◷ Scheduled Jobs", "jobs:list"), btn("⚙ Settings", "settings:menu")],
+    [
+      btn("◷ Scheduled Jobs", "jobs:list"),
+      btn("📺 Live Show", "jobs:live:open", "success"),
+    ],
+    [btn("⚙ Settings", "settings:menu")],
     [btn("◌ Support", "support:menu"), btn("▤ Help", "help:main")],
   ];
   if (isAdmin) rows.push([btn("♛ Admin Panel", "admin:panel")]);
@@ -220,6 +225,25 @@ export function sessionKeyboard(
         ),
     );
   }
+  rows.push([
+    btn(
+      `📥 Collect: ${session.autoCollectLinks ? "ON" : "OFF"}`,
+      `session:${session.sessionId}:auto:collect`,
+      session.autoCollectLinks ? "success" : "danger",
+    ),
+    btn(
+      `🧪 Validate: ${session.autoValidateLinks ? "ON" : "OFF"}`,
+      `session:${session.sessionId}:auto:validate`,
+      session.autoValidateLinks ? "success" : "danger",
+    ),
+  ]);
+  rows.push([
+    btn(
+      `📊 Links ${session.collectedLinkCount ?? 0}/${session.validatedLinkCount ?? 0}`,
+      `session:${session.sessionId}:collect`,
+      "primary",
+    ),
+  ]);
   rows.push([
     btn("↻ Refresh", `session:${session.sessionId}:menu`),
     btn("‹ Sessions", "sessions:list:0"),
@@ -361,6 +385,7 @@ export function workspaceSettingsKeyboard(settings: {
   defaultAutoJoinEnabled: boolean;
   defaultPrefix: string;
   defaultJoinDelayMs: number;
+  defaultJoinMode?: "auto" | "immediate" | "request";
 }): InlineKeyboardMarkup {
   return keyboard([
     [
@@ -380,6 +405,12 @@ export function workspaceSettingsKeyboard(settings: {
       btn(
         `Join delay: ${Math.round(settings.defaultJoinDelayMs / 1000)}s`,
         "settings:delay:cycle",
+      ),
+    ],
+    [
+      btn(
+        `Join mode: ${(settings.defaultJoinMode ?? "auto").toUpperCase()}`,
+        "settings:joinmode:cycle",
       ),
     ],
     [btn("↻ Refresh", "settings:menu")],
@@ -688,7 +719,63 @@ export function adminJobsText(jobs: AdminJobView[]): string {
   );
 }
 
-export function adminJobsKeyboard(jobs: AdminJobView[]): InlineKeyboardMarkup {
+export function jobLiveText(job: JobRecord | undefined): string {
+  if (!job)
+    return pageText(
+      "Live Show",
+      infoResponse(
+        "Job Not Found",
+        "The code is invalid, expired, or belongs to another workspace.",
+      ),
+    );
+  const progress = job.progress;
+  const title = `${job.kind.replace(/-/g, " ").toUpperCase()} · ${job.jobCode ?? job.jobId.slice(0, 8)}`;
+  return pageText(
+    "Live Show",
+    infoResponse(
+      title,
+      `<blockquote><b>State</b> ${escapeHtml(job.state)}
+<b>Code</b> <code>${escapeHtml(job.jobCode ?? "—")}</code>
+<b>Progress</b> ${progress.completed}/${progress.total ?? "—"}
+<b>Success</b> ${progress.success}  <b>Failed</b> ${progress.failed}  <b>Skipped</b> ${progress.skipped}
+<b>Joined</b> ${progress.joined ?? progress.success}  <b>Already member</b> ${progress.alreadyMember ?? 0}
+<b>Requested</b> ${progress.requested ?? 0}  <b>Dead links</b> ${progress.deadLinks ?? 0}  <b>Rate-limit</b> ${progress.rateLimitHits ?? 0}
+<b>Action</b> ${escapeHtml(progress.currentAction ?? "waiting")}
+<b>Target</b> ${escapeHtml(progress.currentGroup ?? progress.currentLink ?? "—")}
+<b>Last result</b> ${escapeHtml(progress.lastResult ?? job.error ?? "—")}</blockquote>
+
+<i>Updates are read from the durable worker record; this view does not simulate progress.</i>`,
+    ),
+  );
+}
+
+export function jobLiveKeyboard(
+  job: JobRecord | undefined,
+): InlineKeyboardMarkup {
+  const code = job?.jobCode ?? "";
+  return keyboard([
+    ...(code ? [[copyBtn("📋 Copy live code", code, "success")]] : []),
+    ...(code ? [[btn("↻ Refresh Live Show", `job:live:${code}`)]] : []),
+    [btn(ui.back, "jobs:list")],
+  ]);
+}
+
+export function adminJobsKeyboard(
+  jobs: Array<{
+    jobId: string;
+    kind: string;
+    state: string;
+    progress: {
+      completed: number;
+      total?: number;
+      success: number;
+      failed: number;
+      skipped: number;
+      retrying: number;
+      rate: number;
+    };
+  }>,
+): InlineKeyboardMarkup {
   const rows: Button[][] = jobs
     .filter((job) =>
       ["QUEUED", "RUNNING", "PAUSED", "RETRYING"].includes(job.state),
@@ -730,12 +817,13 @@ export function workspaceSettingsText(settings: {
   defaultAutoJoinEnabled: boolean;
   defaultPrefix: string;
   defaultJoinDelayMs: number;
+  defaultJoinMode?: "auto" | "immediate" | "request";
 }): string {
   return pageText(
     "Workspace Settings",
     infoResponse(
       "Applies to all owned sessions",
-      `<b>Auto-join:</b> ${settings.defaultAutoJoinEnabled ? "ON" : "OFF"}\n<b>Default prefix:</b> <code>${escapeHtml(settings.defaultPrefix || "none")}</code>\n<b>Join delay:</b> <code>${Math.round(settings.defaultJoinDelayMs / 1000)}s</code>\n\nChanges are persisted and propagated to every session in this workspace.`,
+      `<b>Auto-join:</b> ${settings.defaultAutoJoinEnabled ? "ON" : "OFF"}\n<b>Default prefix:</b> <code>${escapeHtml(settings.defaultPrefix || "none")}</code>\n<b>Join delay:</b> <code>${Math.round(settings.defaultJoinDelayMs / 1000)}s</code>\n<b>Join mode:</b> <code>${escapeHtml((settings.defaultJoinMode ?? "auto").toUpperCase())}</code>\n\nAUTO uses Baileys’ response: immediate joins stay joined, approval-required invites are tracked as pending, and dead links are returned to Main.`,
     ),
   );
 }

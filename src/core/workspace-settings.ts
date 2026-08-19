@@ -11,6 +11,7 @@ export interface WorkspaceSettings {
   defaultJoinBatchCycles: number;
   defaultJoinMaxConcurrency: number;
   defaultJoinRetryLimit: number;
+  defaultJoinMode?: "auto" | "immediate" | "request";
   timezone: string;
   updatedAt: number;
 }
@@ -42,6 +43,7 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
       defaultJoinBatchCycles: existing.defaultJoinBatchCycles ?? 1,
       defaultJoinMaxConcurrency: existing.defaultJoinMaxConcurrency ?? 2,
       defaultJoinRetryLimit: existing.defaultJoinRetryLimit ?? 2,
+      defaultJoinMode: existing.defaultJoinMode ?? "auto",
     };
   const created: WorkspaceSettings = {
     workspaceId,
@@ -52,6 +54,7 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
     defaultJoinBatchCycles: 1,
     defaultJoinMaxConcurrency: 2,
     defaultJoinRetryLimit: 2,
+    defaultJoinMode: "auto",
     timezone: "UTC",
     updatedAt: Date.now(),
   };
@@ -118,6 +121,11 @@ export function updateWorkspaceSettings(
         ),
       ),
     ),
+    defaultJoinMode:
+      patch.defaultJoinMode === "immediate" ||
+      patch.defaultJoinMode === "request"
+        ? patch.defaultJoinMode
+        : "auto",
     updatedAt: Date.now(),
   };
   settings.set(workspaceId, next);

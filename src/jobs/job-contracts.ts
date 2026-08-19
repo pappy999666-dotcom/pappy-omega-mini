@@ -39,10 +39,21 @@ export interface JobProgress {
   rate: number;
   elapsedMs: number;
   etaMs?: number;
+  rateLimitHits?: number;
+  rateLimitStopAt?: number;
+  requested?: number;
+  alreadyMember?: number;
+  deadLinks?: number;
+  joined?: number;
+  currentLink?: string;
+  currentGroup?: string;
+  currentAction?: string;
+  lastResult?: string;
 }
 
 export interface JobRecord<TPayload = Record<string, unknown>> {
   jobId: string;
+  jobCode?: string;
   idempotencyKey: string;
   workspaceId: string;
   sessionId?: string;

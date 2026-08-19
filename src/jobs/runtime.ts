@@ -1,8 +1,17 @@
+import { createHash } from "node:crypto";
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
-import { LinkBucketStore } from "../links/link-bucket-store.js";
+import {
+  LinkBucketStore,
+  type LinkRecord,
+} from "../links/link-bucket-store.js";
 import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
-import { listSessions } from "../core/session-registry.js";
+import {
+  getSession,
+  getWorkspaceDefaults,
+  listSessions,
+  updateSession,
+} from "../core/session-registry.js";
 import {
   sendGroupMentions,
   sendGroupStatus,
@@ -12,6 +21,7 @@ import {
 import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
 import { createDefaultPreviewManager } from "../preview/default-adapter.js";
+import { joinWhatsAppInvite } from "./join-operation.js";
 
 interface LinkValidationPayload {
   urls?: string[];
@@ -62,9 +72,23 @@ function classifyJoinFailure(error: unknown): {
 }
 
 let activeRuntime: JobOrchestrator | undefined;
+let activeBuckets: LinkBucketStore | undefined;
 
 export function getWorkerRuntime(): JobOrchestrator | undefined {
   return activeRuntime;
+}
+
+export async function purgeRuntimeSessionData(
+  workspaceId: string,
+  sessionId: string,
+): Promise<{ jobs: number; links: number }> {
+  const jobs = activeRuntime
+    ? await activeRuntime.purgeSession(workspaceId, sessionId)
+    : 0;
+  const links = activeBuckets
+    ? await activeBuckets.removeSourceSession(workspaceId, sessionId)
+    : 0;
+  return { jobs, links };
 }
 
 export function startWorkerRuntime(): JobOrchestrator {
@@ -73,6 +97,7 @@ export function startWorkerRuntime(): JobOrchestrator {
   activeRuntime = orchestrator;
   const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
   const buckets = new LinkBucketStore(redis);
+  activeBuckets = buckets;
   const previewManager = createDefaultPreviewManager(redis);
   orchestrator.addCloseHook(async () => {
     await redis.quit();
@@ -124,6 +149,34 @@ export function startWorkerRuntime(): JobOrchestrator {
                 : {}),
             },
           });
+          const currentSession = getSession(
+            context.job.workspaceId,
+            sourceSessionId,
+          );
+          updateSession(context.job.workspaceId, sourceSessionId, {
+            validatedLinkCount: (currentSession.validatedLinkCount ?? 0) + 1,
+            lastLinkValidatedAt: Date.now(),
+          });
+          if (currentSession.autoJoinEnabled && activeRuntime) {
+            const defaults = getWorkspaceDefaults(context.job.workspaceId);
+            const autoJoinHash = createHash("sha256")
+              .update(
+                `${context.job.workspaceId}:${sourceSessionId}:${canonicalUrl}`,
+              )
+              .digest("hex");
+            await activeRuntime.enqueue({
+              workspaceId: context.job.workspaceId,
+              sessionId: sourceSessionId,
+              kind: "join-manager",
+              payload: {
+                targetCount: 1,
+                delayMs: defaults.defaultJoinDelayMs,
+                requestMode: defaults.defaultJoinMode ?? "auto",
+                sourceSessionId,
+              },
+              idempotencyKey: `auto-join:${context.job.workspaceId}:${sourceSessionId}:${autoJoinHash}`,
+            });
+          }
           return { status: "success" as const };
         } catch (error) {
           const message =
@@ -191,80 +244,177 @@ export function startWorkerRuntime(): JobOrchestrator {
     const socket = getWhatsAppSocket(
       context.job.workspaceId,
       sessionId,
-    ) as typeof getWhatsAppSocket extends (...args: never[]) => infer R
-      ? R & { groupAcceptInvite: (code: string) => Promise<unknown> }
-      : never;
+    ) as unknown as {
+      groupFetchAllParticipating?: () => Promise<Record<string, unknown>>;
+      groupGetInviteInfo?: (code: string) => Promise<{
+        id?: string;
+        subject?: string;
+        size?: number;
+        participantsCount?: number;
+      }>;
+      groupAcceptInvite?: (code: string) => Promise<string | undefined>;
+    };
     const payload = context.job.payload as {
       targetCount?: number;
       delayMs?: number;
+      requestMode?: "auto" | "immediate" | "request";
     };
     const active = await buckets.list(
       context.job.workspaceId,
       "active",
       0,
-      Math.max(1, payload.targetCount ?? 100),
+      Math.max(
+        1,
+        Math.min(
+          10000,
+          payload.targetCount && payload.targetCount > 0
+            ? payload.targetCount
+            : 10000,
+        ),
+      ),
     );
     const records = active.records.filter(
       (record) =>
         !record.sourceSessionId || record.sourceSessionId === sessionId,
     );
+    let rateLimitHits = 0;
+    let requested = 0;
+    let alreadyMember = 0;
+    let deadLinks = 0;
+    let joined = 0;
+    let lastAttemptAt = 0;
+    const delayMs = Math.max(
+      1000,
+      Math.min(600000, Number(payload.delayMs ?? 5000)),
+    );
     return runBoundedBatch({
       items: records,
       concurrency: 1,
       context,
-      processItem: async (record) => {
-        const inviteCode =
-          record.metadata?.inviteCode ??
-          record.canonicalUrl.match(
-            /chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/,
-          )?.[1];
-        if (!inviteCode) {
-          await buckets.move(
-            context.job.workspaceId,
-            record.canonicalUrl,
-            "dead",
-            { validationError: "No WhatsApp invite code found." },
-          );
-          return { status: "failed" as const };
+      shouldStop: () => rateLimitHits >= 5,
+      processItem: async (record, signal) => {
+        if (signal.aborted) return { status: "skipped" as const };
+        const now = Date.now();
+        if (lastAttemptAt) {
+          const wait = Math.max(0, delayMs - (now - lastAttemptAt));
+          if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
         }
-        try {
-          await socket.groupAcceptInvite(inviteCode);
+        lastAttemptAt = Date.now();
+        await context.report({
+          currentLink: record.canonicalUrl,
+          currentAction: "checking invite",
+        });
+        const result = await joinWhatsAppInvite(socket, record.canonicalUrl);
+        const joinClassification: NonNullable<
+          LinkRecord["metadata"]
+        >["joinClassification"] = result.success
+          ? "joined"
+          : result.alreadyMember
+            ? "already-member"
+            : result.requestRequired
+              ? "request-required"
+              : "failed";
+        const metadata: LinkRecord["metadata"] = {
+          ...record.metadata,
+          ...(result.jid ? { groupJid: result.jid } : {}),
+          ...(result.title ? { groupTitle: result.title } : {}),
+          joinClassification,
+          joinRetryable: false,
+        };
+        if (result.success) {
+          joined += 1;
           await buckets.move(
             context.job.workspaceId,
             record.canonicalUrl,
             "active",
-            { lastCheckedAt: Date.now() },
+            {
+              lastCheckedAt: Date.now(),
+              metadata,
+            },
           );
-          const delayMs = Math.max(
-            0,
-            Math.min(600000, Number(payload.delayMs ?? 0)),
-          );
-          if (delayMs)
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await context.report({
+            joined,
+            lastResult: `Joined ${result.title ?? result.jid ?? record.canonicalUrl}`,
+            currentAction: "joined",
+          });
           return { status: "success" as const };
-        } catch (error) {
-          const classified = classifyJoinFailure(error);
-          if (classified.classification === "already-member") {
-            await buckets.move(
-              context.job.workspaceId,
-              record.canonicalUrl,
-              "active",
-              {
-                lastCheckedAt: Date.now(),
-                metadata: {
-                  ...record.metadata,
-                  joinClassification: classified.classification,
-                  joinRetryable: false,
-                },
+        }
+        if (result.alreadyMember) {
+          alreadyMember += 1;
+          await buckets.move(
+            context.job.workspaceId,
+            record.canonicalUrl,
+            "active",
+            {
+              lastCheckedAt: Date.now(),
+              metadata,
+            },
+          );
+          await context.report({
+            alreadyMember,
+            lastResult: `Already joined ${result.title ?? result.jid ?? record.canonicalUrl}`,
+            currentAction: "already member",
+          });
+          return { status: "skipped" as const };
+        }
+        const classified = classifyJoinFailure(result.error ?? "Join failed");
+        if (result.requestRequired) {
+          requested += 1;
+          await buckets.move(
+            context.job.workspaceId,
+            record.canonicalUrl,
+            "active",
+            {
+              lastCheckedAt: Date.now(),
+              validationError: "Join request sent or approval required.",
+              metadata: {
+                ...metadata,
+                joinClassification: "request-required",
+                joinRetryable: true,
               },
-            );
-            return { status: "success" as const };
-          }
-          if (classified.retryable) {
-            await context.report({
-              retrying: (context.job.progress.retrying ?? 0) + 1,
-            });
-          }
+            },
+          );
+          await context.report({
+            requested,
+            lastResult: `Request pending for ${result.title ?? result.jid ?? record.canonicalUrl}`,
+            currentAction: "request pending",
+          });
+          return { status: "skipped" as const };
+        }
+        if (classified.classification === "rate-limit") {
+          rateLimitHits += 1;
+          await context.report({
+            retrying: (context.job.progress.retrying ?? 0) + 1,
+            rateLimitHits,
+            rateLimitStopAt: 5,
+            lastResult: `Rate limited after ${rateLimitHits} attempt(s)`,
+            currentAction:
+              rateLimitHits >= 5 ? "stopped at rate limit" : "cooling down",
+          });
+        }
+        if (classified.classification === "invalid-invite") {
+          deadLinks += 1;
+          await buckets.move(
+            context.job.workspaceId,
+            record.canonicalUrl,
+            "main",
+            {
+              validationError:
+                "Dead or revoked invite returned to Main for re-validation.",
+              lastCheckedAt: Date.now(),
+              metadata: {
+                ...metadata,
+                joinClassification: "dead-link",
+                joinRetryable: true,
+              },
+            },
+          );
+          await context.report({
+            deadLinks,
+            lastResult: `Dead link returned to Main: ${record.canonicalUrl}`,
+            currentAction: "returned to main",
+          });
+        } else {
           await buckets.move(
             context.job.workspaceId,
             record.canonicalUrl,
@@ -272,15 +422,15 @@ export function startWorkerRuntime(): JobOrchestrator {
             {
               validationError: classified.message.slice(0, 240),
               metadata: {
-                ...record.metadata,
+                ...metadata,
                 joinClassification: classified.classification,
                 joinRetryable: classified.retryable,
               },
               lastCheckedAt: Date.now(),
             },
           );
-          return { status: "failed" as const };
         }
+        return { status: "failed" as const };
       },
     });
   });
@@ -293,21 +443,41 @@ export function startWorkerRuntime(): JobOrchestrator {
         groups?: string[];
         text?: string;
         count?: number;
+        delayMs?: number;
       };
-      const groups =
+      const baseGroups =
         kind === "gstatus"
-          ? Array.from(
-              { length: Math.max(1, Math.min(20, payload.count ?? 1)) },
-              () => payload.groups?.[0],
-            ).filter((jid): jid is string => Boolean(jid))
+          ? [payload.groups?.[0]].filter((jid): jid is string => Boolean(jid))
           : (payload.groups ?? []);
+      const repeat =
+        kind === "gstatus" || kind === "allstatus" || kind === "allchat"
+          ? Math.max(1, Math.min(20, Number(payload.count ?? 1)))
+          : 1;
+      const groups = baseGroups.flatMap((jid) =>
+        Array.from({ length: repeat }, () => jid),
+      );
       const text = payload.text?.trim();
       if (!text) throw new Error(`${kind} requires a non-empty text payload.`);
+      const delayMs = Math.max(
+        1500,
+        Math.min(120000, Number(payload.delayMs ?? 2500)),
+      );
+      let lastPostAt = 0;
       return runBoundedBatch({
         items: groups,
         concurrency: 1,
         context,
-        processItem: async (jid) => {
+        processItem: async (jid, signal) => {
+          if (signal.aborted) return { status: "skipped" as const };
+          if (lastPostAt) {
+            const wait = Math.max(0, delayMs - (Date.now() - lastPostAt));
+            if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+          }
+          lastPostAt = Date.now();
+          await context.report({
+            currentGroup: jid,
+            currentAction: `posting ${kind}`,
+          });
           try {
             if (kind === "gstatus" || kind === "allstatus")
               await sendGroupStatus(context.job.workspaceId, sessionId, jid, {
@@ -330,8 +500,22 @@ export function startWorkerRuntime(): JobOrchestrator {
                 payload.count,
                 previewManager,
               );
+            await context.report({
+              currentGroup: jid,
+              currentAction: "posted",
+              lastResult: `${kind} posted to ${jid}`,
+            });
             return { status: "success" as const };
-          } catch {
+          } catch (error) {
+            await context.report({
+              currentGroup: jid,
+              currentAction: "soft failure",
+              lastResult:
+                `${kind} skipped ${jid}: ${error instanceof Error ? error.message : String(error)}`.slice(
+                  0,
+                  500,
+                ),
+            });
             return { status: "failed" as const };
           }
         },

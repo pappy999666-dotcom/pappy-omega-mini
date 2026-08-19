@@ -3,7 +3,7 @@ dist/
 .env
 .env.*
 !.env.example
-storage/sessions/
+storage/
 data/media/
 *.log
 .DS_Store

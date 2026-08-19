@@ -23,7 +23,11 @@ export interface LinkRecord {
       | "invalid-invite"
       | "forbidden"
       | "rate-limit"
-      | "transport";
+      | "transport"
+      | "request-required"
+      | "joined"
+      | "dead-link"
+      | "failed";
     joinRetryable?: boolean;
   };
   validationError?: string;
@@ -133,6 +137,64 @@ export class LinkBucketStore {
 
   async count(workspaceId: string, bucket: LinkBucket): Promise<number> {
     return this.redis.scard(this.bucketKey(workspaceId, bucket));
+  }
+
+  async listAll(workspaceId: string): Promise<LinkRecord[]> {
+    const records: LinkRecord[] = [];
+    let cursor = 0;
+    do {
+      const [nextCursor, urls] = await this.redis.sscan(
+        this.bucketKey(workspaceId, "master"),
+        cursor,
+        "COUNT",
+        500,
+      );
+      for (const url of urls) {
+        const record = await this.get(workspaceId, url);
+        if (record) records.push(record);
+      }
+      cursor = Number(nextCursor);
+    } while (cursor !== 0);
+    return records;
+  }
+
+  async removeSourceSession(
+    workspaceId: string,
+    sessionId: string,
+  ): Promise<number> {
+    const records = await this.listAll(workspaceId);
+    let removed = 0;
+    for (const record of records) {
+      if (
+        record.sourceSessionId === sessionId &&
+        (await this.remove(workspaceId, record.canonicalUrl))
+      )
+        removed += 1;
+    }
+    return removed;
+  }
+
+  async reconcileMaster(workspaceId: string): Promise<number> {
+    let added = 0;
+    for (const bucket of ["main", "active", "dead", "error"] as LinkBucket[]) {
+      let cursor = 0;
+      do {
+        const [nextCursor, urls] = await this.redis.sscan(
+          this.bucketKey(workspaceId, bucket),
+          cursor,
+          "COUNT",
+          500,
+        );
+        if (urls.length) {
+          added += await this.redis.sadd(
+            this.bucketKey(workspaceId, "master"),
+            ...urls,
+          );
+        }
+        cursor = Number(nextCursor);
+      } while (cursor !== 0);
+    }
+    return added;
   }
 
   private recordKey(workspaceId: string, canonicalUrl: string): string {

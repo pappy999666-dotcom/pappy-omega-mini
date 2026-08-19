@@ -79,6 +79,7 @@ export async function updateProfilePicture(
   await update(
     ownJid(socket),
     Buffer.isBuffer(imageUrl) ? imageUrl : { url: imageUrl },
+    { hd: true },
   );
 }
 
@@ -96,6 +97,7 @@ export async function updateGroupProfilePicture(
   await update(
     groupJid,
     Buffer.isBuffer(imageUrl) ? imageUrl : { url: imageUrl },
+    { hd: true },
   );
 }
 
@@ -115,7 +117,8 @@ export async function createWhatsAppGroup(
   subject: string,
   participants: string[] = [],
 ): Promise<string> {
-  const create = method(socketFor(workspaceId, sessionId), "groupCreate");
+  const socket = socketFor(workspaceId, sessionId);
+  const create = method(socket, "groupCreate");
   if (!create) throw new Error("Unsupported capability: groupCreate");
   const normalizedParticipants = participants
     .map((value) => value.trim())
@@ -126,6 +129,9 @@ export async function createWhatsAppGroup(
       return digits ? `${digits}@s.whatsapp.net` : "";
     })
     .filter(Boolean);
+  const self = ownJid(socket);
+  if (!normalizedParticipants.length && self && !self.endsWith("@lid"))
+    normalizedParticipants.push(self);
   const result = (await create(subject.trim(), normalizedParticipants)) as {
     id?: string;
     gid?: { user?: string; server?: string } | string;
@@ -142,6 +148,31 @@ export async function createWhatsAppGroup(
   throw new Error(
     "WhatsApp created the group but returned no group identifier.",
   );
+}
+
+export async function updateGroupDescription(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  description: string,
+): Promise<void> {
+  const update = method(
+    socketFor(workspaceId, sessionId),
+    "groupUpdateDescription",
+  );
+  if (!update) throw new Error("Unsupported capability: groupDescription");
+  await update(groupJid, description.trim());
+}
+
+export async function getGroupInviteCode(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+): Promise<string | undefined> {
+  const get = method(socketFor(workspaceId, sessionId), "groupInviteCode");
+  if (!get) throw new Error("Unsupported capability: groupInviteLink");
+  const result = await get(groupJid);
+  return typeof result === "string" ? result : undefined;
 }
 
 export async function updateProfileName(

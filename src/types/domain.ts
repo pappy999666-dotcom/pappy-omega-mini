@@ -37,6 +37,12 @@ export interface WhatsAppSession {
   prefix: string;
   sudoList: string[];
   autoJoinEnabled: boolean;
+  autoCollectLinks?: boolean;
+  autoValidateLinks?: boolean;
+  collectedLinkCount?: number;
+  validatedLinkCount?: number;
+  lastLinkCollectedAt?: number;
+  lastLinkValidatedAt?: number;
   connectedAt?: number;
   lastHealthyAt?: number;
   lastMessageReceivedAt?: number;

@@ -51,6 +51,18 @@ export async function listValidatorBucket(
   });
 }
 
+export async function listAllValidatorBucket(
+  workspaceId: string,
+  bucket: ValidatorBucket,
+): Promise<LinkRecord[]> {
+  return withStore(async (store) =>
+    (await listFromStore(store, workspaceId, bucket)).sort(
+      (a, b) =>
+        (b.lastCheckedAt ?? b.firstSeenAt) - (a.lastCheckedAt ?? a.firstSeenAt),
+    ),
+  );
+}
+
 export async function purgeValidatorBucket(
   workspaceId: string,
   bucket: ValidatorBucket,

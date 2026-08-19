@@ -141,25 +141,30 @@ interface PairingRequestDocument extends mongoose.Document {
   updatedAt: number;
 }
 
-const whatsappMessageTraceSchema = new mongoose.Schema<WhatsAppMessageTraceDocument>(
-  {
-    traceId: { type: String, required: true, unique: true },
-    workspaceId: { type: String, required: true, index: true },
-    sessionId: { type: String, required: true, index: true },
-    messageId: String,
-    direction: { type: String, required: true },
-    remoteJid: String,
-    senderJid: String,
-    normalizedText: String,
-    authorized: Boolean,
-    handler: String,
-    outcome: { type: String, required: true },
-    failureReason: String,
-    timestamp: { type: Number, required: true, index: true },
-  },
-  { collection: "whatsapp_message_traces", versionKey: false },
-);
-whatsappMessageTraceSchema.index({ workspaceId: 1, sessionId: 1, timestamp: -1 });
+const whatsappMessageTraceSchema =
+  new mongoose.Schema<WhatsAppMessageTraceDocument>(
+    {
+      traceId: { type: String, required: true, unique: true },
+      workspaceId: { type: String, required: true, index: true },
+      sessionId: { type: String, required: true, index: true },
+      messageId: String,
+      direction: { type: String, required: true },
+      remoteJid: String,
+      senderJid: String,
+      normalizedText: String,
+      authorized: Boolean,
+      handler: String,
+      outcome: { type: String, required: true },
+      failureReason: String,
+      timestamp: { type: Number, required: true, index: true },
+    },
+    { collection: "whatsapp_message_traces", versionKey: false },
+  );
+whatsappMessageTraceSchema.index({
+  workspaceId: 1,
+  sessionId: 1,
+  timestamp: -1,
+});
 
 const supportTicketSchema = new mongoose.Schema<SupportTicketDocument>(
   {
@@ -237,7 +242,13 @@ const sessionSchema = new mongoose.Schema<SessionDocument>(
     status: { type: String, required: true, index: true },
     prefix: { type: String, required: true },
     sudoList: { type: [String], default: [] },
-    autoJoinEnabled: { type: Boolean, required: true },
+    autoJoinEnabled: { type: Boolean, required: true, default: false },
+    autoCollectLinks: { type: Boolean, default: true },
+    autoValidateLinks: { type: Boolean, default: false },
+    collectedLinkCount: { type: Number, default: 0 },
+    validatedLinkCount: { type: Number, default: 0 },
+    lastLinkCollectedAt: Number,
+    lastLinkValidatedAt: Number,
     connectedAt: Number,
     lastHealthyAt: Number,
     lastMessageReceivedAt: Number,
@@ -422,7 +433,10 @@ export async function connectMongo(): Promise<typeof mongoose> {
 function whatsappMessageTraceModel(): Model<WhatsAppMessageTraceDocument> {
   return (
     mongoose.models.WhatsAppMessageTrace ??
-    mongoose.model<WhatsAppMessageTraceDocument>("WhatsAppMessageTrace", whatsappMessageTraceSchema)
+    mongoose.model<WhatsAppMessageTraceDocument>(
+      "WhatsAppMessageTrace",
+      whatsappMessageTraceSchema,
+    )
   );
 }
 
@@ -715,10 +729,17 @@ export async function listModeratorGroups(): Promise<ModeratorGroupRecord[]> {
     .lean<ModeratorGroupRecord[]>()
     .exec();
 }
-export async function listDueModeratorGroups(now = Date.now()): Promise<ModeratorGroupRecord[]> {
+export async function listDueModeratorGroups(
+  now = Date.now(),
+): Promise<ModeratorGroupRecord[]> {
   await connectMongo();
   return moderatorGroupModel()
-    .find({ $or: [{ groupMuteUntil: { $lte: now } }, { groupLockUntil: { $lte: now } }] })
+    .find({
+      $or: [
+        { groupMuteUntil: { $lte: now } },
+        { groupLockUntil: { $lte: now } },
+      ],
+    })
     .lean<ModeratorGroupRecord[]>()
     .exec();
 }
@@ -780,6 +801,17 @@ export async function saveWhatsAppMessageTrace(
 ): Promise<void> {
   await connectMongo();
   await whatsappMessageTraceModel().create(record);
+}
+
+export async function purgeWhatsAppSessionTraces(
+  workspaceId: string,
+  sessionId: string,
+): Promise<number> {
+  await connectMongo();
+  const result = await whatsappMessageTraceModel()
+    .deleteMany({ workspaceId, sessionId })
+    .exec();
+  return result.deletedCount ?? 0;
 }
 
 export async function saveModeratorEvent(

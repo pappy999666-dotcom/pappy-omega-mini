@@ -10,6 +10,7 @@ export interface BoundedBatchOptions<T> {
   concurrency: number;
   context: WorkerContext;
   processItem: (item: T, signal: AbortSignal) => Promise<BatchItemResult>;
+  shouldStop?: () => boolean;
 }
 
 export async function runBoundedBatch<T>(
@@ -25,6 +26,10 @@ export async function runBoundedBatch<T>(
 
   const next = async (): Promise<void> => {
     while (true) {
+      if (options.shouldStop?.()) {
+        controller.abort();
+        return;
+      }
       await options.context.waitIfPaused();
       if (options.context.isCancellationRequested()) {
         controller.abort();

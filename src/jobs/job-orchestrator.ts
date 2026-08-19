@@ -13,6 +13,7 @@ import type {
 
 const QUEUE_NAME = "pappy-omega-mini-jobs";
 const STORE_PREFIX = "pappy-omega-mini:job:";
+const CODE_PREFIX = "pappy-omega-mini:job-code:";
 
 export class RedisJobStore {
   constructor(private readonly redis: Redis) {}
@@ -22,6 +23,16 @@ export class RedisJobStore {
     return value ? (JSON.parse(value) as JobRecord) : undefined;
   }
 
+  async getByCode(
+    workspaceId: string,
+    code: string,
+  ): Promise<JobRecord | undefined> {
+    const jobId = await this.redis.get(
+      `${CODE_PREFIX}${workspaceId}:${code.toUpperCase()}`,
+    );
+    return jobId ? this.get(jobId) : undefined;
+  }
+
   async set(record: JobRecord): Promise<void> {
     await this.redis.set(
       `${STORE_PREFIX}${record.jobId}`,
@@ -29,7 +40,7 @@ export class RedisJobStore {
     );
   }
 
-  async list(limit = 100): Promise<JobRecord[]> {
+  async listAll(): Promise<JobRecord[]> {
     let cursor = "0";
     const keys: string[] = [];
     do {
@@ -38,25 +49,31 @@ export class RedisJobStore {
         "MATCH",
         `${STORE_PREFIX}*`,
         "COUNT",
-        Math.max(25, limit),
+        250,
       );
       cursor = result[0];
       keys.push(...result[1]);
-    } while (cursor !== "0" && keys.length < limit * 2);
-    const records = (
+    } while (cursor !== "0");
+    return (
       await Promise.all(
-        keys
-          .slice(0, limit * 2)
-          .map((key) =>
-            this.redis
-              .get(key)
-              .then((value) =>
-                value ? (JSON.parse(value) as JobRecord) : undefined,
-              ),
-          ),
+        keys.map((key) =>
+          this.redis
+            .get(key)
+            .then((value) =>
+              value ? (JSON.parse(value) as JobRecord) : undefined,
+            ),
+        ),
       )
     ).filter((record): record is JobRecord => Boolean(record));
+  }
+
+  async list(limit = 100): Promise<JobRecord[]> {
+    const records = await this.listAll();
     return records.sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+  }
+
+  async delete(jobId: string): Promise<void> {
+    await this.redis.del(`${STORE_PREFIX}${jobId}`);
   }
 
   async update(
@@ -137,6 +154,7 @@ export class JobOrchestrator {
     }
     const record: JobRecord<TPayload> = {
       jobId: randomUUID(),
+      jobCode: await this.reserveJobCode(input.workspaceId),
       idempotencyKey: input.idempotencyKey,
       workspaceId: input.workspaceId,
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
@@ -150,6 +168,13 @@ export class JobOrchestrator {
       createdAt: Date.now(),
     };
     await this.store.set(record);
+    if (record.jobCode)
+      await this.redis.set(
+        `${CODE_PREFIX}${input.workspaceId}:${record.jobCode}`,
+        record.jobId,
+        "EX",
+        60 * 60 * 24 * 30,
+      );
     await this.redis.set(
       `pappy-omega-mini:idempotency:${input.idempotencyKey}`,
       record.jobId,
@@ -169,8 +194,34 @@ export class JobOrchestrator {
     return this.store.get(jobId);
   }
 
+  async getByCode(
+    workspaceId: string,
+    code: string,
+  ): Promise<JobRecord | undefined> {
+    return this.store.getByCode(workspaceId, code.trim().toUpperCase());
+  }
+
   async listRecent(limit = 100): Promise<JobRecord[]> {
     return this.store.list(limit);
+  }
+
+  async purgeSession(workspaceId: string, sessionId: string): Promise<number> {
+    const jobs = await this.store.listAll();
+    let removed = 0;
+    for (const job of jobs) {
+      if (job.workspaceId !== workspaceId || job.sessionId !== sessionId)
+        continue;
+      if (!["COMPLETED", "FAILED", "CANCELLED"].includes(job.state))
+        await this.cancel(job.jobId).catch(() => undefined);
+      await this.redis.del(
+        `pappy-omega-mini:idempotency:${job.idempotencyKey}`,
+      );
+      if (job.jobCode)
+        await this.redis.del(`${CODE_PREFIX}${workspaceId}:${job.jobCode}`);
+      await this.store.delete(job.jobId);
+      removed += 1;
+    }
+    return removed;
   }
 
   async cancel(jobId: string): Promise<JobRecord | undefined> {
@@ -194,6 +245,21 @@ export class JobOrchestrator {
       state: "RUNNING",
       pauseRequested: false,
     });
+  }
+
+  private async reserveJobCode(workspaceId: string): Promise<string> {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const code = randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase();
+      const claimed = await this.redis.set(
+        `${CODE_PREFIX}${workspaceId}:${code}`,
+        "pending",
+        "EX",
+        60 * 60 * 24 * 30,
+        "NX",
+      );
+      if (claimed) return code;
+    }
+    throw new Error("Unable to allocate a unique live job code.");
   }
 
   async close(): Promise<void> {

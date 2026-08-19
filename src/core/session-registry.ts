@@ -77,6 +77,10 @@ export function createSession(input: {
     prefix: workspaceSettings.defaultPrefix,
     sudoList: [],
     autoJoinEnabled: workspaceSettings.defaultAutoJoinEnabled,
+    autoCollectLinks: true,
+    autoValidateLinks: false,
+    collectedLinkCount: 0,
+    validatedLinkCount: 0,
   };
   sessions.set(session.sessionId, session);
   void persistSession(session).catch(() => undefined);
@@ -198,7 +202,13 @@ export async function hydrateSessionRegistry(): Promise<void> {
       globalSudoList: workspace.globalSudoList ?? [],
     });
   for (const session of snapshot.sessions)
-    sessions.set(session.sessionId, session);
+    sessions.set(session.sessionId, {
+      ...session,
+      autoCollectLinks: session.autoCollectLinks ?? true,
+      autoValidateLinks: session.autoValidateLinks ?? false,
+      collectedLinkCount: session.collectedLinkCount ?? 0,
+      validatedLinkCount: session.validatedLinkCount ?? 0,
+    });
 }
 
 export function getUserWorkspace(telegramUserId: string): string {

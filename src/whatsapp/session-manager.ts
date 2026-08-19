@@ -1,11 +1,12 @@
 import { access, mkdir, rm } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import makeWASocket, {
   makeCacheManagerAuthState,
   type CacheManagerStore,
   type WASocket,
 } from "@crysnovax/baileys";
+import { downloadMediaMessage } from "@crysnovax/baileys/lib/Utils/messages.js";
 import { env } from "../config/env.js";
 import {
   deleteSession,
@@ -50,7 +51,13 @@ interface RuntimeEvents {
 
 interface RuntimeSocket extends WASocket {
   ev: RuntimeEvents;
-  ws?: { isOpen?: boolean };
+  ws?: {
+    isOpen?: boolean;
+    on?: (
+      event: "error" | "close",
+      listener: (error?: unknown) => void,
+    ) => void;
+  };
   end: (error?: unknown) => void;
   waitForConnectionUpdate?: (
     predicate: (update: {
@@ -244,6 +251,25 @@ async function openWhatsAppSession(
     sessionId,
   );
   const socket = makeWASocket({ auth: state }) as unknown as RuntimeSocket;
+  const forceSocketRecovery = (error?: unknown) => {
+    const reason =
+      error instanceof Error
+        ? error.message
+        : String(error ?? "websocket closed");
+    console.warn(
+      `[pappy-omega-mini] low-level WhatsApp websocket failure workspace=${workspaceId} session=${sessionId}: ${reason}`,
+    );
+    try {
+      socket.end(error ?? new Error(reason));
+    } catch {
+      // The connection.update close handler owns state transition and reconnect scheduling.
+    }
+  };
+  socket.ws?.on?.("error", forceSocketRecovery);
+  socket.ws?.on?.("close", () => {
+    if (runtimes.has(key))
+      forceSocketRecovery(new Error("WhatsApp websocket closed."));
+  });
   const sendTrackedMessage = async (
     jid: string,
     content: any,
@@ -265,7 +291,7 @@ async function openWhatsAppSession(
   socket.ev.on("creds.update", () => void saveCreds());
   socket.ev.on(
     "messages.upsert",
-    (event: {
+    async (event: {
       messages?: Array<{
         key?: {
           remoteJid?: string;
@@ -303,6 +329,41 @@ async function openWhatsAppSession(
           message.message?.imageMessage?.caption ??
           message.message?.videoMessage?.caption ??
           "";
+        let inboundMedia:
+          | { kind: "image" | "video"; bytes: Buffer; mimeType?: string }
+          | undefined;
+        const commandSource = text.trim().toLowerCase();
+        const mediaCommand =
+          /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate)/.test(
+            commandSource,
+          );
+        if (
+          mediaCommand &&
+          (message.message?.imageMessage || message.message?.videoMessage)
+        ) {
+          try {
+            const bytes = await downloadMediaMessage(
+              message,
+              "buffer",
+              {},
+              socket,
+            );
+            if (Buffer.isBuffer(bytes)) {
+              const source =
+                message.message?.imageMessage ?? message.message?.videoMessage;
+              inboundMedia = {
+                kind: message.message?.imageMessage ? "image" : "video",
+                bytes,
+                ...(source?.mimetype ? { mimeType: source.mimetype } : {}),
+              };
+            }
+          } catch (error) {
+            console.warn(
+              `[pappy-omega-mini] WhatsApp media download failed session=${sessionId}:`,
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+        }
         const quoted =
           message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
         const quotedText =
@@ -336,12 +397,52 @@ async function openWhatsAppSession(
           timestamp: receivedAt,
         }).catch(() => undefined);
         if (!text && !quotedText) continue;
-        void collectLinks({
-          workspaceId,
-          text: [text, quotedText].filter(Boolean).join("\n"),
-          sourceUserId: message.key.remoteJid,
-          sourceSessionId: sessionId,
-        }).catch(() => undefined);
+        const currentSession = getSession(workspaceId, sessionId);
+        if (currentSession.autoCollectLinks) {
+          void collectLinks({
+            workspaceId,
+            text: [text, quotedText].filter(Boolean).join("\n"),
+            sourceUserId: senderJid,
+            sourceSessionId: sessionId,
+          })
+            .then(async (collection) => {
+              if (collection.added <= 0) return;
+              const collectedAt = Date.now();
+              const latestSession = getSession(workspaceId, sessionId);
+              const next = updateSession(workspaceId, sessionId, {
+                collectedLinkCount:
+                  (latestSession.collectedLinkCount ?? 0) + collection.added,
+                lastLinkCollectedAt: collectedAt,
+              });
+              if (!next.autoValidateLinks) return;
+              const urls = collection.urls;
+              if (!urls.length) return;
+              const { getWorkerRuntime } = await import("../jobs/runtime.js");
+              const runtime = getWorkerRuntime();
+              if (!runtime) return;
+              const payload = {
+                urls,
+                sourceUserId: senderJid,
+                sourceSessionId: sessionId,
+              };
+              const payloadHash = createHash("sha256")
+                .update(JSON.stringify(payload))
+                .digest("hex");
+              await runtime.enqueue({
+                workspaceId,
+                sessionId,
+                kind: "link-validation",
+                payload,
+                idempotencyKey: `${workspaceId}:${sessionId}:auto-validator:${payloadHash}`,
+              });
+            })
+            .catch((error) => {
+              console.error(
+                `[pappy-omega-mini] automatic link collection/validation failed session=${sessionId}:`,
+                error instanceof Error ? error.message : String(error),
+              );
+            });
+        }
         console.info(
           `[pappy-omega-mini] WhatsApp command candidate session=${sessionId} chat=${message.key.remoteJid} text=${JSON.stringify(text.slice(0, 160))}`,
         );
@@ -352,6 +453,7 @@ async function openWhatsAppSession(
           senderJid,
           text,
           ...(quotedText ? { quotedText } : {}),
+          ...(inboundMedia ? { media: inboundMedia } : {}),
         })
           .then((reply) => {
             if (!reply) {
@@ -680,15 +782,23 @@ export function getWhatsAppSocket(
 export async function purgeWhatsAppSession(
   workspaceId: string,
   sessionId: string,
-): Promise<void> {
+): Promise<{ jobs: number; links: number; traces: number }> {
   getSession(workspaceId, sessionId);
   stopWhatsAppSession(workspaceId, sessionId);
+  const [{ purgeRuntimeSessionData }, { purgeWhatsAppSessionTraces }] =
+    await Promise.all([
+      import("../jobs/runtime.js"),
+      import("../persistence/mongo.js"),
+    ]);
+  const runtimeData = await purgeRuntimeSessionData(workspaceId, sessionId);
+  const traces = await purgeWhatsAppSessionTraces(workspaceId, sessionId);
   await rm(join(env.SESSION_ROOT, workspaceId, sessionId), {
     recursive: true,
     force: true,
   });
   resetWhatsAppSessionLifecycle(workspaceId, sessionId);
   await deleteSession(workspaceId, sessionId);
+  return { ...runtimeData, traces };
 }
 
 export function stopWhatsAppSession(

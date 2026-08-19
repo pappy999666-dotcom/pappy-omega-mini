@@ -20,7 +20,13 @@ function compactMenu(session: WhatsAppSession, isOwner: boolean): string {
   const ownerLine = isOwner ? "OWNER" : "USER";
   const commands = createCommandRegistry()
     .filter((command) => !command.ownerOnly || isOwner)
-    .map((command) => `.${command.name}`);
+    .flatMap((command) => {
+      if (command.name === "allstatus") return [".allstatus", ".allstatusx"];
+      if (command.name === "allchat") return [".allchat", ".allchatx"];
+      if (command.name === "gstatus") return [".gstatus", ".gstatusx"];
+      if (command.name === "pfp") return [".pfp", ".setpfp", ".getpfp"];
+      return [`.${command.name}`];
+    });
   const commandLines: string[] = [];
   for (let index = 0; index < commands.length; index += 3)
     commandLines.push(commands.slice(index, index + 3).join("  "));

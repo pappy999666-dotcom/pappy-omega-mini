@@ -8,6 +8,12 @@ import {
 } from "../src/core/control-plane.js";
 import { createSafeError, renderSafeError } from "../src/core/errors.js";
 import { classifyDisconnect } from "../src/whatsapp/session-manager.js";
+import { createSession } from "../src/core/session-registry.js";
+import { routeWhatsAppText } from "../src/whatsapp/message-router.js";
+import {
+  createCommandRegistry,
+  executeCommand,
+} from "../src/whatsapp/command-registry.js";
 
 describe("V2 hardening", () => {
   it("encrypts and decrypts auth-state values", () => {
@@ -60,6 +66,48 @@ describe("V2 hardening", () => {
     expect(() => assertOperationAllowed("join")).toThrow(/safe mode/);
     setEmergencyState("owner", { enabled: false, pauseJoins: false });
     expect(() => assertOperationAllowed("join")).not.toThrow();
+  });
+});
+
+describe("WhatsApp command smoke paths", () => {
+  it("accepts a Baileys device-suffixed owner JID for native commands", async () => {
+    const session = createSession({
+      workspaceId: `smoke-${Date.now()}`,
+      sessionName: "native",
+      phoneNumber: "15551234567",
+    });
+    const response = await routeWhatsAppText({
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+      senderJid: "15551234567:44@s.whatsapp.net",
+      text: ".ping",
+    });
+    expect(response).toContain("PAPPY OMEGA MINI");
+  });
+
+  it("keeps allstatusx repeat count distinct in its worker payload", async () => {
+    const session = createSession({
+      workspaceId: `smoke-${Date.now()}`,
+      sessionName: "status",
+      phoneNumber: "15551234568",
+    });
+    let captured: Record<string, unknown> | undefined;
+    const response = await executeCommand(
+      createCommandRegistry(),
+      "allstatusx 3 hello",
+      {
+        workspaceId: session.workspaceId,
+        sessionId: session.sessionId,
+        isOwner: true,
+        args: [],
+        enqueueJob: async ({ payload }) => {
+          captured = payload;
+          return "job-smoke";
+        },
+      },
+    );
+    expect(response).toContain("job-smoke");
+    expect(captured).toMatchObject({ text: "hello", count: 3 });
   });
 });
 

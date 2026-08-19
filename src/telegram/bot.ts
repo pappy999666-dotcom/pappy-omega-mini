@@ -17,6 +17,7 @@ import {
   uploadWhatsappMenuMedia,
 } from "../admin/media-actions.js";
 import { getWorkerRuntime } from "../jobs/runtime.js";
+import type { JobRecord } from "../jobs/job-contracts.js";
 import {
   getEmergencyState,
   listAuditEvents,
@@ -26,6 +27,7 @@ import {
 import { getValidatorSnapshot } from "../links/validator-snapshot.js";
 import {
   listValidatorBucket,
+  listAllValidatorBucket,
   mergeValidatorBuckets,
   purgeValidatorBucket,
   type ValidatorBucket,
@@ -59,6 +61,8 @@ import {
 } from "../whatsapp/session-manager.js";
 import {
   createWhatsAppGroup,
+  getGroupInviteCode,
+  updateGroupDescription,
   getProfilePictureUrl,
   leaveWhatsAppGroup,
   listGroups,
@@ -110,6 +114,8 @@ import {
   validatorLiveText,
   helpText,
   joinManagerKeyboard,
+  jobLiveKeyboard,
+  jobLiveText,
   linkCollectionKeyboard,
   mediaKeyboard,
   pageText,
@@ -117,6 +123,7 @@ import {
   sessionText,
   sessionsKeyboard,
   btn,
+  copyBtn,
   keyboard,
   ui,
 } from "./ui.js";
@@ -150,8 +157,9 @@ const pendingGroupCreate = new Map<
   {
     workspaceId: string;
     sessionId: string;
-    stage: "subject" | "participants";
+    stage: "subject" | "participants" | "description";
     subject?: string;
+    participants?: string[];
   }
 >();
 const pendingProfilePicture = new Map<
@@ -195,6 +203,30 @@ const pendingAdminBridge = new Map<
   string,
   { workspaceId: string; sessionId: string; chatId: number; messageId: number }
 >();
+const pendingLiveJobCode = new Map<
+  string,
+  { workspaceId: string; chatId: number; messageId: number }
+>();
+
+function clearPendingInputs(userId: string): void {
+  pendingMedia.delete(userId);
+  pendingAdminInput.delete(userId);
+  pendingAdminBroadcasts.delete(userId);
+  pendingScheduleInput.delete(userId);
+  pendingSupportInput.delete(userId);
+  pendingSupportReply.delete(userId);
+  pendingGroupCreate.delete(userId);
+  pendingProfilePicture.delete(userId);
+  pendingSessionSudo.delete(userId);
+  pendingGroupPicture.delete(userId);
+  pendingGroupLeave.delete(userId);
+  pendingSessionSetting.delete(userId);
+  pendingPairing.delete(userId);
+  pendingGlobalCommand.delete(userId);
+  pendingSessionBridge.delete(userId);
+  pendingAdminBridge.delete(userId);
+  pendingLiveJobCode.delete(userId);
+}
 
 async function registerTelegramCommandSuggestions(
   bot: Telegraf<Context>,
@@ -232,6 +264,11 @@ export function createTelegramBot(): Telegraf<Context> {
   if (!env.TELEGRAM_BOT_TOKEN)
     throw new Error("TELEGRAM_BOT_TOKEN is not configured.");
   const bot = new Telegraf<Context>(env.TELEGRAM_BOT_TOKEN);
+  bot.use(async (ctx, next) => {
+    if (ctx.callbackQuery && ctx.from?.id !== undefined)
+      clearPendingInputs(String(ctx.from.id));
+    await next();
+  });
   void registerTelegramCommandSuggestions(bot);
   installModeratorCommands(bot);
   installModeratorProtection(bot);
@@ -654,22 +691,53 @@ export function createTelegramBot(): Telegraf<Context> {
         );
         return;
       }
+      if (groupCreate.stage === "participants") {
+        const participants =
+          input.toLowerCase() === "skip" ? [] : input.split(/[\s,]+/u);
+        pendingGroupCreate.set(userId, {
+          ...groupCreate,
+          stage: "description",
+          participants,
+        });
+        await ctx.reply(
+          pageText(
+            "Create Group",
+            infoResponse(
+              "Optional Description",
+              "Send the group description, or send <code>skip</code> to finish without one.",
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+        return;
+      }
       pendingGroupCreate.delete(userId);
-      const participants =
-        input.toLowerCase() === "skip" ? [] : input.split(/[\s,]+/u);
+      const description = input.toLowerCase() === "skip" ? "" : input;
       try {
         const jid = await createWhatsAppGroup(
           groupCreate.workspaceId,
           groupCreate.sessionId,
           groupCreate.subject ?? "",
-          participants,
+          groupCreate.participants ?? [],
         );
+        if (description)
+          await updateGroupDescription(
+            groupCreate.workspaceId,
+            groupCreate.sessionId,
+            jid,
+            description,
+          );
+        const invite = await getGroupInviteCode(
+          groupCreate.workspaceId,
+          groupCreate.sessionId,
+          jid,
+        ).catch(() => undefined);
         await ctx.reply(
           pageText(
             "Create Group",
             successResponse(
               "Group Created",
-              `<b>${escapeHtml(groupCreate.subject ?? "")}</b>\n<code>${escapeHtml(jid)}</code>\n\nThe group identifier was returned by the live WhatsApp transport.`,
+              `<b>${escapeHtml(groupCreate.subject ?? "")}</b>\n<code>${escapeHtml(jid)}</code>${description ? `\nDescription initialized.` : ""}${invite ? `\nInvite: <code>https://chat.whatsapp.com/${escapeHtml(invite)}</code>` : ""}\n\nThe group was created and initialized through the live WhatsApp transport.`,
             ),
           ),
           { parse_mode: "HTML" },
@@ -694,19 +762,94 @@ export function createTelegramBot(): Telegraf<Context> {
     if (adminBridge && !ctx.message.text.startsWith("/")) {
       pendingAdminBridge.delete(userId);
       if (!isAdmin(ctx)) return deny(ctx);
-      const session = listAllSessions().find((item) => item.workspaceId === adminBridge.workspaceId && item.sessionId === adminBridge.sessionId);
+      const session = listAllSessions().find(
+        (item) =>
+          item.workspaceId === adminBridge.workspaceId &&
+          item.sessionId === adminBridge.sessionId,
+      );
       if (!session) return;
       const input = ctx.message.text.trim();
-      const command = session.prefix && !input.startsWith(session.prefix) ? `${session.prefix}${input}` : input;
+      const command =
+        session.prefix && !input.startsWith(session.prefix)
+          ? `${session.prefix}${input}`
+          : input;
       try {
-        const result = await routeWhatsAppText({ workspaceId: session.workspaceId, sessionId: session.sessionId, senderJid: session.phoneNumber ?? "admin-bridge", text: command, bridgeAuthorized: true });
-        const output = typeof result === "string" ? result : result?.text ?? result?.caption ?? "Command completed without text output.";
-        recordAudit({ workspaceId: session.workspaceId, actorTelegramUserId: userId, action: "bridge.admin.command", success: true, metadata: { sessionId: session.sessionId, command: input.slice(0, 80) } });
-        await ctx.telegram.editMessageText(adminBridge.chatId, adminBridge.messageId, undefined, pageText("Admin Bridge", successResponse("Command Completed", `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<pre>${escapeHtml(output.slice(0, 3500))}</pre>`)), { parse_mode: "HTML", reply_markup: keyboard([[btn("↻ Run Another Command", `admin:bridge:command:${session.workspaceId}:${session.sessionId}`)], [btn("‹ Admin Bridge", "admin:bridge")]]) }).catch(() => undefined);
+        const result = await routeWhatsAppText({
+          workspaceId: session.workspaceId,
+          sessionId: session.sessionId,
+          senderJid: session.phoneNumber ?? "admin-bridge",
+          text: command,
+          bridgeAuthorized: true,
+        });
+        const output =
+          typeof result === "string"
+            ? result
+            : (result?.text ??
+              result?.caption ??
+              "Command completed without text output.");
+        recordAudit({
+          workspaceId: session.workspaceId,
+          actorTelegramUserId: userId,
+          action: "bridge.admin.command",
+          success: true,
+          metadata: {
+            sessionId: session.sessionId,
+            command: input.slice(0, 80),
+          },
+        });
+        await ctx.telegram
+          .editMessageText(
+            adminBridge.chatId,
+            adminBridge.messageId,
+            undefined,
+            pageText(
+              "Admin Bridge",
+              successResponse(
+                "Command Completed",
+                `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<pre>${escapeHtml(output.slice(0, 3500))}</pre>`,
+              ),
+            ),
+            {
+              parse_mode: "HTML",
+              reply_markup: keyboard([
+                [
+                  btn(
+                    "↻ Run Another Command",
+                    `admin:bridge:command:${session.workspaceId}:${session.sessionId}`,
+                  ),
+                ],
+                [btn("‹ Admin Bridge", "admin:bridge")],
+              ]),
+            },
+          )
+          .catch(() => undefined);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        recordAudit({ workspaceId: session.workspaceId, actorTelegramUserId: userId, action: "bridge.admin.command", success: false, metadata: { sessionId: session.sessionId, error: message.slice(0, 160) } });
-        await ctx.telegram.editMessageText(adminBridge.chatId, adminBridge.messageId, undefined, pageText("Admin Bridge", dangerResponse("Command Failed", escapeHtml(message))), { parse_mode: "HTML", reply_markup: keyboard([[btn("‹ Admin Bridge", "admin:bridge")]]) }).catch(() => undefined);
+        recordAudit({
+          workspaceId: session.workspaceId,
+          actorTelegramUserId: userId,
+          action: "bridge.admin.command",
+          success: false,
+          metadata: {
+            sessionId: session.sessionId,
+            error: message.slice(0, 160),
+          },
+        });
+        await ctx.telegram
+          .editMessageText(
+            adminBridge.chatId,
+            adminBridge.messageId,
+            undefined,
+            pageText(
+              "Admin Bridge",
+              dangerResponse("Command Failed", escapeHtml(message)),
+            ),
+            {
+              parse_mode: "HTML",
+              reply_markup: keyboard([[btn("‹ Admin Bridge", "admin:bridge")]]),
+            },
+          )
+          .catch(() => undefined);
       }
       return;
     }
@@ -826,6 +969,43 @@ export function createTelegramBot(): Telegraf<Context> {
           )
           .catch(() => undefined);
       }
+      return;
+    }
+    const liveCodeInput = pendingLiveJobCode.get(userId);
+    if (liveCodeInput && !ctx.message.text.startsWith("/")) {
+      pendingLiveJobCode.delete(userId);
+      const input = ctx.message.text.trim();
+      if (input.toLowerCase() === "cancel") {
+        await ctx.telegram
+          .editMessageText(
+            liveCodeInput.chatId,
+            liveCodeInput.messageId,
+            undefined,
+            pageText(
+              "Live Show",
+              infoResponse("Closed", "No job code was opened."),
+            ),
+            {
+              parse_mode: "HTML",
+              reply_markup: keyboard([[btn("‹ Back", "menu:main")]]),
+            },
+          )
+          .catch(() => undefined);
+        return;
+      }
+      const job = await getWorkerRuntime()?.getByCode(
+        liveCodeInput.workspaceId,
+        input.toUpperCase(),
+      );
+      await ctx.telegram
+        .editMessageText(
+          liveCodeInput.chatId,
+          liveCodeInput.messageId,
+          undefined,
+          jobLiveText(job),
+          { parse_mode: "HTML", reply_markup: jobLiveKeyboard(job) },
+        )
+        .catch(() => undefined);
       return;
     }
     const supportReply = pendingSupportReply.get(userId);
@@ -1198,7 +1378,10 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!session) return deny(ctx);
     const user = resolveTelegramUser(ctx);
     try {
-      await purgeWhatsAppSession(user.workspaceId, session.sessionId);
+      const purged = await purgeWhatsAppSession(
+        user.workspaceId,
+        session.sessionId,
+      );
       await recordAudit({
         workspaceId: user.workspaceId,
         actorTelegramUserId: String(ctx.from?.id ?? ""),
@@ -1207,6 +1390,9 @@ export function createTelegramBot(): Telegraf<Context> {
         metadata: {
           sessionId: session.sessionId,
           sessionName: session.sessionName,
+          jobs: purged.jobs,
+          links: purged.links,
+          traces: purged.traces,
         },
       });
       await edit(
@@ -1215,7 +1401,7 @@ export function createTelegramBot(): Telegraf<Context> {
           "Session Purged",
           successResponse(
             "Encrypted Auth Removed",
-            `Session <b>${escapeHtml(session.sessionName)}</b> was stopped and permanently purged. You can create a new session from Sessions.`,
+            `Session <b>${escapeHtml(session.sessionName)}</b> was stopped and permanently purged.\n\n<b>Deleted:</b> ${purged.jobs} jobs · ${purged.links} collected links · ${purged.traces} message traces · encrypted auth\n\nYou can create a new session from Sessions.`,
           ),
         ),
         keyboard([[btn("‹ Sessions", "sessions:list:0", "success")]]),
@@ -1443,6 +1629,51 @@ export function createTelegramBot(): Telegraf<Context> {
         [btn("Cancel", `session:${session.sessionId}:sudo:list`)],
         [btn("‹ Session", `session:${session.sessionId}:menu`)],
       ]),
+    );
+  });
+  bot.action(/^session:([^:]+):auto:(collect|validate)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = ownedSession(ctx, ctx.match[1] ?? "");
+    if (!session) return deny(ctx);
+    const kind =
+      ctx.match[2] === "collect" ? "autoCollectLinks" : "autoValidateLinks";
+    const next = updateSession(session.workspaceId, session.sessionId, {
+      [kind]: !session[kind],
+    });
+    let queued = 0;
+    if (
+      kind === "autoValidateLinks" &&
+      next.autoValidateLinks &&
+      next.status === "ACTIVE"
+    ) {
+      const runtime = getWorkerRuntime();
+      const records = await listAllValidatorBucket(
+        next.workspaceId,
+        "master",
+      ).catch(() => []);
+      const urls = records.map((record) => record.canonicalUrl).filter(Boolean);
+      if (runtime && urls.length) {
+        await enqueueValidatorJobs(
+          runtime,
+          next.workspaceId,
+          urls,
+          String(ctx.from?.id ?? "telegram"),
+        );
+        queued = urls.length;
+      }
+    }
+    await edit(
+      ctx,
+      pageText(
+        `${session.sessionName} · Automation`,
+        successResponse(
+          kind === "autoCollectLinks"
+            ? "Auto-collection Updated"
+            : "Auto-validation Updated",
+          `<b>Collect:</b> ${next.autoCollectLinks ? "ON" : "OFF"}\n<b>Validate:</b> ${next.autoValidateLinks ? "ON" : "OFF"}\n<b>Collected:</b> ${next.collectedLinkCount}\n<b>Validated:</b> ${next.validatedLinkCount}${queued ? `\n<b>Queued now:</b> ${queued}` : ""}`,
+        ),
+      ),
+      sessionKeyboard(next, isAdmin(ctx)),
     );
   });
   bot.action(/^session:([^:]+):action:([^:]+)$/, async (ctx) => {
@@ -1804,14 +2035,14 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery("Starting validation…");
     const user = resolveTelegramUser(ctx);
     const runtime = getWorkerRuntime();
-    const records = await listValidatorBucket(
+    const records = await listAllValidatorBucket(
       user.workspaceId,
       "master",
-      500,
     ).catch(() => []);
-    const session = listSessions(user.workspaceId).find(
+    const activeSessions = listSessions(user.workspaceId).filter(
       (entry) => entry.status === "ACTIVE",
     );
+    const session = activeSessions[0];
     const urls = records.map((record) => record.canonicalUrl).filter(Boolean);
     if (!runtime || !session || urls.length === 0) {
       await edit(
@@ -1830,31 +2061,43 @@ export function createTelegramBot(): Telegraf<Context> {
       return;
     }
     try {
-      const payload = {
-        urls: urls.slice(0, 50),
-        sourceSessionId: session.sessionId,
-        sourceUserId: String(ctx.from?.id ?? "telegram"),
-      };
-      const payloadHash = createHash("sha256")
-        .update(JSON.stringify(payload))
-        .digest("hex");
-      const job = await runtime.enqueue({
-        workspaceId: user.workspaceId,
-        sessionId: session.sessionId,
-        kind: "link-validation",
-        payload,
-        idempotencyKey: `${user.workspaceId}:${session.sessionId}:validator:${payloadHash}`,
-      });
+      const jobs = await enqueueValidatorJobs(
+        runtime,
+        user.workspaceId,
+        urls,
+        String(ctx.from?.id ?? "telegram"),
+      );
+      const job = jobs[0];
+      if (!job) throw new Error("No active validation worker was available.");
+      const codes = jobs
+        .map((entry) => entry.jobCode ?? entry.jobId.slice(0, 8))
+        .join(", ");
       await edit(
         ctx,
         pageText(
           "Validator Hub",
           successResponse(
             "Validation Started",
-            `<b>Job:</b> <code>${escapeHtml(job.jobId)}</code>\n<b>Links:</b> ${payload.urls.length}\n<b>Session:</b> ${escapeHtml(session.sessionName)}`,
+            `<b>Code:</b> <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>\n<b>Jobs:</b> ${jobs.length} across ${activeSessions.length} active sessions\n<b>Links:</b> ${urls.length}\n<b>Codes:</b> <code>${escapeHtml(codes)}</code>\n\nCopy a code, then open Live Show to follow that worker’s real progress.`,
           ),
         ),
-        bucketKeyboard(),
+        keyboard([
+          [
+            copyBtn(
+              "📋 Copy live code",
+              job.jobCode ?? job.jobId.slice(0, 8),
+              "success",
+            ),
+          ],
+          [
+            btn(
+              "📺 Live Show",
+              `job:live:${job.jobCode ?? job.jobId.slice(0, 8)}`,
+              "success",
+            ),
+          ],
+          [btn("‹ Validator Hub", "bucket:status")],
+        ]),
       );
     } catch (error) {
       await edit(
@@ -2140,6 +2383,41 @@ export function createTelegramBot(): Telegraf<Context> {
     await showValidatorLiveLog(ctx, true);
   });
 
+  bot.action("jobs:live:open", async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = resolveTelegramUser(ctx);
+    const userId = String(ctx.from?.id ?? "");
+    const message = ctx.callbackQuery?.message;
+    const chatId =
+      ctx.chat?.id ??
+      (message && "chat" in message ? message.chat.id : undefined);
+    const messageId =
+      message && "message_id" in message ? message.message_id : undefined;
+    if (!chatId || !messageId) return;
+    pendingLiveJobCode.set(userId, {
+      workspaceId: user.workspaceId,
+      chatId,
+      messageId,
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Live Show",
+        infoResponse(
+          "Paste a job code",
+          "Send the short code from a Join Manager, Validator, or broadcast result. Type <code>cancel</code> to close this input.",
+        ),
+      ),
+      keyboard([[btn("‹ Back", "menu:main")]]),
+    );
+  });
+  bot.action(/^job:live:([A-Z0-9]+)$/i, async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = resolveTelegramUser(ctx);
+    const code = String(ctx.match[1] ?? "").toUpperCase();
+    const job = await getWorkerRuntime()?.getByCode(user.workspaceId, code);
+    await edit(ctx, jobLiveText(job), jobLiveKeyboard(job));
+  });
   bot.action("jobs:list", async (ctx) => {
     await ctx.answerCbQuery();
     await showSchedulePanel(ctx);
@@ -2221,6 +2499,21 @@ export function createTelegramBot(): Telegraf<Context> {
     const index = values.indexOf(current.defaultJoinDelayMs);
     const next = updateWorkspaceDefaults(user.workspaceId, {
       defaultJoinDelayMs: values[(index + 1) % values.length] ?? 5000,
+    });
+    await edit(
+      ctx,
+      workspaceSettingsText(next),
+      workspaceSettingsKeyboard(next),
+    );
+  });
+  bot.action("settings:joinmode:cycle", async (ctx) => {
+    await ctx.answerCbQuery("Updating join mode…");
+    const user = resolveTelegramUser(ctx);
+    const current = getWorkspaceDefaults(user.workspaceId);
+    const values = ["auto", "immediate", "request"] as const;
+    const index = values.indexOf(current.defaultJoinMode ?? "auto");
+    const next = updateWorkspaceDefaults(user.workspaceId, {
+      defaultJoinMode: values[(index + 1) % values.length] ?? "auto",
     });
     await edit(
       ctx,
@@ -2381,7 +2674,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await showJoinManager(ctx, ctx.match[1] ?? "");
   });
   bot.action(
-    /^session:([^:]+):join:(start|pause|stop|settings|setlimit|setdelay|setbatch|setretry|setconcurrency)$/,
+    /^session:([^:]+):join:(start|pause|stop|settings|setlimit|setdelay|setbatch|setretry|setconcurrency|setmode)$/,
     async (ctx) => {
       await ctx.answerCbQuery();
       const session = ownedSession(ctx, ctx.match[1] ?? "");
@@ -2414,6 +2707,7 @@ export function createTelegramBot(): Telegraf<Context> {
             batchCycles: settings.defaultJoinBatchCycles,
             maxConcurrency: settings.defaultJoinMaxConcurrency,
             retryLimit: settings.defaultJoinRetryLimit,
+            requestMode: settings.defaultJoinMode ?? "auto",
           },
           idempotencyKey: `join-manager:${user.workspaceId}:${session.sessionId}:${Date.now()}`,
         });
@@ -2436,7 +2730,7 @@ export function createTelegramBot(): Telegraf<Context> {
             "Join Manager · Settings",
             infoResponse(
               "Durable Joining Settings",
-              `<b>Target links:</b> ${current.defaultJoinTargetCount}\n<b>Delay:</b> ${Math.round(current.defaultJoinDelayMs / 1000)}s\n<b>Batch cycles:</b> ${current.defaultJoinBatchCycles}\n<b>Concurrency:</b> ${current.defaultJoinMaxConcurrency}\n<b>Retry limit:</b> ${current.defaultJoinRetryLimit}`,
+              `<b>Target links:</b> ${current.defaultJoinTargetCount}\n<b>Delay:</b> ${Math.round(current.defaultJoinDelayMs / 1000)}s\n<b>Batch cycles:</b> ${current.defaultJoinBatchCycles}\n<b>Concurrency:</b> ${current.defaultJoinMaxConcurrency}\n<b>Retry limit:</b> ${current.defaultJoinRetryLimit}\n<b>Join mode:</b> ${escapeHtml((current.defaultJoinMode ?? "auto").toUpperCase())}`,
             ),
           ),
           keyboard([
@@ -2453,6 +2747,7 @@ export function createTelegramBot(): Telegraf<Context> {
                 "⚡ Concurrency",
                 `session:${session.sessionId}:join:setconcurrency`,
               ),
+              btn("⇄ Mode", `session:${session.sessionId}:join:setmode`),
             ],
             [btn("‹ Join Manager", `session:${session.sessionId}:joinmgr`)],
           ]),
@@ -2463,10 +2758,11 @@ export function createTelegramBot(): Telegraf<Context> {
         operation === "setdelay" ||
         operation === "setbatch" ||
         operation === "setretry" ||
-        operation === "setconcurrency"
+        operation === "setconcurrency" ||
+        operation === "setmode"
       ) {
         const current = getWorkspaceDefaults(user.workspaceId);
-        const patch =
+        const patch: Parameters<typeof updateWorkspaceDefaults>[1] =
           operation === "setlimit"
             ? {
                 defaultJoinTargetCount:
@@ -2507,16 +2803,25 @@ export function createTelegramBot(): Telegraf<Context> {
                             4
                         ] ?? 2,
                     }
-                  : {
-                      defaultJoinMaxConcurrency:
-                        [1, 2, 3, 5][
-                          ([1, 2, 3, 5].indexOf(
-                            current.defaultJoinMaxConcurrency,
-                          ) +
-                            1) %
-                            4
-                        ] ?? 2,
-                    };
+                  : operation === "setmode"
+                    ? {
+                        defaultJoinMode:
+                          current.defaultJoinMode === "auto"
+                            ? "immediate"
+                            : current.defaultJoinMode === "immediate"
+                              ? "request"
+                              : "auto",
+                      }
+                    : {
+                        defaultJoinMaxConcurrency:
+                          [1, 2, 3, 5][
+                            ([1, 2, 3, 5].indexOf(
+                              current.defaultJoinMaxConcurrency,
+                            ) +
+                              1) %
+                              4
+                          ] ?? 2,
+                      };
         const next = updateWorkspaceDefaults(user.workspaceId, patch);
         return edit(
           ctx,
@@ -2613,14 +2918,35 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!requireAdmin(ctx)) return;
     const workspaceId = ctx.match[1] ?? "";
     const sessionId = ctx.match[2] ?? "";
-    const session = listAllSessions().find((item) => item.workspaceId === workspaceId && item.sessionId === sessionId);
+    const session = listAllSessions().find(
+      (item) =>
+        item.workspaceId === workspaceId && item.sessionId === sessionId,
+    );
     if (!session) return deny(ctx);
     const message = ctx.callbackQuery?.message;
-    const chatId = ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : undefined);
-    const messageId = message && "message_id" in message ? message.message_id : undefined;
+    const chatId =
+      ctx.chat?.id ??
+      (message && "chat" in message ? message.chat.id : undefined);
+    const messageId =
+      message && "message_id" in message ? message.message_id : undefined;
     if (!chatId || !messageId) return;
-    pendingAdminBridge.set(String(ctx.from?.id ?? ""), { workspaceId, sessionId, chatId, messageId });
-    await edit(ctx, pageText("Admin Bridge", infoResponse("Send One Command", `Send a command for <b>${escapeHtml(session.sessionName)}</b>, for example <code>ping</code> or <code>health</code>.`)), keyboard([[btn("✖ Cancel", "admin:bridge")]]));
+    pendingAdminBridge.set(String(ctx.from?.id ?? ""), {
+      workspaceId,
+      sessionId,
+      chatId,
+      messageId,
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Admin Bridge",
+        infoResponse(
+          "Send One Command",
+          `Send a command for <b>${escapeHtml(session.sessionName)}</b>, for example <code>ping</code> or <code>health</code>.`,
+        ),
+      ),
+      keyboard([[btn("✖ Cancel", "admin:bridge")]]),
+    );
   });
   bot.action(/^admin:bridge:session:([^:]+):([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -2649,7 +2975,13 @@ export function createTelegramBot(): Telegraf<Context> {
         ),
       ),
       keyboard([
-        [btn("✉️ Send Command", `admin:bridge:command:${workspaceId}:${sessionId}`, "success")],
+        [
+          btn(
+            "✉️ Send Command",
+            `admin:bridge:command:${workspaceId}:${sessionId}`,
+            "success",
+          ),
+        ],
         [btn("↻ Back to Global Bridge", "admin:bridge", "primary")],
       ]),
     );
@@ -3075,6 +3407,7 @@ async function handlePairingText(
         ),
       ),
       keyboard([
+        [copyBtn("📋 Copy pairing code", code, "success")],
         [btn("↻ Session Status", `session:${session.sessionId}:menu`)],
         [btn(ui.back, "sessions:list:0")],
       ]),
@@ -3929,4 +4262,42 @@ function escapeHtml(value: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+async function enqueueValidatorJobs(
+  runtime: NonNullable<ReturnType<typeof getWorkerRuntime>>,
+  workspaceId: string,
+  urls: string[],
+  sourceUserId: string,
+): Promise<JobRecord[]> {
+  const sessions = listSessions(workspaceId).filter(
+    (session) => session.status === "ACTIVE",
+  );
+  if (!sessions.length || !urls.length) return [];
+  const chunks = sessions.map(() => [] as string[]);
+  urls.forEach((url, index) => chunks[index % chunks.length]?.push(url));
+  return Promise.all(
+    chunks.flatMap((chunk, index) => {
+      if (!chunk.length) return [];
+      const session = sessions[index];
+      if (!session) return [];
+      const payload = {
+        urls: chunk,
+        sourceSessionId: session.sessionId,
+        sourceUserId,
+      };
+      const payloadHash = createHash("sha256")
+        .update(JSON.stringify(payload))
+        .digest("hex");
+      return [
+        runtime.enqueue({
+          workspaceId,
+          sessionId: session.sessionId,
+          kind: "link-validation",
+          payload,
+          idempotencyKey: `${workspaceId}:${session.sessionId}:validator:${payloadHash}`,
+        }),
+      ];
+    }),
+  );
 }
