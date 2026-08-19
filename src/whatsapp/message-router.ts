@@ -1,13 +1,20 @@
-import { executeCommand, createCommandRegistry } from "./command-registry.js";
 import {
+  executeCommand,
+  createCommandRegistry,
+  type EnqueueJobResult,
+} from "./command-registry.js";
+import {
+  createSession,
   getSession,
   getWorkspaceDefaults,
+  getWorkspaceOwnerTelegramUserId,
   getWorkspaceSudo,
 } from "../core/session-registry.js";
 import { createHash } from "node:crypto";
 import { persistJobMedia } from "./job-media-store.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { getWorkerRuntime } from "../jobs/runtime.js";
+import { requestWhatsAppPairingCode } from "./session-manager.js";
 import {
   listGroups,
   sendGroupMentions,
@@ -112,6 +119,29 @@ export async function routeWhatsAppText(
     ...(message.chatJid ? { chatJid: message.chatJid } : {}),
     ...(message.media ? { media: message.media } : {}),
     args: [],
+    pairSession: async ({ label, phoneNumber }: { label: string; phoneNumber: string }) => {
+      const paired = createSession({
+        workspaceId: message.workspaceId,
+        sessionName: label,
+        phoneNumber,
+      });
+      const ownerTelegramId = getWorkspaceOwnerTelegramUserId(
+        message.workspaceId,
+      );
+      const telegramChatId = ownerTelegramId ? Number(ownerTelegramId) : undefined;
+      const code = await requestWhatsAppPairingCode(
+        message.workspaceId,
+        paired.sessionId,
+        phoneNumber,
+        undefined,
+        Number.isFinite(telegramChatId) ? telegramChatId : undefined,
+      );
+      return {
+        sessionName: paired.sessionName,
+        phoneNumber: phoneNumber.replace(/\D/g, ""),
+        code,
+      };
+    },
     ...(runtime
       ? {
           enqueueJob: async ({
@@ -170,7 +200,19 @@ export async function routeWhatsAppText(
               payload: enrichedPayload,
               idempotencyKey: `${message.workspaceId}:${message.sessionId}:${kind}:${payloadHash}`,
             });
-            return record.jobCode ?? record.jobId;
+            const totalGroups = groups.length;
+            const repeat = Math.max(
+              1,
+              Math.min(20, Number((payload as { count?: unknown }).count ?? 1)),
+            );
+            const delayMs = Number(enrichedPayload.delayMs ?? 20000);
+            return {
+              jobCode: record.jobCode ?? record.jobId.slice(0, 8),
+              totalGroups,
+              totalPosts: totalGroups * repeat,
+              delayMs,
+              expectedTimeMs: Math.max(0, totalGroups * repeat - 1) * delayMs,
+            } satisfies EnqueueJobResult;
           },
         }
       : {}),

@@ -12,13 +12,17 @@ import {
   updateSessionJoinSettings,
   setUserStatusLocal,
   getWorkspaceDefaults,
+  getWorkspaceOwnerTelegramUserId,
   updateWorkspaceDefaults,
 } from "../core/session-registry.js";
 import {
   getAdminMediaOverview,
   uploadWhatsappMenuMedia,
 } from "../admin/media-actions.js";
-import { getWorkerRuntime } from "../jobs/runtime.js";
+import {
+  getWorkerRuntime,
+  setJobCompletionNotifier,
+} from "../jobs/runtime.js";
 import type { JobRecord } from "../jobs/job-contracts.js";
 import {
   getEmergencyState,
@@ -294,6 +298,46 @@ export function createTelegramBot(): Telegraf<Context> {
       chatId,
       `✦ <b>PAPPY OMEGA MINI</b>\n──────────────────────────────\n\n${message}`,
       { parse_mode: "HTML" },
+    );
+  });
+  setJobCompletionNotifier(async (job) => {
+    if (job.kind !== "allstatus" && job.kind !== "allchat") return;
+    const ownerId = getWorkspaceOwnerTelegramUserId(job.workspaceId);
+    const chatId = ownerId ? Number(ownerId) : NaN;
+    if (!Number.isFinite(chatId)) return;
+    const payload = job.payload as { groups?: string[]; count?: number; delayMs?: number };
+    const totalGroups = new Set(payload.groups ?? []).size;
+    const repeat = Math.max(1, Math.min(20, Number(payload.count ?? 1)));
+    const expectedPosts = totalGroups * repeat;
+    const progress = job.progress;
+    const elapsedSeconds = Math.max(0, Math.ceil(progress.elapsedMs / 1000));
+    const minutes = Math.floor(elapsedSeconds / 60);
+    const seconds = elapsedSeconds % 60;
+    const delay = Math.max(1, Math.round(Number(payload.delayMs ?? 20000) / 1000));
+    await bot.telegram.sendMessage(
+      chatId,
+      [
+        `✦ <b>PAPPY OMEGA MINI · ${job.kind === "allstatus" ? "ALL-STATUS" : "ALL-CHAT"} DONE</b>`,
+        "──────────────────────────────",
+        `<b>State</b> · ${escapeHtml(job.state)}`,
+        `<b>Total groups</b> · ${totalGroups}`,
+        `<b>Expected posts</b> · ${expectedPosts}`,
+        `<b>Posted</b> · ${progress.success}`,
+        `<b>Failed</b> · ${progress.failed}`,
+        `<b>Skipped</b> · ${progress.skipped}`,
+        `<b>Delay</b> · ${delay}s`,
+        `<b>Total time</b> · ${minutes}m ${seconds}s`,
+        `<b>Live code</b> · <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>`,
+        "",
+        "<i>One terminal report was emitted. Refresh Live Show for the durable ledger.</i>",
+      ].join("\n"),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard([
+          [copyBtn("📋 Copy live code", job.jobCode ?? job.jobId.slice(0, 8), "success")],
+          [btn("📺 Live Show", `job:live:${job.jobCode ?? job.jobId.slice(0, 8)}`)],
+        ]),
+      },
     );
   });
   bot.use(async (ctx, next) => {

@@ -185,6 +185,12 @@ export function updateSession(
   return next;
 }
 
+export function getWorkspaceOwnerTelegramUserId(
+  workspaceId: string,
+): string | undefined {
+  return workspaces.get(workspaceId)?.ownerTelegramUserId;
+}
+
 export function getWorkspaceSudo(workspaceId: string): string[] {
   const workspace = workspaces.get(workspaceId);
   return workspace ? [...(workspace.globalSudoList ?? [])] : [];

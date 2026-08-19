@@ -82,11 +82,20 @@ function classifyJoinFailure(error: unknown): {
 }
 
 let activeRuntime: JobOrchestrator | undefined;
+let jobCompletionNotifier:
+  | ((job: import("./job-contracts.js").JobRecord) => Promise<void>)
+  | undefined;
 let activeBuckets: LinkBucketStore | undefined;
 let activeJoinResults: JoinResultStore | undefined;
 
 export function getWorkerRuntime(): JobOrchestrator | undefined {
   return activeRuntime;
+}
+
+export function setJobCompletionNotifier(
+  notifier: (job: import("./job-contracts.js").JobRecord) => Promise<void>,
+): void {
+  jobCompletionNotifier = notifier;
 }
 
 export async function purgeRuntimeSessionData(
@@ -106,8 +115,33 @@ export function startWorkerRuntime(): JobOrchestrator {
   if (activeRuntime) return activeRuntime;
   const orchestrator = new JobOrchestrator(env.QUEUE_CONCURRENCY);
   activeRuntime = orchestrator;
+  orchestrator.addCompletionHook(async (job) => {
+    if (jobCompletionNotifier) await jobCompletionNotifier(job);
+  });
   const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
   const buckets = new LinkBucketStore(redis);
+  const markBroadcastDelivered = async (
+    jobId: string,
+    kind: string,
+    jid: string,
+    repeatIndex: number,
+  ): Promise<boolean> => {
+    const key = `pappy-omega-mini:broadcast-done:${jobId}:${kind}:${encodeURIComponent(jid)}:${repeatIndex}`;
+    try {
+      return (await redis.get(key)) !== "done";
+    } catch {
+      return true;
+    }
+  };
+  const recordBroadcastDelivered = async (
+    jobId: string,
+    kind: string,
+    jid: string,
+    repeatIndex: number,
+  ): Promise<void> => {
+    const key = `pappy-omega-mini:broadcast-done:${jobId}:${kind}:${encodeURIComponent(jid)}:${repeatIndex}`;
+    await redis.set(key, "done", "EX", 60 * 60 * 24 * 30).catch(() => undefined);
+  };
   const joinResults = new JoinResultStore(redis);
   activeBuckets = buckets;
   activeJoinResults = joinResults;
@@ -631,8 +665,12 @@ export function startWorkerRuntime(): JobOrchestrator {
         kind === "gstatus" || kind === "allstatus" || kind === "allchat"
           ? Math.max(1, Math.min(20, Number(payload.count ?? 1)))
           : 1;
-      const groups = baseGroups.flatMap((jid) =>
-        Array.from({ length: repeat }, () => jid),
+      const uniqueGroups = [...new Set(baseGroups)];
+      const deliveries = uniqueGroups.flatMap((jid) =>
+        Array.from({ length: repeat }, (_, repeatIndex) => ({
+          jid,
+          repeatIndex: repeatIndex + 1,
+        })),
       );
       const text = typeof payload.text === "string" ? payload.text : "";
       if (!text.trim() && !payload.media)
@@ -657,11 +695,24 @@ export function startWorkerRuntime(): JobOrchestrator {
       }
       let lastPostAt = 0;
       return runBoundedBatch({
-        items: groups,
+        items: deliveries,
         concurrency: 1,
         context,
-        processItem: async (jid, signal) => {
+        processItem: async ({ jid, repeatIndex }, signal) => {
           if (signal.aborted) return { status: "skipped" as const };
+          const alreadyDelivered = !(await markBroadcastDelivered(
+            context.job.jobId,
+            kind,
+            jid,
+            repeatIndex,
+          ));
+          if (alreadyDelivered) {
+            await context.report({
+              currentGroup: jid,
+              currentAction: `already posted${repeat > 1 ? ` · repeat ${repeatIndex}/${repeat}` : ""}`,
+            });
+            return { status: "skipped" as const };
+          }
           if (lastPostAt) {
             const wait = Math.max(0, delayMs - (Date.now() - lastPostAt));
             if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
@@ -695,10 +746,16 @@ export function startWorkerRuntime(): JobOrchestrator {
                 undefined,
                 media,
               );
+            await recordBroadcastDelivered(
+              context.job.jobId,
+              kind,
+              jid,
+              repeatIndex,
+            );
             await context.report({
               currentGroup: jid,
               currentAction: "posted",
-              lastResult: `${kind} posted to ${jid}`,
+              lastResult: `${kind} posted to ${jid}${repeat > 1 ? ` · repeat ${repeatIndex}/${repeat}` : ""}`,
             });
             return { status: "success" as const };
           } catch (error) {

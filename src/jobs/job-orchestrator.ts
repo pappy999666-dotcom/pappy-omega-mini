@@ -106,6 +106,7 @@ export class JobOrchestrator {
   private readonly worker: Worker<JobRecord>;
   private readonly joinResults: JoinResultStore;
   private readonly closeHooks: Array<() => Promise<void> | void> = [];
+  private readonly completionHooks: Array<(job: JobRecord) => Promise<void> | void> = [];
   private readonly reaperTimer: NodeJS.Timeout;
   private reaperBusy = false;
 
@@ -149,6 +150,10 @@ export class JobOrchestrator {
 
   addCloseHook(hook: () => Promise<void> | void): void {
     this.closeHooks.push(hook);
+  }
+
+  addCompletionHook(hook: (job: JobRecord) => Promise<void> | void): void {
+    this.completionHooks.push(hook);
   }
 
   async enqueue<TPayload extends Record<string, unknown>>(
@@ -351,6 +356,11 @@ export class JobOrchestrator {
         heartbeatAt: Date.now(),
         cancellationRequested: context.isCancellationRequested(),
       });
+      const completedRecord = await this.store.get(record.jobId);
+      if (completedRecord) {
+        for (const hook of this.completionHooks)
+          await Promise.resolve(hook(completedRecord)).catch(() => undefined);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const retrying = bullJob.attemptsMade + 1 < record.maxAttempts;

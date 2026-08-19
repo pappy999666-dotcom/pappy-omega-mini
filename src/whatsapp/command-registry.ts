@@ -32,6 +32,14 @@ import {
   getGroupInviteCode,
 } from "./transport-adapter.js";
 
+export interface EnqueueJobResult {
+  jobCode: string;
+  totalGroups?: number;
+  totalPosts?: number;
+  delayMs?: number;
+  expectedTimeMs?: number;
+}
+
 export interface CommandContext {
   workspaceId: string;
   sessionId: string;
@@ -42,10 +50,14 @@ export interface CommandContext {
   args: string[];
   invokedName?: string;
   rawPayload?: string;
+  pairSession?: (input: {
+    label: string;
+    phoneNumber: string;
+  }) => Promise<{ sessionName: string; phoneNumber: string; code: string }>;
   enqueueJob?: (input: {
     kind: "gstatus" | "allstatus" | "allchat" | "tag";
     payload: Record<string, unknown>;
-  }) => Promise<string>;
+  }) => Promise<string | EnqueueJobResult>;
   sendCurrentGroupStatus?: (input: {
     text: string;
     repeat: number;
@@ -89,6 +101,31 @@ function mediaCommandPayload(ctx: CommandContext): string {
   return caption;
 }
 
+function queuedJobAcknowledgement(
+  kind: "allstatus" | "allchat",
+  result: string | EnqueueJobResult,
+): string {
+  if (typeof result === "string")
+    return `${kind === "allstatus" ? "All-status" : "All-chat"} job queued: ${result}`;
+  const delay = Math.max(1, Math.round((result.delayMs ?? 20000) / 1000));
+  const totalGroups = result.totalGroups ?? "—";
+  const totalPosts = result.totalPosts ?? totalGroups;
+  const expectedSeconds = Math.max(0, Math.ceil((result.expectedTimeMs ?? 0) / 1000));
+  const minutes = Math.floor(expectedSeconds / 60);
+  const seconds = expectedSeconds % 60;
+  return [
+    `✦ PAPPY OMEGA MINI · ${kind === "allstatus" ? "ALL-STATUS" : "ALL-CHAT"}`,
+    "──────────────────────────────",
+    `Total groups  · ${totalGroups}`,
+    `Expected posts · ${totalPosts}`,
+    `Delay         · ${delay}s`,
+    `Expected time · ${minutes}m ${seconds}s`,
+    `Live code     · ${result.jobCode}`,
+    "",
+    "Open Telegram → Live Show and paste the live code for durable progress.",
+  ].join("\n");
+}
+
 function repeatAndPayload(
   ctx: CommandContext,
   enabled: boolean,
@@ -130,10 +167,33 @@ export function createCommandRegistry(): RegisteredCommand[] {
     {
       name: "pair",
       aliases: [],
-      description: "Start pairing from the Telegram control plane.",
+      description: "Create and pair a WhatsApp session from this owner chat.",
       ownerOnly: true,
-      run: async () =>
-        "Pairing is controlled by Telegram for workspace ownership and safety. Open Telegram → Pair to create or attach a WhatsApp session.",
+      run: async (ctx) => {
+        if (!ctx.pairSession)
+          return "WhatsApp pairing is unavailable from this transport.";
+        const raw = mediaCommandPayload(ctx);
+        const parts = raw.split(/\s+/).filter(Boolean);
+        const label = parts[0] ?? "whatsapp-session";
+        const phoneNumber = parts[1] ?? "";
+        if (!/^\d{8,15}$/.test(phoneNumber.replace(/\D/g, "")))
+          return "Usage: .pair <label> <international-phone-number>. Example: .pair support 2348012345678";
+        try {
+          const paired = await ctx.pairSession({ label, phoneNumber });
+          return [
+            "✦ PAPPY OMEGA MINI · PAIRING",
+            "──────────────────────────────",
+            `Session · ${paired.sessionName}`,
+            `Phone   · ${paired.phoneNumber}`,
+            `Code    · ${paired.code}`,
+            "",
+            "Open WhatsApp → Linked Devices → Link a Device → Link with phone number, then enter the code.",
+            "The new session is chained to this workspace and its source Telegram owner.",
+          ].join("\n");
+        } catch (error) {
+          return `Pairing failed: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
     },
     {
       name: "ping",
@@ -439,11 +499,11 @@ export function createCommandRegistry(): RegisteredCommand[] {
         );
         if (!text && !ctx.media)
           return "Usage: .allstatus [repeat] <text or media>.";
-        const jobId = await ctx.enqueueJob({
+        const queued = await ctx.enqueueJob({
           kind: "allstatus",
           payload: { text, count: repeat },
         });
-        return `All-status job queued: ${jobId}`;
+        return queuedJobAcknowledgement("allstatus", queued);
       },
     },
     {
@@ -492,11 +552,11 @@ export function createCommandRegistry(): RegisteredCommand[] {
         );
         if (!text && !ctx.media)
           return "Usage: .allchat [repeat] <text or media>.";
-        const jobId = await ctx.enqueueJob({
+        const queued = await ctx.enqueueJob({
           kind: "allchat",
           payload: { text, count: repeat },
         });
-        return `All-chat job queued: ${jobId}`;
+        return queuedJobAcknowledgement("allchat", queued);
       },
     },
     {

@@ -475,7 +475,7 @@ describe("WhatsApp command registry", () => {
       isOwner: true,
       args: [],
     });
-    expect(result).toContain("Telegram");
+    expect(result).toContain("WhatsApp pairing is unavailable");
   });
 });
 
