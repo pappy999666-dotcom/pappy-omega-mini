@@ -9,6 +9,7 @@ import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
 import {
   getSession,
   getWorkspaceDefaults,
+  listAllSessions,
   listSessions,
   updateSession,
 } from "../core/session-registry.js";
@@ -87,6 +88,7 @@ let jobCompletionNotifier:
   | undefined;
 let activeBuckets: LinkBucketStore | undefined;
 let activeJoinResults: JoinResultStore | undefined;
+let validatorSweepTimer: NodeJS.Timeout | undefined;
 
 export function getWorkerRuntime(): JobOrchestrator | undefined {
   return activeRuntime;
@@ -146,6 +148,8 @@ export function startWorkerRuntime(): JobOrchestrator {
   activeBuckets = buckets;
   activeJoinResults = joinResults;
   orchestrator.addCloseHook(async () => {
+    if (validatorSweepTimer) clearInterval(validatorSweepTimer);
+    validatorSweepTimer = undefined;
     await redis.quit();
   });
 
@@ -197,6 +201,7 @@ export function startWorkerRuntime(): JobOrchestrator {
               ...(metadata.participantCount !== undefined
                 ? { memberCount: metadata.participantCount }
                 : {}),
+              needsValidation: false,
             },
           });
           const currentSession = getSession(
@@ -294,6 +299,7 @@ export function startWorkerRuntime(): JobOrchestrator {
             ...(payload.sourceSessionId
               ? { sourceSessionId: payload.sourceSessionId }
               : {}),
+            metadata: { needsValidation: true },
           });
           return { status: "success" as const };
         } catch {
@@ -606,6 +612,7 @@ export function startWorkerRuntime(): JobOrchestrator {
                 ...metadata,
                 joinClassification: "dead-link",
                 joinRetryable: true,
+                needsValidation: false,
               },
             },
           );
@@ -795,5 +802,76 @@ export function startWorkerRuntime(): JobOrchestrator {
       error instanceof Error ? error.message : String(error),
     );
   });
+  void sweepPendingMainValidation(orchestrator, buckets);
+  validatorSweepTimer = setInterval(
+    () => void sweepPendingMainValidation(orchestrator, buckets),
+    5_000,
+  );
+  validatorSweepTimer.unref?.();
   return orchestrator;
+}
+
+
+async function sweepPendingMainValidation(
+  orchestrator: JobOrchestrator,
+  buckets: LinkBucketStore,
+): Promise<void> {
+  const activeSessions = listAllSessions().filter(
+    (session) => session.status === "ACTIVE" && session.authHealth !== "INVALID",
+  );
+  const workspaceIds = [...new Set(activeSessions.map((session) => session.workspaceId))];
+  for (const workspaceId of workspaceIds) {
+    const sessions = activeSessions.filter(
+      (session) => session.workspaceId === workspaceId,
+    );
+    if (!sessions.length) continue;
+    const records: LinkRecord[] = [];
+    let cursor = 0;
+    do {
+      const page = await buckets.list(workspaceId, "main", cursor, 500);
+      records.push(...page.records);
+      cursor = page.nextCursor;
+    } while (cursor !== 0);
+    const pending = records
+      .filter(
+        (record) =>
+          record.metadata?.needsValidation === true ||
+          (record.lastCheckedAt === undefined &&
+            record.metadata?.needsValidation !== false),
+      )
+      .sort((left, right) => left.canonicalUrl.localeCompare(right.canonicalUrl));
+    if (!pending.length) continue;
+    const chunks = sessions.map(() => [] as string[]);
+    pending.forEach((record, index) => {
+      chunks[index % chunks.length]?.push(record.canonicalUrl);
+    });
+    await Promise.all(
+      chunks.flatMap((urls, index) => {
+        const session = sessions[index];
+        if (!session || !urls.length) return [];
+        const payload = {
+          urls,
+          sourceSessionId: session.sessionId,
+          sourceUserId: "validator-auto",
+        };
+        const payloadHash = createHash("sha256")
+          .update(JSON.stringify(payload))
+          .digest("hex");
+        return [
+          orchestrator.enqueue({
+            workspaceId,
+            sessionId: session.sessionId,
+            kind: "link-validation",
+            payload,
+            idempotencyKey: `validator-auto:${workspaceId}:${session.sessionId}:${payloadHash}`,
+          }),
+        ];
+      }),
+    );
+  }
+}
+
+export function stopWorkerRuntimeForTests(): void {
+  if (validatorSweepTimer) clearInterval(validatorSweepTimer);
+  validatorSweepTimer = undefined;
 }

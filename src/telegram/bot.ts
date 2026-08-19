@@ -340,7 +340,7 @@ export function createTelegramBot(): Telegraf<Context> {
     if (ctx.callbackQuery && ctx.from?.id !== undefined) {
       const userId = String(ctx.from.id);
       clearPendingInputs(userId);
-      passiveIntakeSuspended.add(userId);
+      passiveIntakeSuspended.delete(userId);
     }
     await next();
   });
@@ -1363,8 +1363,6 @@ export function createTelegramBot(): Telegraf<Context> {
       return;
     }
     if (!ctx.message.text.startsWith("/")) {
-      const passiveUserId = String(ctx.from?.id ?? "");
-      if (passiveIntakeSuspended.delete(passiveUserId)) return;
       const urls = extractWhatsAppGroupInviteUrls(ctx.message.text);
       if (urls.length) {
         const user = resolveTelegramUser(ctx);
@@ -1474,13 +1472,21 @@ export function createTelegramBot(): Telegraf<Context> {
   });
 
   bot.on("document", async (ctx) => {
-    const passiveUserId = String(ctx.from?.id ?? "");
-    if (passiveIntakeSuspended.delete(passiveUserId)) return;
     const document = ctx.message.document;
     const fileName = document.file_name ?? "document.txt";
     const mimeType = document.mime_type ?? "text/plain";
     const isTextFile =
-      mimeType.startsWith("text/") || /\.(txt|csv|log|md)$/i.test(fileName);
+      mimeType.startsWith("text/") ||
+      [
+        "application/json",
+        "application/ndjson",
+        "application/octet-stream",
+        "application/xml",
+        "text/csv",
+      ].includes(mimeType.toLowerCase()) ||
+      /\.(txt|text|csv|tsv|log|md|json|ndjson|list|links|xml|yaml|yml)$/i.test(
+        fileName,
+      );
     if (!isTextFile) {
       await ctx.reply(
         "Only text-based files (.txt, .csv, .log, or .md) are supported for link intake.",
@@ -3380,8 +3386,14 @@ export function createTelegramBot(): Telegraf<Context> {
           },
           idempotencyKey: `join-manager:${user.workspaceId}:${session.sessionId}:${Date.now()}`,
         });
+        const started = await runtime.waitForStarted(job.jobId, 3000);
         joinJobs.set(key, job.jobId);
-        joinStates.set(key, "running");
+        joinStates.set(
+          key,
+          started && ["RUNNING", "QUEUED", "RETRYING"].includes(started.state)
+            ? "running"
+            : "stopped",
+        );
       } else if (operation === "pause") {
         const jobId = joinJobs.get(key);
         if (jobId) await runtime?.pause(jobId);
@@ -4012,7 +4024,8 @@ export function createTelegramBot(): Telegraf<Context> {
       (item) => item.targetId === (ctx.match[1] ?? ""),
     );
     if (!target) return;
-    await ctx.reply(
+    await edit(
+      ctx,
       pageText(
         "Force Join Target",
         infoResponse(
@@ -4020,7 +4033,7 @@ export function createTelegramBot(): Telegraf<Context> {
           `<code>${escapeHtml(target.usernameOrLink)}</code>\n\nOpen the target, join it, then return and press Check Membership.`,
         ),
       ),
-      { parse_mode: "HTML", reply_markup: forceJoinKeyboard([target]) },
+      forceJoinKeyboard([target]),
     );
   });
   bot.action("forcejoin:status", async (ctx) => {

@@ -29,6 +29,7 @@ export interface LinkRecord {
       | "dead-link"
       | "failed";
     joinRetryable?: boolean;
+    needsValidation?: boolean;
   };
   validationError?: string;
 }

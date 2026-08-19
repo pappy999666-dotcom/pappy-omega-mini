@@ -96,6 +96,10 @@ async function collectUrlValues(
         ...(input.sourceSessionId
           ? { sourceSessionId: input.sourceSessionId }
           : {}),
+        metadata: {
+          ...(before?.metadata ?? {}),
+          needsValidation: true,
+        },
       });
       if (!before) added += 1;
     } catch {

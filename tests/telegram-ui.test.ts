@@ -50,7 +50,7 @@ describe("Telegram UI authorization", () => {
     const dashboard = JSON.stringify(dashboardKeyboard(false));
     const globalBridge = JSON.stringify(globalBridgeKeyboard(2));
     expect(dashboard).toContain("bridge:global");
-    expect(dashboard).toContain("forcejoin:status");
+    expect(dashboard).not.toContain("forcejoin:status");
     expect(globalBridge).toContain("bridge:global:select");
     expect(dashboard).not.toContain("admin:bridge");
   });
@@ -115,6 +115,25 @@ describe("Telegram UI authorization", () => {
     expect(picker).toContain("admin:media:pick:media-1");
     expect(picker).toContain("admin:media:clear");
     expect(picker).toContain("admin:media:caption");
+  });
+
+  it("uses direct Telegram URLs for Force Join targets", () => {
+    const gate = JSON.stringify(
+      forceJoinKeyboard([
+        {
+          targetId: "target-1",
+          targetType: "channel",
+          usernameOrLink: "@pappylung",
+          displayName: "pappy channel",
+          buttonText: "Join channel",
+          enabled: true,
+          required: true,
+          sortOrder: 0,
+        },
+      ]),
+    );
+    expect(gate).toContain("https://t.me/pappylung");
+    expect(gate).not.toContain("forcejoin:open:target-1");
   });
 
   it("keeps Admin Global Bridge callbacks short and actionable", () => {

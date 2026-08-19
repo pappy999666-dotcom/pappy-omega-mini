@@ -86,7 +86,9 @@ export async function mergeValidatorBuckets(
     ];
     let moved = 0;
     for (const record of records) {
-      const next = await store.move(workspaceId, record.canonicalUrl, "main");
+      const next = await store.move(workspaceId, record.canonicalUrl, "main", {
+        metadata: { ...record.metadata, needsValidation: true },
+      });
       if (next) moved += 1;
     }
     return moved;

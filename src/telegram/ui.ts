@@ -90,7 +90,6 @@ export function dashboardKeyboard(isAdmin: boolean): InlineKeyboardMarkup {
       btn("⌁ Validator Hub", "bucket:status"),
       btn("🌉 Global Bridge", "bridge:global"),
     ],
-    [btn("♙ Membership Gate", "forcejoin:status")],
     [
       btn("◷ Scheduled Jobs", "jobs:list"),
       btn("📺 Live Show", "jobs:live:open", "success"),
@@ -505,15 +504,22 @@ export function forceJoinText(
   );
 }
 
+function forceJoinUrl(value: string): string {
+  const target = value.trim();
+  if (/^https?:\/\//i.test(target)) return target;
+  if (/^t\.me\//i.test(target)) return `https://${target}`;
+  if (target.startsWith("@")) return `https://t.me/${target.slice(1)}`;
+  if (/^[A-Za-z0-9_]{3,}$/.test(target)) return `https://t.me/${target}`;
+  if (/^-?\d+$/.test(target))
+    return `tg://resolve?domain=${encodeURIComponent(target)}`;
+  return `https://t.me/${target.replace(/^\/+/, "")}`;
+}
+
 export function forceJoinKeyboard(
   targets: ForceJoinTargetView[],
 ): InlineKeyboardMarkup {
   const rows: Button[][] = targets.map((target) => [
-    btn(
-      `↗ ${target.buttonText}`,
-      `forcejoin:open:${target.targetId}`,
-      "primary",
-    ),
+    urlBtn(`↗ ${target.buttonText}`, forceJoinUrl(target.usernameOrLink), "primary"),
   ]);
   rows.push([btn("✓ Check Membership", "forcejoin:check", "success")]);
   return keyboard(rows);
