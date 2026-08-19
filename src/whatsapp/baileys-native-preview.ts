@@ -4,8 +4,9 @@ import { isIP } from "node:net";
 import { Redis } from "ioredis";
 import sharp from "sharp";
 import { env } from "../config/env.js";
+import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
 
-const PREVIEW_CACHE_VERSION = "v4";
+const PREVIEW_CACHE_VERSION = "v5";
 const PREVIEW_TTL_SECONDS = 7 * 24 * 60 * 60;
 const PREVIEW_FAILURE_TTL_SECONDS = 60;
 const FETCH_TIMEOUT_MS = 8_000;
@@ -110,14 +111,7 @@ function cleanUrl(value: string): string | undefined {
 }
 
 export function canonicalizePreviewUrl(value: string): string {
-  const parsed = new URL(value.trim());
-  if (!/^https?:$/.test(parsed.protocol))
-    throw new Error("Preview URLs must use HTTP or HTTPS.");
-  if (parsed.username || parsed.password)
-    throw new Error("Preview URLs cannot contain credentials.");
-  parsed.hostname = parsed.hostname.toLowerCase();
-  parsed.hash = "";
-  return parsed.toString();
+  return canonicalizeHttpUrl(value);
 }
 
 export function assertSafePreviewUrl(value: string): void {
@@ -620,9 +614,21 @@ async function nativeLinkPreview(
     "canonical-url": record.canonicalUrl,
     ...(record.title ? { title: record.title } : {}),
     ...(record.description ? { description: record.description } : {}),
-    previewType: 5,
+    previewType: 0,
     ...(thumbnail ? { jpegThumbnail: thumbnail } : {}),
-    ...(highQualityThumbnail ? { highQualityThumbnail } : {}),
+    ...(highQualityThumbnail
+      ? {
+          highQualityThumbnail: {
+            ...highQualityThumbnail,
+            ...(highQualityThumbnail.width ? {} : { width: 480 }),
+            ...(highQualityThumbnail.height ? {} : { height: 720 }),
+          },
+        }
+      : {}),
+    linkPreviewMetadata: {
+      linkMediaDuration: 0,
+      socialMediaPostType: 4,
+    },
   };
 }
 

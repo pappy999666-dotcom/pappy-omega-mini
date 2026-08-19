@@ -1,6 +1,7 @@
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
 import { LinkBucketStore } from "./link-bucket-store.js";
+import { canonicalizeHttpUrl } from "./url-canonicalization.js";
 
 const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
 const buckets = new LinkBucketStore(redis);
@@ -84,7 +85,7 @@ async function collectUrlValues(
   for (const originalUrl of urls) {
     try {
       if (!isWhatsAppGroupInviteUrl(originalUrl)) continue;
-      const canonicalUrl = new URL(originalUrl).toString();
+      const canonicalUrl = canonicalizeHttpUrl(originalUrl);
       const before = await buckets.get(input.workspaceId, canonicalUrl);
       await buckets.upsert({
         canonicalUrl,

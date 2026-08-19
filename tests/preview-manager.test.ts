@@ -18,6 +18,14 @@ describe("canonical Baileys-native preview pipeline", () => {
     expect(canonicalizePreviewUrl("HTTPS://Example.com/a#fragment")).toBe(
       "https://example.com/a",
     );
+    expect(
+      canonicalizePreviewUrl(
+        "https://chat.whatsapp.com/JjF3McLM5gIKNz7zaQKJbZ?s=cl&p=a&mlu=4",
+      ),
+    ).toBe("https://chat.whatsapp.com/JjF3McLM5gIKNz7zaQKJbZ");
+    expect(canonicalizePreviewUrl("https://example.com/a?x=1")).toBe(
+      "https://example.com/a?x=1",
+    );
   });
 
   it("blocks private and metadata hosts", () => {
@@ -39,7 +47,39 @@ describe("canonical Baileys-native preview pipeline", () => {
     );
   });
 
-  it("accepts only WhatsApp group invite URLs for Validator Hub", () => {
+  it("resolves parameterized group invites through the bare invite code", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async () =>
+      new Response("", { status: 404 }),
+    ) as typeof fetch;
+    try {
+      const text =
+        "https://chat.whatsapp.com/JjF3McLM5gIKNz7zaQKJbZ?s=cl&p=a&mlu=4";
+      const content = await prepareCanonicalPreviewContent({
+        text,
+        content: { text },
+        socket: {
+          groupGetInviteInfo: async (code: string) => {
+            calls.push(code);
+            return { id: "120363000000000000@g.us", subject: "Pappy bugs", size: 42 };
+          },
+        },
+        cacheScope: `test-query-invite-${Date.now()}`,
+      });
+      expect(calls).toEqual(["JjF3McLM5gIKNz7zaQKJbZ"]);
+      expect(content.text).toBe(text);
+      expect(content.linkPreview).toMatchObject({
+        "matched-text": "https://chat.whatsapp.com/JjF3McLM5gIKNz7zaQKJbZ",
+        "canonical-url": "https://chat.whatsapp.com/JjF3McLM5gIKNz7zaQKJbZ",
+        title: "Pappy bugs",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("accepts only WhatsApp group invite URLs for Validator Hub", async () => {
     expect(isWhatsAppGroupInviteUrl("https://chat.whatsapp.com/ABC123")).toBe(
       true,
     );
@@ -90,7 +130,11 @@ describe("canonical Baileys-native preview pipeline", () => {
           "matched-text": "https://example.com/article",
           title: "Example title",
           description: "Example description",
-          previewType: 5,
+          previewType: 0,
+          linkPreviewMetadata: {
+            linkMediaDuration: 0,
+            socialMediaPostType: 4,
+          },
         },
       });
       const preview = content.linkPreview as Record<string, unknown>;
@@ -242,10 +286,10 @@ describe("canonical Baileys-native preview pipeline", () => {
       const second = await prepareCanonicalPreviewContent({ text, content: { text }, socket, cacheScope: scope });
       expect(
         (first.linkPreview as Record<string, unknown>).highQualityThumbnail,
-      ).toMatchObject({ directPath: "/thumbnail" });
+      ).toMatchObject({ directPath: "/thumbnail", width: 900, height: 600 });
       expect(
         (second.linkPreview as Record<string, unknown>).highQualityThumbnail,
-      ).toMatchObject({ directPath: "/thumbnail" });
+      ).toMatchObject({ directPath: "/thumbnail", width: 900, height: 600 });
       expect(uploads).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
