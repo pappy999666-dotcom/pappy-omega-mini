@@ -30,9 +30,9 @@ The prompt explicitly requires WhatsApp stability before moderator expansion. No
 | B3 | Durable per-group settings, rules, welcome/goodbye, staff, whitelist, filters, lock state | PARTIAL — settings, rules, staff, whitelist, welcome/goodbye durable; filters/lock remain |
 | B4 | Unified DETECT → CLASSIFY → EXEMPTION → RECORD → ACTION → EXECUTE → NOTIFY → CLEANUP engine | PARTIAL — protected manual actions and anti-link/anti-spam paths; unified engine remains |
 | B5 | Warning records and `/warn`, `/warns`, `/resetwarn`, `/warnlimit`, `/warnlist` | PARTIAL — all command routes and durable reset/limit/list now exist; escalation policy and dashboard remain |
-| B6 | User mute and group-wide mute with expiry | PARTIAL — real user mute/unmute/ban/unban and warning escalation deployed; group-wide mute remains |
+| B6 | User mute and group-wide mute with expiry | PARTIAL — real user/group mute, unmute, ban/unban, and warning escalation deployed; automatic group-mute expiry remains |
 | B7 | Staff add/remove/list, trusted users, whitelist, real Telegram permission limits | PARTIAL — staff/whitelist and Telegram admin checks deployed; trusted-user UX remains |
-| B8 | Protected commands: moderation, rules, filters, anti-spam, anti-link, logs, welcome/goodbye | PARTIAL — moderation/rules/anti-spam/anti-link/logs/welcome/goodbye deployed; filters remain |
+| B8 | Protected commands: moderation, rules, filters, anti-spam, anti-link, logs, welcome/goodbye | PARTIAL — moderation/rules/filters/anti-spam/anti-link/logs/welcome/goodbye deployed; unified routing remains |
 | B9 | DM/group permission-aware command suggestions | PARTIAL — private/group/admin scopes deployed; per-user dynamic menu refresh remains |
 | B10 | Welcome/goodbye templates with real mentions and optional media/cleanup | PARTIAL — durable text templates and member-event replies deployed; media/cleanup remain |
 | B11 | Rules state machine and editable templates | MISSING / TO AUDIT |
