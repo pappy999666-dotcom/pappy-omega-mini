@@ -26,7 +26,7 @@ import {
 import { getValidatorSnapshot } from "../links/validator-snapshot.js";
 import { collectLinks, extractUrls } from "../links/link-collector.js";
 import { exportBucket } from "../links/link-export.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   deletePairingRequest,
   disableSchedule,
@@ -242,13 +242,19 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.start(async (ctx) => {
     resolveTelegramUser(ctx);
-    const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+    const isGroup =
+      ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
     if (isGroup && ctx.chat) {
-      const group = await loadModeratorGroup(String(ctx.chat.id)).catch(() => undefined);
+      const group = await loadModeratorGroup(String(ctx.chat.id)).catch(
+        () => undefined,
+      );
       let moderator = false;
       if (ctx.from) {
-        const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id).catch(() => undefined);
-        moderator = member?.status === "creator" || member?.status === "administrator";
+        const member = await ctx.telegram
+          .getChatMember(ctx.chat.id, ctx.from.id)
+          .catch(() => undefined);
+        moderator =
+          member?.status === "creator" || member?.status === "administrator";
       }
       const title = "title" in ctx.chat ? ctx.chat.title : "Telegram group";
       await ctx.reply(groupStartText(title, moderator, group?.rules), {
@@ -275,39 +281,69 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.action("group:start:refresh", async (ctx) => {
     await ctx.answerCbQuery("Refreshing…");
-    if (!ctx.chat || (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup")) return;
-    const group = await loadModeratorGroup(String(ctx.chat.id)).catch(() => undefined);
+    if (
+      !ctx.chat ||
+      (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup")
+    )
+      return;
+    const group = await loadModeratorGroup(String(ctx.chat.id)).catch(
+      () => undefined,
+    );
     const title = "title" in ctx.chat ? ctx.chat.title : "Telegram group";
     let moderator = false;
     if (ctx.from) {
-      const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id).catch(() => undefined);
-      moderator = member?.status === "creator" || member?.status === "administrator";
+      const member = await ctx.telegram
+        .getChatMember(ctx.chat.id, ctx.from.id)
+        .catch(() => undefined);
+      moderator =
+        member?.status === "creator" || member?.status === "administrator";
     }
-    await edit(ctx, groupStartText(title, moderator, group?.rules), groupStartKeyboard(moderator));
+    await edit(
+      ctx,
+      groupStartText(title, moderator, group?.rules),
+      groupStartKeyboard(moderator),
+    );
   });
 
   bot.action("group:start:rules", async (ctx) => {
     await ctx.answerCbQuery();
-    if (!ctx.chat || (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup")) return;
-    const group = await loadModeratorGroup(String(ctx.chat.id)).catch(() => undefined);
+    if (
+      !ctx.chat ||
+      (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup")
+    )
+      return;
+    const group = await loadModeratorGroup(String(ctx.chat.id)).catch(
+      () => undefined,
+    );
     const title = "title" in ctx.chat ? ctx.chat.title : "Telegram group";
     let moderator = false;
     if (ctx.from) {
-      const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id).catch(() => undefined);
-      moderator = member?.status === "creator" || member?.status === "administrator";
+      const member = await ctx.telegram
+        .getChatMember(ctx.chat.id, ctx.from.id)
+        .catch(() => undefined);
+      moderator =
+        member?.status === "creator" || member?.status === "administrator";
     }
     await edit(
       ctx,
       pageText(
         "Group Rules",
-        infoResponse("Published Rules", escapeHtml(group?.rules ?? "No group rules have been configured.")),
+        infoResponse(
+          "Published Rules",
+          escapeHtml(group?.rules ?? "No group rules have been configured."),
+        ),
       ),
       keyboard([[btn(ui.back, "group:start:refresh")]]),
     );
   });
   bot.action("group:start:moderation", async (ctx) => {
-    if (!ctx.chat || (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup")) {
-      await ctx.answerCbQuery("Open this in a Telegram group.", { show_alert: true });
+    if (
+      !ctx.chat ||
+      (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup")
+    ) {
+      await ctx.answerCbQuery("Open this in a Telegram group.", {
+        show_alert: true,
+      });
       return;
     }
     await openModeratorDashboard(ctx);
@@ -1554,6 +1590,77 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     await showValidatorHub(ctx);
   });
+  bot.action("bucket:validate", async (ctx) => {
+    await ctx.answerCbQuery("Starting validation…");
+    const user = resolveTelegramUser(ctx);
+    const runtime = getWorkerRuntime();
+    const snapshot = await getValidatorSnapshot(user.workspaceId).catch(
+      () => undefined,
+    );
+    const session = listSessions(user.workspaceId).find(
+      (entry) => entry.status === "ACTIVE",
+    );
+    const urls =
+      snapshot?.recent.map((record) => record.canonicalUrl).filter(Boolean) ??
+      [];
+    if (!runtime || !session || urls.length === 0) {
+      await edit(
+        ctx,
+        pageText(
+          "Validator Hub",
+          dangerResponse(
+            "Validation Unavailable",
+            !session
+              ? "No authenticated WhatsApp session is currently active. Pair or recover a session first."
+              : "The master bucket has no collected links to validate.",
+          ),
+        ),
+        bucketKeyboard(),
+      );
+      return;
+    }
+    try {
+      const payload = {
+        urls: urls.slice(0, 50),
+        sourceSessionId: session.sessionId,
+        sourceUserId: String(ctx.from?.id ?? "telegram"),
+      };
+      const payloadHash = createHash("sha256")
+        .update(JSON.stringify(payload))
+        .digest("hex");
+      const job = await runtime.enqueue({
+        workspaceId: user.workspaceId,
+        sessionId: session.sessionId,
+        kind: "link-validation",
+        payload,
+        idempotencyKey: `${user.workspaceId}:${session.sessionId}:validator:${payloadHash}`,
+      });
+      await edit(
+        ctx,
+        pageText(
+          "Validator Hub",
+          successResponse(
+            "Validation Started",
+            `<b>Job:</b> <code>${escapeHtml(job.jobId)}</code>\n<b>Links:</b> ${payload.urls.length}\n<b>Session:</b> ${escapeHtml(session.sessionName)}`,
+          ),
+        ),
+        bucketKeyboard(),
+      );
+    } catch (error) {
+      await edit(
+        ctx,
+        pageText(
+          "Validator Hub",
+          dangerResponse(
+            "Validation Failed",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        bucketKeyboard(),
+      );
+    }
+  });
+
   bot.action("ui:validator", async (ctx) => {
     await ctx.answerCbQuery();
     await showValidatorHub(ctx);

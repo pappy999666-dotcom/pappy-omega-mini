@@ -55,7 +55,10 @@ export function groupStartKeyboard(isModerator: boolean): InlineKeyboardMarkup {
     [btn("📜 Group Rules", "group:start:rules")],
     [btn("🔄 Refresh", "group:start:refresh")],
   ];
-  if (isModerator) rows.push([btn("🛡 Moderator Controls", "group:start:moderation", "success")]);
+  if (isModerator)
+    rows.push([
+      btn("🛡 Moderator Controls", "group:start:moderation", "success"),
+    ]);
   return keyboard(rows);
 }
 
@@ -299,8 +302,9 @@ export function bucketKeyboard(): InlineKeyboardMarkup {
   return keyboard([
     [
       btn("📡 Live Validation Log", "bucket:live", "success"),
-      btn("🔄 Refresh", "bucket:status"),
+      btn("▶ Validate Master", "bucket:validate", "success"),
     ],
+    [btn("🔄 Refresh", "bucket:status")],
     [
       btn("📦 Main / Master", "bucket:view:main"),
       btn("✅ Active", "bucket:view:active"),
