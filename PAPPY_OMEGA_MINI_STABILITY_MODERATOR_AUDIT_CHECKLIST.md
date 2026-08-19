@@ -35,7 +35,7 @@ The prompt explicitly requires WhatsApp stability before moderator expansion. No
 | B8 | Protected commands: moderation, rules, filters, anti-spam, anti-link, logs, welcome/goodbye | PARTIAL — moderation/rules/filters/anti-spam/anti-link/logs/welcome/goodbye deployed; unified routing remains |
 | B9 | DM/group permission-aware command suggestions | PARTIAL — private/group/admin scopes deployed; per-user dynamic menu refresh remains |
 | B10 | Welcome/goodbye templates with real mentions and optional media/cleanup | PARTIAL — durable text templates and member-event replies deployed; media/cleanup remain |
-| B11 | Rules state machine and editable templates | MISSING / TO AUDIT |
+| B11 | Rules state machine and editable templates | PARTIAL — durable draft, preview, publish, cancel, version counter, and published rules state are deployed; media/template validation and full acceptance coverage remain |
 | B12 | Controlled tag-all with dedupe, bot/admin exclusions, limits, progress, cancellation | PARTIAL — bounded confirmation-gated tag-all now uses up to 50 deduplicated observed members with admin/staff/whitelist/trusted exclusions; progress jobs and full-member enumeration remain |
 | B13 | Anti-link with invite/obfuscated/link text detection, whitelist/trusted exemptions | PARTIAL — common URL/invite detection and whitelist/staff/admin exemptions deployed; obfuscation coverage remains |
 | B14 | Redis sliding-window anti-spam/flood counters with TTL | PARTIAL — Redis 10-second sliding window and TTL deployed |
