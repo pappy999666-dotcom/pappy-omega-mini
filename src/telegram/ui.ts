@@ -329,6 +329,7 @@ export function validatorLiveText(
     state: string;
     jobCode?: string;
     jobId: string;
+    sessionId?: string;
     progress: {
       completed: number;
       total?: number;
@@ -339,6 +340,7 @@ export function validatorLiveText(
       lastResult?: string;
     };
   }> = [],
+  sessions: Array<{ sessionId: string; sessionName: string; status: string; authHealth?: string }> = [],
 ): string {
   const matrix = snapshot.recent
     .slice(0, 10)
@@ -352,13 +354,18 @@ export function validatorLiveText(
     .join("\n") || "Waiting for link activity.";
   const work = jobs.filter((job) => ["RUNNING", "RETRYING"].includes(job.state)).slice(0, 6);
   const activeFeed = work.length
-    ? work.map((job) => `◌ <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code> ${escapeHtml(job.progress.currentAction ?? "validating")} · <code>${escapeHtml(job.progress.currentLink ?? job.progress.lastResult ?? "waiting")}</code>`).join("\n")
-    : "No link is currently being checked; new Main links are admitted automatically.";
+    ? work.map((job) => `◌ <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code> · ${escapeHtml(job.sessionId?.slice(0, 8) ?? "socket—")} · ${escapeHtml(job.progress.currentAction ?? "validating")} · <code>${escapeHtml(job.progress.currentLink ?? job.progress.lastResult ?? "waiting")}</code>`).join("\n")
+    : (snapshot.counts.main ?? 0) > 0
+      ? "Main links are waiting for the next automatic admission sweep or a healthy validation socket."
+      : "No Main links are waiting; collection is active and the Validator is idle.";
+  const sessionFeed = sessions.length
+    ? sessions.map((session) => `${session.status === "ACTIVE" ? "●" : "○"} <b>${escapeHtml(session.sessionName)}</b> · ${escapeHtml(session.status)}${session.authHealth ? ` · ${escapeHtml(session.authHealth)}` : ""} · <code>${escapeHtml(session.sessionId.slice(0, 8))}</code>`).join("\n")
+    : "No session is currently available for validation.";
   return pageText(
     "Validator Hub · Live",
     infoResponse(
       active ? "Live feed is ON" : "Live feed is PAUSED",
-      `<b>Live validation workers · state matrix</b> · refreshed in place\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating/Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Retryable:</b> ${snapshot.counts.error ?? 0}\n<b>Master total:</b> ${snapshot.counts.master ?? 0}\n\n<b>Current validation</b>\n${activeFeed}\n\n<b>Group matrix</b>\n${matrix}\n\n<i>Links leave Main when validation begins. Dead means the invite is revoked, expired, invalid, or the group no longer exists. Temporary session/transport failures return to Main for retry and do not contaminate the Error bucket.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+      `<b>Live validation workers · state matrix</b> · refreshed in place\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating/Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Retryable:</b> ${snapshot.counts.error ?? 0}\n<b>Master total:</b> ${snapshot.counts.master ?? 0}\n\n<b>Validator intake</b> · automatic collection ON · admission every 5s · bounded batches per ACTIVE socket\n\n<b>Validation sockets</b>\n${sessionFeed}\n\n<b>Current validation</b>\n${activeFeed}\n\n<b>Group matrix</b>\n${matrix}\n\n<i>Links leave Main when validation begins. Dead means the invite is revoked, expired, invalid, or the group no longer exists. Temporary session/transport failures return to Main for retry and do not contaminate the Error bucket.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
     ),
   );
 }

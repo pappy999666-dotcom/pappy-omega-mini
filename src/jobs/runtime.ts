@@ -10,6 +10,7 @@ import {
   requeueLegacyValidatorErrors,
   requeueValidatorMainLinks,
 } from "../links/validator-operations.js";
+import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
 import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
 import {
   getSession,
@@ -29,7 +30,10 @@ import {
   readJobMedia,
   type JobMediaReference,
 } from "../whatsapp/job-media-store.js";
-import { selectHealthyWhatsAppSession } from "../whatsapp/session-allocator.js";
+import {
+  listHealthyWhatsAppSessions,
+  selectHealthyWhatsAppSession,
+} from "../whatsapp/session-allocator.js";
 import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
 import { joinWhatsAppInvite } from "./join-operation.js";
@@ -188,17 +192,21 @@ export function startWorkerRuntime(): JobOrchestrator {
           const parsed = new URL(raw);
           if (!["http:", "https:"].includes(parsed.protocol))
             return { status: "failed" as const };
-          const canonicalUrl = parsed.toString();
+          const canonicalUrl = canonicalizeHttpUrl(raw);
           const inviteCode = canonicalUrl.match(
             /chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/,
           )?.[1];
           if (!inviteCode) throw new Error("Invalid WhatsApp group invite link.");
-          const sourceSessionId = selectHealthyWhatsAppSession(
+          const candidates = listHealthyWhatsAppSessions(
+            context.job.workspaceId,
+            payload.sourceSessionId,
+          );
+          const sourceSession = candidates[0] ?? selectHealthyWhatsAppSession(
             context.job.workspaceId,
             payload.sourceSessionId,
             canonicalUrl,
-          )?.sessionId;
-          if (!sourceSessionId)
+          );
+          if (!sourceSession)
             throw new Error("No healthy WhatsApp validation session is available yet.");
           const existing = await buckets.get(context.job.workspaceId, canonicalUrl);
           const validatingMetadata = {
@@ -209,7 +217,7 @@ export function startWorkerRuntime(): JobOrchestrator {
           };
           if (existing)
             await buckets.move(context.job.workspaceId, canonicalUrl, "active", {
-              sourceSessionId,
+              sourceSessionId: sourceSession.sessionId,
               metadata: validatingMetadata,
             });
           else
@@ -219,14 +227,29 @@ export function startWorkerRuntime(): JobOrchestrator {
               bucket: "active",
               workspaceId: context.job.workspaceId,
               sourceUserId: payload.sourceUserId ?? "worker",
-              sourceSessionId,
+              sourceSessionId: sourceSession.sessionId,
               metadata: validatingMetadata,
             });
-          const metadata = await validateInviteLink(
-            context.job.workspaceId,
-            sourceSessionId,
-            inviteCode,
-          );
+          let metadata: Awaited<ReturnType<typeof validateInviteLink>> | undefined;
+          let sourceSessionId: string | undefined;
+          let lastValidationError: unknown;
+          for (const candidate of candidates.length ? candidates : [sourceSession]) {
+            try {
+              metadata = await validateInviteLink(
+                context.job.workspaceId,
+                candidate.sessionId,
+                inviteCode,
+              );
+              sourceSessionId = candidate.sessionId;
+              break;
+            } catch (error) {
+              lastValidationError = error;
+            }
+          }
+          if (!metadata || !sourceSessionId)
+            throw lastValidationError instanceof Error
+              ? lastValidationError
+              : new Error("Invite validation failed on all healthy sessions.");
           await buckets.upsert({
             canonicalUrl,
             originalUrl: raw,
@@ -281,6 +304,7 @@ export function startWorkerRuntime(): JobOrchestrator {
                 restrictionThreshold: defaults.defaultJoinRestrictionThreshold,
                 requestMode: defaults.defaultJoinMode ?? "auto",
                 sourceSessionId,
+                selectedLinks: [canonicalUrl],
               },
               idempotencyKey: `auto-join:${context.job.workspaceId}:${sourceSessionId}:${autoJoinHash}`,
             });
@@ -291,7 +315,7 @@ export function startWorkerRuntime(): JobOrchestrator {
             error instanceof Error ? error.message : String(error);
           const parsed = (() => {
             try {
-              return new URL(raw).toString();
+              return canonicalizeHttpUrl(raw);
             } catch {
               return raw;
             }

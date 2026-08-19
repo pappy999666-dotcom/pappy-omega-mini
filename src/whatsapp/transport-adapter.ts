@@ -527,17 +527,29 @@ export async function validateInviteLink(
     "groupGetInviteInfo",
   );
   if (!inspect) throw new Error("Unsupported capability: inviteValidation");
-  const result = (await inspect(inviteCode)) as {
-    subject?: string;
-    size?: number;
-    participantsCount?: number;
-  };
-  return {
-    ...(result.subject ? { subject: result.subject } : {}),
-    ...((result.participantsCount ?? result.size) !== undefined
-      ? { participantCount: result.participantsCount ?? result.size }
-      : {}),
-  };
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const result = (await inspect(inviteCode)) as {
+        subject?: string;
+        size?: number;
+        participantsCount?: number;
+      };
+      return {
+        ...(result.subject ? { subject: result.subject } : {}),
+        ...((result.participantsCount ?? result.size) !== undefined
+          ? { participantCount: result.participantsCount ?? result.size }
+          : {}),
+      };
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      const retryable = /rate|429|timeout|tempor|network|connection|closed|unavailable|5\d\d/.test(message);
+      if (!retryable || attempt === 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Invite validation failed."));
 }
 
 export async function getGroupInviteLink(

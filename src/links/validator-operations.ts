@@ -5,6 +5,7 @@ import {
   type LinkBucket,
   type LinkRecord,
 } from "./link-bucket-store.js";
+import { canonicalizeHttpUrl } from "./url-canonicalization.js";
 
 export type ValidatorBucket = LinkBucket;
 
@@ -128,7 +129,7 @@ export async function claimValidatorMainLinks(
     for (const raw of urls) {
       let canonicalUrl: string;
       try {
-        canonicalUrl = new URL(raw).toString();
+        canonicalUrl = canonicalizeHttpUrl(raw);
       } catch {
         continue;
       }
@@ -157,7 +158,7 @@ export async function requeueValidatorMainLinks(
     for (const raw of urls) {
       let canonicalUrl: string;
       try {
-        canonicalUrl = new URL(raw).toString();
+        canonicalUrl = canonicalizeHttpUrl(raw);
       } catch {
         continue;
       }

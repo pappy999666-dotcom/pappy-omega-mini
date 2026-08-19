@@ -26,6 +26,10 @@ import {
 } from "../core/encrypted-store.js";
 import { routeWhatsAppText, type WhatsAppReply } from "./message-router.js";
 import { collectLinks } from "../links/link-collector.js";
+import {
+  claimValidatorMainLinks,
+  requeueValidatorMainLinks,
+} from "../links/validator-operations.js";
 import { prepareCanonicalPreviewContent } from "./baileys-native-preview.js";
 import {
   extractMessageText,
@@ -471,6 +475,12 @@ async function openWhatsAppSession(
               const { getWorkerRuntime } = await import("../jobs/runtime.js");
               const runtime = getWorkerRuntime();
               if (!runtime) return;
+              const claimed = await claimValidatorMainLinks(
+                workspaceId,
+                urls,
+                sessionId,
+              ).catch(() => 0);
+              if (claimed !== urls.length) return;
               const payload = {
                 urls,
                 sourceUserId: senderJid,
@@ -479,13 +489,18 @@ async function openWhatsAppSession(
               const payloadHash = createHash("sha256")
                 .update(JSON.stringify(payload))
                 .digest("hex");
-              await runtime.enqueue({
-                workspaceId,
-                sessionId,
-                kind: "link-validation",
-                payload,
-                idempotencyKey: `${workspaceId}:${sessionId}:auto-validator:${payloadHash}`,
-              });
+              try {
+                await runtime.enqueue({
+                  workspaceId,
+                  sessionId,
+                  kind: "link-validation",
+                  payload,
+                  idempotencyKey: `${workspaceId}:${sessionId}:auto-validator:${payloadHash}`,
+                });
+              } catch (error) {
+                await requeueValidatorMainLinks(workspaceId, urls).catch(() => undefined);
+                throw error;
+              }
             })
             .catch((error) => {
               console.error(

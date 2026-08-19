@@ -3926,7 +3926,7 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!requireAdmin(ctx)) return;
     const user = resolveTelegramUser(ctx);
     const activeSessions = activeAllSessions();
-    const targets: string[] = [];
+    const targets = activeSessions.map((session) => session.sessionId);
     pendingAutoPromote.set(String(ctx.from?.id ?? ""), {
       workspaceId: user.workspaceId,
       scope: "GLOBAL",
@@ -3935,7 +3935,17 @@ export function createTelegramBot(): Telegraf<Context> {
       chatId: ctx.chat?.id,
       messageId: ctx.callbackQuery?.message && "message_id" in ctx.callbackQuery.message ? ctx.callbackQuery.message.message_id : undefined,
     });
-    await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Target Sessions", "Select the active WhatsApp sessions this owner job may use. This configuration remains independent from user and session Auto Promote settings.")), autoPromoteGlobalTargetsKeyboard(activeSessions, new Set(targets)));
+    await edit(
+      ctx,
+      pageText(
+        "Global Auto Promote",
+        infoResponse(
+          "Choose Command",
+          `<b>Targets:</b> ${targets.length} ACTIVE session(s) selected by default. You can review them after choosing the command.\n\nThis owner configuration automatically follows future eligible sessions.`,
+        ),
+      ),
+      autoPromoteCommandKeyboard(),
+    );
   });
   bot.action("admin:autopromote:targets:refresh", async (ctx) => {
     await ctx.answerCbQuery("Refreshing ACTIVE sessions…");
@@ -3982,8 +3992,29 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!requireAdmin(ctx)) return;
     const userId = String(ctx.from?.id ?? "");
     const current = pendingAutoPromote.get(userId);
-    if (!current || current.scope !== "GLOBAL" || !(current.targetSessionIds?.length)) return;
-    await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Command", `<b>Targets:</b> ${current.targetSessionIds.length} selected active session(s)`)), autoPromoteCommandKeyboard());
+    if (!current || current.scope !== "GLOBAL" || !(current.targetSessionIds?.length)) {
+      await edit(
+        ctx,
+        pageText(
+          "Global Auto Promote",
+          infoResponse("Select at least one session", "Choose one or more ACTIVE sessions, then press Use Selected Sessions."),
+        ),
+        autoPromoteGlobalTargetsKeyboard(activeAllSessions(), new Set(current?.targetSessionIds ?? [])),
+      );
+      return;
+    }
+    pendingAutoPromote.set(userId, { ...current, stage: "days" });
+    await edit(
+      ctx,
+      pageText(
+        "Global Auto Promote",
+        infoResponse(
+          "Choose Duration",
+          `<b>Targets:</b> ${current.targetSessionIds.length} selected ACTIVE session(s)\n\nChoose how many days this Global Auto Promote should run.`,
+        ),
+      ),
+      autoPromoteDaysKeyboard(),
+    );
   });
   bot.action(/^autopromote:scope:SESSION:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -4007,7 +4038,23 @@ export function createTelegramBot(): Telegraf<Context> {
     const current = pendingAutoPromote.get(userId);
     if (!current) return;
     const command = ctx.match[1] as AutoPromoteCommand;
-    pendingAutoPromote.set(userId, { ...current, command, stage: "days" });
+    pendingAutoPromote.set(userId, { ...current, command, stage: current.scope === "GLOBAL" ? "scope" : "days" });
+    if (current.scope === "GLOBAL") {
+      const activeSessions = activeAllSessions();
+      const selected = new Set(current.targetSessionIds ?? activeSessions.map((session) => session.sessionId));
+      await edit(
+        ctx,
+        pageText(
+          "Global Auto Promote",
+          infoResponse(
+            "Review Target Sessions",
+            `<b>Command:</b> <code>${escapeHtml(command)}</code>\n<b>Selected:</b> ${selected.size} ACTIVE session(s)\n\nAdjust the selection if needed, then press Continue to Duration.`,
+          ),
+        ),
+        autoPromoteGlobalTargetsKeyboard(activeSessions, selected),
+      );
+      return;
+    }
     await edit(ctx, pageText("Auto Promote", infoResponse("Duration", "How many days should this Auto Promote job run? Choose 2–30 days.")), autoPromoteDaysKeyboard());
   });
   bot.action(/^autopromote:days:(\d+)$/, async (ctx) => {
@@ -5611,9 +5658,15 @@ async function showValidatorLiveLog(
       job.kind === "link-validation" &&
       ["RUNNING", "RETRYING"].includes(job.state),
   );
+  const validationSessions = listSessions(user.workspaceId).map((session) => ({
+    sessionId: session.sessionId,
+    sessionName: session.sessionName,
+    status: effectiveSessionStatus(session),
+    ...(session.authHealth ? { authHealth: session.authHealth } : {}),
+  }));
   await edit(
     ctx,
-    validatorLiveText(snapshot, active, jobs),
+    validatorLiveText(snapshot, active, jobs, validationSessions),
     validatorLiveKeyboard(active),
   );
   const message = ctx.callbackQuery?.message;
@@ -5645,12 +5698,18 @@ async function showValidatorLiveLog(
         ) ?? Promise.resolve([]),
     ])
       .then(([nextSnapshot, nextJobs]) => {
+        const nextValidationSessions = listSessions(user.workspaceId).map((session) => ({
+          sessionId: session.sessionId,
+          sessionName: session.sessionName,
+          status: effectiveSessionStatus(session),
+          ...(session.authHealth ? { authHealth: session.authHealth } : {}),
+        }));
         void ctx.telegram
           .editMessageText(
             chatId,
             messageId,
             undefined,
-            validatorLiveText(nextSnapshot, true, nextJobs),
+            validatorLiveText(nextSnapshot, true, nextJobs, nextValidationSessions),
             { parse_mode: "HTML", reply_markup: validatorLiveKeyboard(true) },
           )
           .catch(() => {

@@ -14,23 +14,29 @@ export function isHealthyWhatsAppSession(
   return !lastHealthy || now - lastHealthy <= HEALTH_WINDOW_MS;
 }
 
+export function listHealthyWhatsAppSessions(
+  workspaceId: string,
+  preferredSessionId?: string,
+): WhatsAppSession[] {
+  const sessions = listSessions(workspaceId)
+    .filter((session) => isHealthyWhatsAppSession(session))
+    .sort((left, right) => score(right) - score(left));
+  if (!preferredSessionId) return sessions;
+  const preferredIndex = sessions.findIndex(
+    (session) => session.sessionId === preferredSessionId,
+  );
+  if (preferredIndex <= 0) return sessions;
+  const [preferred] = sessions.splice(preferredIndex, 1);
+  if (preferred) sessions.unshift(preferred);
+  return sessions;
+}
+
 export function selectHealthyWhatsAppSession(
   workspaceId: string,
   preferredSessionId?: string,
   affinityKey?: string,
 ): WhatsAppSession | undefined {
-  const sessions = listSessions(workspaceId);
-  const preferred = preferredSessionId
-    ? sessions.find(
-        (session) =>
-          session.sessionId === preferredSessionId &&
-          isHealthyWhatsAppSession(session),
-      )
-    : undefined;
-  if (preferred) return preferred;
-  const healthy = sessions
-    .filter((session) => isHealthyWhatsAppSession(session))
-    .sort((left, right) => score(right) - score(left));
+  const healthy = listHealthyWhatsAppSessions(workspaceId, preferredSessionId);
   if (!healthy.length) return undefined;
   if (!affinityKey) return healthy[0];
   const digest = createHash("sha256").update(affinityKey).digest();
