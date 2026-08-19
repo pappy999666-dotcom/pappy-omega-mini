@@ -5914,14 +5914,22 @@ function isAdmin(ctx: Context): boolean {
 
 function requireAdmin(ctx: Context): boolean {
   if (isAdmin(ctx)) return true;
-  void ctx.answerCbQuery("Owner only.", { show_alert: true });
+  if (ctx.callbackQuery) {
+    void ctx.answerCbQuery("Owner only.", { show_alert: true });
+  } else {
+    void ctx.reply("Owner-only operation.").catch(() => undefined);
+  }
   return false;
 }
 
 function deny(ctx: Context): void {
-  void ctx.answerCbQuery("This action is not available for your workspace.", {
-    show_alert: true,
-  });
+  if (ctx.callbackQuery) {
+    void ctx.answerCbQuery("This action is not available for your workspace.", {
+      show_alert: true,
+    });
+  } else {
+    void ctx.reply("This action is not available for your workspace.").catch(() => undefined);
+  }
 }
 
 function parseJoinSetting(
