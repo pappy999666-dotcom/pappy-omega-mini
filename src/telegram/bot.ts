@@ -121,6 +121,10 @@ import {
   pageText,
   sessionKeyboard,
   sessionText,
+  sessionToolsKeyboard,
+  sessionSettingsKeyboard,
+  sessionAccessKeyboard,
+  sessionValidatorKeyboard,
   sessionsKeyboard,
   btn,
   copyBtn,
@@ -172,7 +176,7 @@ const pendingSessionSudo = new Map<
 >();
 const pendingGroupPicture = new Map<
   string,
-  { workspaceId: string; sessionId: string }
+  { workspaceId: string; sessionId: string; groupJid?: string }
 >();
 const pendingGroupLeave = new Map<
   string,
@@ -482,10 +486,16 @@ export function createTelegramBot(): Telegraf<Context> {
     const groupPicture = pendingGroupPicture.get(userId);
     if (groupPicture && !ctx.message.text.startsWith("/")) {
       pendingGroupPicture.delete(userId);
-      const [groupJid, imageUrl] = ctx.message.text.trim().split(/\s+/);
+      const input = ctx.message.text.trim().split(/\s+/);
+      const groupJid = groupPicture.groupJid ?? input[0];
+      const imageUrl = groupPicture.groupJid ? input[0] : input[1];
       try {
         if (!groupJid || !imageUrl || !/^https:\/\//i.test(imageUrl))
-          throw new Error("Usage: send <groupJid> <https image URL>.");
+          throw new Error(
+            groupPicture.groupJid
+              ? "Send one HTTPS image URL."
+              : "Usage: send <groupJid> <https image URL>.",
+          );
         await updateGroupProfilePicture(
           groupPicture.workspaceId,
           groupPicture.sessionId,
@@ -1362,6 +1372,77 @@ export function createTelegramBot(): Telegraf<Context> {
       sessionKeyboard(session, isAdmin(ctx)),
     );
   });
+  bot.action(
+    /^session:([^:]+):section:(overview|tools|groups|bridge|validator|join|health|settings|access)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      const session = ownedSession(ctx, ctx.match[1] ?? "");
+      if (!session) return deny(ctx);
+      const section = ctx.match[2] ?? "overview";
+      if (section === "overview")
+        return edit(
+          ctx,
+          sessionText(session),
+          sessionKeyboard(session, isAdmin(ctx)),
+        );
+      if (section === "groups")
+        return showSessionGroups(ctx, session.sessionId);
+      if (section === "bridge")
+        return showSessionBridge(ctx, session.sessionId);
+      if (section === "join") return showJoinManager(ctx, session.sessionId);
+      if (section === "health")
+        return showSessionHealth(ctx, session.sessionId);
+      if (section === "access") {
+        if (!isAdmin(ctx)) return deny(ctx);
+        return edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Access`,
+            infoResponse(
+              "Session Access Control",
+              "Sudo identities are isolated to this WhatsApp session. Workspace owner/admin checks still apply to this panel.",
+            ),
+          ),
+          sessionAccessKeyboard(session.sessionId),
+        );
+      }
+      if (section === "validator")
+        return edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Validator Hub`,
+            infoResponse(
+              "Automatic Link Pipeline",
+              `<b>Collection:</b> automatic\n<b>Validation:</b> automatic\n<b>Collected:</b> ${session.collectedLinkCount ?? 0}\n<b>Validated:</b> ${session.validatedLinkCount ?? 0}\n\nOpen the workspace Hub for the live same-message validation dashboard.`,
+            ),
+          ),
+          sessionValidatorKeyboard(session.sessionId),
+        );
+      if (section === "settings")
+        return edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Settings`,
+            infoResponse(
+              "Session Runtime Settings",
+              `<b>Auto-join:</b> ${session.autoJoinEnabled ? "ON" : "OFF"}\n<b>Prefix:</b> <code>${escapeHtml(session.prefix || "none")}</code>\n<b>Validator:</b> AUTO\n\nChanges here are applied in place and return to this session control plane.`,
+            ),
+          ),
+          sessionSettingsKeyboard(session.sessionId, session.autoJoinEnabled),
+        );
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Tools`,
+          infoResponse(
+            "WhatsApp Operations",
+            "Profile, media, group creation, group picture, and identity controls are isolated to this session.",
+          ),
+        ),
+        sessionToolsKeyboard(session.sessionId),
+      );
+    },
+  );
   bot.action(/^session:view:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const session = ownedSession(ctx, ctx.match[1] ?? "");
@@ -1504,6 +1585,172 @@ export function createTelegramBot(): Telegraf<Context> {
         keyboard([[btn("‹ Session", `session:${session.sessionId}:menu`)]]),
       );
     }
+  });
+  bot.action(/^session:([^:]+):group:view:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+    if (!session) return deny(ctx);
+    const index = Number(ctx.match[2] ?? -1);
+    try {
+      const group = await getSessionGroupAt(ctx, session.sessionId, index);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Group Detail`,
+          infoResponse(
+            "Group Control Surface",
+            `<b>Subject:</b> ${escapeHtml(group.subject)}\n<b>JID:</b> <code>${escapeHtml(group.jid)}</code>\n<b>Members:</b> ${group.participantCount}\n\nChoose one action for this group.`,
+          ),
+        ),
+        keyboard([
+          [
+            btn(
+              "🔗 Invite Link",
+              `session:${session.sessionId}:group:invite:${index}`,
+            ),
+            btn(
+              "▣ Group Picture",
+              `session:${session.sessionId}:group:picture:${index}`,
+            ),
+          ],
+          [
+            btn(
+              "↪ Leave Group",
+              `session:${session.sessionId}:group:leave:${index}`,
+              "danger",
+            ),
+          ],
+          [btn("‹ My Groups", `session:${session.sessionId}:section:groups`)],
+        ]),
+      );
+    } catch (error) {
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Group Detail`,
+          dangerResponse(
+            "Group Read Failed",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        keyboard([
+          [btn("‹ My Groups", `session:${session.sessionId}:section:groups`)],
+        ]),
+      );
+    }
+  });
+  bot.action(/^session:([^:]+):group:invite:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Resolving invite…");
+    const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+    if (!session) return deny(ctx);
+    const index = Number(ctx.match[2] ?? -1);
+    try {
+      const group = await getSessionGroupAt(ctx, session.sessionId, index);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      const code = await getGroupInviteCode(
+        session.workspaceId,
+        session.sessionId,
+        group.jid,
+      );
+      const link = `https://chat.whatsapp.com/${code}`;
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Invite Link`,
+          successResponse(
+            "Invite Ready",
+            `<b>Group:</b> ${escapeHtml(group.subject)}\n<code>${escapeHtml(link)}</code>`,
+          ),
+        ),
+        keyboard([
+          [copyBtn("📋 Copy Invite Link", link, "success")],
+          [
+            btn(
+              "‹ Group Detail",
+              `session:${session.sessionId}:group:view:${index}`,
+            ),
+          ],
+        ]),
+      );
+    } catch (error) {
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Invite Link`,
+          dangerResponse(
+            "Invite Unavailable",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        keyboard([
+          [btn("‹ My Groups", `session:${session.sessionId}:section:groups`)],
+        ]),
+      );
+    }
+  });
+  bot.action(/^session:([^:]+):group:picture:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+    if (!session) return deny(ctx);
+    const index = Number(ctx.match[2] ?? -1);
+    const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(
+      () => undefined,
+    );
+    if (!group) return showSessionGroups(ctx, session.sessionId);
+    pendingGroupPicture.set(String(ctx.from?.id ?? ""), {
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+      groupJid: group.jid,
+    });
+    await edit(
+      ctx,
+      pageText(
+        `${session.sessionName} · Group Picture`,
+        infoResponse(
+          "Change Group Picture",
+          `<b>Group:</b> ${escapeHtml(group.subject)}\nSend one HTTPS image URL. The original image bytes are sent to WhatsApp without bot-side cropping.`,
+        ),
+      ),
+      keyboard([
+        [btn("Cancel", `session:${session.sessionId}:group:view:${index}`)],
+      ]),
+    );
+  });
+  bot.action(/^session:([^:]+):group:leave:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+    if (!session) return deny(ctx);
+    const index = Number(ctx.match[2] ?? -1);
+    const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(
+      () => undefined,
+    );
+    if (!group) return showSessionGroups(ctx, session.sessionId);
+    pendingGroupLeave.set(String(ctx.from?.id ?? ""), {
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+      groupJid: group.jid,
+    });
+    await edit(
+      ctx,
+      pageText(
+        `${session.sessionName} · Leave Group`,
+        dangerResponse(
+          "Confirm Destructive Action",
+          `Leave <b>${escapeHtml(group.subject)}</b>?\n<code>${escapeHtml(group.jid)}</code>`,
+        ),
+      ),
+      keyboard([
+        [
+          btn(
+            "⚠ Confirm Leave",
+            `session:${session.sessionId}:group:leave:confirm`,
+            "danger",
+          ),
+        ],
+        [btn("Cancel", `session:${session.sessionId}:group:view:${index}`)],
+      ]),
+    );
   });
   bot.action(/^session:([^:]+):group:leave:confirm$/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -2038,38 +2285,9 @@ export function createTelegramBot(): Telegraf<Context> {
         urls,
         String(ctx.from?.id ?? "telegram"),
       );
-      const job = jobs[0];
-      if (!job) throw new Error("No active validation worker was available.");
-      const codes = jobs
-        .map((entry) => entry.jobCode ?? entry.jobId.slice(0, 8))
-        .join(", ");
-      await edit(
-        ctx,
-        pageText(
-          "Validator Hub",
-          successResponse(
-            "Validation Started",
-            `<b>Code:</b> <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>\n<b>Jobs:</b> ${jobs.length} across ${activeSessions.length} active sessions\n<b>Links:</b> ${urls.length}\n<b>Codes:</b> <code>${escapeHtml(codes)}</code>\n\nCopy a code, then open Live Show to follow that worker’s real progress.`,
-          ),
-        ),
-        keyboard([
-          [
-            copyBtn(
-              "📋 Copy live code",
-              job.jobCode ?? job.jobId.slice(0, 8),
-              "success",
-            ),
-          ],
-          [
-            btn(
-              "📺 Live Show",
-              `job:live:${job.jobCode ?? job.jobId.slice(0, 8)}`,
-              "success",
-            ),
-          ],
-          [btn("‹ Validator Hub", "bucket:status")],
-        ]),
-      );
+      if (!jobs.length)
+        throw new Error("No active validation worker was available.");
+      await showValidatorHub(ctx);
     } catch (error) {
       await edit(
         ctx,
@@ -2091,11 +2309,11 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.action("bucket:live", async (ctx) => {
     await ctx.answerCbQuery();
-    await showValidatorLiveLog(ctx, false);
+    await showValidatorHub(ctx);
   });
   bot.action("bucket:live:on", async (ctx) => {
-    await ctx.answerCbQuery("Live log enabled");
-    await showValidatorLiveLog(ctx, true);
+    await ctx.answerCbQuery("Live dashboard resumed");
+    await showValidatorHub(ctx);
   });
   bot.action("bucket:live:off", async (ctx) => {
     await ctx.answerCbQuery("Live log stopped");
@@ -2103,11 +2321,7 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.action("bucket:live:refresh", async (ctx) => {
     await ctx.answerCbQuery();
-    const workspaceId = resolveTelegramUser(ctx).workspaceId;
-    await showValidatorLiveLog(
-      ctx,
-      validatorLiveStates.get(workspaceId) === true,
-    );
+    await showValidatorHub(ctx);
   });
   bot.action("bucket:downloads", async (ctx) => {
     await ctx.answerCbQuery();
@@ -2645,7 +2859,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await showJoinManager(ctx, ctx.match[1] ?? "");
   });
   bot.action(
-    /^session:([^:]+):join:(start|pause|stop|settings|setlimit|setdelay|setbatch|setretry|setconcurrency|setmode)$/,
+    /^session:([^:]+):join:(start|pause|stop|settings|setlimit|setdelay|setmindelay|setmaxdelay|setbatch|setretry|setretrybase|setcooldown|setrestriction|setconcurrency|setmode)$/,
     async (ctx) => {
       await ctx.answerCbQuery();
       const session = ownedSession(ctx, ctx.match[1] ?? "");
@@ -2675,9 +2889,14 @@ export function createTelegramBot(): Telegraf<Context> {
           payload: {
             targetCount: settings.defaultJoinTargetCount,
             delayMs: settings.defaultJoinDelayMs,
+            minDelayMs: settings.defaultJoinMinDelayMs,
+            maxDelayMs: settings.defaultJoinMaxDelayMs,
             batchCycles: settings.defaultJoinBatchCycles,
             maxConcurrency: settings.defaultJoinMaxConcurrency,
             retryLimit: settings.defaultJoinRetryLimit,
+            retryBaseMs: settings.defaultJoinRetryBaseMs,
+            sessionCooldownMs: settings.defaultJoinSessionCooldownMs,
+            restrictionThreshold: settings.defaultJoinRestrictionThreshold,
             requestMode: settings.defaultJoinMode ?? "auto",
           },
           idempotencyKey: `join-manager:${user.workspaceId}:${session.sessionId}:${Date.now()}`,
@@ -2701,7 +2920,7 @@ export function createTelegramBot(): Telegraf<Context> {
             "Join Manager · Settings",
             infoResponse(
               "Durable Joining Settings",
-              `<b>Target links:</b> ${current.defaultJoinTargetCount}\n<b>Delay:</b> ${Math.round(current.defaultJoinDelayMs / 1000)}s\n<b>Batch cycles:</b> ${current.defaultJoinBatchCycles}\n<b>Concurrency:</b> ${current.defaultJoinMaxConcurrency}\n<b>Retry limit:</b> ${current.defaultJoinRetryLimit}\n<b>Join mode:</b> ${escapeHtml((current.defaultJoinMode ?? "auto").toUpperCase())}`,
+              `<b>Target links:</b> ${current.defaultJoinTargetCount}\n<b>Delay:</b> ${Math.round(current.defaultJoinDelayMs / 1000)}s\n<b>Min / max delay:</b> ${Math.round(current.defaultJoinMinDelayMs / 1000)}s / ${Math.round(current.defaultJoinMaxDelayMs / 1000)}s\n<b>Batch cycles:</b> ${current.defaultJoinBatchCycles}\n<b>Concurrency:</b> ${current.defaultJoinMaxConcurrency}\n<b>Retry limit / backoff:</b> ${current.defaultJoinRetryLimit} / ${Math.round(current.defaultJoinRetryBaseMs / 1000)}s\n<b>Session cooldown:</b> ${Math.round(current.defaultJoinSessionCooldownMs / 1000)}s\n<b>Restriction stop:</b> ${current.defaultJoinRestrictionThreshold} rate limits\n<b>Join mode:</b> ${escapeHtml((current.defaultJoinMode ?? "auto").toUpperCase())}`,
             ),
           ),
           keyboard([
@@ -2710,16 +2929,40 @@ export function createTelegramBot(): Telegraf<Context> {
               btn("⏱ Delay", `session:${session.sessionId}:join:setdelay`),
             ],
             [
+              btn(
+                "↘ Min Delay",
+                `session:${session.sessionId}:join:setmindelay`,
+              ),
+              btn(
+                "↗ Max Delay",
+                `session:${session.sessionId}:join:setmaxdelay`,
+              ),
+            ],
+            [
               btn("🔁 Batch", `session:${session.sessionId}:join:setbatch`),
               btn("↻ Retry", `session:${session.sessionId}:join:setretry`),
+            ],
+            [
+              btn(
+                "⏳ Retry Backoff",
+                `session:${session.sessionId}:join:setretrybase`,
+              ),
+              btn(
+                "❄ Cooldown",
+                `session:${session.sessionId}:join:setcooldown`,
+              ),
             ],
             [
               btn(
                 "⚡ Concurrency",
                 `session:${session.sessionId}:join:setconcurrency`,
               ),
-              btn("⇄ Mode", `session:${session.sessionId}:join:setmode`),
+              btn(
+                "⛔ Stop Threshold",
+                `session:${session.sessionId}:join:setrestriction`,
+              ),
             ],
+            [btn("⇄ Join Mode", `session:${session.sessionId}:join:setmode`)],
             [btn("‹ Join Manager", `session:${session.sessionId}:joinmgr`)],
           ]),
         );
@@ -2727,8 +2970,13 @@ export function createTelegramBot(): Telegraf<Context> {
       if (
         operation === "setlimit" ||
         operation === "setdelay" ||
+        operation === "setmindelay" ||
+        operation === "setmaxdelay" ||
         operation === "setbatch" ||
         operation === "setretry" ||
+        operation === "setretrybase" ||
+        operation === "setcooldown" ||
+        operation === "setrestriction" ||
         operation === "setconcurrency" ||
         operation === "setmode"
       ) {
@@ -2756,43 +3004,114 @@ export function createTelegramBot(): Telegraf<Context> {
                         4
                     ] ?? 5000,
                 }
-              : operation === "setbatch"
-                ? {
-                    defaultJoinBatchCycles:
-                      [1, 2, 5, 10][
-                        ([1, 2, 5, 10].indexOf(current.defaultJoinBatchCycles) +
+              : operation === "setmindelay"
+                ? (() => {
+                    const nextMin =
+                      [1000, 3000, 5000, 10000][
+                        ([1000, 3000, 5000, 10000].indexOf(
+                          current.defaultJoinMinDelayMs,
+                        ) +
                           1) %
                           4
-                      ] ?? 1,
-                  }
-                : operation === "setretry"
-                  ? {
-                      defaultJoinRetryLimit:
-                        [0, 1, 2, 3][
-                          ([0, 1, 2, 3].indexOf(current.defaultJoinRetryLimit) +
+                      ] ?? 5000;
+                    return {
+                      defaultJoinMinDelayMs: nextMin,
+                      ...(nextMin > current.defaultJoinMaxDelayMs
+                        ? { defaultJoinMaxDelayMs: nextMin }
+                        : {}),
+                    };
+                  })()
+                : operation === "setmaxdelay"
+                  ? (() => {
+                      const nextMax =
+                        [5000, 10000, 30000, 60000][
+                          ([5000, 10000, 30000, 60000].indexOf(
+                            current.defaultJoinMaxDelayMs,
+                          ) +
                             1) %
                             4
-                        ] ?? 2,
-                    }
-                  : operation === "setmode"
+                        ] ?? 10000;
+                      return {
+                        defaultJoinMaxDelayMs: nextMax,
+                        ...(nextMax < current.defaultJoinMinDelayMs
+                          ? { defaultJoinMinDelayMs: nextMax }
+                          : {}),
+                      };
+                    })()
+                  : operation === "setbatch"
                     ? {
-                        defaultJoinMode:
-                          current.defaultJoinMode === "auto"
-                            ? "immediate"
-                            : current.defaultJoinMode === "immediate"
-                              ? "request"
-                              : "auto",
-                      }
-                    : {
-                        defaultJoinMaxConcurrency:
-                          [1, 2, 3, 5][
-                            ([1, 2, 3, 5].indexOf(
-                              current.defaultJoinMaxConcurrency,
+                        defaultJoinBatchCycles:
+                          [1, 2, 5, 10][
+                            ([1, 2, 5, 10].indexOf(
+                              current.defaultJoinBatchCycles,
                             ) +
                               1) %
                               4
-                          ] ?? 2,
-                      };
+                          ] ?? 1,
+                      }
+                    : operation === "setretry"
+                      ? {
+                          defaultJoinRetryLimit:
+                            [0, 1, 2, 3][
+                              ([0, 1, 2, 3].indexOf(
+                                current.defaultJoinRetryLimit,
+                              ) +
+                                1) %
+                                4
+                            ] ?? 2,
+                        }
+                      : operation === "setretrybase"
+                        ? {
+                            defaultJoinRetryBaseMs:
+                              [1000, 5000, 10000, 30000][
+                                ([1000, 5000, 10000, 30000].indexOf(
+                                  current.defaultJoinRetryBaseMs,
+                                ) +
+                                  1) %
+                                  4
+                              ] ?? 5000,
+                          }
+                        : operation === "setcooldown"
+                          ? {
+                              defaultJoinSessionCooldownMs:
+                                [0, 10000, 30000, 60000][
+                                  ([0, 10000, 30000, 60000].indexOf(
+                                    current.defaultJoinSessionCooldownMs,
+                                  ) +
+                                    1) %
+                                    4
+                                ] ?? 30000,
+                            }
+                          : operation === "setrestriction"
+                            ? {
+                                defaultJoinRestrictionThreshold:
+                                  [3, 5, 8, 10][
+                                    ([3, 5, 8, 10].indexOf(
+                                      current.defaultJoinRestrictionThreshold,
+                                    ) +
+                                      1) %
+                                      4
+                                  ] ?? 5,
+                              }
+                            : operation === "setmode"
+                              ? {
+                                  defaultJoinMode:
+                                    current.defaultJoinMode === "auto"
+                                      ? "immediate"
+                                      : current.defaultJoinMode === "immediate"
+                                        ? "request"
+                                        : "auto",
+                                }
+                              : {
+                                  defaultJoinMaxConcurrency:
+                                    [1, 2, 3, 5][
+                                      ([1, 2, 3, 5].indexOf(
+                                        current.defaultJoinMaxConcurrency,
+                                      ) +
+                                        1) %
+                                        4
+                                    ] ?? 2,
+                                };
         const next = updateWorkspaceDefaults(user.workspaceId, patch);
         return edit(
           ctx,
@@ -2800,7 +3119,7 @@ export function createTelegramBot(): Telegraf<Context> {
             "Join Manager · Settings",
             successResponse(
               "Setting Updated",
-              `<b>Target:</b> ${next.defaultJoinTargetCount} · <b>Delay:</b> ${Math.round(next.defaultJoinDelayMs / 1000)}s · <b>Batch:</b> ${next.defaultJoinBatchCycles} · <b>Concurrency:</b> ${next.defaultJoinMaxConcurrency} · <b>Retries:</b> ${next.defaultJoinRetryLimit}`,
+              `<b>Target:</b> ${next.defaultJoinTargetCount} · <b>Delay:</b> ${Math.round(next.defaultJoinDelayMs / 1000)}s · <b>Min/Max:</b> ${Math.round(next.defaultJoinMinDelayMs / 1000)}s/${Math.round(next.defaultJoinMaxDelayMs / 1000)}s\n<b>Batch:</b> ${next.defaultJoinBatchCycles} · <b>Concurrency:</b> ${next.defaultJoinMaxConcurrency} · <b>Retries:</b> ${next.defaultJoinRetryLimit} · <b>Backoff:</b> ${Math.round(next.defaultJoinRetryBaseMs / 1000)}s\n<b>Cooldown:</b> ${Math.round(next.defaultJoinSessionCooldownMs / 1000)}s · <b>Stop:</b> ${next.defaultJoinRestrictionThreshold} rate limits · <b>Mode:</b> ${escapeHtml((next.defaultJoinMode ?? "auto").toUpperCase())}`,
             ),
           ),
           keyboard([
@@ -3551,6 +3870,17 @@ async function showSessionHealth(
   );
 }
 
+async function getSessionGroupAt(
+  ctx: Context,
+  sessionId: string,
+  index: number,
+): Promise<Awaited<ReturnType<typeof listGroups>>[number] | undefined> {
+  const session = ownedSession(ctx, sessionId);
+  if (!session) return undefined;
+  const groups = await listGroups(session.workspaceId, session.sessionId);
+  return groups[index];
+}
+
 async function showSessionGroups(
   ctx: Context,
   sessionId: string,
@@ -3563,20 +3893,27 @@ async function showSessionGroups(
       ? groups
           .map(
             (group, index) =>
-              `<b>${index + 1}. ${escapeHtml(group.subject)}</b>\n<code>${escapeHtml(group.jid)}</code> · ${group.participantCount} participants`,
+              `<b>${index + 1}. ${escapeHtml(group.subject)}</b> · ${group.participantCount} participants`,
           )
-          .join("\n\n")
+          .join("\n")
       : "No groups were returned by the connected WhatsApp session.";
+    const groupRows = groups.map((group, index) => [
+      btn(
+        `${String(index + 1).padStart(2, "0")} · ${group.subject.slice(0, 28)}`,
+        `session:${session.sessionId}:group:view:${index}`,
+      ),
+    ]);
     await edit(
       ctx,
       pageText(
-        `${session.sessionName} · Groups`,
+        `${session.sessionName} · My Groups`,
         infoResponse(
-          "Live Group Inventory",
-          `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Groups:</b> ${groups.length}\n\n${body}`,
+          "Selectable Group Inventory",
+          `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Groups:</b> ${groups.length}\n\n${body}\n\nSelect a group to open its detail submenu.`,
         ),
       ),
       keyboard([
+        ...groupRows,
         [
           btn(
             "＋ Create Group",
@@ -3584,7 +3921,7 @@ async function showSessionGroups(
             "success",
           ),
           btn(
-            "↪ Leave Group",
+            "↪ Leave by JID",
             `session:${session.sessionId}:group:leave`,
             "danger",
           ),
@@ -3596,7 +3933,7 @@ async function showSessionGroups(
             "primary",
           ),
         ],
-        [btn("‹ Session", `session:${session.sessionId}:menu`)],
+        [btn("‹ Session Control", `session:${session.sessionId}:menu`)],
       ]),
     );
   } catch (error) {
@@ -3941,9 +4278,7 @@ async function showAdminJobs(ctx: Context): Promise<void> {
 }
 
 async function showValidatorHub(ctx: Context): Promise<void> {
-  const user = resolveTelegramUser(ctx);
-  const snapshot = await getValidatorSnapshot(user.workspaceId);
-  await edit(ctx, validatorDashboardText(snapshot), bucketKeyboard());
+  await showValidatorLiveLog(ctx, true);
 }
 
 async function showValidatorLiveLog(
@@ -3954,9 +4289,15 @@ async function showValidatorLiveLog(
   validatorLiveStates.set(user.workspaceId, active);
   if (!active) stopValidatorLiveLoops(user.workspaceId);
   const snapshot = await getValidatorSnapshot(user.workspaceId);
+  const jobs = ((await getWorkerRuntime()?.listRecent(200)) ?? []).filter(
+    (job) =>
+      job.workspaceId === user.workspaceId &&
+      job.kind === "link-validation" &&
+      ["QUEUED", "RUNNING", "PAUSED", "RETRYING"].includes(job.state),
+  );
   await edit(
     ctx,
-    validatorLiveText(snapshot, active),
+    validatorLiveText(snapshot, active, jobs),
     validatorLiveKeyboard(active),
   );
   const message = ctx.callbackQuery?.message;
@@ -3974,14 +4315,26 @@ async function showValidatorLiveLog(
       stopValidatorLiveLoops(user.workspaceId);
       return;
     }
-    void getValidatorSnapshot(user.workspaceId)
-      .then((nextSnapshot) => {
+    void Promise.all([
+      getValidatorSnapshot(user.workspaceId),
+      getWorkerRuntime()
+        ?.listRecent(200)
+        .then((jobs) =>
+          jobs.filter(
+            (job) =>
+              job.workspaceId === user.workspaceId &&
+              job.kind === "link-validation" &&
+              ["QUEUED", "RUNNING", "PAUSED", "RETRYING"].includes(job.state),
+          ),
+        ) ?? Promise.resolve([]),
+    ])
+      .then(([nextSnapshot, nextJobs]) => {
         void ctx.telegram
           .editMessageText(
             chatId,
             messageId,
             undefined,
-            validatorLiveText(nextSnapshot, true),
+            validatorLiveText(nextSnapshot, true, nextJobs),
             { parse_mode: "HTML", reply_markup: validatorLiveKeyboard(true) },
           )
           .catch(() => {
@@ -4080,14 +4433,45 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
   const status = job
     ? jobStateToJoinStatus(job.state)
     : (joinStates.get(key) ?? "idle");
-  const render = (currentJob = job) =>
-    pageText(
-      "Join Manager",
+  const render = (currentJob = job) => {
+    const progress = currentJob?.progress;
+    const payload = (currentJob?.payload ?? {}) as Record<string, unknown>;
+    const target =
+      typeof payload.targetCount === "number" ? payload.targetCount : "all";
+    const delayMs =
+      typeof payload.delayMs === "number" ? `${payload.delayMs}ms` : "default";
+    const mode =
+      typeof payload.requestMode === "string"
+        ? payload.requestMode.toUpperCase()
+        : "AUTO";
+    const code = currentJob?.jobCode ?? currentJob?.jobId?.slice(0, 8) ?? "—";
+    const total = progress?.total ?? target;
+    const joined = progress?.joined ?? progress?.success ?? 0;
+    const requested = progress?.requested ?? 0;
+    const alreadyMember = progress?.alreadyMember ?? 0;
+    const deadLinks = progress?.deadLinks ?? 0;
+    const rateLimits = progress?.rateLimitHits ?? 0;
+    const details = [
+      `<b>Session:</b> ${escapeHtml(session.sessionName)}`,
+      `<b>Transport:</b> ${escapeHtml(effectiveSessionStatus(session))} · <b>Groups online:</b> ${totalGroups ?? "unavailable"}`,
+      `<b>Mode:</b> ${escapeHtml(mode)} · <b>Target:</b> ${escapeHtml(String(target))} · <b>Delay:</b> ${escapeHtml(delayMs)}`,
+      `<b>Cursor:</b> ${progress?.completed ?? 0}/${escapeHtml(String(total))} · <b>Job:</b> <code>${escapeHtml(code)}</code>`,
+      `<b>Joined:</b> ${joined} · <b>Requested:</b> ${requested} · <b>Already member:</b> ${alreadyMember}`,
+      `<b>Dead returned to Main:</b> ${deadLinks} · <b>Failed:</b> ${progress?.failed ?? 0} · <b>Retrying:</b> ${progress?.retrying ?? 0}`,
+      `<b>Rate limits:</b> ${rateLimits}/5 · <b>Skipped:</b> ${progress?.skipped ?? 0} · <b>Rate:</b> ${(progress?.rate ?? 0).toFixed(2)}/s`,
+      `<b>Current link:</b> <code>${escapeHtml(progress?.currentLink ?? "waiting")}</code>`,
+      `<b>Action:</b> ${escapeHtml(progress?.currentAction ?? "idle")}`,
+      `<b>Last result:</b> ${escapeHtml(progress?.lastResult ?? "No attempt yet.")}`,
+      `<b>Worker:</b> ${escapeHtml(currentJob?.state ?? status)}`,
+    ].join("\n");
+    return pageText(
+      "Join Manager · Live",
       infoResponse(
-        "Live Session-Bound Join Worker",
-        `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Connected groups:</b> ${totalGroups ?? "unavailable"}\n<b>Source:</b> Active bucket\n<b>Status:</b> ${status}\n<b>Job:</b> <code>${escapeHtml(currentJob?.jobId ?? "not started")}</code>\n<b>Progress:</b> ${currentJob?.progress.completed ?? 0}/${currentJob?.progress.total ?? "—"}\n<b>Joined:</b> ${currentJob?.progress.success ?? 0}  <b>Failed:</b> ${currentJob?.progress.failed ?? 0}\n<b>Skipped:</b> ${currentJob?.progress.skipped ?? 0}  <b>Retrying:</b> ${currentJob?.progress.retrying ?? 0}\n<b>Rate:</b> ${currentJob?.progress.rate ? currentJob.progress.rate.toFixed(2) : "0.00"}/s\n<b>Worker state:</b> ${escapeHtml(currentJob?.state ?? status)}\n\nThe view updates in place while the worker is active.`,
+        "Transport-backed Join Control",
+        `${details}\n\n<i>Refresh edits this message. Back keeps the worker alive; Stop requests cancellation.</i>`,
       ),
     );
+  };
   await edit(ctx, render(), joinManagerKeyboard(session.sessionId, status));
   const message = ctx.callbackQuery?.message;
   const chatId =
@@ -4186,6 +4570,15 @@ async function edit(
   text: string,
   markup: ReturnType<typeof keyboard>,
 ): Promise<void> {
+  const callbackData =
+    ctx.callbackQuery && "data" in ctx.callbackQuery
+      ? ctx.callbackQuery.data
+      : undefined;
+  if (typeof callbackData === "string" && callbackData.startsWith("bucket:")) {
+    const actor = ctx.from;
+    if (actor)
+      stopValidatorLiveLoops(resolveUser(String(actor.id)).workspaceId);
+  }
   await ctx
     .editMessageText(text, { parse_mode: "HTML", reply_markup: markup })
     .catch(async () => {

@@ -7,6 +7,11 @@ export interface WorkspaceSettings {
   defaultPrefix: string;
   defaultAutoJoinEnabled: boolean;
   defaultJoinDelayMs: number;
+  defaultJoinMinDelayMs: number;
+  defaultJoinMaxDelayMs: number;
+  defaultJoinRetryBaseMs: number;
+  defaultJoinSessionCooldownMs: number;
+  defaultJoinRestrictionThreshold: number;
   defaultJoinTargetCount: number;
   defaultJoinBatchCycles: number;
   defaultJoinMaxConcurrency: number;
@@ -43,6 +48,17 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
       defaultJoinBatchCycles: existing.defaultJoinBatchCycles ?? 1,
       defaultJoinMaxConcurrency: existing.defaultJoinMaxConcurrency ?? 2,
       defaultJoinRetryLimit: existing.defaultJoinRetryLimit ?? 2,
+      defaultJoinMinDelayMs:
+        existing.defaultJoinMinDelayMs ??
+        Math.max(1000, existing.defaultJoinDelayMs ?? 5000),
+      defaultJoinMaxDelayMs:
+        existing.defaultJoinMaxDelayMs ??
+        Math.max(1000, existing.defaultJoinDelayMs ?? 5000),
+      defaultJoinRetryBaseMs: existing.defaultJoinRetryBaseMs ?? 5000,
+      defaultJoinSessionCooldownMs:
+        existing.defaultJoinSessionCooldownMs ?? 30000,
+      defaultJoinRestrictionThreshold:
+        existing.defaultJoinRestrictionThreshold ?? 5,
       defaultJoinMode: existing.defaultJoinMode ?? "auto",
     };
   const created: WorkspaceSettings = {
@@ -50,6 +66,11 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
     defaultPrefix: ".",
     defaultAutoJoinEnabled: false,
     defaultJoinDelayMs: 5000,
+    defaultJoinMinDelayMs: 5000,
+    defaultJoinMaxDelayMs: 7000,
+    defaultJoinRetryBaseMs: 5000,
+    defaultJoinSessionCooldownMs: 30000,
+    defaultJoinRestrictionThreshold: 5,
     defaultJoinTargetCount: 100,
     defaultJoinBatchCycles: 1,
     defaultJoinMaxConcurrency: 2,
@@ -77,10 +98,65 @@ export function updateWorkspaceSettings(
       3,
     ),
     defaultJoinDelayMs: Math.max(
-      0,
+      1000,
       Math.min(
         600000,
         Number(patch.defaultJoinDelayMs ?? current.defaultJoinDelayMs),
+      ),
+    ),
+    defaultJoinMinDelayMs: Math.max(
+      1000,
+      Math.min(
+        600000,
+        Number(
+          patch.defaultJoinMinDelayMs ??
+            current.defaultJoinMinDelayMs ??
+            current.defaultJoinDelayMs,
+        ),
+      ),
+    ),
+    defaultJoinMaxDelayMs: Math.max(
+      1000,
+      Math.min(
+        600000,
+        Number(
+          patch.defaultJoinMaxDelayMs ??
+            current.defaultJoinMaxDelayMs ??
+            current.defaultJoinDelayMs,
+        ),
+      ),
+    ),
+    defaultJoinRetryBaseMs: Math.max(
+      1000,
+      Math.min(
+        600000,
+        Number(
+          patch.defaultJoinRetryBaseMs ??
+            current.defaultJoinRetryBaseMs ??
+            5000,
+        ),
+      ),
+    ),
+    defaultJoinSessionCooldownMs: Math.max(
+      0,
+      Math.min(
+        3600000,
+        Number(
+          patch.defaultJoinSessionCooldownMs ??
+            current.defaultJoinSessionCooldownMs ??
+            30000,
+        ),
+      ),
+    ),
+    defaultJoinRestrictionThreshold: Math.max(
+      1,
+      Math.min(
+        20,
+        Number(
+          patch.defaultJoinRestrictionThreshold ??
+            current.defaultJoinRestrictionThreshold ??
+            5,
+        ),
       ),
     ),
     defaultJoinTargetCount: Math.max(

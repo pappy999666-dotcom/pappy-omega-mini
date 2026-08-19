@@ -20,7 +20,6 @@ import {
 } from "../whatsapp/transport-adapter.js";
 import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
-import { createDefaultPreviewManager } from "../preview/default-adapter.js";
 import { joinWhatsAppInvite } from "./join-operation.js";
 
 interface LinkValidationPayload {
@@ -98,7 +97,6 @@ export function startWorkerRuntime(): JobOrchestrator {
   const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
   const buckets = new LinkBucketStore(redis);
   activeBuckets = buckets;
-  const previewManager = createDefaultPreviewManager(redis);
   orchestrator.addCloseHook(async () => {
     await redis.quit();
   });
@@ -112,6 +110,10 @@ export function startWorkerRuntime(): JobOrchestrator {
       context,
       processItem: async (url) => {
         const raw = url.trim();
+        await context.report({
+          currentLink: raw,
+          currentAction: "validating",
+        });
         try {
           const parsed = new URL(raw);
           if (!["http:", "https:"].includes(parsed.protocol))
@@ -157,6 +159,11 @@ export function startWorkerRuntime(): JobOrchestrator {
             validatedLinkCount: (currentSession.validatedLinkCount ?? 0) + 1,
             lastLinkValidatedAt: Date.now(),
           });
+          await context.report({
+            currentLink: canonicalUrl,
+            currentAction: "validated",
+            lastResult: `Active: ${metadata.subject ?? canonicalUrl}`,
+          });
           if (currentSession.autoJoinEnabled && activeRuntime) {
             const defaults = getWorkspaceDefaults(context.job.workspaceId);
             const autoJoinHash = createHash("sha256")
@@ -171,6 +178,12 @@ export function startWorkerRuntime(): JobOrchestrator {
               payload: {
                 targetCount: 1,
                 delayMs: defaults.defaultJoinDelayMs,
+                minDelayMs: defaults.defaultJoinMinDelayMs,
+                maxDelayMs: defaults.defaultJoinMaxDelayMs,
+                retryLimit: defaults.defaultJoinRetryLimit,
+                retryBaseMs: defaults.defaultJoinRetryBaseMs,
+                sessionCooldownMs: defaults.defaultJoinSessionCooldownMs,
+                restrictionThreshold: defaults.defaultJoinRestrictionThreshold,
                 requestMode: defaults.defaultJoinMode ?? "auto",
                 sourceSessionId,
               },
@@ -188,6 +201,11 @@ export function startWorkerRuntime(): JobOrchestrator {
               return raw;
             }
           })();
+          await context.report({
+            currentLink: parsed,
+            currentAction: "validation failed",
+            lastResult: message.slice(0, 240),
+          });
           await buckets
             .move(
               context.job.workspaceId,
@@ -257,6 +275,13 @@ export function startWorkerRuntime(): JobOrchestrator {
     const payload = context.job.payload as {
       targetCount?: number;
       delayMs?: number;
+      batchCycles?: number;
+      minDelayMs?: number;
+      maxDelayMs?: number;
+      retryLimit?: number;
+      retryBaseMs?: number;
+      sessionCooldownMs?: number;
+      restrictionThreshold?: number;
       requestMode?: "auto" | "immediate" | "request";
     };
     const active = await buckets.list(
@@ -273,30 +298,73 @@ export function startWorkerRuntime(): JobOrchestrator {
         ),
       ),
     );
-    const records = active.records.filter(
+    const sourceRecords = active.records.filter(
       (record) =>
         !record.sourceSessionId || record.sourceSessionId === sessionId,
     );
+    const batchCycles = Math.max(
+      1,
+      Math.min(20, Number(payload.batchCycles ?? 1)),
+    );
+    const records = Array.from(
+      { length: batchCycles },
+      () => sourceRecords,
+    ).flat();
     let rateLimitHits = 0;
     let requested = 0;
     let alreadyMember = 0;
     let deadLinks = 0;
     let joined = 0;
     let lastAttemptAt = 0;
-    const delayMs = Math.max(
+    const fallbackDelay = Math.max(
       1000,
       Math.min(600000, Number(payload.delayMs ?? 5000)),
+    );
+    const minDelayMs = Math.max(
+      1000,
+      Math.min(600000, Number(payload.minDelayMs ?? fallbackDelay)),
+    );
+    const maxDelayMs = Math.max(
+      minDelayMs,
+      Math.min(600000, Number(payload.maxDelayMs ?? minDelayMs)),
+    );
+    const retryLimit = Math.max(
+      0,
+      Math.min(5, Number(payload.retryLimit ?? 2)),
+    );
+    const retryBaseMs = Math.max(
+      1000,
+      Math.min(600000, Number(payload.retryBaseMs ?? 5000)),
+    );
+    const sessionCooldownMs = Math.max(
+      0,
+      Math.min(3600000, Number(payload.sessionCooldownMs ?? 30000)),
+    );
+    const restrictionThreshold = Math.max(
+      1,
+      Math.min(20, Number(payload.restrictionThreshold ?? 5)),
     );
     return runBoundedBatch({
       items: records,
       concurrency: 1,
       context,
-      shouldStop: () => rateLimitHits >= 5,
+      shouldStop: () => rateLimitHits >= restrictionThreshold,
       processItem: async (record, signal) => {
         if (signal.aborted) return { status: "skipped" as const };
+        const currentRecord = await buckets.get(
+          context.job.workspaceId,
+          record.canonicalUrl,
+        );
+        if (!currentRecord || currentRecord.bucket !== "active")
+          return { status: "skipped" as const };
         const now = Date.now();
         if (lastAttemptAt) {
-          const wait = Math.max(0, delayMs - (now - lastAttemptAt));
+          const interval =
+            minDelayMs === maxDelayMs
+              ? minDelayMs
+              : minDelayMs +
+                Math.floor(Math.random() * (maxDelayMs - minDelayMs + 1));
+          const wait = Math.max(0, interval - (now - lastAttemptAt));
           if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
         }
         lastAttemptAt = Date.now();
@@ -304,7 +372,31 @@ export function startWorkerRuntime(): JobOrchestrator {
           currentLink: record.canonicalUrl,
           currentAction: "checking invite",
         });
-        const result = await joinWhatsAppInvite(socket, record.canonicalUrl);
+        let result = await joinWhatsAppInvite(socket, record.canonicalUrl);
+        let retryAttempt = 0;
+        while (
+          !result.success &&
+          !result.alreadyMember &&
+          !result.requestRequired &&
+          retryAttempt < retryLimit
+        ) {
+          const retryClass = classifyJoinFailure(result.error ?? "Join failed");
+          if (
+            !retryClass.retryable ||
+            retryClass.classification === "rate-limit"
+          )
+            break;
+          retryAttempt += 1;
+          await context.report({
+            retrying: retryAttempt,
+            currentAction: `retrying in ${retryBaseMs * retryAttempt}ms`,
+          });
+          await new Promise((resolve) =>
+            setTimeout(resolve, retryBaseMs * retryAttempt),
+          );
+          if (signal.aborted) return { status: "skipped" as const };
+          result = await joinWhatsAppInvite(socket, record.canonicalUrl);
+        }
         const joinClassification: NonNullable<
           LinkRecord["metadata"]
         >["joinClassification"] = result.success
@@ -386,11 +478,17 @@ export function startWorkerRuntime(): JobOrchestrator {
           await context.report({
             retrying: (context.job.progress.retrying ?? 0) + 1,
             rateLimitHits,
-            rateLimitStopAt: 5,
+            rateLimitStopAt: restrictionThreshold,
             lastResult: `Rate limited after ${rateLimitHits} attempt(s)`,
             currentAction:
-              rateLimitHits >= 5 ? "stopped at rate limit" : "cooling down",
+              rateLimitHits >= restrictionThreshold
+                ? "stopped at rate limit"
+                : "cooling down",
           });
+          if (sessionCooldownMs && rateLimitHits < restrictionThreshold)
+            await new Promise((resolve) =>
+              setTimeout(resolve, sessionCooldownMs),
+            );
         }
         if (classified.classification === "invalid-invite") {
           deadLinks += 1;
@@ -489,7 +587,6 @@ export function startWorkerRuntime(): JobOrchestrator {
                 sessionId,
                 jid,
                 text,
-                previewManager,
               );
             else
               await sendGroupMentions(
@@ -497,8 +594,6 @@ export function startWorkerRuntime(): JobOrchestrator {
                 sessionId,
                 jid,
                 text,
-                undefined,
-                previewManager,
               );
             await context.report({
               currentGroup: jid,

@@ -1,10 +1,5 @@
 import type { WASocket } from "@crysnovax/baileys";
 import { getWhatsAppSocket } from "./session-manager.js";
-import { PreviewManager } from "../preview/preview-manager.js";
-import {
-  firstHttpUrl,
-  linkPreviewPayload,
-} from "../preview/default-adapter.js";
 
 export type TransportCapability =
   | "profileName"
@@ -224,14 +219,12 @@ export async function sendDirectText(
   sessionId: string,
   jid: string,
   text: string,
-  previewManager?: PreviewManager,
 ): Promise<void> {
   const send = method(socketFor(workspaceId, sessionId), "sendMessage");
   if (!send) throw new Error("Unsupported capability: sendMessage");
-  const url = firstHttpUrl(text);
-  const preview =
-    url && previewManager ? await previewManager.resolve(url) : undefined;
-  await send(jid, (preview && linkPreviewPayload(preview, text)) ?? { text });
+  // The Baileys fork natively hydrates ordinary text URLs through getUrlInfo,
+  // including high-quality thumbnails. Do not prefetch or replace that payload.
+  await send(jid, { text });
 }
 
 export async function sendGroupText(
@@ -239,14 +232,10 @@ export async function sendGroupText(
   sessionId: string,
   jid: string,
   text: string,
-  previewManager?: PreviewManager,
 ): Promise<void> {
   const send = method(socketFor(workspaceId, sessionId), "sendMessage");
   if (!send) throw new Error("Unsupported capability: sendMessage");
-  const url = firstHttpUrl(text);
-  const preview =
-    url && previewManager ? await previewManager.resolve(url) : undefined;
-  await send(jid, (preview && linkPreviewPayload(preview, text)) ?? { text });
+  await send(jid, { text });
 }
 
 export async function sendGroupStatus(
@@ -358,7 +347,6 @@ export async function sendGroupMentions(
   jid: string,
   text: string,
   participantCount?: number,
-  previewManager?: PreviewManager,
 ): Promise<void> {
   const socket = socketFor(workspaceId, sessionId);
   const send = method(socket, "sendMessage");
@@ -368,15 +356,9 @@ export async function sendGroupMentions(
     0,
     Math.max(1, Math.min(participantCount ?? participants.length, 100)),
   );
-  const url = firstHttpUrl(text);
-  const preview =
-    url && previewManager ? await previewManager.resolve(url) : undefined;
-  await send(
-    jid,
-    preview && linkPreviewPayload(preview, text)
-      ? { ...linkPreviewPayload(preview, text), mentions: selected }
-      : { text, mentions: selected },
-  );
+  // Keep the body plain and pass recipients only through hidden mention
+  // metadata; Baileys performs native URL hydration on the same message.
+  await send(jid, { text, mentions: selected });
 }
 
 export async function validateInviteLink(

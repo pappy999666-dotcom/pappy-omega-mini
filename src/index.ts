@@ -20,6 +20,7 @@ import { closeMongo, ensureMongoIndexes } from "./persistence/mongo.js";
 import type { JobOrchestrator } from "./jobs/job-orchestrator.js";
 import { DurableScheduler } from "./jobs/scheduler.js";
 import { hydrateMenuMedia } from "./media/menu-media-store.js";
+import { closeValidatorSnapshot } from "./links/validator-snapshot.js";
 
 async function main(): Promise<void> {
   assertProductionSecrets();
@@ -48,11 +49,7 @@ async function main(): Promise<void> {
     if (await hasPersistedWhatsAppAuth(session.workspaceId, session.sessionId))
       recoverableSessions.push(session);
   }
-  await Promise.allSettled(
-    recoverableSessions.map((session) =>
-      startWhatsAppSession(session.workspaceId, session.sessionId),
-    ),
-  );
+  await startRecoverableSessions(recoverableSessions, 6);
   console.log(
     `[pappy-omega-mini] WhatsApp recovery scheduled for ${recoverableSessions.length} paired session(s); ${persistedSessions.length - recoverableSessions.length} session(s) await pairing.`,
   );
@@ -77,12 +74,41 @@ async function main(): Promise<void> {
     stopModeratorReconciliation();
     await scheduler?.close();
     await workers?.close();
+    await closeValidatorSnapshot();
     shutdownWhatsAppSessions();
     await closeMongo();
     console.log("[pappy-omega-mini] transports closed; shutdown complete.");
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
+}
+
+async function startRecoverableSessions(
+  sessions: ReturnType<typeof listAllSessions>,
+  concurrency: number,
+): Promise<void> {
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const index = cursor++;
+      const session = sessions[index];
+      if (!session) return;
+      try {
+        await startWhatsAppSession(session.workspaceId, session.sessionId);
+      } catch (error) {
+        console.error(
+          `[pappy-omega-mini] startup recovery failed session=${session.sessionId}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(Math.max(1, concurrency), sessions.length || 1) },
+      () => worker(),
+    ),
+  );
 }
 
 main().catch((error) => {

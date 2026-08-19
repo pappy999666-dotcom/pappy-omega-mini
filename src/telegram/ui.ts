@@ -1,8 +1,7 @@
 import type { InlineKeyboardMarkup } from "telegraf/types";
 import type { WhatsAppSession } from "../types/domain.js";
 import type { JobRecord } from "../jobs/job-contracts.js";
-import { buildSessionMenu } from "../menus/menu-model.js";
-import { renderTelegramSessionMenu } from "../menus/renderers.js";
+import { effectiveSessionStatus } from "../menus/menu-model.js";
 import { infoResponse } from "./renderer.js";
 
 export type ButtonStyle = "primary" | "success" | "danger";
@@ -210,41 +209,101 @@ export function sessionKeyboard(
   session: WhatsAppSession,
   isOwner: boolean,
 ): InlineKeyboardMarkup {
-  const actions = buildSessionMenu(session, isOwner).actions;
-  const rows: Button[][] = [];
-  for (let i = 0; i < actions.length; i += 2) {
-    rows.push(
-      actions
-        .slice(i, i + 2)
-        .map((action) =>
-          btn(
-            `${action.label}`,
-            `session:${session.sessionId}:action:${action.id}`,
-            ["gpp", "purge"].includes(action.id) ? "danger" : "primary",
-          ),
-        ),
-    );
-  }
+  const id = session.sessionId;
+  const rows: Button[][] = [
+    [
+      btn("◉ Overview", `session:${id}:section:overview`, "success"),
+      btn("🧰 WhatsApp Tools", `session:${id}:section:tools`),
+    ],
+    [
+      btn("👥 My Groups", `session:${id}:section:groups`),
+      btn("🌉 Session Bridge", `session:${id}:section:bridge`),
+    ],
+    [
+      btn("🔗 Validator Hub", `session:${id}:section:validator`, "success"),
+      btn("🛠 Join Manager", `session:${id}:section:join`),
+    ],
+    [
+      btn("🩺 Health & Jobs", `session:${id}:section:health`),
+      btn("⚙ Session Settings", `session:${id}:section:settings`),
+    ],
+  ];
+  if (isOwner)
+    rows.push([btn("🔐 Access / Sudo", `session:${id}:section:access`)]);
+  rows.push([btn("⚠ Purge Session", `session:${id}:action:purge`, "danger")]);
   rows.push([
-    btn(
-      `⚡ Validator AUTO · ${session.collectedLinkCount ?? 0}/${session.validatedLinkCount ?? 0}`,
-      `session:${session.sessionId}:collect`,
-      "success",
-    ),
-  ]);
-  rows.push([
-    btn("↻ Refresh", `session:${session.sessionId}:menu`),
+    btn("↻ Refresh", `session:${id}:menu`),
     btn("‹ Sessions", "sessions:list:0"),
   ]);
   return keyboard(rows);
+}
+
+export function sessionToolsKeyboard(sessionId: string): InlineKeyboardMarkup {
+  return keyboard([
+    [
+      btn("🪪 Profile", `session:${sessionId}:action:profile`),
+      btn("🖼 PFP", `session:${sessionId}:action:pfp`),
+    ],
+    [
+      btn("✎ Name", `session:${sessionId}:action:name`),
+      btn("✎ Bio", `session:${sessionId}:action:bio`),
+    ],
+    [
+      btn(
+        "＋ Create Group",
+        `session:${sessionId}:action:creategroup`,
+        "success",
+      ),
+      btn("▣ Group Picture", `session:${sessionId}:action:gpp`),
+    ],
+    [btn("‹ Session Control", `session:${sessionId}:menu`)],
+  ]);
+}
+
+export function sessionSettingsKeyboard(
+  sessionId: string,
+  autoJoinEnabled: boolean,
+): InlineKeyboardMarkup {
+  return keyboard([
+    [
+      btn(
+        `Auto-join: ${autoJoinEnabled ? "ON" : "OFF"}`,
+        `session:${sessionId}:action:autojoin`,
+        autoJoinEnabled ? "success" : "danger",
+      ),
+      btn("Prefix", `session:${sessionId}:action:prefix`),
+    ],
+    [btn("‹ Session Control", `session:${sessionId}:menu`)],
+  ]);
+}
+
+export function sessionAccessKeyboard(sessionId: string): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("◉ List Sudo", `session:${sessionId}:sudo:list`)],
+    [
+      btn("＋ Add Sudo", `session:${sessionId}:sudo:add`, "success"),
+      btn("− Remove Sudo", `session:${sessionId}:sudo:remove`, "danger"),
+    ],
+    [btn("‹ Session Control", `session:${sessionId}:menu`)],
+  ]);
+}
+
+export function sessionValidatorKeyboard(
+  sessionId: string,
+): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("📊 Link Statistics", `session:${sessionId}:collect`, "success")],
+    [btn("⌁ Open Live Validator Hub", "bucket:status", "success")],
+    [btn("‹ Session Control", `session:${sessionId}:menu`)],
+  ]);
 }
 
 export function linkCollectionKeyboard(
   sessionId: string,
 ): InlineKeyboardMarkup {
   return keyboard([
-    [btn("📊 Refresh Statistics", `session:${sessionId}:collect`, "success")],
-    [btn("📡 Live Collection Log", `session:${sessionId}:collect:live`)],
+    [btn("↻ Refresh Statistics", `session:${sessionId}:collect`, "success")],
+    [btn("⌁ Open Live Validator Hub", "bucket:status", "success")],
     [btn(ui.back, `session:${sessionId}:menu`)],
   ]);
 }
@@ -278,6 +337,20 @@ export function validatorLiveText(
     capturedAt: number;
   },
   active = false,
+  jobs: Array<{
+    state: string;
+    jobCode?: string;
+    jobId: string;
+    progress: {
+      completed: number;
+      total?: number;
+      success: number;
+      failed: number;
+      currentLink?: string;
+      currentAction?: string;
+      lastResult?: string;
+    };
+  }> = [],
 ): string {
   const recent =
     snapshot.recent
@@ -287,11 +360,20 @@ export function validatorLiveText(
           `• <code>${escapeHtml(record.canonicalUrl.slice(0, 72))}</code> <i>${escapeHtml(record.bucket)}</i>`,
       )
       .join("\n") || "Waiting for link activity.";
+  const work = jobs.length
+    ? jobs
+        .slice(0, 6)
+        .map(
+          (job) =>
+            `• <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code> ${escapeHtml(job.state)} · ${job.progress.completed}/${job.progress.total ?? "—"} · ${escapeHtml(job.progress.currentAction ?? "waiting")}\n  <code>${escapeHtml(job.progress.currentLink ?? job.progress.lastResult ?? "waiting")}</code>`,
+        )
+        .join("\n")
+    : "No validation worker is currently active.";
   return pageText(
-    "Validator Live Log",
+    "Validator Hub · Live",
     infoResponse(
-      active ? "Live feed is ON" : "Live feed is OFF",
-      `<b>What you see:</b> link collection and validation changes for this workspace.\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Error:</b> ${snapshot.counts.error ?? 0}\n\n${recent}\n\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+      active ? "Live dashboard is ON" : "Live dashboard is PAUSED",
+      `<b>What you see:</b> live collection and validation changes for this workspace.\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Error:</b> ${snapshot.counts.error ?? 0}\n<b>Master total:</b> ${snapshot.counts.master ?? 0}\n\n<b>Live validation workers</b>\n${work}\n\n<b>Recent records</b>\n${recent}\n\n<i>Buttons pause this message’s refresh only. Returning to Validator Hub resumes it.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
     ),
   );
 }
@@ -300,23 +382,23 @@ export function validatorLiveKeyboard(active = false): InlineKeyboardMarkup {
   return keyboard([
     [
       btn(
-        active ? "⏹ Turn Live Log Off" : "▶ Turn Live Log On",
+        active ? "⏹ Stop Live Refresh" : "▶ Resume Live Refresh",
         active ? "bucket:live:off" : "bucket:live:on",
         active ? "danger" : "success",
       ),
     ],
-    [btn("🔄 Refresh Log", "bucket:live:refresh")],
-    [btn("‹ Validator Hub", "bucket:status")],
+    [btn("↻ Refresh Dashboard", "bucket:live:refresh")],
+    [btn(ui.back, "menu:main")],
   ]);
 }
 
 export function bucketKeyboard(): InlineKeyboardMarkup {
   return keyboard([
     [
-      btn("📡 Live Validation Log", "bucket:live", "success"),
+      btn("⏹ Stop Live Refresh", "bucket:live:off", "danger"),
       btn("▶ Validate Master", "bucket:validate", "success"),
     ],
-    [btn("🔄 Refresh", "bucket:status")],
+    [btn("↻ Refresh Live Dashboard", "bucket:status")],
     [
       btn("📦 Main / Master", "bucket:view:main"),
       btn("✅ Active", "bucket:view:active"),
@@ -358,8 +440,10 @@ export function joinManagerKeyboard(
     ]);
   if (status !== "running")
     rows.push([btn("🔁 Batch Cycles", `session:${sessionId}:join:setbatch`)]);
-  rows.push([btn("⚙ Joining Settings", `session:${sessionId}:join:settings`)]);
-  rows.push([btn("🔄 Refresh", `session:${sessionId}:joinmgr`)]);
+  rows.push([
+    btn("⚙ Full Join Settings", `session:${sessionId}:join:settings`),
+    btn("🔄 Refresh Live View", `session:${sessionId}:joinmgr`),
+  ]);
   rows.push([
     btn(
       status === "running" ? "🔙 Back (keeps running)" : ui.back,
@@ -793,11 +877,13 @@ export function mediaKeyboard(): InlineKeyboardMarkup {
 }
 
 export function sessionText(session: WhatsAppSession): string {
-  const model = buildSessionMenu(session, false);
-  const rendered = renderTelegramSessionMenu(model);
+  const status = effectiveSessionStatus(session);
   return pageText(
-    "Per-Session Control",
-    rendered.text.replace(/<b>.*?<\/b>\n?/s, "").trim(),
+    "Session Control Plane",
+    infoResponse(
+      `${statusIcon(session.status)} ${escapeHtml(session.sessionName)}`,
+      `<b>Status:</b> ${escapeHtml(status)}\n<b>WhatsApp:</b> <code>${escapeHtml(session.phoneNumber ?? "pairing required")}</code>\n<b>Prefix:</b> <code>${escapeHtml(session.prefix || "none")}</code>\n<b>Auto-join:</b> ${session.autoJoinEnabled ? "ON" : "OFF"}\n<b>Validator:</b> AUTO · ${session.collectedLinkCount ?? 0} collected / ${session.validatedLinkCount ?? 0} validated\n\nChoose a control area below. Each area edits this message and keeps its own Back path.`,
+    ),
   );
 }
 

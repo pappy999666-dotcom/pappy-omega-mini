@@ -14,6 +14,7 @@ import {
   pageText,
   sessionKeyboard,
   validatorLiveKeyboard,
+  validatorLiveText,
 } from "../src/telegram/ui.js";
 import type { WhatsAppSession } from "../src/types/domain.js";
 
@@ -141,45 +142,68 @@ describe("Telegram UI authorization", () => {
     expect(adminJobsText(jobs)).not.toContain("Owner Verified");
   });
 
-  it("keeps Validator Live Log off until explicitly enabled", () => {
+  it("uses one Validator Hub live dashboard with pause and resume controls", () => {
     const off = JSON.stringify(validatorLiveKeyboard(false));
     const on = JSON.stringify(validatorLiveKeyboard(true));
     expect(off).toContain("bucket:live:on");
     expect(off).not.toContain("bucket:live:off");
     expect(on).toContain("bucket:live:off");
+    const text = validatorLiveText(
+      {
+        counts: { main: 2, active: 3, dead: 1, error: 0, master: 6 },
+        recent: [
+          { canonicalUrl: "https://chat.whatsapp.com/abc", bucket: "active" },
+        ],
+        capturedAt: Date.now(),
+      },
+      true,
+      [
+        {
+          jobId: "validation-job-1",
+          jobCode: "AB12CD34",
+          state: "RUNNING",
+          progress: {
+            completed: 1,
+            total: 4,
+            success: 1,
+            failed: 0,
+            currentLink: "https://chat.whatsapp.com/xyz",
+            currentAction: "validating",
+          },
+        },
+      ],
+    );
+    expect(text).toContain("Validator Hub · Live");
+    expect(text).toContain("AB12CD34");
+    expect(text).toContain("Live validation workers");
   });
 
-  it("covers every operational per-session action without generic placeholders", () => {
+  it("renders advanced per-session submenu categories without placeholders", () => {
     const userSession = JSON.stringify(sessionKeyboard(session, false));
-    for (const action of [
-      "profile",
-      "pfp",
-      "creategroup",
-      "name",
-      "bio",
+    for (const section of [
+      "overview",
+      "tools",
       "groups",
       "bridge",
-      "gpp",
-      "autojoin",
+      "validator",
       "join",
-      "prefix",
       "health",
-      "purge",
+      "settings",
     ]) {
-      expect(userSession).toContain(`session:session-1:action:${action}`);
+      expect(userSession).toContain(`session:session-1:section:${section}`);
     }
-    expect(userSession).not.toContain("session:session-1:action:sudo");
-    expect(userSession).not.toContain("Owner Verified");
+    expect(userSession).not.toContain("session:session-1:section:access");
+    expect(userSession).toContain("session:session-1:action:purge");
     expect(userSession).not.toContain("Coming soon");
     expect(userSession).not.toContain("placeholder");
   });
 
-  it("keeps the per-session sudo action owner-only and exposes purge to users", () => {
+  it("keeps Access/Sudo owner-only while exposing purge to users", () => {
     const userSession = callbackData(sessionKeyboard(session, false)).join(" ");
-    expect(userSession).not.toContain("session:session-1:action:sudo");
+    expect(userSession).not.toContain("session:session-1:section:access");
     expect(userSession).toContain("session:session-1:action:purge");
     expect(callbackData(sessionKeyboard(session, true)).join(" ")).toContain(
-      "session:session-1:action:sudo",
+      "session:session-1:section:access",
     );
   });
 });
