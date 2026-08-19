@@ -260,6 +260,7 @@ export function installModeratorProtection(bot: Telegraf<Context>): void {
 
 export function installModeratorCommands(bot: Telegraf<Context>): void {
   bot.command("moderation", async (ctx) => {
+    if (!(await requireModerator(ctx))) return;
     if (!groupId(ctx)) {
       await ctx.reply("Open this command inside a Telegram group.");
       return;
