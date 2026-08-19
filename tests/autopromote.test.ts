@@ -7,6 +7,7 @@ import {
   autoPromotePostsKeyboard,
   autoPromoteTimesKeyboard,
   autoPromoteGlobalTargetsKeyboard,
+  autoPromoteScopeKeyboard,
 } from "../src/telegram/ui.js";
 import {
   DEFAULT_AUTOPROMOTE_SLOT_TIMES,
@@ -65,6 +66,11 @@ describe("Auto Promote scheduling contracts", () => {
     ], new Set(["s1"])));
     expect(targetData).toContain("autopromote:global:toggle:s1");
     expect(targetData).toContain("autopromote:global:ready");
+    const scopeData = JSON.stringify(autoPromoteScopeKeyboard(undefined, [
+      { sessionId: "s1", sessionName: "Main", status: "ACTIVE", authHealth: "HEALTHY", workspaceId: "w1", createdAt: 1, updatedAt: 1 } as never,
+    ]));
+    expect(scopeData).toContain("autopromote:scope:SESSION:s1");
+    expect(scopeData).toContain("autopromote:scope:USER");
   });
 
 });

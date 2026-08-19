@@ -5,6 +5,7 @@ import {
   LinkBucketStore,
   type LinkRecord,
 } from "../links/link-bucket-store.js";
+import { requeueLegacyValidatorErrors } from "../links/validator-operations.js";
 import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
 import {
   getSession,
@@ -94,6 +95,7 @@ let jobCompletionNotifier:
 let activeBuckets: LinkBucketStore | undefined;
 let activeJoinResults: JoinResultStore | undefined;
 let validatorSweepTimer: NodeJS.Timeout | undefined;
+const validatorErrorMigrations = new Set<string>();
 
 export function getWorkerRuntime(): JobOrchestrator | undefined {
   return activeRuntime;
@@ -161,6 +163,7 @@ export function startWorkerRuntime(): JobOrchestrator {
   orchestrator.addCloseHook(async () => {
     if (validatorSweepTimer) clearInterval(validatorSweepTimer);
     validatorSweepTimer = undefined;
+    validatorErrorMigrations.clear();
     await redis.quit();
   });
 
@@ -185,15 +188,36 @@ export function startWorkerRuntime(): JobOrchestrator {
           const inviteCode = canonicalUrl.match(
             /chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/,
           )?.[1];
+          if (!inviteCode) throw new Error("Invalid WhatsApp group invite link.");
           const sourceSessionId = selectHealthyWhatsAppSession(
             context.job.workspaceId,
             payload.sourceSessionId,
             canonicalUrl,
           )?.sessionId;
-          if (!inviteCode || !sourceSessionId)
-            throw new Error(
-              "No safe WhatsApp validation session is available.",
-            );
+          if (!sourceSessionId)
+            throw new Error("No healthy WhatsApp validation session is available yet.");
+          const existing = await buckets.get(context.job.workspaceId, canonicalUrl);
+          const validatingMetadata = {
+            ...(existing?.metadata ?? {}),
+            inviteCode,
+            needsValidation: false,
+            validationState: "validating" as const,
+          };
+          if (existing)
+            await buckets.move(context.job.workspaceId, canonicalUrl, "active", {
+              sourceSessionId,
+              metadata: validatingMetadata,
+            });
+          else
+            await buckets.upsert({
+              canonicalUrl,
+              originalUrl: raw,
+              bucket: "active",
+              workspaceId: context.job.workspaceId,
+              sourceUserId: payload.sourceUserId ?? "worker",
+              sourceSessionId,
+              metadata: validatingMetadata,
+            });
           const metadata = await validateInviteLink(
             context.job.workspaceId,
             sourceSessionId,
@@ -208,11 +232,14 @@ export function startWorkerRuntime(): JobOrchestrator {
             sourceSessionId,
             lastCheckedAt: Date.now(),
             metadata: {
+              ...(existing?.metadata ?? {}),
               ...(metadata.subject ? { title: metadata.subject } : {}),
               ...(metadata.participantCount !== undefined
                 ? { memberCount: metadata.participantCount }
                 : {}),
+              inviteCode,
               needsValidation: false,
+              validationState: "active",
             },
           });
           const currentSession = getSession(
@@ -270,17 +297,29 @@ export function startWorkerRuntime(): JobOrchestrator {
             currentAction: "validation failed",
             lastResult: message.slice(0, 240),
           });
+          const lower = message.toLowerCase();
+          const isDead = [
+            "invalid whatsapp group invite",
+            "not found",
+            "expired",
+            "revoked",
+            "unknown invite",
+            "group not found",
+            "gone",
+          ].some((marker) => lower.includes(marker));
+          const existing = await buckets.get(context.job.workspaceId, parsed);
           await buckets
             .move(
               context.job.workspaceId,
               parsed,
-              message.toLowerCase().includes("not found") ||
-                message.toLowerCase().includes("expired")
-                ? "dead"
-                : "error",
+              isDead ? "dead" : "main",
               {
                 validationError: message.slice(0, 240),
-                lastCheckedAt: Date.now(),
+                metadata: {
+                  ...(existing?.metadata ?? {}),
+                  needsValidation: !isDead,
+                  validationState: isDead ? "dead" : "retryable-error",
+                },
               },
             )
             .catch(() => undefined);
@@ -324,6 +363,7 @@ export function startWorkerRuntime(): JobOrchestrator {
     const sessionId = context.job.sessionId;
     if (!sessionId)
       throw new Error("Join Manager requires a selected WhatsApp session.");
+    const boundSession = getSession(context.job.workspaceId, sessionId);
     const socket = getWhatsAppSocket(
       context.job.workspaceId,
       sessionId,
@@ -386,14 +426,13 @@ export function startWorkerRuntime(): JobOrchestrator {
     let deadLinks = 0;
     let joined = 0;
     let lastAttemptAt = 0;
-    const fallbackDelay = Math.max(
-      1000,
-      Math.min(600000, Number(payload.delayMs ?? 5000)),
-    );
-    const minDelayMs = Math.max(
-      1000,
-      Math.min(600000, Number(payload.minDelayMs ?? fallbackDelay)),
-    );
+    const immediateMode = payload.requestMode === "immediate";
+    const fallbackDelay = immediateMode
+      ? 0
+      : Math.max(0, Math.min(600000, Number(payload.delayMs ?? 0)));
+    const minDelayMs = immediateMode
+      ? 0
+      : Math.max(0, Math.min(600000, Number(payload.minDelayMs ?? fallbackDelay)));
     const maxDelayMs = Math.max(
       minDelayMs,
       Math.min(600000, Number(payload.maxDelayMs ?? minDelayMs)),
@@ -472,7 +511,7 @@ export function startWorkerRuntime(): JobOrchestrator {
         lastAttemptAt = Date.now();
         await context.report({
           currentLink: record.canonicalUrl,
-          currentAction: "checking invite",
+          currentAction: `checking invite via ${boundSession.sessionName} · socket ${sessionId.slice(0, 8)} · generation ${boundSession.socketGeneration ?? "—"}`,
         });
         let retryAttempt = 0;
         let result = await joinWhatsAppInvite(socket, record.canonicalUrl, {
@@ -623,7 +662,7 @@ export function startWorkerRuntime(): JobOrchestrator {
                 ...metadata,
                 joinClassification: "dead-link",
                 joinRetryable: true,
-                needsValidation: false,
+                needsValidation: true,
               },
             },
           );
@@ -638,16 +677,18 @@ export function startWorkerRuntime(): JobOrchestrator {
             currentAction: "returned to main",
           });
         } else {
+          const retryable = classified.retryable || classified.classification === "rate-limit";
           await buckets.move(
             context.job.workspaceId,
             record.canonicalUrl,
-            classified.retryable ? "error" : "dead",
+            retryable ? "main" : "dead",
             {
               validationError: classified.message.slice(0, 240),
               metadata: {
                 ...metadata,
                 joinClassification: classified.classification,
-                joinRetryable: classified.retryable,
+                joinRetryable: retryable,
+                needsValidation: retryable,
               },
               lastCheckedAt: Date.now(),
             },
@@ -868,6 +909,10 @@ async function sweepPendingMainValidation(
   );
   const workspaceIds = [...new Set(activeSessions.map((session) => session.workspaceId))];
   for (const workspaceId of workspaceIds) {
+    if (!validatorErrorMigrations.has(workspaceId)) {
+      await requeueLegacyValidatorErrors(workspaceId).catch(() => 0);
+      validatorErrorMigrations.add(workspaceId);
+    }
     const sessions = activeSessions.filter(
       (session) => session.workspaceId === workspaceId,
     );
@@ -892,35 +937,37 @@ async function sweepPendingMainValidation(
     pending.forEach((record, index) => {
       chunks[index % chunks.length]?.push(record.canonicalUrl);
     });
-    await Promise.all(
-      chunks.flatMap((urls, index) => {
-        const session = sessions[index];
-        if (!session || !urls.length) return [];
+    const jobs: Promise<unknown>[] = [];
+    chunks.forEach((urls, index) => {
+      const session = sessions[index];
+      if (!session || !urls.length) return;
+      for (let offset = 0; offset < urls.length; offset += 100) {
+        const batch = urls.slice(offset, offset + 100);
         const payload = {
-          urls,
+          urls: batch,
           sourceSessionId: session.sessionId,
           sourceUserId: "validator-auto",
         };
         const payloadHash = createHash("sha256")
           .update(JSON.stringify(payload))
           .digest("hex");
-        return [
-          orchestrator.enqueue({
-            workspaceId,
-            sessionId: session.sessionId,
-            kind: "link-validation",
-            payload,
-            idempotencyKey: `validator-auto:${workspaceId}:${session.sessionId}:${payloadHash}`,
-          }),
-        ];
-      }),
-    );
+        jobs.push(orchestrator.enqueue({
+          workspaceId,
+          sessionId: session.sessionId,
+          kind: "link-validation",
+          payload,
+          idempotencyKey: `validator-auto:${workspaceId}:${session.sessionId}:${payloadHash}`,
+        }));
+      }
+    });
+    await Promise.all(jobs);
   }
 }
 
 export function stopWorkerRuntimeForTests(): void {
   if (validatorSweepTimer) clearInterval(validatorSweepTimer);
   validatorSweepTimer = undefined;
+  validatorErrorMigrations.clear();
 }
 
 

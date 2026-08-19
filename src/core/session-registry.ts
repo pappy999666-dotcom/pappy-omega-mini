@@ -92,7 +92,7 @@ function normalizedSessionJoinSettings(
   const next = { ...base, ...(current ?? {}) };
   const clamp = (value: number, min: number, max: number): number =>
     Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
-  const minDelayMs = clamp(next.minDelayMs, 1000, 600000);
+  const minDelayMs = clamp(next.minDelayMs, 0, 600000);
   const maxDelayMs = Math.max(
     minDelayMs,
     clamp(next.maxDelayMs, minDelayMs, 600000),
@@ -100,7 +100,7 @@ function normalizedSessionJoinSettings(
   return {
     ...next,
     targetCount: clamp(next.targetCount, 1, 10000),
-    delayMs: clamp(next.delayMs, 1000, 600000),
+    delayMs: clamp(next.delayMs, 0, 600000),
     minDelayMs,
     maxDelayMs,
     batchCycles: clamp(next.batchCycles, 1, 20),

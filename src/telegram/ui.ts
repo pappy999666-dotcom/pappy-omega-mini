@@ -298,7 +298,7 @@ export function linkCollectionKeyboard(
 
 export function validatorDashboardText(snapshot: {
   counts: Record<string, number>;
-  recent: Array<{ canonicalUrl: string; bucket: string }>;
+  recent: Array<{ canonicalUrl: string; bucket: string; metadata?: { title?: string; validationState?: string; memberCount?: number } }>;
   capturedAt: number;
 }): string {
   const recent =
@@ -306,14 +306,14 @@ export function validatorDashboardText(snapshot: {
       .slice(0, 6)
       .map(
         (record) =>
-          `• <code>${escapeHtml(record.canonicalUrl.slice(0, 72))}</code> <i>${escapeHtml(record.bucket)}</i>`,
+          `• <code>${escapeHtml(record.metadata?.title ?? record.canonicalUrl.slice(0, 72))}</code> <i>${escapeHtml(record.metadata?.validationState ?? record.bucket)}</i>`,
       )
       .join("\n") || "No link records yet.";
   return pageText(
     "Validator Hub",
     infoResponse(
       "Live Workspace Buckets",
-      `<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Active:</b> ${snapshot.counts.active ?? 0}\n<b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Error:</b> ${snapshot.counts.error ?? 0}\n<b>Master:</b> ${snapshot.counts.master ?? 0}\n\n<b>Recent records</b>\n${recent}\n\n<i>Updated ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+      `<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Active:</b> ${snapshot.counts.active ?? 0}\n<b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Retryable:</b> ${snapshot.counts.error ?? 0}\n<b>Master:</b> ${snapshot.counts.master ?? 0}\n\n<b>Recent records</b>\n${recent}\n\n<i>Updated ${new Date(snapshot.capturedAt).toISOString()}</i>`,
     ),
   );
 }
@@ -321,7 +321,7 @@ export function validatorDashboardText(snapshot: {
 export function validatorLiveText(
   snapshot: {
     counts: Record<string, number>;
-    recent: Array<{ canonicalUrl: string; bucket: string }>;
+    recent: Array<{ canonicalUrl: string; bucket: string; metadata?: { title?: string; validationState?: string; memberCount?: number } }>;
     capturedAt: number;
   },
   active = false,
@@ -340,28 +340,25 @@ export function validatorLiveText(
     };
   }> = [],
 ): string {
-  const recent =
-    snapshot.recent
-      .slice(0, 10)
-      .map(
-        (record) =>
-          `• <code>${escapeHtml(record.canonicalUrl.slice(0, 72))}</code> <i>${escapeHtml(record.bucket)}</i>`,
-      )
-      .join("\n") || "Waiting for link activity.";
-  const work = jobs.length
-    ? jobs
-        .slice(0, 6)
-        .map(
-          (job) =>
-            `• <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code> ${escapeHtml(job.state)} · ${job.progress.completed}/${job.progress.total ?? "—"} · ${escapeHtml(job.progress.currentAction ?? "waiting")}\n  <code>${escapeHtml(job.progress.currentLink ?? job.progress.lastResult ?? "waiting")}</code>`,
-        )
-        .join("\n")
-    : "No validation worker is currently active.";
+  const matrix = snapshot.recent
+    .slice(0, 10)
+    .map((record) => {
+      const state = record.metadata?.validationState ?? record.bucket;
+      const icon = state === "active" ? "●" : state === "validating" ? "◌" : state === "dead" ? "×" : state === "retryable-error" ? "↻" : "·";
+      const title = record.metadata?.title ?? record.canonicalUrl.slice(0, 64);
+      const size = record.metadata?.memberCount !== undefined ? ` · ${record.metadata.memberCount} members` : "";
+      return `${icon} <code>${escapeHtml(title)}</code> <i>${escapeHtml(state)}${size}</i>`;
+    })
+    .join("\n") || "Waiting for link activity.";
+  const work = jobs.filter((job) => ["RUNNING", "RETRYING"].includes(job.state)).slice(0, 6);
+  const activeFeed = work.length
+    ? work.map((job) => `◌ <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code> ${escapeHtml(job.progress.currentAction ?? "validating")} · <code>${escapeHtml(job.progress.currentLink ?? job.progress.lastResult ?? "waiting")}</code>`).join("\n")
+    : "No link is currently being checked; new Main links are admitted automatically.";
   return pageText(
     "Validator Hub · Live",
     infoResponse(
-      active ? "Live dashboard is ON" : "Live dashboard is PAUSED",
-      `<b>What you see:</b> live collection and validation changes for this workspace.\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Error:</b> ${snapshot.counts.error ?? 0}\n<b>Master total:</b> ${snapshot.counts.master ?? 0}\n\n<b>Live validation workers</b>\n${work}\n\n<b>Recent records</b>\n${recent}\n\n<i>Stop pauses this message’s live refresh only. The Validator Hub dashboard remains available; open Live Log again when you want the feed.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+      active ? "Live feed is ON" : "Live feed is PAUSED",
+      `<b>Live validation workers · state matrix</b> · refreshed in place\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating/Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Retryable:</b> ${snapshot.counts.error ?? 0}\n<b>Master total:</b> ${snapshot.counts.master ?? 0}\n\n<b>Current validation</b>\n${activeFeed}\n\n<b>Group matrix</b>\n${matrix}\n\n<i>Links leave Main when validation begins. Dead means the invite is revoked, expired, invalid, or the group no longer exists. Temporary session/transport failures return to Main for retry and do not contaminate the Error bucket.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
     ),
   );
 }
@@ -391,12 +388,12 @@ export function bucketKeyboard(): InlineKeyboardMarkup {
       btn("📦 Main / Master", "bucket:view:main"),
       btn("✅ Active", "bucket:view:active"),
     ],
-    [btn("💀 Dead", "bucket:view:dead"), btn("⚠️ Error", "bucket:view:error")],
-    [btn("🔀 Merge Active + Error → Main", "bucket:merge:main", "success")],
+    [btn("💀 Dead", "bucket:view:dead"), btn("↻ Retryable", "bucket:view:error")],
+    [btn("🔀 Requeue Active + Retryable", "bucket:merge:main", "success")],
     [btn("⬇️ Downloads", "bucket:downloads")],
     [
       btn("🗑 Purge Dead", "bucket:purge:dead", "danger"),
-      btn("🗑 Purge Error", "bucket:purge:error", "danger"),
+      btn("🗑 Purge Retryable", "bucket:purge:error", "danger"),
     ],
     [btn("🗑 Purge Everything", "bucket:purge:master", "danger")],
     [btn(ui.back, "menu:main")],
@@ -467,7 +464,7 @@ export function workspaceSettingsKeyboard(settings: {
       ),
       btn("Set exact", "settings:broadcastdelay:set", "primary"),
     ],
-    [btn("Join Manager settings are per session", "menu:sessions")],
+    [btn("Open per-session Join Manager settings", "sessions:list:0")],
     [btn("↻ Refresh", "settings:menu")],
     [btn(ui.back, "menu:main")],
   ]);
@@ -995,11 +992,17 @@ function escapeHtml(value: string): string {
 }
 
 
-export function autoPromoteScopeKeyboard(sessionId?: string): InlineKeyboardMarkup {
+export function autoPromoteScopeKeyboard(
+  sessionId?: string,
+  sessions: WhatsAppSession[] = [],
+): InlineKeyboardMarkup {
+  const sessionButtons = sessions.map((session) =>
+    [btn(`Session · ${session.sessionName}`, `autopromote:scope:SESSION:${session.sessionId}`, "success")],
+  );
   return keyboard([
     ...(sessionId
       ? [[btn("This Session", `autopromote:scope:SESSION:${sessionId}`, "success")]]
-      : []),
+      : sessionButtons),
     [btn("All My Sessions", "autopromote:scope:USER", "primary")],
     [btn(ui.back, sessionId ? `session:${sessionId}:menu` : "menu:main")],
   ]);
@@ -1105,6 +1108,7 @@ export function autoPromoteGlobalTargetsKeyboard(
   ]);
   rows.push([btn("✅ Use Selected Sessions", "autopromote:global:ready", "success")]);
   rows.push([btn("✚ Select All Active", "autopromote:global:all", "primary")]);
+  rows.push([btn("↻ Refresh ACTIVE Sessions", "admin:autopromote:targets:refresh", "primary")]);
   rows.push([btn("Cancel", "autopromote:cancel", "danger")]);
   return keyboard(rows);
 }

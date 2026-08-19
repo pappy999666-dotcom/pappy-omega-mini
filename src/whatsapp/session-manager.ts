@@ -579,6 +579,8 @@ async function openWhatsAppSession(
               void sendTrackedMessage(jid, {
                 [mediaReply.media.kind]: mediaReply.media.bytes,
                 caption: mediaReply.caption ?? "",
+                mimetype: mediaReply.media.mimeType,
+                ...(mediaReply.media.kind === "video" ? { fileName: mediaReply.media.fileName } : {}),
               });
             } else if (mediaReply.text) {
               void sendTrackedMessage(jid, { text: mediaReply.text });

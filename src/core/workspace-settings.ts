@@ -54,10 +54,10 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
       defaultJoinRetryLimit: existing.defaultJoinRetryLimit ?? 2,
       defaultJoinMinDelayMs:
         existing.defaultJoinMinDelayMs ??
-        Math.max(1000, existing.defaultJoinDelayMs ?? 5000),
+        Math.max(0, existing.defaultJoinDelayMs ?? 0),
       defaultJoinMaxDelayMs:
         existing.defaultJoinMaxDelayMs ??
-        Math.max(1000, existing.defaultJoinDelayMs ?? 5000),
+        Math.max(0, existing.defaultJoinDelayMs ?? 0),
       defaultJoinRetryBaseMs: existing.defaultJoinRetryBaseMs ?? 5000,
       defaultJoinSessionCooldownMs:
         existing.defaultJoinSessionCooldownMs ?? 30000,
@@ -73,9 +73,9 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
     workspaceId,
     defaultPrefix: ".",
     defaultAutoJoinEnabled: false,
-    defaultJoinDelayMs: 5000,
-    defaultJoinMinDelayMs: 5000,
-    defaultJoinMaxDelayMs: 7000,
+    defaultJoinDelayMs: 0,
+    defaultJoinMinDelayMs: 0,
+    defaultJoinMaxDelayMs: 0,
     defaultJoinRetryBaseMs: 5000,
     defaultJoinSessionCooldownMs: 30000,
     defaultJoinRestrictionThreshold: 5,
@@ -83,7 +83,7 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
     defaultJoinBatchCycles: 1,
     defaultJoinMaxConcurrency: 2,
     defaultJoinRetryLimit: 2,
-    defaultJoinMode: "auto",
+    defaultJoinMode: "immediate",
     defaultBroadcastDelayMs: 20000,
     timezone: "UTC",
     updatedAt: Date.now(),
@@ -107,14 +107,14 @@ export function updateWorkspaceSettings(
       3,
     ),
     defaultJoinDelayMs: Math.max(
-      1000,
+      0,
       Math.min(
         600000,
         Number(patch.defaultJoinDelayMs ?? current.defaultJoinDelayMs),
       ),
     ),
     defaultJoinMinDelayMs: Math.max(
-      1000,
+      0,
       Math.min(
         600000,
         Number(
@@ -125,7 +125,7 @@ export function updateWorkspaceSettings(
       ),
     ),
     defaultJoinMaxDelayMs: Math.max(
-      1000,
+      0,
       Math.min(
         600000,
         Number(

@@ -87,7 +87,7 @@ export async function mergeValidatorBuckets(
     let moved = 0;
     for (const record of records) {
       const next = await store.move(workspaceId, record.canonicalUrl, "main", {
-        metadata: { ...record.metadata, needsValidation: true },
+        metadata: { ...record.metadata, needsValidation: true, validationState: "pending" },
       });
       if (next) moved += 1;
     }
@@ -108,4 +108,55 @@ async function listFromStore(
     cursor = page.nextCursor;
   } while (cursor !== 0);
   return records;
+}
+
+
+export async function claimValidatorMainLinks(
+  workspaceId: string,
+  urls: string[],
+  sourceSessionId?: string,
+): Promise<number> {
+  return withStore(async (store) => {
+    let claimed = 0;
+    for (const raw of urls) {
+      let canonicalUrl: string;
+      try {
+        canonicalUrl = new URL(raw).toString();
+      } catch {
+        continue;
+      }
+      const record = await store.get(workspaceId, canonicalUrl);
+      if (!record || record.bucket !== "main") continue;
+      const next = await store.move(workspaceId, canonicalUrl, "active", {
+        ...(sourceSessionId ? { sourceSessionId } : {}),
+        metadata: {
+          ...record.metadata,
+          needsValidation: false,
+          validationState: "validating",
+        },
+      });
+      if (next) claimed += 1;
+    }
+    return claimed;
+  });
+}
+
+export async function requeueLegacyValidatorErrors(
+  workspaceId: string,
+): Promise<number> {
+  return withStore(async (store) => {
+    const records = await listFromStore(store, workspaceId, "error");
+    let moved = 0;
+    for (const record of records) {
+      const next = await store.move(workspaceId, record.canonicalUrl, "main", {
+        metadata: {
+          ...record.metadata,
+          needsValidation: true,
+          validationState: "pending",
+        },
+      });
+      if (next) moved += 1;
+    }
+    return moved;
+  });
 }

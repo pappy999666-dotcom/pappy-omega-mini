@@ -30,6 +30,7 @@ export interface LinkRecord {
       | "failed";
     joinRetryable?: boolean;
     needsValidation?: boolean;
+    validationState?: "pending" | "validating" | "active" | "dead" | "retryable-error";
   };
   validationError?: string;
 }

@@ -205,7 +205,7 @@ describe("Session-scoped Join Manager settings", () => {
     );
   });
 
-  it("normalizes unsafe delay values instead of persisting zero-delay joins", () => {
+  it("supports explicit zero-delay Immediate mode without corrupting min/max bounds", () => {
     const workspaceId = `join-delay-${Date.now()}-${Math.random()}`;
     const session = createSession({ workspaceId, sessionName: "delay-test" });
     updateSessionJoinSettings(workspaceId, session.sessionId, {
@@ -214,9 +214,9 @@ describe("Session-scoped Join Manager settings", () => {
       maxDelayMs: 0,
     });
     expect(getSessionJoinSettings(workspaceId, session.sessionId)).toMatchObject({
-      delayMs: 1000,
-      minDelayMs: 1000,
-      maxDelayMs: 1000,
+      delayMs: 0,
+      minDelayMs: 0,
+      maxDelayMs: 0,
     });
   });
 });

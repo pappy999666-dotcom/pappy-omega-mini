@@ -54,6 +54,7 @@ import { getValidatorSnapshot } from "../links/validator-snapshot.js";
 import {
   listValidatorBucket,
   listAllValidatorBucket,
+  claimValidatorMainLinks,
   mergeValidatorBuckets,
   purgeValidatorBucket,
   type ValidatorBucket,
@@ -227,7 +228,7 @@ type AutoPromoteWizard = {
   payloadMedia?: JobMediaReference;
   payloadCaption?: string;
   payloadQuoted?: { messageId?: string; remoteJid?: string; text?: string };
-  stage: "command" | "days" | "times" | "posts" | "payload" | "confirm";
+  stage: "scope" | "command" | "days" | "times" | "posts" | "payload" | "confirm";
   chatId?: number | undefined;
   messageId?: number | undefined;
 };
@@ -343,6 +344,20 @@ function clearPendingInputs(userId: string): void {
   pendingLiveJobCode.delete(userId);
 }
 
+function isAutoPromoteWizardContinuation(callbackData: string): boolean {
+  return (
+    callbackData.startsWith("autopromote:scope:") ||
+    callbackData.startsWith("autopromote:command:") ||
+    callbackData.startsWith("autopromote:days:") ||
+    callbackData.startsWith("autopromote:times:") ||
+    callbackData.startsWith("autopromote:posts:") ||
+    callbackData === "autopromote:edit" ||
+    callbackData === "autopromote:confirm" ||
+    callbackData.startsWith("autopromote:global:") ||
+    callbackData === "admin:autopromote:targets:refresh"
+  );
+}
+
 async function registerTelegramCommandSuggestions(
   bot: Telegraf<Context>,
 ): Promise<void> {
@@ -383,8 +398,11 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.use(async (ctx, next) => {
     if (ctx.callbackQuery && ctx.from?.id !== undefined) {
       const userId = String(ctx.from.id);
-      clearPendingInputs(userId);
-      passiveIntakeSuspended.delete(userId);
+      const callbackData = "data" in ctx.callbackQuery ? String(ctx.callbackQuery.data ?? "") : "";
+      if (!isAutoPromoteWizardContinuation(callbackData)) {
+        clearPendingInputs(userId);
+        passiveIntakeSuspended.delete(userId);
+      }
     }
     await next();
   });
@@ -1503,6 +1521,13 @@ export function createTelegramBot(): Telegraf<Context> {
         .catch(() => undefined);
       return;
     }
+    await ctx.telegram.editMessageText(
+      pending.chatId,
+      pending.messageId,
+      undefined,
+      pageText("Global Bridge · Processing", infoResponse("Command dispatched", `<b>Targets:</b> ${sessions.length} ACTIVE session${sessions.length === 1 ? "" : "s"}\n\n⏳ Waiting for transport responses…`)),
+      { parse_mode: "HTML", reply_markup: keyboard([[btn("✖ Close Bridge", "bridge:global")]]) },
+    ).catch(() => undefined);
     const results = await Promise.all(
       sessions.map(async (session) => {
         try {
@@ -2806,7 +2831,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const runtime = getWorkerRuntime();
     const records = await listAllValidatorBucket(
       user.workspaceId,
-      "master",
+      "main",
     ).catch(() => []);
     const activeSessions = listSessions(user.workspaceId).filter(
       (entry) => entry.status === "ACTIVE",
@@ -2822,7 +2847,7 @@ export function createTelegramBot(): Telegraf<Context> {
             "Validation Unavailable",
             !session
               ? "No authenticated WhatsApp session is currently active. Pair or recover a session first."
-              : "The master bucket has no collected links to validate.",
+              : "Main has no pending links to validate.",
           ),
         ),
         bucketKeyboard(),
@@ -3546,14 +3571,8 @@ export function createTelegramBot(): Telegraf<Context> {
           },
           idempotencyKey: `join-manager:${user.workspaceId}:${session.sessionId}:${Date.now()}`,
         });
-        const started = await runtime.waitForStarted(job.jobId, 3000);
         joinJobs.set(key, job.jobId);
-        joinStates.set(
-          key,
-          started && ["RUNNING", "QUEUED", "RETRYING"].includes(started.state)
-            ? "running"
-            : "stopped",
-        );
+        joinStates.set(key, "running");
       } else if (operation === "pause") {
         const jobId = joinJobs.get(key);
         if (jobId) await runtime?.pause(jobId);
@@ -3666,23 +3685,23 @@ export function createTelegramBot(): Telegraf<Context> {
             : operation === "setdelay"
               ? {
                   defaultJoinDelayMs:
-                    [5000, 10000, 30000, 60000][
-                      ([5000, 10000, 30000, 60000].indexOf(
+                      [0, 5000, 10000, 30000, 60000][
+                      ([0, 5000, 10000, 30000, 60000].indexOf(
                         current.defaultJoinDelayMs,
                       ) +
                         1) %
-                        4
+                        5
                     ] ?? 5000,
                 }
               : operation === "setmindelay"
                 ? (() => {
                     const nextMin =
-                      [1000, 3000, 5000, 10000][
-                        ([1000, 3000, 5000, 10000].indexOf(
+                      [0, 1000, 3000, 5000, 10000][
+                        ([0, 1000, 3000, 5000, 10000].indexOf(
                           current.defaultJoinMinDelayMs,
                         ) +
                           1) %
-                          4
+                          5
                       ] ?? 5000;
                     return {
                       defaultJoinMinDelayMs: nextMin,
@@ -3694,12 +3713,12 @@ export function createTelegramBot(): Telegraf<Context> {
                 : operation === "setmaxdelay"
                   ? (() => {
                       const nextMax =
-                        [5000, 10000, 30000, 60000][
-                          ([5000, 10000, 30000, 60000].indexOf(
+                        [0, 5000, 10000, 30000, 60000][
+                          ([0, 5000, 10000, 30000, 60000].indexOf(
                             current.defaultJoinMaxDelayMs,
                           ) +
                             1) %
-                            4
+                            5
                         ] ?? 10000;
                       return {
                         defaultJoinMaxDelayMs: nextMax,
@@ -3878,7 +3897,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
     const user = resolveTelegramUser(ctx);
-    const activeSessions = listAllSessions().filter((session) => session.status === "ACTIVE");
+    const activeSessions = activeAllSessions();
     const targets: string[] = [];
     pendingAutoPromote.set(String(ctx.from?.id ?? ""), {
       workspaceId: user.workspaceId,
@@ -3890,6 +3909,22 @@ export function createTelegramBot(): Telegraf<Context> {
     });
     await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Target Sessions", "Select the active WhatsApp sessions this owner job may use. This configuration remains independent from user and session Auto Promote settings.")), autoPromoteGlobalTargetsKeyboard(activeSessions, new Set(targets)));
   });
+  bot.action("admin:autopromote:targets:refresh", async (ctx) => {
+    await ctx.answerCbQuery("Refreshing ACTIVE sessions…");
+    if (!requireAdmin(ctx)) return;
+    const userId = String(ctx.from?.id ?? "");
+    const current = pendingAutoPromote.get(userId);
+    if (!current || current.scope !== "GLOBAL") return;
+    const activeSessions = activeAllSessions();
+    const activeIds = new Set(activeSessions.map((session) => session.sessionId));
+    const selected = new Set((current.targetSessionIds ?? []).filter((id) => activeIds.has(id)));
+    pendingAutoPromote.set(userId, { ...current, targetSessionIds: [...selected] });
+    await edit(
+      ctx,
+      pageText("Global Auto Promote", infoResponse("Choose Target Sessions", `<b>Selected:</b> ${selected.size} active session(s)\n<b>Available:</b> ${activeSessions.length} ACTIVE session(s)`)),
+      autoPromoteGlobalTargetsKeyboard(activeSessions, selected),
+    );
+  });
   bot.action(/^autopromote:global:toggle:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
@@ -3900,7 +3935,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const sessionId = ctx.match[1] ?? "";
     if (selected.has(sessionId)) selected.delete(sessionId); else selected.add(sessionId);
     pendingAutoPromote.set(userId, { ...current, targetSessionIds: [...selected] });
-    const activeSessions = listAllSessions().filter((session) => session.status === "ACTIVE");
+    const activeSessions = activeAllSessions();
     await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Target Sessions", `<b>Selected:</b> ${selected.size} active session(s)`)), autoPromoteGlobalTargetsKeyboard(activeSessions, selected));
   });
   bot.action("autopromote:global:all", async (ctx) => {
@@ -3909,7 +3944,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const userId = String(ctx.from?.id ?? "");
     const current = pendingAutoPromote.get(userId);
     if (!current || current.scope !== "GLOBAL") return;
-    const activeSessions = listAllSessions().filter((session) => session.status === "ACTIVE");
+    const activeSessions = activeAllSessions();
     const selected = activeSessions.map((session) => session.sessionId);
     pendingAutoPromote.set(userId, { ...current, targetSessionIds: selected });
     await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Target Sessions", `<b>Selected:</b> ${selected.length} active session(s)`)), autoPromoteGlobalTargetsKeyboard(activeSessions, new Set(selected)));
@@ -3928,14 +3963,14 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!session) return deny(ctx);
     const current = pendingAutoPromote.get(String(ctx.from?.id ?? ""));
     if (!current) return;
-    pendingAutoPromote.set(String(ctx.from?.id ?? ""), { ...current, scope: "SESSION", sessionId: session.sessionId });
+    pendingAutoPromote.set(String(ctx.from?.id ?? ""), { ...current, scope: "SESSION", sessionId: session.sessionId, stage: "command" });
     await edit(ctx, pageText("Auto Promote", infoResponse("Choose Command", `<b>Session:</b> ${escapeHtml(session.sessionName)}`)), autoPromoteCommandKeyboard());
   });
   bot.action("autopromote:scope:USER", async (ctx) => {
     await ctx.answerCbQuery();
     const current = pendingAutoPromote.get(String(ctx.from?.id ?? ""));
     if (!current) return;
-    pendingAutoPromote.set(String(ctx.from?.id ?? ""), { ...current, scope: "USER", sessionId: undefined });
+    pendingAutoPromote.set(String(ctx.from?.id ?? ""), { ...current, scope: "USER", sessionId: undefined, stage: "command" });
     await edit(ctx, pageText("Auto Promote", infoResponse("Choose Command", "This configuration targets all WhatsApp sessions owned by you.")), autoPromoteCommandKeyboard());
   });
   bot.action(/^autopromote:command:(allstatus|allchat|allstatusx)$/, async (ctx) => {
@@ -4017,8 +4052,22 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("autopromote:new", async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
-    pendingAutoPromote.set(String(ctx.from?.id ?? ""), { workspaceId: user.workspaceId, scope: "USER", stage: "command" });
-    await edit(ctx, pageText("Auto Promote", infoResponse("Choose Command", "Select the canonical operation to schedule.")), autoPromoteCommandKeyboard());
+    const userId = String(ctx.from?.id ?? "");
+    pendingAutoPromote.set(userId, {
+      workspaceId: user.workspaceId,
+      scope: "USER",
+      stage: "scope",
+      chatId: ctx.chat?.id,
+      messageId: ctx.callbackQuery?.message && "message_id" in ctx.callbackQuery.message
+        ? ctx.callbackQuery.message.message_id
+        : undefined,
+    });
+    const sessions = activeWorkspaceSessions(user.workspaceId);
+    await edit(
+      ctx,
+      pageText("Auto Promote", infoResponse("Choose Scope", "Choose one WhatsApp session or apply the schedule to all your ACTIVE sessions.")),
+      autoPromoteScopeKeyboard(undefined, sessions),
+    );
   });
   bot.action(/^autopromote:view:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -5070,7 +5119,7 @@ async function showSessionHealth(
     (job) =>
       job.workspaceId === session.workspaceId &&
       job.sessionId === session.sessionId &&
-      ["QUEUED", "RUNNING", "PAUSED", "RETRYING"].includes(job.state),
+      ["RUNNING", "RETRYING"].includes(job.state),
   );
   await edit(
     ctx,
@@ -5532,7 +5581,7 @@ async function showValidatorLiveLog(
     (job) =>
       job.workspaceId === user.workspaceId &&
       job.kind === "link-validation" &&
-      ["QUEUED", "RUNNING", "PAUSED", "RETRYING"].includes(job.state),
+      ["RUNNING", "RETRYING"].includes(job.state),
   );
   await edit(
     ctx,
@@ -5563,7 +5612,7 @@ async function showValidatorLiveLog(
             (job) =>
               job.workspaceId === user.workspaceId &&
               job.kind === "link-validation" &&
-              ["QUEUED", "RUNNING", "PAUSED", "RETRYING"].includes(job.state),
+              ["RUNNING", "RETRYING"].includes(job.state),
           ),
         ) ?? Promise.resolve([]),
     ])
@@ -5695,6 +5744,7 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
     const details = [
       `<b>Session:</b> ${escapeHtml(session.sessionName)}`,
       `<b>Transport:</b> ${escapeHtml(effectiveSessionStatus(session))} · <b>Groups online:</b> ${totalGroups ?? "unavailable"}`,
+      `<b>Socket:</b> <code>${escapeHtml(session.sessionId.slice(0, 12))}</code> · generation ${escapeHtml(String(session.socketGeneration ?? "—"))}`,
       `<b>Mode:</b> ${escapeHtml(mode)} · <b>Target:</b> ${escapeHtml(String(target))} · <b>Delay:</b> ${escapeHtml(delayMs)}`,
       `<b>Cursor:</b> ${progress?.completed ?? 0}/${escapeHtml(String(total))} · <b>Job:</b> <code>${escapeHtml(code)}</code>`,
       `<b>Joined:</b> ${joined} · <b>Requested:</b> ${requested} · <b>Already member:</b> ${alreadyMember}`,
@@ -5985,6 +6035,7 @@ async function enqueueValidatorJobs(
       if (!chunk.length) return [];
       const session = sessions[index];
       if (!session) return [];
+      void claimValidatorMainLinks(workspaceId, chunk, session.sessionId).catch(() => undefined);
       const payload = {
         urls: chunk,
         sourceSessionId: session.sessionId,
