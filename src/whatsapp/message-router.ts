@@ -20,6 +20,7 @@ export interface IncomingTextMessage {
   quotedText?: string;
   media?: { kind: "image" | "video"; bytes: Buffer; mimeType?: string };
   bridgeAuthorized?: boolean;
+  fromMe?: boolean;
 }
 export interface WhatsAppReply {
   text?: string;
@@ -45,6 +46,7 @@ function isOwnerFor(
   session: ReturnType<typeof getSession>,
 ): boolean {
   return (
+    message.fromMe === true ||
     message.bridgeAuthorized === true ||
     identityMatches(message.senderJid, session.phoneNumber ?? "") ||
     session.sudoList.some((identity) =>
@@ -73,8 +75,15 @@ export async function routeWhatsAppText(
   const commandName = raw.trim().split(/\s+/, 1)[0]?.toLowerCase();
   const isOwner = isOwnerFor(message, session);
   // WhatsApp is a private command surface: public and unauthorized senders
-  // receive no reply and cannot open the menu.
-  if (!isOwner) return null;
+  // receive no reply and cannot open the menu. `fromMe` is the transport-level
+  // proof that this was sent by the authenticated account itself, even when
+  // Baileys exposes its LID rather than its phone JID.
+  if (!isOwner) {
+    console.info(
+      `[pappy-omega-mini] WhatsApp command unauthorized session=${message.sessionId} sender=${message.senderJid} command=${commandName}`,
+    );
+    return null;
+  }
   if (commandName === "menu" || commandName === "help" || commandName === "m") {
     const payload = await buildWhatsappMenuPayload(
       session,

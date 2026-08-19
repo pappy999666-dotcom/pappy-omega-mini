@@ -450,6 +450,7 @@ async function openWhatsAppSession(
           chatJid: message.key.remoteJid,
           senderJid,
           text,
+          ...(message.key.fromMe ? { fromMe: true } : {}),
           ...(quotedText ? { quotedText } : {}),
           ...(inboundMedia ? { media: inboundMedia } : {}),
         })

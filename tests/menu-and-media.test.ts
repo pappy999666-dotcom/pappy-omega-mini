@@ -113,6 +113,28 @@ describe("Telegram group moderator command surface", () => {
 });
 
 describe("WhatsApp command privacy", () => {
+  it("authorizes self-sent commands when Baileys supplies a LID sender", async () => {
+    const user = resolveUser(`wa-from-me-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "self-sent",
+      phoneNumber: "2347065217750",
+    });
+    updateSession(user.workspaceId, session.sessionId, {
+      status: "ACTIVE",
+      lastHealthyAt: Date.now(),
+    });
+    expect(
+      await routeWhatsAppText({
+        workspaceId: user.workspaceId,
+        sessionId: session.sessionId,
+        senderJid: "222707593568329@lid",
+        text: ".ping",
+        fromMe: true,
+      }),
+    ).toContain("ACTIVE");
+  });
+
   it("silences public and unknown WhatsApp commands", async () => {
     const user = resolveUser(`wa-auth-${Date.now()}-${Math.random()}`);
     const session = createSession({
