@@ -26,10 +26,6 @@ function ownJid(socket: WASocket): string {
   return (socket as WASocket & { user?: { id?: string } }).user?.id ?? "me";
 }
 
-export function nativePreview(text: string): { richPreview?: true } {
-  return /https?:\/\/\S+/i.test(text) ? { richPreview: true } : {};
-}
-
 function method(
   socket: WASocket,
   name: string,

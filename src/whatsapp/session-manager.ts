@@ -306,6 +306,8 @@ async function openWhatsAppSession(
   const socket = makeWASocket({
     auth: state,
     logger,
+    generateHighQualityLinkPreview: true,
+    linkPreviewImageThumbnailWidth: 1920,
   }) as unknown as RuntimeSocket;
   const forceSocketRecovery = (error?: unknown) => {
     const reason =

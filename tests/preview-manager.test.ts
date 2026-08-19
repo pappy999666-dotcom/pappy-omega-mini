@@ -9,7 +9,10 @@ import {
   firstHttpUrl,
   linkPreviewPayload,
 } from "../src/preview/default-adapter.js";
-import { buildNativeGroupStatusPreviewContent } from "../src/whatsapp/outbound-preview.js";
+import {
+  buildNativeGroupStatusPreviewContent,
+  prepareOutboundContent,
+} from "../src/whatsapp/outbound-preview.js";
 import {
   extractWhatsAppGroupInviteUrls,
   isWhatsAppGroupInviteUrl,
@@ -82,6 +85,23 @@ describe("preview acceptance safeguards", () => {
       text: "Read https://example.com/a",
       linkPreview: { title: "Title", jpegThumbnail: Buffer.from("jpeg") },
     });
+  });
+
+  it("leaves URL-only content native for Bailey high-quality hydration", async () => {
+    const content = { text: "Join https://chat.whatsapp.com/ABC123" };
+    await expect(
+      prepareOutboundContent({ text: content.text, content }),
+    ).resolves.toEqual(content);
+  });
+
+  it("does not inject a thumbnail into URL-bearing media content", async () => {
+    const content = {
+      image: Buffer.from([1, 2, 3]),
+      caption: "https://chat.whatsapp.com/ABC123",
+    };
+    await expect(
+      prepareOutboundContent({ text: content.caption, content }),
+    ).resolves.toEqual(content);
   });
 
   it("builds the native Bailey group-status preview contract", () => {
