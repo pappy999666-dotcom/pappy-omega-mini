@@ -53,7 +53,7 @@ describe("canonical Baileys-native preview pipeline", () => {
     ).toEqual(["https://chat.whatsapp.com/ABC123"]);
   });
 
-  it("uses the exact native richPreview contract for a URL text message", async () => {
+  it("uses the exact native linkPreview contract for a URL text message", async () => {
     const source = await sharp({
       create: {
         width: 900,
@@ -85,18 +85,22 @@ describe("canonical Baileys-native preview pipeline", () => {
         cacheScope: `test-${Date.now()}`,
       });
       expect(content).toMatchObject({
-        richPreview: true,
         text,
-        previewTitle: "Example title",
-        previewDescription: "Example description",
+        linkPreview: {
+          "matched-text": "https://example.com/article",
+          title: "Example title",
+          description: "Example description",
+          previewType: 5,
+        },
       });
-      expect(Buffer.isBuffer(content.previewImage)).toBe(true);
+      const preview = content.linkPreview as Record<string, unknown>;
+      expect(Buffer.isBuffer(preview.jpegThumbnail)).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
-  it("preserves hidden mentions while using the native richPreview path", async () => {
+  it("preserves hidden mentions while using the native linkPreview path", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async () =>
       new Response(
@@ -115,9 +119,10 @@ describe("canonical Baileys-native preview pipeline", () => {
         cacheScope: `test-mentions-${Date.now()}`,
       });
       expect(content).toMatchObject({
-        richPreview: true,
-        previewTitle: "Mentioned",
-        previewDescription: "Preview",
+        linkPreview: {
+          title: "Mentioned",
+          description: "Preview",
+        },
         mentions: ["2347000000000@s.whatsapp.net"],
       });
     } finally {
@@ -142,12 +147,106 @@ describe("canonical Baileys-native preview pipeline", () => {
         cacheScope: `test-status-${Date.now()}`,
       });
       expect(content).toMatchObject({
-        richPreview: true,
         groupStatus: true,
         text,
-        previewTitle: "Group title",
-        previewDescription: "Group description",
+        linkPreview: {
+          title: "Group title",
+          description: "Group description",
+        },
       });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("normalizes a tall source without upscaling or cropping", async () => {
+    const source = await sharp({
+      create: {
+        width: 420,
+        height: 2400,
+        channels: 3,
+        background: { r: 130, g: 60, b: 20 },
+      },
+    })
+      .png()
+      .toBuffer();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input) => {
+      if (String(input).endsWith("tall.png"))
+        return new Response(source, {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        });
+      return new Response(
+        '<meta property="og:title" content="Tall"><meta property="og:description" content="Complete"><meta property="og:image" content="https://example.com/tall.png">',
+        { status: 200, headers: { "content-type": "text/html" } },
+      );
+    }) as typeof fetch;
+    try {
+      const content = await prepareCanonicalPreviewContent({
+        text: "https://example.com/tall-page",
+        content: { text: "https://example.com/tall-page" },
+        cacheScope: `test-tall-${Date.now()}`,
+      });
+      const preview = content.linkPreview as Record<string, unknown>;
+      const metadata = await sharp(preview.jpegThumbnail as Buffer).metadata();
+      expect(metadata.format).toBe("jpeg");
+      expect(metadata.width).toBe(336);
+      expect(metadata.height).toBe(1920);
+      expect(metadata.width! / metadata.height!).toBeCloseTo(420 / 2400, 3);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses a socket uploader once for repeated native preview sends", async () => {
+    const originalFetch = globalThis.fetch;
+    let uploads = 0;
+    const source = await sharp({
+      create: {
+        width: 900,
+        height: 600,
+        channels: 3,
+        background: { r: 42, g: 82, b: 140 },
+      },
+    })
+      .jpeg()
+      .toBuffer();
+    globalThis.fetch = vi.fn(async (input) => {
+      if (String(input).endsWith("card.jpg"))
+        return new Response(source, {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        });
+      return new Response(
+        '<meta property="og:title" content="Uploaded"><meta property="og:description" content="Native"><meta property="og:image" content="https://example.com/card.jpg">',
+        { status: 200, headers: { "content-type": "text/html" } },
+      );
+    }) as typeof fetch;
+    try {
+      const socket = {
+        waUploadToServer: async () => {
+          uploads += 1;
+          return {
+            directPath: "/thumbnail",
+            mediaKey: Buffer.alloc(32),
+            fileSha256: Buffer.alloc(32),
+            fileEncSha256: Buffer.alloc(32),
+            mediaKeyTimestamp: 1,
+          };
+        },
+      };
+      const text = "https://example.com/uploaded";
+      const scope = `test-upload-${Date.now()}`;
+      const first = await prepareCanonicalPreviewContent({ text, content: { text }, socket, cacheScope: scope });
+      const second = await prepareCanonicalPreviewContent({ text, content: { text }, socket, cacheScope: scope });
+      expect(
+        (first.linkPreview as Record<string, unknown>).highQualityThumbnail,
+      ).toMatchObject({ directPath: "/thumbnail" });
+      expect(
+        (second.linkPreview as Record<string, unknown>).highQualityThumbnail,
+      ).toMatchObject({ directPath: "/thumbnail" });
+      expect(uploads).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
     }

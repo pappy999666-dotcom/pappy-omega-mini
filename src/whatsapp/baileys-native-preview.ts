@@ -11,6 +11,8 @@ const PREVIEW_FAILURE_TTL_SECONDS = 60;
 const FETCH_TIMEOUT_MS = 8_000;
 const MAX_HTML_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
+const NORMALIZED_PREVIEW_MAX_DIMENSION = 1920;
+const NORMALIZED_PREVIEW_MAX_BYTES = 512 * 1024;
 const MAX_REDIRECTS = 4;
 const URL_PATTERN = /https?:\/\/[^\s<>"']+/gi;
 const TRAILING_URL_PUNCTUATION = /[),.;!?]+$/;
@@ -25,6 +27,7 @@ const imagePriorities = new Map([
 export interface PreviewSocket {
   groupGetInviteInfo?: (code: string) => Promise<Record<string, unknown>>;
   profilePictureUrl?: (jid: string, type: string) => Promise<string | null>;
+  waUploadToServer?: (...args: unknown[]) => Promise<unknown>;
 }
 
 export interface CanonicalPreviewRecord {
@@ -51,9 +54,9 @@ export interface PreviewDebugSnapshot {
   sourceWidth?: number;
   sourceHeight?: number;
   sourceBytes?: number;
-  processing: "NONE";
+  processing: "NONE" | "NORMALIZED";
   crop: "NO";
-  compression: "NONE";
+  compression: "NONE" | "JPEG_QUALITY_85_95";
   nativeFlag: "richPreview" | "linkPreview" | "NONE";
   payload: "READY" | "FAILED";
   cache: "HIT" | "MISS" | "BYPASS";
@@ -71,6 +74,7 @@ export interface CanonicalPreviewInput {
 
 let redis: Redis | undefined;
 const inFlight = new Map<string, Promise<CanonicalPreviewRecord | undefined>>();
+const nativeUploadCache = new Map<string, Promise<Record<string, unknown> | undefined>>();
 const lastDebug = new Map<string, PreviewDebugSnapshot>();
 
 function getRedis(): Redis {
@@ -227,6 +231,31 @@ async function readHtml(url: string): Promise<{ html: string; finalUrl: string }
   return { html: bytes.toString("utf8"), finalUrl };
 }
 
+async function normalizePreviewImage(
+  bytes: Buffer,
+  width: number,
+  height: number,
+): Promise<Buffer> {
+  const qualities = [95, 90, 85] as const;
+  let normalized = bytes;
+  for (const quality of qualities) {
+    normalized = await sharp(bytes, { limitInputPixels: 100_000_000 })
+      .resize({
+        width: NORMALIZED_PREVIEW_MAX_DIMENSION,
+        height: NORMALIZED_PREVIEW_MAX_DIMENSION,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .jpeg({ quality, chromaSubsampling: "4:4:4", progressive: true })
+      .toBuffer();
+    if (normalized.length <= NORMALIZED_PREVIEW_MAX_BYTES || quality === 85)
+      break;
+  }
+  if (!normalized.length || width < 1 || height < 1)
+    throw new Error("Preview image normalization produced no bytes.");
+  return normalized;
+}
+
 async function readImage(url: string): Promise<{
   bytes: Buffer;
   finalUrl: string;
@@ -244,9 +273,9 @@ async function readImage(url: string): Promise<{
   if (!metadata.width || !metadata.height || !metadata.format)
     throw new Error("Preview image could not be decoded.");
   return {
-    bytes,
+    bytes: await normalizePreviewImage(bytes, metadata.width, metadata.height),
     finalUrl,
-    mimeType: type || `image/${metadata.format}`,
+    mimeType: "image/jpeg",
     width: metadata.width,
     height: metadata.height,
   };
@@ -544,11 +573,48 @@ function readExistingPreview(content: Record<string, unknown>): Record<string, u
   return undefined;
 }
 
-function nativeLinkPreview(record: CanonicalPreviewRecord, matchedUrl: string): Record<string, unknown> {
-  const thumbnail =
-    record.imageData && record.imageMimeType?.toLowerCase() === "image/jpeg"
-      ? Buffer.from(record.imageData, "base64")
-      : undefined;
+async function nativeLinkPreview(
+  record: CanonicalPreviewRecord,
+  matchedUrl: string,
+  socket: PreviewSocket | undefined,
+  cacheScope: string | undefined,
+): Promise<Record<string, unknown>> {
+  const thumbnail = record.imageData
+    ? Buffer.from(record.imageData, "base64")
+    : undefined;
+  let highQualityThumbnail: Record<string, unknown> | undefined;
+  if (thumbnail && socket?.waUploadToServer) {
+    const uploadKey = `${cacheScope ?? "global"}:${record.canonicalUrl}`;
+    const current = nativeUploadCache.get(uploadKey);
+    if (current) {
+      highQualityThumbnail = await current;
+    } else {
+      const pending = (async () => {
+        try {
+          const { prepareWAMessageMedia } = (await import(
+            "@crysnovax/baileys"
+          )) as unknown as {
+            prepareWAMessageMedia: (
+              message: Record<string, unknown>,
+              options: Record<string, unknown>,
+            ) => Promise<{ imageMessage?: Record<string, unknown> }>;
+          };
+          const prepared = await prepareWAMessageMedia(
+            { image: thumbnail },
+            {
+              upload: socket.waUploadToServer,
+              mediaTypeOverride: "thumbnail-link",
+            },
+          );
+          return prepared.imageMessage;
+        } catch {
+          return undefined;
+        }
+      })();
+      nativeUploadCache.set(uploadKey, pending);
+      highQualityThumbnail = await pending;
+    }
+  }
   return {
     "matched-text": matchedUrl,
     "canonical-url": record.canonicalUrl,
@@ -556,6 +622,7 @@ function nativeLinkPreview(record: CanonicalPreviewRecord, matchedUrl: string): 
     ...(record.description ? { description: record.description } : {}),
     previewType: 5,
     ...(thumbnail ? { jpegThumbnail: thumbnail } : {}),
+    ...(highQualityThumbnail ? { highQualityThumbnail } : {}),
   };
 }
 
@@ -585,23 +652,17 @@ export async function prepareCanonicalPreviewContent(
       lastDebug.set(input.cacheScope ?? "global", { ...snapshotBase, cache, reason: "no-valid-preview" });
       return content;
     }
-    const image = record.imageData ? Buffer.from(record.imageData, "base64") : undefined;
-    const useRichPreview = Boolean(record.title && record.description);
-    const prepared = useRichPreview
-      ? {
-          ...content,
-          richPreview: true,
-          text,
-          ...(record.title ? { previewTitle: record.title } : {}),
-          ...(record.description ? { previewDescription: record.description } : {}),
-          ...(image ? { previewImage: image } : {}),
-          ...(input.target === "group-status" ? { groupStatus: true } : {}),
-        }
-      : {
-          ...content,
-          text,
-          linkPreview: nativeLinkPreview(record, url),
-        };
+    const prepared = {
+      ...content,
+      text,
+      linkPreview: await nativeLinkPreview(
+        record,
+        url,
+        socketCandidate(input.socket),
+        input.cacheScope,
+      ),
+      ...(input.target === "group-status" ? { groupStatus: true } : {}),
+    };
     lastDebug.set(input.cacheScope ?? "global", {
       ...snapshotBase,
       canonicalUrl: record.canonicalUrl,
@@ -611,7 +672,9 @@ export async function prepareCanonicalPreviewContent(
       ...(record.sourceWidth ? { sourceWidth: record.sourceWidth } : {}),
       ...(record.sourceHeight ? { sourceHeight: record.sourceHeight } : {}),
       ...(record.imageData ? { sourceBytes: Buffer.byteLength(record.imageData, "base64") } : {}),
-      nativeFlag: useRichPreview ? "richPreview" : "linkPreview",
+      processing: record.imageData ? "NORMALIZED" : "NONE",
+      compression: record.imageData ? "JPEG_QUALITY_85_95" : "NONE",
+      nativeFlag: "linkPreview",
       payload: "READY",
       cache,
       result: "READY",
@@ -634,5 +697,6 @@ export async function closeCanonicalPreview(): Promise<void> {
   await redis?.quit().catch(() => undefined);
   redis = undefined;
   inFlight.clear();
+  nativeUploadCache.clear();
   lastDebug.clear();
 }

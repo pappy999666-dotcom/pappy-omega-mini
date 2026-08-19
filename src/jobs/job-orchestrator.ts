@@ -126,7 +126,6 @@ export class JobOrchestrator {
       {
         connection: this.redis,
         concurrency: Math.max(1, Math.min(concurrency, 32)),
-        limiter: { max: Math.max(1, concurrency * 2), duration: 1000 },
       },
     );
     this.worker.on("failed", (job, error) => {

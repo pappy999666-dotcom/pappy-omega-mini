@@ -155,8 +155,6 @@ export async function routeWhatsAppText(
               payload: enrichedPayload,
               idempotencyKey: `${message.workspaceId}:${message.sessionId}:${kind}:${payloadHash}`,
             });
-            if (kind === "allstatus")
-              await runtime.waitForStarted(record.jobId);
             return record.jobCode ?? record.jobId;
           },
         }
