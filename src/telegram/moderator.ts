@@ -300,7 +300,36 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
   bot.command("mute", async (ctx) => {
     if (!(await requireModerator(ctx))) return;
     const group = await ensureGroup(ctx);
+    const id = groupId(ctx);
     const target = targetId(ctx);
+    const values = args(ctx);
+    if (id && target === "all") {
+      const duration = Math.max(
+        30,
+        Math.min(86_400, Number(values[1]) || group?.muteDefaultSeconds || 600),
+      );
+      let ok = true;
+      try {
+        await ctx.telegram.setChatPermissions(Number(id), {
+          can_send_messages: false,
+        });
+      } catch {
+        ok = false;
+      }
+      await recordEvent(ctx, {
+        rule: "manual",
+        action: "group_mute",
+        reason: `${duration}s`,
+        success: ok,
+        ...(ok ? {} : { failureReason: "Telegram setChatPermissions failed" }),
+      });
+      await ctx.reply(
+        ok
+          ? `✅ Group muted for ${duration}s. Telegram will require an explicit /unmute all when the window ends.`
+          : "⛔ Group mute failed; check my administrator permissions.",
+      );
+      return;
+    }
     if (!group || !target) {
       await ctx.reply(
         "Reply to a member or provide a numeric Telegram user ID. Usage: /mute 600",
@@ -395,7 +424,40 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
 
   bot.command("unmute", async (ctx) => {
     if (!(await requireModerator(ctx))) return;
+    const id = groupId(ctx);
     const target = targetId(ctx);
+    if (id && target === "all") {
+      let ok = true;
+      try {
+        await ctx.telegram.setChatPermissions(Number(id), {
+          can_send_messages: true,
+          can_send_audios: true,
+          can_send_documents: true,
+          can_send_photos: true,
+          can_send_videos: true,
+          can_send_video_notes: true,
+          can_send_voice_notes: true,
+          can_send_polls: true,
+          can_send_other_messages: true,
+          can_add_web_page_previews: true,
+          can_invite_users: true,
+        });
+      } catch {
+        ok = false;
+      }
+      await recordEvent(ctx, {
+        rule: "manual",
+        action: "group_unmute",
+        success: ok,
+        ...(ok ? {} : { failureReason: "Telegram setChatPermissions failed" }),
+      });
+      await ctx.reply(
+        ok
+          ? "✅ Group unmuted."
+          : "⛔ Group unmute failed; check my administrator permissions.",
+      );
+      return;
+    }
     if (!target) {
       await ctx.reply(
         "Reply to a member or provide a numeric Telegram user ID. Usage: /unmute",
