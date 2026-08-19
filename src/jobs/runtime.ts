@@ -29,6 +29,11 @@ import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
 import { joinWhatsAppInvite } from "./join-operation.js";
 import {
+  recordAutoPromoteChildCompletion,
+  recordAutoPromoteProgress,
+} from "../autopromote/service.js";
+import { acquireSessionLock, type SessionLock } from "../core/session-lock.js";
+import {
   JoinResultStore,
   joinOutcomeFromClassification,
   type JoinResultOutcome,
@@ -118,6 +123,12 @@ export function startWorkerRuntime(): JobOrchestrator {
   const orchestrator = new JobOrchestrator(env.QUEUE_CONCURRENCY);
   activeRuntime = orchestrator;
   orchestrator.addCompletionHook(async (job) => {
+    await recordAutoPromoteChildCompletion(job).catch((error) => {
+      console.error(
+        "[pappy-omega-mini] Auto Promote completion persistence failed:",
+        error instanceof Error ? error.message : String(error),
+      );
+    });
     if (jobCompletionNotifier) await jobCompletionNotifier(job);
   });
   const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
@@ -703,7 +714,15 @@ export function startWorkerRuntime(): JobOrchestrator {
         };
       }
       let lastPostAt = 0;
-      return runBoundedBatch({
+      let completedDeliveries = 0;
+      let failedDeliveries = 0;
+      const autoPromoteRunId = typeof (context.job.payload as { autoPromoteRunId?: unknown }).autoPromoteRunId === "string"
+        ? (context.job.payload as { autoPromoteRunId: string }).autoPromoteRunId
+        : undefined;
+      const sessionLock = await waitForSessionOperationLock(context.job.workspaceId, sessionId, context.signal);
+      if (!sessionLock) throw new Error("WhatsApp session operation was cancelled before its lock became available.");
+      try {
+        return await runBoundedBatch({
         items: deliveries,
         concurrency: 1,
         context,
@@ -761,6 +780,18 @@ export function startWorkerRuntime(): JobOrchestrator {
               jid,
               repeatIndex,
             );
+            completedDeliveries += 1;
+            if (autoPromoteRunId)
+              void recordAutoPromoteProgress({
+                runId: autoPromoteRunId,
+                currentGroup: jid,
+                currentRepetition: repeatIndex,
+                completedGroups: Math.floor(completedDeliveries / repeat),
+                failedGroups: failedDeliveries,
+                successCount: completedDeliveries,
+                totalGroups: uniqueGroups.length,
+                totalRepetitions: repeat,
+              }).catch(() => undefined);
             await context.report({
               currentGroup: jid,
               currentAction: "posted",
@@ -768,6 +799,19 @@ export function startWorkerRuntime(): JobOrchestrator {
             });
             return { status: "success" as const };
           } catch (error) {
+            failedDeliveries += 1;
+            if (autoPromoteRunId)
+              void recordAutoPromoteProgress({
+                runId: autoPromoteRunId,
+                currentGroup: jid,
+                currentRepetition: repeatIndex,
+                completedGroups: Math.floor(completedDeliveries / repeat),
+                failedGroups: failedDeliveries,
+                successCount: completedDeliveries,
+                totalGroups: uniqueGroups.length,
+                totalRepetitions: repeat,
+                error: error instanceof Error ? error.message : String(error),
+              }).catch(() => undefined);
             await context.report({
               currentGroup: jid,
               currentAction: "soft failure",
@@ -780,7 +824,10 @@ export function startWorkerRuntime(): JobOrchestrator {
             return { status: "failed" as const };
           }
         },
-      });
+        });
+      } finally {
+        await sessionLock.release();
+      }
     });
   }
 
@@ -874,4 +921,18 @@ async function sweepPendingMainValidation(
 export function stopWorkerRuntimeForTests(): void {
   if (validatorSweepTimer) clearInterval(validatorSweepTimer);
   validatorSweepTimer = undefined;
+}
+
+
+async function waitForSessionOperationLock(
+  workspaceId: string,
+  sessionId: string,
+  signal: AbortSignal,
+): Promise<SessionLock | undefined> {
+  while (!signal.aborted) {
+    const lock = await acquireSessionLock(workspaceId, sessionId);
+    if (lock) return lock;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  return undefined;
 }

@@ -4,6 +4,7 @@ import { env } from "../config/env.js";
 import type { User, WhatsAppSession, Workspace } from "../types/domain.js";
 import type { AuditEvent, EmergencyState } from "../types/v2.js";
 import type { MenuMedia } from "../types/domain.js";
+import type { AutoPromoteConfig, AutoPromoteRun } from "../autopromote/types.js";
 
 export interface WhatsAppMessageTraceRecord {
   traceId: string;
@@ -58,6 +59,8 @@ interface WorkspaceDocument extends Workspace, mongoose.Document {}
 interface SessionDocument extends WhatsAppSession, mongoose.Document {}
 interface AuditDocument extends AuditEvent, mongoose.Document {}
 interface MediaDocument extends MenuMedia, mongoose.Document {}
+type AutoPromoteConfigDocument = mongoose.Document & AutoPromoteConfig;
+type AutoPromoteRunDocument = mongoose.Document & AutoPromoteRun;
 interface ScheduleDocument extends mongoose.Document {
   scheduleId: string;
   workspaceId: string;
@@ -310,6 +313,64 @@ const scheduleSchema = new mongoose.Schema<ScheduleDocument>(
   },
   { collection: "schedules", versionKey: false },
 );
+const autoPromoteConfigSchema = new mongoose.Schema<AutoPromoteConfigDocument>(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    scope: { type: String, enum: ["SESSION", "USER", "GLOBAL"], required: true, index: true },
+    ownerTelegramUserId: { type: String, required: true, index: true },
+    ownerWorkspaceId: String,
+    sessionId: String,
+    targetSessionIds: { type: [String], default: [] },
+    command: { type: String, enum: ["allstatus", "allchat", "allstatusx"], required: true },
+    payload: { type: mongoose.Schema.Types.Mixed, required: true },
+    days: { type: Number, required: true },
+    timesPerDay: { type: Number, required: true },
+    allstatusxPostsPerGroup: Number,
+    timezone: { type: String, required: true },
+    slotTimes: { type: mongoose.Schema.Types.Mixed, required: true },
+    startDate: { type: String, required: true },
+    endDate: { type: String, required: true },
+    enabled: { type: Boolean, required: true, index: true },
+    state: { type: String, required: true, index: true },
+    cooldownMinutes: { type: Number, required: true },
+    misfireGraceMinutes: { type: Number, required: true },
+    createdAt: { type: Number, required: true, index: true },
+    updatedAt: { type: Number, required: true },
+  },
+  { collection: "auto_promote_configs", versionKey: false },
+);
+autoPromoteConfigSchema.index({ ownerTelegramUserId: 1, enabled: 1, updatedAt: -1 });
+autoPromoteConfigSchema.index({ scope: 1, sessionId: 1, enabled: 1 });
+const autoPromoteRunSchema = new mongoose.Schema<AutoPromoteRunDocument>(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    configId: { type: String, required: true, index: true },
+    occurrenceId: { type: String, required: true, unique: true, index: true },
+    scope: { type: String, required: true, index: true },
+    ownerTelegramUserId: { type: String, required: true, index: true },
+    sessionId: { type: String, required: true, index: true },
+    scheduledAt: { type: Number, required: true, index: true },
+    startedAt: Number,
+    finishedAt: Number,
+    status: { type: String, required: true, index: true },
+    currentGroup: String,
+    totalGroups: { type: Number, required: true },
+    completedGroups: { type: Number, required: true },
+    failedGroups: { type: Number, required: true },
+    currentRepetition: { type: Number, required: true },
+    totalRepetitions: { type: Number, required: true },
+    retryCount: { type: Number, required: true },
+    successCount: { type: Number, required: true },
+    cooldownUntil: Number,
+    error: String,
+    jobId: String,
+    createdAt: { type: Number, required: true },
+    updatedAt: { type: Number, required: true },
+  },
+  { collection: "auto_promote_runs", versionKey: false },
+);
+autoPromoteRunSchema.index({ sessionId: 1, status: 1, scheduledAt: 1 });
+autoPromoteRunSchema.index({ configId: 1, scheduledAt: 1 });
 const auditSchema = new mongoose.Schema<AuditDocument>(
   {
     correlationId: { type: String, required: true, unique: true, index: true },
@@ -430,6 +491,8 @@ let PairingRequestModel: Model<PairingRequestDocument> | undefined;
 let AuditModel: Model<AuditDocument> | undefined;
 let ScheduleModel: Model<ScheduleDocument> | undefined;
 let MediaModel: Model<MediaDocument> | undefined;
+let AutoPromoteConfigModel: Model<AutoPromoteConfigDocument> | undefined;
+let AutoPromoteRunModel: Model<AutoPromoteRunDocument> | undefined;
 let EmergencyModel: Model<EmergencyDocument> | undefined;
 let ModeratorGroupModel: Model<ModeratorGroupDocument> | undefined;
 let ModeratorWarningModel: Model<ModeratorWarningDocument> | undefined;
@@ -495,6 +558,16 @@ function scheduleModel(): Model<ScheduleDocument> {
     mongoose.models.Schedule ??
     mongoose.model<ScheduleDocument>("Schedule", scheduleSchema));
 }
+function autoPromoteConfigModel(): Model<AutoPromoteConfigDocument> {
+  return (AutoPromoteConfigModel ??=
+    mongoose.models.AutoPromoteConfig ??
+    mongoose.model<AutoPromoteConfigDocument>("AutoPromoteConfig", autoPromoteConfigSchema));
+}
+function autoPromoteRunModel(): Model<AutoPromoteRunDocument> {
+  return (AutoPromoteRunModel ??=
+    mongoose.models.AutoPromoteRun ??
+    mongoose.model<AutoPromoteRunDocument>("AutoPromoteRun", autoPromoteRunSchema));
+}
 function auditModel(): Model<AuditDocument> {
   return (AuditModel ??=
     mongoose.models.AuditEvent ??
@@ -549,6 +622,8 @@ export async function ensureMongoIndexes(): Promise<void> {
     pairingRequestModel().createIndexes(),
     auditModel().createIndexes(),
     scheduleModel().createIndexes(),
+    autoPromoteConfigModel().createIndexes(),
+    autoPromoteRunModel().createIndexes(),
     mediaModel().createIndexes(),
     emergencyModel().createIndexes(),
     moderatorGroupModel().createIndexes(),
@@ -1046,4 +1121,138 @@ export async function removeForceJoinTarget(
 export async function closeMongo(): Promise<void> {
   connectionPromise = undefined;
   if (mongoose.connection.readyState !== 0) await mongoose.disconnect();
+}
+
+
+export async function saveAutoPromoteConfig(
+  config: AutoPromoteConfig,
+): Promise<void> {
+  await connectMongo();
+  await autoPromoteConfigModel().replaceOne(
+    { id: config.id },
+    config,
+    { upsert: true },
+  ).exec();
+}
+
+export async function getAutoPromoteConfig(
+  id: string,
+): Promise<AutoPromoteConfig | undefined> {
+  await connectMongo();
+  return (await autoPromoteConfigModel().findOne({ id }).lean<AutoPromoteConfig>().exec()) ?? undefined;
+}
+
+export async function listAutoPromoteConfigs(input: {
+  ownerTelegramUserId?: string;
+  scope?: AutoPromoteConfig["scope"];
+  enabled?: boolean;
+  limit?: number;
+} = {}): Promise<AutoPromoteConfig[]> {
+  await connectMongo();
+  const filter: Record<string, unknown> = {};
+  if (input.ownerTelegramUserId) filter.ownerTelegramUserId = input.ownerTelegramUserId;
+  if (input.scope) filter.scope = input.scope;
+  if (input.enabled !== undefined) filter.enabled = input.enabled;
+  return autoPromoteConfigModel()
+    .find(filter)
+    .sort({ updatedAt: -1 })
+    .limit(input.limit ?? 100)
+    .lean<AutoPromoteConfig[]>()
+    .exec();
+}
+
+export async function disableAutoPromoteConfig(id: string): Promise<void> {
+  await connectMongo();
+  await autoPromoteConfigModel()
+    .updateOne(
+      { id },
+      { $set: { enabled: false, state: "CANCELLED", updatedAt: Date.now() } },
+    )
+    .exec();
+}
+
+export async function saveAutoPromoteRun(run: AutoPromoteRun): Promise<void> {
+  await connectMongo();
+  await autoPromoteRunModel().replaceOne(
+    { id: run.id },
+    run,
+    { upsert: true },
+  ).exec();
+}
+
+export async function getAutoPromoteRun(
+  id: string,
+): Promise<AutoPromoteRun | undefined> {
+  await connectMongo();
+  return (await autoPromoteRunModel().findOne({ id }).lean<AutoPromoteRun>().exec()) ?? undefined;
+}
+
+export async function getAutoPromoteRunByOccurrence(
+  occurrenceId: string,
+): Promise<AutoPromoteRun | undefined> {
+  await connectMongo();
+  return (await autoPromoteRunModel().findOne({ occurrenceId }).lean<AutoPromoteRun>().exec()) ?? undefined;
+}
+
+export async function listAutoPromoteRuns(input: {
+  ownerTelegramUserId?: string;
+  configId?: string;
+  sessionId?: string;
+  limit?: number;
+} = {}): Promise<AutoPromoteRun[]> {
+  await connectMongo();
+  const filter: Record<string, unknown> = {};
+  if (input.ownerTelegramUserId) filter.ownerTelegramUserId = input.ownerTelegramUserId;
+  if (input.configId) filter.configId = input.configId;
+  if (input.sessionId) filter.sessionId = input.sessionId;
+  return autoPromoteRunModel()
+    .find(filter)
+    .sort({ scheduledAt: -1 })
+    .limit(input.limit ?? 100)
+    .lean<AutoPromoteRun[]>()
+    .exec();
+}
+
+export async function listRecoverableAutoPromoteRuns(
+  now = Date.now(),
+): Promise<AutoPromoteRun[]> {
+  await connectMongo();
+  return autoPromoteRunModel()
+    .find({
+      status: { $in: ["SCHEDULED", "QUEUED", "WAITING_FOR_SESSION", "RUNNING", "COOLDOWN"] },
+      scheduledAt: { $lte: now },
+    })
+    .sort({ scheduledAt: 1 })
+    .limit(500)
+    .lean<AutoPromoteRun[]>()
+    .exec();
+}
+
+export async function claimAutoPromoteOccurrence(
+  occurrenceId: string,
+  run: AutoPromoteRun,
+): Promise<AutoPromoteRun | undefined> {
+  await connectMongo();
+  const existing = await autoPromoteRunModel().findOne({ occurrenceId }).lean<AutoPromoteRun>().exec();
+  if (existing) return existing;
+  try {
+    await autoPromoteRunModel().create(run);
+    return run;
+  } catch (error) {
+    if (error instanceof Error && /duplicate|E11000/i.test(error.message))
+      return (await autoPromoteRunModel().findOne({ occurrenceId }).lean<AutoPromoteRun>().exec()) ?? undefined;
+    throw error;
+  }
+}
+
+
+export async function setAutoPromoteConfigState(
+  id: string,
+  state: AutoPromoteConfig["state"],
+  enabled: boolean,
+): Promise<void> {
+  await connectMongo();
+  await autoPromoteConfigModel()
+    .updateOne({ id }, { $set: { state, enabled, updatedAt: Date.now() } })
+    .exec();
 }

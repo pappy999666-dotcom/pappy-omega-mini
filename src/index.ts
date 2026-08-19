@@ -27,9 +27,11 @@ import {
 } from "./persistence/mongo.js";
 import type { JobOrchestrator } from "./jobs/job-orchestrator.js";
 import { DurableScheduler } from "./jobs/scheduler.js";
+import { AutoPromoteScheduler } from "./autopromote/service.js";
 import { hydrateMenuMedia } from "./media/menu-media-store.js";
 import { closeValidatorSnapshot } from "./links/validator-snapshot.js";
 import { closeCanonicalPreview } from "./whatsapp/baileys-native-preview.js";
+import { closeSessionLockRedis } from "./core/session-lock.js";
 
 async function main(): Promise<void> {
   assertProductionSecrets();
@@ -52,11 +54,14 @@ async function main(): Promise<void> {
   await hydrateControlPlane();
   let workers: JobOrchestrator | undefined;
   let scheduler: DurableScheduler | undefined;
+  let autoPromoteScheduler: AutoPromoteScheduler | undefined;
   let pairingCleanupTimer: NodeJS.Timeout | undefined;
   if (env.TELEGRAM_BOT_TOKEN) {
     workers = startWorkerRuntime();
     scheduler = new DurableScheduler(workers);
     scheduler.start();
+    autoPromoteScheduler = new AutoPromoteScheduler(workers);
+    autoPromoteScheduler.start();
   }
   await cleanupExpiredPairingSessions();
   await cleanupLoggedOutSessions();
@@ -101,11 +106,13 @@ async function main(): Promise<void> {
     if (pairingCleanupTimer) clearInterval(pairingCleanupTimer);
     stopModeratorReconciliation();
     await scheduler?.close();
+    await autoPromoteScheduler?.close();
     await workers?.close();
     await closeValidatorSnapshot();
     await shutdownWhatsAppSessions();
     await closeMongo();
     await closeCanonicalPreview();
+    await closeSessionLockRedis();
     console.log("[pappy-omega-mini] transports closed; shutdown complete.");
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));

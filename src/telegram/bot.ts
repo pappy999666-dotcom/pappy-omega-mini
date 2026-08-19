@@ -33,6 +33,18 @@ import {
 } from "../jobs/runtime.js";
 import type { JobRecord } from "../jobs/job-contracts.js";
 import {
+  cancelAutoPromoteConfig,
+  createAutoPromoteConfig,
+  pauseAutoPromoteConfig,
+  resumeAutoPromoteConfig,
+} from "../autopromote/service.js";
+import type {
+  AutoPromoteCommand,
+  AutoPromoteScope,
+} from "../autopromote/types.js";
+import type { JobMediaReference } from "../whatsapp/job-media-store.js";
+import { persistJobMedia } from "../whatsapp/job-media-store.js";
+import {
   getEmergencyState,
   listAuditEvents,
   recordAudit,
@@ -60,6 +72,9 @@ import {
   getPairingRequest,
   listForceJoinTargets,
   listSchedules,
+  getAutoPromoteConfig,
+  listAutoPromoteConfigs,
+  listAutoPromoteRuns,
   listSupportTickets,
   createSupportTicket,
   updateSupportTicket,
@@ -148,6 +163,14 @@ import {
   sessionAccessKeyboard,
   sessionValidatorKeyboard,
   sessionsKeyboard,
+  autoPromoteScopeKeyboard,
+  autoPromoteCommandKeyboard,
+  autoPromoteDaysKeyboard,
+  autoPromoteTimesKeyboard,
+  autoPromotePostsKeyboard,
+  autoPromoteConfirmKeyboard,
+  autoPromoteDashboardKeyboard,
+  autoPromoteText,
   btn,
   copyBtn,
   keyboard,
@@ -190,6 +213,24 @@ const pendingAdminBroadcasts = new Map<
   { text: string; workspaceId: string }
 >();
 const pendingScheduleInput = new Map<string, { workspaceId: string }>();
+type AutoPromoteWizard = {
+  workspaceId: string;
+  scope: AutoPromoteScope;
+  sessionId?: string | undefined;
+  targetSessionIds?: string[] | undefined;
+  command?: AutoPromoteCommand;
+  days?: number;
+  timesPerDay?: number;
+  allstatusxPostsPerGroup?: number;
+  payloadText?: string;
+  payloadMedia?: JobMediaReference;
+  payloadCaption?: string;
+  payloadQuoted?: { messageId?: string; remoteJid?: string; text?: string };
+  stage: "command" | "days" | "times" | "posts" | "payload" | "confirm";
+  chatId?: number | undefined;
+  messageId?: number | undefined;
+};
+const pendingAutoPromote = new Map<string, AutoPromoteWizard>();
 const pendingSupportInput = new Map<string, { workspaceId: string }>();
 const pendingSupportReply = new Map<string, { ticketId: string }>();
 const pendingGroupCreate = new Map<
@@ -282,6 +323,7 @@ function clearPendingInputs(userId: string): void {
   pendingForceJoin.delete(userId);
   pendingAdminBroadcasts.delete(userId);
   pendingScheduleInput.delete(userId);
+  pendingAutoPromote.delete(userId);
   pendingSupportInput.delete(userId);
   pendingSupportReply.delete(userId);
   pendingGroupCreate.delete(userId);
@@ -309,6 +351,7 @@ async function registerTelegramCommandSuggestions(
     { command: "menu", description: "Open the main menu" },
     { command: "pair", description: "Pair a WhatsApp session" },
     { command: "sessions", description: "List your WhatsApp sessions" },
+    { command: "autopromote", description: "Schedule durable WhatsApp promotions" },
   ];
   const groupCommands = [
     { command: "help", description: "Show available commands" },
@@ -538,6 +581,18 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!requireAdmin(ctx)) return;
     await sendAdminMedia(ctx);
   });
+  bot.command("autopromote", async (ctx) => {
+    const user = resolveTelegramUser(ctx);
+    pendingAutoPromote.set(String(ctx.from?.id ?? ""), {
+      workspaceId: user.workspaceId,
+      scope: "USER",
+      stage: "command",
+    });
+    await ctx.reply(
+      pageText("Auto Promote", infoResponse("Choose Command", "Select the canonical operation to schedule.")),
+      { parse_mode: "HTML", reply_markup: autoPromoteCommandKeyboard() },
+    );
+  });
 
   bot.on("text", async (ctx) => {
     const userId = String(ctx.from.id);
@@ -548,6 +603,31 @@ export function createTelegramBot(): Telegraf<Context> {
       // consuming a later unrelated message.
       clearPendingInputs(userId);
       passiveIntakeSuspended.delete(userId);
+      return;
+    }
+    const autoPromote = pendingAutoPromote.get(userId);
+    if (autoPromote?.stage === "payload") {
+      if (text.toLowerCase() === "cancel") {
+        pendingAutoPromote.delete(userId);
+        await ctx.reply(pageText("Auto Promote", infoResponse("Cancelled", "No Auto Promote configuration was created.")), { parse_mode: "HTML" });
+        return;
+      }
+      const quotedText = ctx.message.reply_to_message && "text" in ctx.message.reply_to_message
+        ? ctx.message.reply_to_message.text
+        : undefined;
+      pendingAutoPromote.set(userId, {
+        ...autoPromote,
+        payloadText: ctx.message.text,
+        payloadCaption: ctx.message.text,
+        ...(ctx.message.reply_to_message
+          ? { payloadQuoted: { messageId: String(ctx.message.reply_to_message.message_id), ...(quotedText ? { text: quotedText } : {}) } }
+          : {}),
+        stage: "confirm",
+      });
+      await ctx.reply(
+        pageText("Auto Promote · Confirm", autoPromoteWizardSummary({ ...autoPromote, payloadText: ctx.message.text })),
+        { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() },
+      );
       return;
     }
     const joinInput = pendingJoinSettingInput.get(userId);
@@ -1473,6 +1553,23 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.on("document", async (ctx) => {
     const document = ctx.message.document;
+    const userId = String(ctx.from.id);
+    const autoPromote = pendingAutoPromote.get(userId);
+    if (autoPromote?.stage === "payload") {
+      const file = await ctx.telegram.getFileLink(document.file_id);
+      const response = await fetch(file.href);
+      const media = await persistJobMedia({
+        workspaceId: autoPromote.workspaceId,
+        kind: "document",
+        bytes: Buffer.from(await response.arrayBuffer()),
+        mimeType: document.mime_type ?? "application/octet-stream",
+        fileName: document.file_name ?? `autopromote-${document.file_unique_id}.bin`,
+      });
+      const caption = ctx.message.caption ?? "";
+      pendingAutoPromote.set(userId, { ...autoPromote, payloadMedia: media, payloadText: caption, payloadCaption: caption, stage: "confirm" });
+      await ctx.reply(pageText("Auto Promote · Confirm", autoPromoteWizardSummary({ ...autoPromote, payloadMedia: media, payloadText: caption })), { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() });
+      return;
+    }
     const fileName = document.file_name ?? "document.txt";
     const mimeType = document.mime_type ?? "text/plain";
     const isTextFile =
@@ -1598,6 +1695,30 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.on("photo", async (ctx) => {
     const userId = String(ctx.from.id);
+    const autoPromote = pendingAutoPromote.get(userId);
+    if (autoPromote?.stage === "payload") {
+      const photo = ctx.message.photo.at(-1);
+      if (!photo) return;
+      const file = await ctx.telegram.getFileLink(photo.file_id);
+      const response = await fetch(file.href);
+      const media = await persistJobMedia({
+        workspaceId: autoPromote.workspaceId,
+        kind: "image",
+        bytes: Buffer.from(await response.arrayBuffer()),
+        mimeType: "image/jpeg",
+        fileName: `autopromote-${photo.file_unique_id}.jpg`,
+      });
+      const caption = ctx.message.caption ?? "";
+      pendingAutoPromote.set(userId, {
+        ...autoPromote,
+        payloadMedia: media,
+        payloadText: caption,
+        payloadCaption: caption,
+        stage: "confirm",
+      });
+      await ctx.reply(pageText("Auto Promote · Confirm", autoPromoteWizardSummary({ ...autoPromote, payloadMedia: media, payloadText: caption })), { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() });
+      return;
+    }
     const profilePicture = pendingProfilePicture.get(userId);
     if (profilePicture) {
       pendingProfilePicture.delete(userId);
@@ -1671,6 +1792,23 @@ export function createTelegramBot(): Telegraf<Context> {
   });
 
   bot.on("video", async (ctx) => {
+    const userId = String(ctx.from.id);
+    const autoPromote = pendingAutoPromote.get(userId);
+    if (autoPromote?.stage === "payload") {
+      const file = await ctx.telegram.getFileLink(ctx.message.video.file_id);
+      const response = await fetch(file.href);
+      const media = await persistJobMedia({
+        workspaceId: autoPromote.workspaceId,
+        kind: "video",
+        bytes: Buffer.from(await response.arrayBuffer()),
+        mimeType: ctx.message.video.mime_type ?? "video/mp4",
+        fileName: `autopromote-${ctx.message.video.file_unique_id}.mp4`,
+      });
+      const caption = ctx.message.caption ?? "";
+      pendingAutoPromote.set(userId, { ...autoPromote, payloadMedia: media, payloadText: caption, payloadCaption: caption, stage: "confirm" });
+      await ctx.reply(pageText("Auto Promote · Confirm", autoPromoteWizardSummary({ ...autoPromote, payloadMedia: media, payloadText: caption })), { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() });
+      return;
+    }
     if (!requireAdmin(ctx)) return;
     const kind = pendingMedia.get(String(ctx.from.id));
     if (kind !== "video")
@@ -1696,6 +1834,27 @@ export function createTelegramBot(): Telegraf<Context> {
       ),
       { parse_mode: "HTML", reply_markup: mediaKeyboard() },
     );
+  });
+
+  bot.on("audio", async (ctx) => {
+    const userId = String(ctx.from.id);
+    const autoPromote = pendingAutoPromote.get(userId);
+    if (autoPromote?.stage === "payload") {
+      const file = await ctx.telegram.getFileLink(ctx.message.audio.file_id);
+      const response = await fetch(file.href);
+      const media = await persistJobMedia({
+        workspaceId: autoPromote.workspaceId,
+        kind: "audio",
+        bytes: Buffer.from(await response.arrayBuffer()),
+        mimeType: ctx.message.audio.mime_type ?? "audio/mpeg",
+        fileName: ctx.message.audio.file_name ?? `autopromote-${ctx.message.audio.file_unique_id}.audio`,
+      });
+      const caption = ctx.message.caption ?? "";
+      pendingAutoPromote.set(userId, { ...autoPromote, payloadMedia: media, payloadText: caption, payloadCaption: caption, stage: "confirm" });
+      await ctx.reply(pageText("Auto Promote · Confirm", autoPromoteWizardSummary({ ...autoPromote, payloadMedia: media, payloadText: caption })), { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() });
+      return;
+    }
+    await ctx.reply("Audio is accepted by Auto Promote only while its payload step is open.");
   });
 
   bot.action("menu:main", async (ctx) => {
@@ -3686,6 +3845,189 @@ export function createTelegramBot(): Telegraf<Context> {
     },
   );
 
+  bot.action("autopromote:user", async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = resolveTelegramUser(ctx);
+    await showAutoPromoteDashboard(ctx, user.telegramUserId, user.workspaceId);
+  });
+  bot.action(/^session:([^:]+):autopromote$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = ownedSession(ctx, ctx.match[1] ?? "");
+    if (!session) return deny(ctx);
+    pendingAutoPromote.set(String(ctx.from?.id ?? ""), {
+      workspaceId: session.workspaceId,
+      scope: "SESSION",
+      sessionId: session.sessionId,
+      stage: "command",
+      chatId: ctx.chat?.id,
+      messageId: ctx.callbackQuery?.message && "message_id" in ctx.callbackQuery.message ? ctx.callbackQuery.message.message_id : undefined,
+    });
+    await edit(
+      ctx,
+      pageText("Session Auto Promote", infoResponse("Choose Command", `<b>Session:</b> ${escapeHtml(session.sessionName)}\nThis configuration affects only this WhatsApp session.`)),
+      autoPromoteCommandKeyboard(),
+    );
+  });
+  bot.action("admin:autopromote", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    await showOwnerAutoPromoteDashboard(ctx);
+  });
+  bot.action("admin:autopromote:new", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const user = resolveTelegramUser(ctx);
+    const targets = listAllSessions().filter((session) => session.status === "ACTIVE").map((session) => session.sessionId);
+    pendingAutoPromote.set(String(ctx.from?.id ?? ""), {
+      workspaceId: user.workspaceId,
+      scope: "GLOBAL",
+      targetSessionIds: targets,
+      stage: "command",
+      chatId: ctx.chat?.id,
+      messageId: ctx.callbackQuery?.message && "message_id" in ctx.callbackQuery.message ? ctx.callbackQuery.message.message_id : undefined,
+    });
+    await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Command", `<b>Targets:</b> ${targets.length} active session(s)\nThis owner configuration remains independent from user and session Auto Promote settings.`)), autoPromoteCommandKeyboard());
+  });
+  bot.action(/^autopromote:scope:SESSION:([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = ownedSession(ctx, ctx.match[1] ?? "");
+    if (!session) return deny(ctx);
+    const current = pendingAutoPromote.get(String(ctx.from?.id ?? ""));
+    if (!current) return;
+    pendingAutoPromote.set(String(ctx.from?.id ?? ""), { ...current, scope: "SESSION", sessionId: session.sessionId });
+    await edit(ctx, pageText("Auto Promote", infoResponse("Choose Command", `<b>Session:</b> ${escapeHtml(session.sessionName)}`)), autoPromoteCommandKeyboard());
+  });
+  bot.action("autopromote:scope:USER", async (ctx) => {
+    await ctx.answerCbQuery();
+    const current = pendingAutoPromote.get(String(ctx.from?.id ?? ""));
+    if (!current) return;
+    pendingAutoPromote.set(String(ctx.from?.id ?? ""), { ...current, scope: "USER", sessionId: undefined });
+    await edit(ctx, pageText("Auto Promote", infoResponse("Choose Command", "This configuration targets all WhatsApp sessions owned by you.")), autoPromoteCommandKeyboard());
+  });
+  bot.action(/^autopromote:command:(allstatus|allchat|allstatusx)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = String(ctx.from?.id ?? "");
+    const current = pendingAutoPromote.get(userId);
+    if (!current) return;
+    const command = ctx.match[1] as AutoPromoteCommand;
+    pendingAutoPromote.set(userId, { ...current, command, stage: "days" });
+    await edit(ctx, pageText("Auto Promote", infoResponse("Duration", "How many days should this Auto Promote job run? Choose 2–30 days.")), autoPromoteDaysKeyboard());
+  });
+  bot.action(/^autopromote:days:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = String(ctx.from?.id ?? "");
+    const current = pendingAutoPromote.get(userId);
+    const days = Number(ctx.match[1]);
+    if (!current || days < 2 || days > 30) return;
+    pendingAutoPromote.set(userId, { ...current, days, stage: "times" });
+    await edit(ctx, pageText("Auto Promote", infoResponse("Times Per Day", "How many times should the payload post each day?")), autoPromoteTimesKeyboard());
+  });
+  bot.action(/^autopromote:times:([1-5])$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = String(ctx.from?.id ?? "");
+    const current = pendingAutoPromote.get(userId);
+    const timesPerDay = Number(ctx.match[1]);
+    if (!current) return;
+    const next = { ...current, timesPerDay, stage: current.command === "allstatusx" ? "posts" as const : "payload" as const };
+    pendingAutoPromote.set(userId, next);
+    await edit(ctx, pageText("Auto Promote", infoResponse(next.stage === "posts" ? "Posts Per Group" : "Payload", next.stage === "posts" ? "How many times should the payload be posted to each group before moving to the next group?" : "Send the original text, link, or caption payload now. It will be preserved exactly.")), next.stage === "posts" ? autoPromotePostsKeyboard() : keyboard([[btn("Cancel", "autopromote:cancel", "danger")]]));
+  });
+  bot.action(/^autopromote:posts:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = String(ctx.from?.id ?? "");
+    const current = pendingAutoPromote.get(userId);
+    const posts = Number(ctx.match[1]);
+    if (!current || posts < 1 || posts > 10) return;
+    pendingAutoPromote.set(userId, { ...current, allstatusxPostsPerGroup: posts, stage: "payload" });
+    await edit(ctx, pageText("Auto Promote", infoResponse("Payload", "Send the original text, link, or caption payload now. It will be preserved exactly.")), keyboard([[btn("Cancel", "autopromote:cancel", "danger")]]));
+  });
+  bot.action("autopromote:confirm", async (ctx) => {
+    await ctx.answerCbQuery("Creating Auto Promote…");
+    const userId = String(ctx.from?.id ?? "");
+    const current = pendingAutoPromote.get(userId);
+    if (!current?.command || !current.days || !current.timesPerDay || current.payloadText === undefined) return;
+    const config = await createAutoPromoteConfig({
+      scope: current.scope,
+      ownerTelegramUserId: userId,
+      ownerWorkspaceId: current.workspaceId,
+      ...(current.sessionId ? { sessionId: current.sessionId } : {}),
+      ...(current.targetSessionIds ? { targetSessionIds: current.targetSessionIds } : {}),
+      command: current.command,
+      payload: {
+        ...(current.payloadText !== undefined ? { text: current.payloadText } : {}),
+        ...(current.payloadMedia ? { media: current.payloadMedia } : {}),
+        ...(current.payloadCaption !== undefined ? { caption: current.payloadCaption } : {}),
+        ...(current.payloadQuoted ? { quoted: current.payloadQuoted } : {}),
+      },
+      days: current.days,
+      timesPerDay: current.timesPerDay,
+      ...(current.allstatusxPostsPerGroup !== undefined ? { allstatusxPostsPerGroup: current.allstatusxPostsPerGroup } : {}),
+    });
+    pendingAutoPromote.delete(userId);
+    recordAudit({ workspaceId: current.workspaceId, actorTelegramUserId: userId, action: "autopromote.create", success: true, metadata: { configId: config.id, scope: config.scope, command: config.command } });
+    await showAutoPromoteDashboard(ctx, userId, current.workspaceId);
+  });
+  bot.action("autopromote:edit", async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = String(ctx.from?.id ?? "");
+    const current = pendingAutoPromote.get(userId);
+    if (!current) return;
+    pendingAutoPromote.set(userId, { ...current, stage: "command" });
+    await edit(ctx, pageText("Auto Promote", infoResponse("Choose Command", "Restart the wizard from the command step.")), autoPromoteCommandKeyboard());
+  });
+  bot.action("autopromote:cancel", async (ctx) => {
+    await ctx.answerCbQuery("Cancelled");
+    pendingAutoPromote.delete(String(ctx.from?.id ?? ""));
+    await edit(ctx, pageText("Auto Promote", infoResponse("Cancelled", "No Auto Promote configuration was created.")), keyboard([[btn(ui.back, "menu:main")]]));
+  });
+  bot.action("autopromote:new", async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = resolveTelegramUser(ctx);
+    pendingAutoPromote.set(String(ctx.from?.id ?? ""), { workspaceId: user.workspaceId, scope: "USER", stage: "command" });
+    await edit(ctx, pageText("Auto Promote", infoResponse("Choose Command", "Select the canonical operation to schedule.")), autoPromoteCommandKeyboard());
+  });
+  bot.action(/^autopromote:view:([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const config = await getAutoPromoteConfig(ctx.match[1] ?? "");
+    const user = resolveTelegramUser(ctx);
+    if (!config || (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))) return deny(ctx);
+    const runs = await listAutoPromoteRuns({ configId: config.id, limit: 20 });
+    await edit(ctx, autoPromoteText([config], runs), keyboard([
+      [btn(config.state === "PAUSED" ? "▶ Resume" : "Ⅱ Pause", `autopromote:${config.state === "PAUSED" ? "resume" : "pause"}:${config.id}`, config.state === "PAUSED" ? "success" : "primary")],
+      [btn(config.enabled ? "■ Cancel Job" : "□ Disabled", `autopromote:disable:${config.id}`, "danger")],
+      [btn(ui.back, "autopromote:user")],
+    ]));
+  });
+  bot.action(/^autopromote:(pause|resume):([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const configId = ctx.match[2] ?? "";
+    const config = await getAutoPromoteConfig(configId);
+    const user = resolveTelegramUser(ctx);
+    if (!config || (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))) return deny(ctx);
+    const runs = await listAutoPromoteRuns({ configId, limit: 100 });
+    const runtime = getWorkerRuntime();
+    if (ctx.match[1] === "pause") {
+      await pauseAutoPromoteConfig(configId);
+      for (const run of runs) if (run.jobId) await runtime?.pause(run.jobId).catch(() => undefined);
+    } else {
+      await resumeAutoPromoteConfig(configId);
+      for (const run of runs) if (run.jobId) await runtime?.resume(run.jobId).catch(() => undefined);
+    }
+    await showAutoPromoteDashboard(ctx, user.telegramUserId, user.workspaceId);
+  });
+  bot.action(/^autopromote:disable:([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Cancelling…");
+    const configId = ctx.match[1] ?? "";
+    const config = await getAutoPromoteConfig(configId);
+    const user = resolveTelegramUser(ctx);
+    if (!config || (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))) return deny(ctx);
+    await cancelAutoPromoteConfig(configId);
+    const runtime = getWorkerRuntime();
+    const runs = await listAutoPromoteRuns({ configId, limit: 100 });
+    for (const run of runs) if (run.jobId) await runtime?.cancel(run.jobId).catch(() => undefined);
+    await showAutoPromoteDashboard(ctx, user.telegramUserId, user.workspaceId);
+  });
+
   bot.action("admin:panel", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
@@ -5627,5 +5969,51 @@ async function enqueueValidatorJobs(
         }),
       ];
     }),
+  );
+}
+
+
+async function showOwnerAutoPromoteDashboard(ctx: Context): Promise<void> {
+  const [configs, runs] = await Promise.all([
+    listAutoPromoteConfigs({ limit: 200 }),
+    listAutoPromoteRuns({ limit: 50 }),
+  ]);
+  await edit(ctx, autoPromoteText(configs, runs), autoPromoteDashboardKeyboard(configs, "admin:autopromote:new", "admin:panel"));
+}
+
+async function showAutoPromoteDashboard(
+  ctx: Context,
+  ownerTelegramUserId: string,
+  workspaceId: string,
+): Promise<void> {
+  const [configs, runs] = await Promise.all([
+    listAutoPromoteConfigs({ ownerTelegramUserId, limit: 100 }),
+    listAutoPromoteRuns({ ownerTelegramUserId, limit: 20 }),
+  ]);
+  await edit(ctx, autoPromoteText(configs, runs), autoPromoteDashboardKeyboard(configs));
+}
+
+function autoPromoteWizardSummary(state: AutoPromoteWizard): string {
+  const slots = state.timesPerDay
+    ? state.timesPerDay === 1
+      ? "Evening"
+      : state.timesPerDay === 2
+        ? "Morning · Evening"
+        : state.timesPerDay === 3
+          ? "Morning · Afternoon · Evening"
+          : state.timesPerDay === 4
+            ? "Morning · Afternoon · Evening · Night"
+            : "Morning · Afternoon · Evening · Night · Late Night"
+    : "—";
+  return infoResponse(
+    "Review Before Creation",
+    `<b>Scope:</b> ${escapeHtml(state.scope)}\n` +
+      `<b>Command:</b> ${escapeHtml(state.command?.toUpperCase() ?? "—")}\n` +
+      `<b>Duration:</b> ${state.days ?? "—"} days\n` +
+      `<b>Times/day:</b> ${state.timesPerDay ?? "—"}\n` +
+      (state.command === "allstatusx" ? `<b>Posts/group:</b> ${state.allstatusxPostsPerGroup ?? "—"}\n` : "") +
+      `<b>Timezone:</b> Africa/Lagos\n` +
+      `<b>Schedule:</b> ${slots}\n` +
+      `<b>Payload:</b> <blockquote>${escapeHtml(state.payloadText ?? "")}</blockquote>`,
   );
 }

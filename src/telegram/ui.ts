@@ -1,6 +1,7 @@
 import type { InlineKeyboardMarkup } from "telegraf/types";
 import type { MenuMedia, WhatsAppSession } from "../types/domain.js";
 import type { JobRecord } from "../jobs/job-contracts.js";
+import type { AutoPromoteConfig, AutoPromoteRun } from "../autopromote/types.js";
 import { effectiveSessionStatus } from "../menus/menu-model.js";
 import { infoResponse } from "./renderer.js";
 
@@ -88,8 +89,9 @@ export function dashboardKeyboard(isAdmin: boolean): InlineKeyboardMarkup {
     ],
     [
       btn("⌁ Validator Hub", "bucket:status"),
-      btn("🌉 Global Bridge", "bridge:global"),
+      btn("⚡ Auto Promote", "autopromote:user"),
     ],
+    [btn("🌉 Global Bridge", "bridge:global")],
     [
       btn("◷ Scheduled Jobs", "jobs:list"),
       btn("📺 Live Show", "jobs:live:open", "success"),
@@ -205,8 +207,9 @@ export function sessionKeyboard(
     ],
     [
       btn("🔗 Validator Hub", `session:${id}:section:validator`, "success"),
-      btn("🛠 Join Manager", `session:${id}:section:join`),
+      btn("⚡ Auto Promote", `session:${id}:autopromote`, "primary"),
     ],
+    [btn("🛠 Join Manager", `session:${id}:section:join`)],
     [
       btn("🩺 Health & Jobs", `session:${id}:section:health`),
       btn("⚙ Session Settings", `session:${id}:section:settings`),
@@ -735,7 +738,8 @@ export function adminAuditKeyboard(): InlineKeyboardMarkup {
 
 export function adminKeyboard(): InlineKeyboardMarkup {
   return keyboard([
-    [btn("⚙ Force Join", "admin:forcejoin"), btn("◉ Users", "admin:users")],
+    [btn("⚙ Force Join", "admin:forcejoin"), btn("⚡ Global Auto Promote", "admin:autopromote")],
+    [btn("◉ Users", "admin:users")],
     [
       btn("▣ Media", "admin:media"),
       btn("🌉 Global Bridge Ops", "admin:bridge"),
@@ -974,4 +978,101 @@ function escapeHtml(value: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+
+export function autoPromoteScopeKeyboard(sessionId?: string): InlineKeyboardMarkup {
+  return keyboard([
+    ...(sessionId
+      ? [[btn("This Session", `autopromote:scope:SESSION:${sessionId}`, "success")]]
+      : []),
+    [btn("All My Sessions", "autopromote:scope:USER", "primary")],
+    [btn(ui.back, sessionId ? `session:${sessionId}:menu` : "menu:main")],
+  ]);
+}
+
+export function autoPromoteCommandKeyboard(): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("All Status", "autopromote:command:allstatus", "primary")],
+    [btn("All Chat", "autopromote:command:allchat", "primary")],
+    [btn("All Status X", "autopromote:command:allstatusx", "success")],
+    [btn("Cancel", "autopromote:cancel", "danger")],
+  ]);
+}
+
+export function autoPromoteDaysKeyboard(): InlineKeyboardMarkup {
+  const values = Array.from({ length: 29 }, (_, index) => index + 2);
+  const rows: Button[][] = [];
+  for (let index = 0; index < values.length; index += 7)
+    rows.push(values.slice(index, index + 7).map((value) => btn(String(value), `autopromote:days:${value}`)));
+  rows.push([btn("Cancel", "autopromote:cancel", "danger")]);
+  return keyboard(rows);
+}
+
+export function autoPromoteTimesKeyboard(): InlineKeyboardMarkup {
+  return keyboard([
+    [1, 2, 3, 4, 5].map((value) => btn(`${value} time${value === 1 ? "" : "s"}`, `autopromote:times:${value}`)),
+    [btn("Cancel", "autopromote:cancel", "danger")],
+  ]);
+}
+
+export function autoPromotePostsKeyboard(): InlineKeyboardMarkup {
+  const rows: Button[][] = [];
+  for (let index = 1; index <= 10; index += 5)
+    rows.push(Array.from({ length: 5 }, (_, offset) => index + offset).map((value) => btn(String(value), `autopromote:posts:${value}`)));
+  rows.push([btn("Cancel", "autopromote:cancel", "danger")]);
+  return keyboard(rows);
+}
+
+export function autoPromoteConfirmKeyboard(): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("✅ Confirm Auto Promote", "autopromote:confirm", "success")],
+    [btn("✎ Edit", "autopromote:edit", "primary"), btn("Cancel", "autopromote:cancel", "danger")],
+  ]);
+}
+
+export function autoPromoteDashboardKeyboard(
+  configs: AutoPromoteConfig[],
+  newCallback = "autopromote:new",
+  backCallback = "menu:main",
+): InlineKeyboardMarkup {
+  const rows: Button[][] = configs.slice(0, 20).map((config) => [
+    btn(
+      `${config.enabled ? "■" : "□"} ${config.command.toUpperCase()} · ${config.scope}`,
+      `autopromote:view:${config.id}`,
+    ),
+  ]);
+  rows.push([btn("＋ New Auto Promote", newCallback, "success")]);
+  rows.push([btn(ui.back, backCallback)]);
+  return keyboard(rows);
+}
+
+export function autoPromoteText(
+  configs: AutoPromoteConfig[],
+  runs: AutoPromoteRun[] = [],
+): string {
+  const configRows = configs.length
+    ? configs
+        .slice(0, 12)
+        .map(
+          (config) =>
+            `${config.enabled ? "🟢" : "⚪"} <b>${escapeHtml(config.command.toUpperCase())}</b> · ${escapeHtml(config.scope)}\n` +
+            `<code>${escapeHtml(config.id.slice(0, 8))}</code> · ${config.days}d · ${config.timesPerDay}x/day · ${escapeHtml(config.timezone)} · ${escapeHtml(config.state)}`,
+        )
+        .join("\n\n")
+    : "No Auto Promote configurations have been created.";
+  const runRows = runs
+    .slice(0, 5)
+    .map(
+      (run) =>
+        `<code>${escapeHtml(run.id.slice(0, 8))}</code> · ${escapeHtml(run.status)} · ${escapeHtml(run.sessionId.slice(0, 8))} · ${run.completedGroups}/${run.totalGroups} groups · ${run.successCount} success · ${run.failedGroups} failed`,
+    )
+    .join("\n");
+  return pageText(
+    "Auto Promote",
+    infoResponse(
+      "Durable Multi-Scope Scheduler",
+      `${configRows}\n\n<b>Recent runs</b>\n${runRows || "No runs yet."}\n\n<i>Timezone-aware occurrences, per-session queue locks, cooldowns, and restart-safe run records are enabled.</i>`,
+    ),
+  );
 }

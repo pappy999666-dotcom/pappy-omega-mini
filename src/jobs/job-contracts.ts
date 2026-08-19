@@ -16,7 +16,8 @@ export type JobKind =
   | "join-manager"
   | "moderator-expiry"
   | "moderator-raid"
-  | "moderator-tag-all";
+  | "moderator-tag-all"
+  | "auto-promote";
 
 export type JobState =
   | "QUEUED"
@@ -27,7 +28,11 @@ export type JobState =
   | "COMPLETED"
   | "PARTIAL"
   | "FAILED"
-  | "RETRYING";
+  | "RETRYING"
+  | "WAITING_FOR_SESSION"
+  | "COOLDOWN"
+  | "SCHEDULED"
+  | "EXPIRED";
 
 export interface JobProgress {
   completed: number;
