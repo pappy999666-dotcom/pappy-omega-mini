@@ -31,7 +31,7 @@ The prompt explicitly requires WhatsApp stability before moderator expansion. No
 | B4 | Unified DETECT → CLASSIFY → EXEMPTION → RECORD → ACTION → EXECUTE → NOTIFY → CLEANUP engine | PARTIAL — protected manual actions and anti-link/anti-spam paths; unified engine remains |
 | B5 | Warning records and `/warn`, `/warns`, `/resetwarn`, `/warnlimit`, `/warnlist` | PARTIAL — all command routes and durable reset/limit/list now exist; escalation policy and dashboard remain |
 | B6 | User mute and group-wide mute with expiry | PARTIAL — real user/group mute, unmute, ban/unban, warning escalation, durable expiry fields, and restart-safe permission reconciliation are deployed; complete group-mute action wiring and acceptance proof remain |
-| B7 | Staff add/remove/list, trusted users, whitelist, real Telegram permission limits | PARTIAL — staff/whitelist and Telegram admin checks deployed; trusted-user UX remains |
+| B7 | Staff add/remove/list, trusted users, whitelist, real Telegram permission limits | PARTIAL — staff/whitelist, durable trusted-user add/remove/list, and Telegram admin checks deployed; inline trusted-user UX and complete permission acceptance remain |
 | B8 | Protected commands: moderation, rules, filters, anti-spam, anti-link, logs, welcome/goodbye | PARTIAL — moderation/rules/filters/anti-spam/anti-link/logs/welcome/goodbye deployed; unified routing remains |
 | B9 | DM/group permission-aware command suggestions | PARTIAL — private/group/admin scopes deployed; per-user dynamic menu refresh remains |
 | B10 | Welcome/goodbye templates with real mentions and optional media/cleanup | PARTIAL — durable text templates and member-event replies deployed; media/cleanup remain |
@@ -41,7 +41,7 @@ The prompt explicitly requires WhatsApp stability before moderator expansion. No
 | B14 | Redis sliding-window anti-spam/flood counters with TTL | PARTIAL — Redis 10-second sliding window and TTL deployed |
 | B15 | Raid/join flood protection with temporary lockdown and recovery | PARTIAL — Redis join-window detection and temporary lockdown are live; operator controls, richer recovery telemetry, and full acceptance coverage remain |
 | B16 | Admin-only moderation logs with result/failure reason | PARTIAL — durable logs with success/failure reasons and admin-gated `/logs` deployed |
-| B17 | Group/member exemptions and bot self-protection | PARTIAL — admin/staff/whitelist exemptions deployed; explicit bot self-protection remains |
+| B17 | Group/member exemptions and bot self-protection | PARTIAL — admin/staff/whitelist/trusted exemptions deployed across protection and tag-all; explicit bot self-protection and full automatic-action coverage remain |
 | B18 | Moderator dashboard with real counts and grouped controls | PARTIAL — grouped dashboard, live warning/event counts, toggles, group-start entry, expiry reconciliation, and tag-all entry exist; Quick Protect, Custom Setup, raid state controls, and pagination remain |
 
 ## Acceptance matrix
