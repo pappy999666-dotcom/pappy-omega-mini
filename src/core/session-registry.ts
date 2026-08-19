@@ -279,6 +279,11 @@ export async function hydrateSessionRegistry(): Promise<void> {
   for (const session of snapshot.sessions)
     sessions.set(session.sessionId, {
       ...session,
+      prefix: session.prefix ?? getWorkspaceSettings(session.workspaceId).defaultPrefix,
+      sudoList: session.sudoList ?? [],
+      autoJoinEnabled:
+        session.autoJoinEnabled ??
+        getWorkspaceSettings(session.workspaceId).defaultAutoJoinEnabled,
       autoCollectLinks: true,
       autoValidateLinks: true,
       joinSettings: normalizedSessionJoinSettings(

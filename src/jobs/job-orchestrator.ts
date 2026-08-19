@@ -145,7 +145,43 @@ export class JobOrchestrator {
   }
 
   async recoverStaleJobsNow(): Promise<void> {
+    await this.recoverOutstandingJobs();
     await this.reapStaleJobs();
+  }
+
+  private async recoverOutstandingJobs(): Promise<void> {
+    const now = Date.now();
+    for (const record of await this.store.listAll()) {
+      if (!["QUEUED", "RUNNING", "RETRYING"].includes(record.state)) continue;
+      if (record.cancellationRequested) continue;
+      const bullJob = await this.queue.getJob(record.jobId);
+      const heartbeatAge = now - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
+      const bullWaiting = bullJob ? await bullJob.isWaiting() : false;
+      const bullActive = bullJob ? await bullJob.isActive() : false;
+      const bullDelayed = bullJob ? await bullJob.isDelayed() : false;
+      const shouldRecover =
+        !bullJob ||
+        (record.state === "RUNNING" && !bullWaiting && !bullActive && !bullDelayed && heartbeatAge > 10_000) ||
+        (record.state === "RETRYING" && !bullWaiting && !bullActive && !bullDelayed);
+      if (!shouldRecover) continue;
+      const claimKey = `pappy-omega-mini:recovery:${record.jobId}:${record.heartbeatAt ?? record.createdAt}`;
+      const claimed = await this.redis.set(claimKey, "1", "EX", 120, "NX");
+      if (claimed !== "OK") continue;
+      await this.store.update(record.jobId, {
+        state: "RETRYING",
+        error: "Worker restart recovery scheduled.",
+        heartbeatAt: now,
+      });
+      await this.queue.add(
+        `${record.kind}:startup-recovery`,
+        { ...record, state: "QUEUED" },
+        {
+          jobId: `${record.jobId}:startup:${now}`,
+          attempts: Math.max(1, record.maxAttempts - record.attempts),
+          backoff: { type: "exponential", delay: 1000 },
+        },
+      );
+    }
   }
 
   register(kind: JobKind, handler: WorkerHandler): void {

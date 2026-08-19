@@ -51,6 +51,13 @@ export async function listValidatorBucket(
   });
 }
 
+export async function countValidatorBucket(
+  workspaceId: string,
+  bucket: ValidatorBucket,
+): Promise<number> {
+  return withStore((store) => store.count(workspaceId, bucket));
+}
+
 export async function listAllValidatorBucket(
   workspaceId: string,
   bucket: ValidatorBucket,

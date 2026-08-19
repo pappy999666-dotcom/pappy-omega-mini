@@ -49,7 +49,9 @@ function resolveTargetSessionIds(config: AutoPromoteConfig): string[] {
     return sessions
       .filter((session) => getWorkspaceOwnerTelegramUserId(session.workspaceId) === config.ownerTelegramUserId)
       .map((session) => session.sessionId);
-  return [...new Set(config.targetSessionIds ?? sessions.map((session) => session.sessionId))];
+  // Global owner configurations follow the live session registry. Newly paired
+  // eligible sessions join on the next occurrence without recreating the config.
+  return sessions.map((session) => session.sessionId);
 }
 
 function newRun(

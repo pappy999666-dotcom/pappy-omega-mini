@@ -54,6 +54,7 @@ import { getValidatorSnapshot } from "../links/validator-snapshot.js";
 import {
   listValidatorBucket,
   listAllValidatorBucket,
+  countValidatorBucket,
   claimValidatorMainLinks,
   mergeValidatorBuckets,
   purgeValidatorBucket,
@@ -627,6 +628,9 @@ export function createTelegramBot(): Telegraf<Context> {
     }
     const autoPromote = pendingAutoPromote.get(userId);
     if (autoPromote?.stage === "payload") {
+      console.info(
+        `[pappy-omega-mini] Telegram Auto Promote payload received user=${userId} chars=${ctx.message.text.length}`,
+      );
       if (text.toLowerCase() === "cancel") {
         pendingAutoPromote.delete(userId);
         await ctx.reply(pageText("Auto Promote", infoResponse("Cancelled", "No Auto Promote configuration was created.")), { parse_mode: "HTML" });
@@ -635,19 +639,27 @@ export function createTelegramBot(): Telegraf<Context> {
       const quotedText = ctx.message.reply_to_message && "text" in ctx.message.reply_to_message
         ? ctx.message.reply_to_message.text
         : undefined;
-      pendingAutoPromote.set(userId, {
-        ...autoPromote,
-        payloadText: ctx.message.text,
-        payloadCaption: ctx.message.text,
-        ...(ctx.message.reply_to_message
-          ? { payloadQuoted: { messageId: String(ctx.message.reply_to_message.message_id), ...(quotedText ? { text: quotedText } : {}) } }
-          : {}),
-        stage: "confirm",
-      });
-      await ctx.reply(
-        pageText("Auto Promote · Confirm", autoPromoteWizardSummary({ ...autoPromote, payloadText: ctx.message.text })),
-        { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() },
-      );
+      try {
+        pendingAutoPromote.set(userId, {
+          ...autoPromote,
+          payloadText: ctx.message.text,
+          payloadCaption: ctx.message.text,
+          ...(ctx.message.reply_to_message
+            ? { payloadQuoted: { messageId: String(ctx.message.reply_to_message.message_id), ...(quotedText ? { text: quotedText } : {}) } }
+            : {}),
+          stage: "confirm",
+        });
+        await ctx.reply(
+          pageText("Auto Promote · Confirm", autoPromoteWizardSummary({ ...autoPromote, payloadText: ctx.message.text })),
+          { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() },
+        );
+      } catch (error) {
+        console.error(
+          `[pappy-omega-mini] Auto Promote payload handling failed user=${userId}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+        await ctx.reply("Payload received, but the confirmation screen could not be delivered. Press Auto Promote again to retry.").catch(() => undefined);
+      }
       return;
     }
     const joinInput = pendingJoinSettingInput.get(userId);
@@ -3539,6 +3551,21 @@ export function createTelegramBot(): Telegraf<Context> {
           user.workspaceId,
           session.sessionId,
         );
+        const activeLinks = await countValidatorBucket(user.workspaceId, "active").catch(() => 0);
+        if (activeLinks === 0) {
+          joinStates.set(key, "idle");
+          return edit(
+            ctx,
+            pageText(
+              "Join Manager",
+              infoResponse(
+                "No Active Links",
+                "There are currently no links in the Active bucket to join. Add or validate WhatsApp group invite links first, then press Start again.",
+              ),
+            ),
+            joinManagerKeyboard(session.sessionId, "idle"),
+          );
+        }
         const existing = (await runtime.listRecent(200)).find(
           (candidate) =>
             candidate.workspaceId === user.workspaceId &&
@@ -5717,6 +5744,12 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
   const key = `${user.workspaceId}:${session.sessionId}`;
   const runtime = getWorkerRuntime();
   let totalGroups: number | undefined;
+  let activeLinks: number | undefined;
+  void countValidatorBucket(session.workspaceId, "active")
+    .then((count) => {
+      activeLinks = count;
+    })
+    .catch(() => undefined);
   void listGroups(session.workspaceId, session.sessionId)
     .then((groups) => {
       totalGroups = groups.length;
@@ -5747,7 +5780,8 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
     const rateLimits = progress?.rateLimitHits ?? 0;
     const details = [
       `<b>Session:</b> ${escapeHtml(session.sessionName)}`,
-      `<b>Transport:</b> ${escapeHtml(effectiveSessionStatus(session))} · <b>Groups online:</b> ${totalGroups ?? "unavailable"}`,
+      `<b>Transport:</b> ${escapeHtml(effectiveSessionStatus(session))} · <b>Groups online:</b> ${totalGroups ?? "loading"}`,
+      `<b>Active links available:</b> ${activeLinks ?? "loading"}${activeLinks === 0 ? " · <i>No links to join; collect or validate WhatsApp group invites first.</i>" : ""}`,
       `<b>Socket:</b> <code>${escapeHtml(session.sessionId.slice(0, 12))}</code> · generation ${escapeHtml(String(session.socketGeneration ?? "—"))}`,
       `<b>Mode:</b> ${escapeHtml(mode)} · <b>Target:</b> ${escapeHtml(String(target))} · <b>Delay:</b> ${escapeHtml(delayMs)}`,
       `<b>Cursor:</b> ${progress?.completed ?? 0}/${escapeHtml(String(total))} · <b>Job:</b> <code>${escapeHtml(code)}</code>`,
