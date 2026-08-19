@@ -57,16 +57,18 @@ export async function prepareOutboundContent(
   );
   if (hasMedia) return content;
 
-  const enriched: Record<string, unknown> = {
+  const thumbnail = record.thumbnailData
+    ? Buffer.from(record.thumbnailData, "base64")
+    : undefined;
+  return {
     ...content,
-    richPreview: true,
+    linkPreview: {
+      "matched-text": record.canonicalUrl,
+      ...(record.title ? { title: record.title } : {}),
+      ...(record.description ? { description: record.description } : {}),
+      ...(thumbnail ? { jpegThumbnail: thumbnail } : {}),
+    },
   };
-  if (record.title) enriched.previewTitle = record.title;
-  if (record.description) enriched.previewDescription = record.description;
-  if (record.thumbnailData)
-    enriched.previewImage = Buffer.from(record.thumbnailData, "base64");
-  else if (record.thumbnailUrl) enriched.previewImage = record.thumbnailUrl;
-  return enriched;
 }
 
 export function readText(content: Record<string, unknown>): string | undefined {
