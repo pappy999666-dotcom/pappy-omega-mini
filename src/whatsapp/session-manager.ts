@@ -494,7 +494,11 @@ export async function hasPersistedWhatsAppAuth(
       typeof credentials?.signedIdentityKey === "object" ||
       typeof credentials?.signedPreKey === "object"
     );
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[pappy-omega-mini] persisted WhatsApp auth unreadable session=${sessionId}:`,
+      error instanceof Error ? error.message : String(error),
+    );
     return false;
   }
 }
