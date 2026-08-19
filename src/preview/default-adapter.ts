@@ -1,4 +1,33 @@
 import sharp from "sharp";
+// PAPPY_PREVIEW_SHARPENING_INJECTED
+const previewSharpening = {
+  sigma: boundedNumber(process.env.PAPPY_PREVIEW_SHARPEN_SIGMA, 0.7, 0.1, 1.2),
+  m1: boundedNumber(process.env.PAPPY_PREVIEW_SHARPEN_M1, 0.5, 0, 2),
+  m2: boundedNumber(process.env.PAPPY_PREVIEW_SHARPEN_M2, 1.2, 0, 2),
+};
+const groupPreviewSharpening = {
+  sigma: boundedNumber(
+    process.env.PAPPY_GROUP_PREVIEW_SHARPEN_SIGMA,
+    0.55,
+    0.1,
+    1.2,
+  ),
+  m1: boundedNumber(process.env.PAPPY_GROUP_PREVIEW_SHARPEN_M1, 0.4, 0, 2),
+  m2: boundedNumber(process.env.PAPPY_GROUP_PREVIEW_SHARPEN_M2, 1.1, 0, 2),
+};
+
+function boundedNumber(
+  value: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed)
+    ? Math.min(maximum, Math.max(minimum, parsed))
+    : fallback;
+}
+
 import { env } from "../config/env.js";
 import {
   PreviewManager,
@@ -129,7 +158,7 @@ async function normalizeImageBuffer(input: Buffer): Promise<Buffer> {
       fit: "inside",
       withoutEnlargement: true,
     })
-    .sharpen({ sigma: 0.7, m1: 0.5, m2: 1.2 })
+    .sharpen(previewSharpening)
     .jpeg({ quality: 94, chromaSubsampling: "4:4:4" })
     .toBuffer();
 }
@@ -163,7 +192,7 @@ async function normalizeGroupImageBuffer(
           withoutEnlargement: true,
           kernel: "lanczos3",
         })
-        .sharpen({ sigma: 0.55, m1: 0.4, m2: 1.1 })
+        .sharpen(groupPreviewSharpening)
         .jpeg({ ...attempt, chromaSubsampling: "4:4:4" })
         .toBuffer();
       if (output.length <= maxGroupThumbnailBytes) return output;

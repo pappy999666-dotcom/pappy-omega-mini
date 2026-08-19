@@ -769,7 +769,7 @@ export async function startWhatsAppSession(
 export async function waitForWhatsAppSessionReady(
   workspaceId: string,
   sessionId: string,
-  timeoutMs = 30_000,
+  timeoutMs = env.WHATSAPP_READY_TIMEOUT_MS,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
