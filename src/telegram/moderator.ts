@@ -83,6 +83,7 @@ async function ensureGroup(
     muteDefaultSeconds: 600,
     welcomeEnabled: false,
     goodbyeEnabled: false,
+    filters: [],
     whitelist: [],
     staff: [],
     updatedAt: Date.now(),
@@ -211,6 +212,19 @@ export function installModeratorProtection(bot: Telegraf<Context>): void {
         return next();
     } catch {
       return next();
+    }
+    const filter = group.filters.find((entry) =>
+      text.toLowerCase().includes(entry.trigger.toLowerCase()),
+    );
+    if (filter) {
+      await ctx.reply(filter.response);
+      await recordEvent(ctx, {
+        rule: "filter",
+        action: "respond",
+        targetId: sender,
+        success: true,
+      });
+      return;
     }
     if (group.antiLink && LINK_PATTERN.test(text)) {
       let success = true;
@@ -614,6 +628,49 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
   bot.command("welcome", (ctx) => updateGreeting(ctx, "welcome"));
   bot.command("goodbye", (ctx) => updateGreeting(ctx, "goodbye"));
 
+  bot.command("filter", async (ctx) => {
+    if (!(await requireModerator(ctx))) return;
+    const group = await ensureGroup(ctx);
+    if (!group) return;
+    const values = args(ctx);
+    const action = values[0]?.toLowerCase();
+    const trigger = values[1]?.toLowerCase();
+    if (action === "add" && trigger && values.length >= 3) {
+      const response = values.slice(2).join(" ").slice(0, 1000);
+      group.filters = [
+        ...group.filters.filter((entry) => entry.trigger !== trigger),
+        { trigger, response },
+      ];
+      group.updatedAt = Date.now();
+      await saveModeratorGroup(group);
+      await recordEvent(ctx, {
+        rule: "filter",
+        action: "add",
+        targetId: trigger,
+        success: true,
+      });
+    } else if (action === "remove" && trigger) {
+      group.filters = group.filters.filter(
+        (entry) => entry.trigger !== trigger,
+      );
+      group.updatedAt = Date.now();
+      await saveModeratorGroup(group);
+      await recordEvent(ctx, {
+        rule: "filter",
+        action: "remove",
+        targetId: trigger,
+        success: true,
+      });
+    }
+    await ctx.reply(
+      group.filters.length
+        ? group.filters
+            .map((entry) => `${entry.trigger} → ${entry.response}`)
+            .join("\\n")
+        : "No keyword filters configured.",
+    );
+  });
+
   bot.on("new_chat_members", async (ctx) => {
     const id = groupId(ctx);
     if (!id) return;
@@ -717,6 +774,7 @@ export const moderatorCommandScopes = [
   { command: "rules", description: "Show group rules" },
   { command: "welcome", description: "Configure welcome messages" },
   { command: "goodbye", description: "Configure goodbye messages" },
+  { command: "filter", description: "Manage keyword filters" },
   { command: "setrules", description: "Update group rules" },
   { command: "staff", description: "Manage delegated staff" },
   { command: "whitelist", description: "Manage trusted users" },

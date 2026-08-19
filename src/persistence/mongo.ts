@@ -67,6 +67,7 @@ export interface ModeratorGroupRecord {
   goodbyeEnabled: boolean;
   welcomeText?: string;
   goodbyeText?: string;
+  filters: Array<{ trigger: string; response: string }>;
   whitelist: string[];
   staff: string[];
   updatedAt: number;
@@ -273,6 +274,15 @@ const moderatorGroupSchema = new mongoose.Schema<ModeratorGroupDocument>(
     goodbyeEnabled: { type: Boolean, default: false },
     welcomeText: String,
     goodbyeText: String,
+    filters: {
+      type: [
+        {
+          trigger: { type: String, required: true },
+          response: { type: String, required: true },
+        },
+      ],
+      default: [],
+    },
     whitelist: { type: [String], default: [] },
     staff: { type: [String], default: [] },
     updatedAt: { type: Number, required: true },
