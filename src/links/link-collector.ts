@@ -10,14 +10,59 @@ export function extractUrls(text: string): string[] {
   return [...new Set(matches.map((value) => value.replace(/[),.;!?]+$/, "")))];
 }
 
-export async function collectLinks(input: {
+type CollectionInput = {
   workspaceId: string;
-  text: string;
   sourceUserId: string;
   sourceSessionId?: string;
   originalUrl?: string;
-}): Promise<{ found: number; added: number; urls: string[] }> {
-  const urls = extractUrls(input.text);
+};
+
+export async function collectLinks(
+  input: CollectionInput & { text: string },
+): Promise<{
+  found: number;
+  added: number;
+  urls: string[];
+}> {
+  return collectUrlValues(input, extractUrls(input.text));
+}
+
+/**
+ * Collect links from a streamed text source. A short carry window protects URLs
+ * split between network chunks while preventing the whole document from being
+ * retained in memory.
+ */
+export async function collectLinksFromChunks(
+  input: CollectionInput & { chunks: AsyncIterable<string> },
+): Promise<{ found: number; added: number; urls: string[] }> {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  let carry = "";
+  for await (const chunk of input.chunks) {
+    carry += chunk;
+    if (carry.length <= 4096) continue;
+    const boundary = carry.length - 512;
+    for (const url of extractUrls(carry.slice(0, boundary))) {
+      if (!seen.has(url)) {
+        seen.add(url);
+        urls.push(url);
+      }
+    }
+    carry = carry.slice(boundary);
+  }
+  for (const url of extractUrls(carry)) {
+    if (!seen.has(url)) {
+      seen.add(url);
+      urls.push(url);
+    }
+  }
+  return collectUrlValues(input, urls);
+}
+
+async function collectUrlValues(
+  input: CollectionInput,
+  urls: string[],
+): Promise<{ found: number; added: number; urls: string[] }> {
   let added = 0;
   for (const originalUrl of urls) {
     try {

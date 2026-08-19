@@ -10,6 +10,7 @@ import type {
   WorkerContext,
   WorkerHandler,
 } from "./job-contracts.js";
+import { JoinResultStore } from "./join-result-store.js";
 
 const QUEUE_NAME = "pappy-omega-mini-jobs";
 const STORE_PREFIX = "pappy-omega-mini:job:";
@@ -103,6 +104,7 @@ export class JobOrchestrator {
   private readonly queue: Queue<JobRecord>;
   private readonly handlers = new Map<JobKind, WorkerHandler>();
   private readonly worker: Worker<JobRecord>;
+  private readonly joinResults: JoinResultStore;
   private readonly closeHooks: Array<() => Promise<void> | void> = [];
 
   constructor(concurrency = env.QUEUE_CONCURRENCY) {
@@ -111,6 +113,7 @@ export class JobOrchestrator {
       enableReadyCheck: true,
     });
     this.store = new RedisJobStore(this.redis);
+    this.joinResults = new JoinResultStore(this.redis);
     this.queue = new Queue<JobRecord>(QUEUE_NAME, {
       connection: this.redis,
       defaultJobOptions: { removeOnComplete: false, removeOnFail: false },
@@ -231,6 +234,7 @@ export class JobOrchestrator {
       );
       if (job.jobCode)
         await this.redis.del(`${CODE_PREFIX}${workspaceId}:${job.jobCode}`);
+      await this.joinResults.purgeJob(job.jobId);
       await this.store.delete(job.jobId);
       removed += 1;
     }

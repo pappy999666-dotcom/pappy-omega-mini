@@ -1,3 +1,5 @@
+export type JoinMode = "auto" | "immediate" | "request";
+
 export interface JoinAttemptResult {
   success: boolean;
   jid?: string;
@@ -16,6 +18,7 @@ interface JoinSocket {
     participantsCount?: number;
   }>;
   groupAcceptInvite?: (code: string) => Promise<string | undefined>;
+  groupRequestJoin?: (code: string) => Promise<string | undefined>;
 }
 
 function inviteCode(target: string): string | undefined {
@@ -41,6 +44,7 @@ function isDead(error: string): boolean {
 export async function joinWhatsAppInvite(
   socket: JoinSocket,
   target: string,
+  options: { mode?: JoinMode } = {},
 ): Promise<JoinAttemptResult> {
   const trimmed = target.trim();
   try {
@@ -71,6 +75,20 @@ export async function joinWhatsAppInvite(
         error: "Already a member.",
       };
 
+    if (options.mode === "request") {
+      if (!socket.groupRequestJoin)
+        throw new Error(
+          "Request-to-join is not supported by the installed Baileys transport.",
+        );
+      await socket.groupRequestJoin(code);
+      return {
+        success: false,
+        requestRequired: true,
+        jid: info.id,
+        ...(info.subject ? { title: info.subject } : {}),
+        error: "Join request submitted.",
+      };
+    }
     if (!socket.groupAcceptInvite)
       throw new Error(
         "The connected Baileys transport does not support group invites.",

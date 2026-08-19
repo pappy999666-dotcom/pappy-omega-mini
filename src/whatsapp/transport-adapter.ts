@@ -231,34 +231,61 @@ export async function sendDirectText(
   await send(jid, { text, ...nativePreview(text) });
 }
 
+export interface GroupMediaPayload {
+  kind: "image" | "video";
+  bytes: Buffer;
+  mimeType?: string;
+}
+
+function messagePayload(
+  text: string,
+  media?: GroupMediaPayload,
+): Record<string, unknown> {
+  if (!media) return { text, ...nativePreview(text) };
+  return {
+    [media.kind]: media.bytes,
+    caption: text,
+    ...(media.mimeType ? { mimetype: media.mimeType } : {}),
+  };
+}
+
 export async function sendGroupText(
   workspaceId: string,
   sessionId: string,
   jid: string,
   text: string,
+  media?: GroupMediaPayload,
 ): Promise<void> {
   const send = method(socketFor(workspaceId, sessionId), "sendMessage");
   if (!send) throw new Error("Unsupported capability: sendMessage");
-  await send(jid, { text, ...nativePreview(text) });
+  await send(jid, messagePayload(text, media));
 }
 
 export async function sendGroupStatus(
   workspaceId: string,
   sessionId: string,
   jid: string,
-  payload: { text?: string; image?: unknown; video?: unknown },
+  payload: {
+    text?: string;
+    image?: unknown;
+    video?: unknown;
+    media?: GroupMediaPayload;
+  },
 ): Promise<void> {
   const socket = socketFor(workspaceId, sessionId);
   const native = method(socket, "sendGroupStatus");
-  if (native) {
+  if (native && !payload.media) {
     await native(jid, payload);
     return;
   }
   const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: groupStatus");
+  const text = payload.text ?? "";
+  const { media, ...statusPayload } = payload;
   await send(jid, {
-    ...payload,
-    ...(payload.text ? nativePreview(payload.text) : {}),
+    ...statusPayload,
+    ...(media ? messagePayload(text, media) : {}),
+    ...(text && !media ? nativePreview(text) : {}),
     groupStatus: true,
   });
 }
@@ -355,6 +382,7 @@ export async function sendGroupMentions(
   jid: string,
   text: string,
   participantCount?: number,
+  media?: GroupMediaPayload,
 ): Promise<void> {
   const socket = socketFor(workspaceId, sessionId);
   const send = method(socket, "sendMessage");
@@ -366,7 +394,10 @@ export async function sendGroupMentions(
   );
   // Keep the body plain and pass recipients only through hidden mention
   // metadata; Baileys performs native URL hydration on the same message.
-  await send(jid, { text, ...nativePreview(text), mentions: selected });
+  await send(jid, {
+    ...messagePayload(text, media),
+    mentions: selected,
+  });
 }
 
 export async function validateInviteLink(

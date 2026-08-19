@@ -32,7 +32,11 @@ import {
   purgeValidatorBucket,
   type ValidatorBucket,
 } from "../links/validator-operations.js";
-import { collectLinks, extractUrls } from "../links/link-collector.js";
+import {
+  collectLinks,
+  collectLinksFromChunks,
+  extractUrls,
+} from "../links/link-collector.js";
 import { exportBucket } from "../links/link-export.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -1154,14 +1158,32 @@ export function createTelegramBot(): Telegraf<Context> {
           throw new Error(
             `Telegram file download failed with ${response.status}.`,
           );
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        if (bytes.byteLength > 10 * 1024 * 1024)
-          throw new Error("File exceeds the 10 MB link-intake limit.");
-        const text = new TextDecoder().decode(bytes);
+        if (!response.body)
+          throw new Error("Telegram file download returned no readable body.");
         const user = resolveTelegramUser(ctx);
-        const result = await collectLinks({
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let totalBytes = 0;
+        async function* chunks(): AsyncGenerator<string> {
+          try {
+            while (true) {
+              const next = await reader.read();
+              if (next.done) break;
+              totalBytes += next.value.byteLength;
+              if (totalBytes > 10 * 1024 * 1024)
+                throw new Error("File exceeds the 10 MB link-intake limit.");
+              const text = decoder.decode(next.value, { stream: true });
+              if (text) yield text;
+            }
+            const finalText = decoder.decode();
+            if (finalText) yield finalText;
+          } finally {
+            reader.releaseLock();
+          }
+        }
+        const result = await collectLinksFromChunks({
           workspaceId: user.workspaceId,
-          text,
+          chunks: chunks(),
           sourceUserId: user.telegramUserId,
           originalUrl: fileName,
         });

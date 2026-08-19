@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { joinWhatsAppInvite } from "../src/jobs/join-operation.js";
+import { JoinResultStore } from "../src/jobs/join-result-store.js";
 import { jobLiveText } from "../src/telegram/ui.js";
 import type { JobRecord } from "../src/jobs/job-contracts.js";
 
@@ -79,6 +80,41 @@ describe("Baileys Join Operation", () => {
     expect(accepted).toBe(false);
   });
 
+  it("supports explicit request mode when the transport exposes it", async () => {
+    const calls: string[] = [];
+    const requested = await joinWhatsAppInvite(
+      {
+        groupFetchAllParticipating: async () => ({}),
+        groupGetInviteInfo: async () => ({ id: "120@g.us", subject: "Alpha" }),
+        groupRequestJoin: async (code) => {
+          calls.push(`request:${code}`);
+          return "120@g.us";
+        },
+      },
+      "https://chat.whatsapp.com/ABC_123",
+      { mode: "request" },
+    );
+    expect(requested).toMatchObject({
+      requestRequired: true,
+      jid: "120@g.us",
+      title: "Alpha",
+    });
+    expect(calls).toEqual(["request:ABC_123"]);
+  });
+
+  it("reports unsupported request mode honestly", async () => {
+    const result = await joinWhatsAppInvite(
+      {
+        groupFetchAllParticipating: async () => ({}),
+        groupGetInviteInfo: async () => ({ id: "120@g.us" }),
+      },
+      "https://chat.whatsapp.com/ABC_123",
+      { mode: "request" },
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Request-to-join is not supported");
+  });
+
   it("classifies approval-required and dead invite responses", async () => {
     const requested = await joinWhatsAppInvite(
       {
@@ -103,6 +139,38 @@ describe("Baileys Join Operation", () => {
     );
     expect(dead.success).toBe(false);
     expect(dead.error).toContain("invite revoked");
+  });
+});
+
+describe("Join Result Store", () => {
+  it("round-trips one result per job, link, and cycle", async () => {
+    const values = new Map<string, string>();
+    const redis = {
+      get: async (key: string) => values.get(key) ?? null,
+      set: async (key: string, value: string) => {
+        values.set(key, value);
+        return "OK";
+      },
+    } as never;
+    const store = new JoinResultStore(redis);
+    await store.set({
+      jobId: "job-1",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      canonicalUrl: "https://chat.whatsapp.com/ABC_123",
+      cycle: 2,
+      outcome: "JOINED",
+      retryCount: 1,
+      timestamp: 123,
+      jid: "120@g.us",
+      title: "Alpha",
+    });
+    await expect(
+      store.get("job-1", "https://chat.whatsapp.com/ABC_123", 2),
+    ).resolves.toMatchObject({ outcome: "JOINED", jid: "120@g.us" });
+    await expect(
+      store.get("job-1", "https://chat.whatsapp.com/ABC_123", 3),
+    ).resolves.toBeUndefined();
   });
 });
 

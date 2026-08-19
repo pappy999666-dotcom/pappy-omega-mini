@@ -1,6 +1,7 @@
 import { executeCommand, createCommandRegistry } from "./command-registry.js";
 import { getSession, getWorkspaceSudo } from "../core/session-registry.js";
 import { createHash } from "node:crypto";
+import { persistJobMedia } from "./job-media-store.js";
 import { getWorkerRuntime } from "../jobs/runtime.js";
 import {
   listGroups,
@@ -122,9 +123,20 @@ export async function routeWhatsAppText(
                   ? [{ jid: message.chatJid }]
                   : []
                 : await listGroups(message.workspaceId, message.sessionId);
+            const mediaReference = message.media
+              ? await persistJobMedia({
+                  workspaceId: message.workspaceId,
+                  kind: message.media.kind,
+                  bytes: message.media.bytes,
+                  ...(message.media.mimeType
+                    ? { mimeType: message.media.mimeType }
+                    : {}),
+                })
+              : undefined;
             const enrichedPayload = {
               ...payload,
               groups: payload.groups ?? groups.map((group) => group.jid),
+              ...(mediaReference ? { media: mediaReference } : {}),
             };
             const payloadHash = createHash("sha256")
               .update(JSON.stringify(enrichedPayload))

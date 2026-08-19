@@ -8,7 +8,8 @@ import {
 } from "../src/core/control-plane.js";
 import { createSafeError, renderSafeError } from "../src/core/errors.js";
 import { classifyDisconnect } from "../src/whatsapp/session-manager.js";
-import { createSession } from "../src/core/session-registry.js";
+import { createSession, updateSession } from "../src/core/session-registry.js";
+import { selectHealthyWhatsAppSession } from "../src/whatsapp/session-allocator.js";
 import { routeWhatsAppText } from "../src/whatsapp/message-router.js";
 import {
   createCommandRegistry,
@@ -50,6 +51,32 @@ describe("V2 hardening", () => {
       label: "unknown-transport",
       terminal: false,
     });
+  });
+
+  it("selects only healthy owned sessions and honors a safe preference", () => {
+    const workspaceId = `allocator-${Date.now()}-${Math.random()}`;
+    const preferred = createSession({ workspaceId, sessionName: "preferred" });
+    const healthy = createSession({ workspaceId, sessionName: "healthy" });
+    updateSession(workspaceId, preferred.sessionId, {
+      status: "ACTIVE",
+      authHealth: "INVALID",
+      lastHealthyAt: Date.now(),
+    });
+    updateSession(workspaceId, healthy.sessionId, {
+      status: "ACTIVE",
+      authHealth: "VALID",
+      lastHealthyAt: Date.now(),
+    });
+    expect(
+      selectHealthyWhatsAppSession(workspaceId, preferred.sessionId)?.sessionId,
+    ).toBe(healthy.sessionId);
+    expect(
+      selectHealthyWhatsAppSession(
+        workspaceId,
+        undefined,
+        "https://chat.whatsapp.com/A",
+      ),
+    ).toBeTruthy();
   });
 
   it("records workspace-scoped audit events and emergency blocking", () => {

@@ -16,11 +16,22 @@ import {
   sendGroupMentions,
   sendGroupStatus,
   sendGroupText,
+  type GroupMediaPayload,
   validateInviteLink,
 } from "../whatsapp/transport-adapter.js";
+import {
+  readJobMedia,
+  type JobMediaReference,
+} from "../whatsapp/job-media-store.js";
+import { selectHealthyWhatsAppSession } from "../whatsapp/session-allocator.js";
 import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
 import { joinWhatsAppInvite } from "./join-operation.js";
+import {
+  JoinResultStore,
+  joinOutcomeFromClassification,
+  type JoinResultOutcome,
+} from "./join-result-store.js";
 
 interface LinkValidationPayload {
   urls?: string[];
@@ -72,6 +83,7 @@ function classifyJoinFailure(error: unknown): {
 
 let activeRuntime: JobOrchestrator | undefined;
 let activeBuckets: LinkBucketStore | undefined;
+let activeJoinResults: JoinResultStore | undefined;
 
 export function getWorkerRuntime(): JobOrchestrator | undefined {
   return activeRuntime;
@@ -96,7 +108,9 @@ export function startWorkerRuntime(): JobOrchestrator {
   activeRuntime = orchestrator;
   const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
   const buckets = new LinkBucketStore(redis);
+  const joinResults = new JoinResultStore(redis);
   activeBuckets = buckets;
+  activeJoinResults = joinResults;
   orchestrator.addCloseHook(async () => {
     await redis.quit();
   });
@@ -122,11 +136,11 @@ export function startWorkerRuntime(): JobOrchestrator {
           const inviteCode = canonicalUrl.match(
             /chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/,
           )?.[1];
-          const sourceSessionId =
-            payload.sourceSessionId ??
-            listSessions(context.job.workspaceId).find(
-              (session) => session.status === "ACTIVE",
-            )?.sessionId;
+          const sourceSessionId = selectHealthyWhatsAppSession(
+            context.job.workspaceId,
+            payload.sourceSessionId,
+            canonicalUrl,
+          )?.sessionId;
           if (!inviteCode || !sourceSessionId)
             throw new Error(
               "No safe WhatsApp validation session is available.",
@@ -284,32 +298,26 @@ export function startWorkerRuntime(): JobOrchestrator {
       restrictionThreshold?: number;
       requestMode?: "auto" | "immediate" | "request";
     };
-    const active = await buckets.list(
-      context.job.workspaceId,
-      "active",
-      0,
-      Math.max(
-        1,
-        Math.min(
-          10000,
-          payload.targetCount && payload.targetCount > 0
-            ? payload.targetCount
-            : 10000,
-        ),
-      ),
-    );
-    const sourceRecords = active.records.filter(
-      (record) =>
-        !record.sourceSessionId || record.sourceSessionId === sessionId,
-    );
+    const allActive = await buckets.listAll(context.job.workspaceId);
+    const sourceRecords = allActive
+      .filter(
+        (record) =>
+          record.bucket === "active" &&
+          (!record.sourceSessionId || record.sourceSessionId === sessionId),
+      )
+      .slice(
+        0,
+        payload.targetCount && payload.targetCount > 0
+          ? Math.min(payload.targetCount, allActive.length)
+          : undefined,
+      );
     const batchCycles = Math.max(
       1,
       Math.min(20, Number(payload.batchCycles ?? 1)),
     );
-    const records = Array.from(
-      { length: batchCycles },
-      () => sourceRecords,
-    ).flat();
+    const workItems = Array.from({ length: batchCycles }).flatMap((_, cycle) =>
+      sourceRecords.map((record) => ({ record, cycle })),
+    );
     let rateLimitHits = 0;
     let requested = 0;
     let alreadyMember = 0;
@@ -345,11 +353,40 @@ export function startWorkerRuntime(): JobOrchestrator {
       Math.min(20, Number(payload.restrictionThreshold ?? 5)),
     );
     return runBoundedBatch({
-      items: records,
+      items: workItems,
       concurrency: 1,
       context,
       shouldStop: () => rateLimitHits >= restrictionThreshold,
-      processItem: async (record, signal) => {
+      processItem: async (workItem, signal) => {
+        const { record, cycle } = workItem;
+        const prior = await joinResults.get(
+          context.job.jobId,
+          record.canonicalUrl,
+          cycle,
+        );
+        if (prior) {
+          await context.report({
+            currentLink: record.canonicalUrl,
+            currentAction: "resumed",
+            lastResult: `Skipped completed cycle ${cycle + 1}: ${prior.outcome}`,
+          });
+          return { status: "skipped" as const };
+        }
+        const saveResult = async (
+          outcome: JoinResultOutcome,
+          details: { jid?: string; title?: string; error?: string } = {},
+        ) =>
+          joinResults.set({
+            jobId: context.job.jobId,
+            workspaceId: context.job.workspaceId,
+            sessionId,
+            canonicalUrl: record.canonicalUrl,
+            cycle,
+            outcome,
+            retryCount: retryAttempt,
+            timestamp: Date.now(),
+            ...details,
+          });
         if (signal.aborted) return { status: "skipped" as const };
         const currentRecord = await buckets.get(
           context.job.workspaceId,
@@ -372,8 +409,10 @@ export function startWorkerRuntime(): JobOrchestrator {
           currentLink: record.canonicalUrl,
           currentAction: "checking invite",
         });
-        let result = await joinWhatsAppInvite(socket, record.canonicalUrl);
         let retryAttempt = 0;
+        let result = await joinWhatsAppInvite(socket, record.canonicalUrl, {
+          mode: payload.requestMode ?? "auto",
+        });
         while (
           !result.success &&
           !result.alreadyMember &&
@@ -395,7 +434,9 @@ export function startWorkerRuntime(): JobOrchestrator {
             setTimeout(resolve, retryBaseMs * retryAttempt),
           );
           if (signal.aborted) return { status: "skipped" as const };
-          result = await joinWhatsAppInvite(socket, record.canonicalUrl);
+          result = await joinWhatsAppInvite(socket, record.canonicalUrl, {
+            mode: payload.requestMode ?? "auto",
+          });
         }
         const joinClassification: NonNullable<
           LinkRecord["metadata"]
@@ -424,6 +465,10 @@ export function startWorkerRuntime(): JobOrchestrator {
               metadata,
             },
           );
+          await saveResult("JOINED", {
+            ...(result.jid ? { jid: result.jid } : {}),
+            ...(result.title ? { title: result.title } : {}),
+          });
           await context.report({
             joined,
             lastResult: `Joined ${result.title ?? result.jid ?? record.canonicalUrl}`,
@@ -442,6 +487,10 @@ export function startWorkerRuntime(): JobOrchestrator {
               metadata,
             },
           );
+          await saveResult("ALREADY_JOINED", {
+            ...(result.jid ? { jid: result.jid } : {}),
+            ...(result.title ? { title: result.title } : {}),
+          });
           await context.report({
             alreadyMember,
             lastResult: `Already joined ${result.title ?? result.jid ?? record.canonicalUrl}`,
@@ -466,6 +515,11 @@ export function startWorkerRuntime(): JobOrchestrator {
               },
             },
           );
+          await saveResult("REQUESTED", {
+            ...(result.jid ? { jid: result.jid } : {}),
+            ...(result.title ? { title: result.title } : {}),
+            error: "Join request sent or approval required.",
+          });
           await context.report({
             requested,
             lastResult: `Request pending for ${result.title ?? result.jid ?? record.canonicalUrl}`,
@@ -507,6 +561,11 @@ export function startWorkerRuntime(): JobOrchestrator {
               },
             },
           );
+          await saveResult("DEAD", {
+            ...(result.jid ? { jid: result.jid } : {}),
+            ...(result.title ? { title: result.title } : {}),
+            error: classified.message,
+          });
           await context.report({
             deadLinks,
             lastResult: `Dead link returned to Main: ${record.canonicalUrl}`,
@@ -527,6 +586,14 @@ export function startWorkerRuntime(): JobOrchestrator {
               lastCheckedAt: Date.now(),
             },
           );
+          await saveResult(
+            joinOutcomeFromClassification(classified.classification),
+            {
+              ...(result.jid ? { jid: result.jid } : {}),
+              ...(result.title ? { title: result.title } : {}),
+              error: classified.message,
+            },
+          );
         }
         return { status: "failed" as const };
       },
@@ -542,6 +609,7 @@ export function startWorkerRuntime(): JobOrchestrator {
         text?: string;
         count?: number;
         delayMs?: number;
+        media?: JobMediaReference;
       };
       const baseGroups =
         kind === "gstatus"
@@ -560,6 +628,14 @@ export function startWorkerRuntime(): JobOrchestrator {
         1500,
         Math.min(120000, Number(payload.delayMs ?? 2500)),
       );
+      let media: GroupMediaPayload | undefined;
+      if (payload.media) {
+        media = {
+          kind: payload.media.kind,
+          bytes: await readJobMedia(payload.media),
+          mimeType: payload.media.mimeType,
+        };
+      }
       let lastPostAt = 0;
       return runBoundedBatch({
         items: groups,
@@ -580,6 +656,7 @@ export function startWorkerRuntime(): JobOrchestrator {
             if (kind === "gstatus" || kind === "allstatus")
               await sendGroupStatus(context.job.workspaceId, sessionId, jid, {
                 text,
+                ...(media ? { media } : {}),
               });
             else if (kind === "allchat")
               await sendGroupText(
@@ -587,6 +664,7 @@ export function startWorkerRuntime(): JobOrchestrator {
                 sessionId,
                 jid,
                 text,
+                media,
               );
             else
               await sendGroupMentions(
@@ -594,6 +672,8 @@ export function startWorkerRuntime(): JobOrchestrator {
                 sessionId,
                 jid,
                 text,
+                undefined,
+                media,
               );
             await context.report({
               currentGroup: jid,
