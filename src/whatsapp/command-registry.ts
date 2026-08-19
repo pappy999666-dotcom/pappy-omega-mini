@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { WhatsAppSession } from "../types/domain.js";
 import {
   getSession,
+  getWorkspaceDefaults,
   getWorkspaceSudo,
   updateSession,
+  updateWorkspaceDefaults,
   updateWorkspaceSudo,
 } from "../core/session-registry.js";
 import {
@@ -39,6 +41,7 @@ export interface CommandContext {
   media?: WhatsAppMediaPayload;
   args: string[];
   invokedName?: string;
+  rawPayload?: string;
   enqueueJob?: (input: {
     kind: "gstatus" | "allstatus" | "allchat" | "tag";
     payload: Record<string, unknown>;
@@ -69,7 +72,7 @@ function session(ctx: CommandContext): WhatsAppSession {
 }
 
 function mediaCommandPayload(ctx: CommandContext): string {
-  const inline = ctx.args.join(" ").trim();
+  const inline = (ctx.rawPayload ?? ctx.args.join(" ")).trim();
   if (inline) return inline;
   const caption = ctx.media?.caption?.trim() ?? "";
   if (!caption) return "";
@@ -84,6 +87,20 @@ function mediaCommandPayload(ctx: CommandContext): string {
   )
     return caption.slice(commandToken.length).trim();
   return caption;
+}
+
+function repeatAndPayload(
+  ctx: CommandContext,
+  enabled: boolean,
+): { repeat: number; text: string } {
+  const raw = ctx.rawPayload ?? ctx.args.join(" ");
+  if (!enabled) return { repeat: 1, text: mediaCommandPayload(ctx) };
+  const match = /^(\d+)(?:[ \t]+|\n+)([\s\S]*)$/.exec(raw);
+  if (!match) return { repeat: 1, text: mediaCommandPayload(ctx) };
+  return {
+    repeat: Math.max(1, Math.min(20, Number(match[1] ?? 1))),
+    text: (match[2] ?? "").trim(),
+  };
 }
 
 export function createCommandRegistry(): RegisteredCommand[] {
@@ -392,16 +409,34 @@ export function createCommandRegistry(): RegisteredCommand[] {
       },
     },
     {
+      name: "broadcastdelay",
+      aliases: ["setbroadcastdelay", "postdelay"],
+      description: "Set the allchat/allstatus delay in seconds.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const raw = mediaCommandPayload(ctx);
+        if (!/^\d+$/.test(raw))
+          return `Broadcast delay is ${Math.round(getWorkspaceDefaults(ctx.workspaceId).defaultBroadcastDelayMs / 1000)}s. Usage: .broadcastdelay <1-60>.`;
+        const seconds = Number(raw);
+        if (seconds < 1 || seconds > 60)
+          return "Broadcast delay must be between 1 and 60 seconds.";
+        const next = updateWorkspaceDefaults(ctx.workspaceId, {
+          defaultBroadcastDelayMs: seconds * 1000,
+        });
+        return `Broadcast delay set to ${Math.round(next.defaultBroadcastDelayMs / 1000)}s for allchat/allstatus jobs.`;
+      },
+    },
+    {
       name: "allstatus",
       aliases: ["allstatusx"],
       description: "Queue bounded delivery to all eligible groups.",
       ownerOnly: true,
       run: async (ctx) => {
         if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
-        const repeat = /^\d+$/.test(ctx.args[0] ?? "")
-          ? Math.max(1, Math.min(20, Number(ctx.args.shift())))
-          : 1;
-        const text = mediaCommandPayload(ctx);
+        const { repeat, text } = repeatAndPayload(
+          ctx,
+          ctx.invokedName === "allstatusx",
+        );
         if (!text && !ctx.media)
           return "Usage: .allstatus [repeat] <text or media>.";
         const jobId = await ctx.enqueueJob({
@@ -422,11 +457,10 @@ export function createCommandRegistry(): RegisteredCommand[] {
           return "This command must be used inside a WhatsApp group.";
         if (!ctx.sendCurrentGroupStatus)
           return "WhatsApp transport is unavailable.";
-        const repeat =
-          ctx.invokedName === "gstatusx" && /^\d+$/.test(ctx.args[0] ?? "")
-            ? Math.max(1, Math.min(20, Number(ctx.args.shift())))
-            : 1;
-        const text = mediaCommandPayload(ctx);
+        const { repeat, text } = repeatAndPayload(
+          ctx,
+          ctx.invokedName === "gstatusx",
+        );
         if (!text && !ctx.media)
           return repeat > 1
             ? "Usage: .gstatusx <count> <text or media> (or reply to a message)."
@@ -452,10 +486,10 @@ export function createCommandRegistry(): RegisteredCommand[] {
       ownerOnly: true,
       run: async (ctx) => {
         if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
-        const repeat = /^\d+$/.test(ctx.args[0] ?? "")
-          ? Math.max(1, Math.min(20, Number(ctx.args.shift())))
-          : 1;
-        const text = mediaCommandPayload(ctx);
+        const { repeat, text } = repeatAndPayload(
+          ctx,
+          ctx.invokedName === "allchatx",
+        );
         if (!text && !ctx.media)
           return "Usage: .allchat [repeat] <text or media>.";
         const jobId = await ctx.enqueueJob({
@@ -490,7 +524,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
             ? Math.max(1, Math.min(1000, Number(ctx.args[0])))
             : undefined;
         const text = numericCount
-          ? mediaCommandPayload({ ...ctx, args: [] })
+          ? mediaCommandPayload({ ...ctx, args: [], rawPayload: "" })
           : mediaCommandPayload(ctx);
         if (!text && !ctx.media && numericCount === undefined)
           return "Usage: .tag <payload or media> or .tag <member-count>.";
@@ -590,8 +624,17 @@ export async function executeCommand(
   raw: string,
   ctx: CommandContext,
 ): Promise<string> {
-  const [name, ...args] = raw.trim().split(/\s+/);
-  const invokedName = name?.toLowerCase() ?? "";
+  const normalizedRaw = raw.trim();
+  const commandMatch = /^(\S+)(?:\s+|$)/.exec(normalizedRaw);
+  const name = commandMatch?.[1] ?? "";
+  const payloadStart = commandMatch?.[0]?.length ?? normalizedRaw.length;
+  const args = normalizedRaw
+    .slice(payloadStart)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const rawPayload = normalizedRaw.slice(payloadStart);
+  const invokedName = name.toLowerCase();
   const command = registry.find(
     (item) => item.name === invokedName || item.aliases.includes(invokedName),
   );
@@ -610,5 +653,6 @@ export async function executeCommand(
     ...ctx,
     invokedName,
     args: normalizedArgs,
+    rawPayload,
   });
 }

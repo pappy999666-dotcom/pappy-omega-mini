@@ -456,6 +456,7 @@ export function joinManagerKeyboard(
 export function workspaceSettingsKeyboard(settings: {
   defaultAutoJoinEnabled: boolean;
   defaultPrefix: string;
+  defaultBroadcastDelayMs: number;
 }): InlineKeyboardMarkup {
   return keyboard([
     [
@@ -470,6 +471,13 @@ export function workspaceSettingsKeyboard(settings: {
         `Prefix: ${settings.defaultPrefix || "none"}`,
         "settings:prefix:cycle",
       ),
+    ],
+    [
+      btn(
+        `Broadcast delay: ${Math.round(settings.defaultBroadcastDelayMs / 1000)}s`,
+        "settings:broadcastdelay:cycle",
+      ),
+      btn("Set exact", "settings:broadcastdelay:set", "primary"),
     ],
     [btn("Join Manager settings are per session", "menu:sessions")],
     [btn("↻ Refresh", "settings:menu")],
@@ -877,12 +885,13 @@ export function sessionText(session: WhatsAppSession): string {
 export function workspaceSettingsText(settings: {
   defaultAutoJoinEnabled: boolean;
   defaultPrefix: string;
+  defaultBroadcastDelayMs: number;
 }): string {
   return pageText(
     "Workspace Settings",
     infoResponse(
       "Workspace-wide defaults",
-      `<b>Auto-join default:</b> ${settings.defaultAutoJoinEnabled ? "ON" : "OFF"}\n<b>Prefix default:</b> <code>${escapeHtml(settings.defaultPrefix || "none")}</code>\n\nJoin Manager delay, concurrency, retry, cooldown, target, and mode are configured inside each WhatsApp session and never change another session.`,
+      `<b>Auto-join default:</b> ${settings.defaultAutoJoinEnabled ? "ON" : "OFF"}\n<b>Prefix default:</b> <code>${escapeHtml(settings.defaultPrefix || "none")}</code>\n<b>Allchat/allstatus delay:</b> ${Math.round(settings.defaultBroadcastDelayMs / 1000)}s\n\nBroadcast delay is workspace-wide and bounded from 1 to 60 seconds. Join Manager delay, concurrency, retry, cooldown, target, and mode are configured inside each WhatsApp session and never change another session.`,
     ),
   );
 }

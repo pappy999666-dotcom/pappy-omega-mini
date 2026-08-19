@@ -307,10 +307,15 @@ export async function sendGroupStatus(
   }
   const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: groupStatus");
-  const { media, ...statusPayload } = payload;
+  if (payload.media) {
+    await send(jid, {
+      groupStatusMessage: messagePayload(text, payload.media),
+    });
+    return;
+  }
+  const { media: _media, ...statusPayload } = payload;
   const content = {
     ...statusPayload,
-    ...(media ? messagePayload(text, media) : {}),
     groupStatus: true,
   };
   const prepared = await prepareCanonicalPreviewContent({

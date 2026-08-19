@@ -194,6 +194,7 @@ const pendingSessionSetting = new Map<
   string,
   { workspaceId: string; sessionId: string; action: "name" | "bio" | "prefix" }
 >();
+const pendingBroadcastDelay = new Map<string, string>();
 const pendingPairing = new Map<
   string,
   {
@@ -233,6 +234,7 @@ function clearPendingInputs(userId: string): void {
   pendingGroupPicture.delete(userId);
   pendingGroupLeave.delete(userId);
   pendingSessionSetting.delete(userId);
+  pendingBroadcastDelay.delete(userId);
   pendingPairing.delete(userId);
   pendingGlobalCommand.delete(userId);
   pendingSessionBridge.delete(userId);
@@ -537,6 +539,35 @@ export function createTelegramBot(): Telegraf<Context> {
           { parse_mode: "HTML" },
         );
       }
+      return;
+    }
+    const broadcastWorkspaceId = pendingBroadcastDelay.get(userId);
+    if (broadcastWorkspaceId && !ctx.message.text.startsWith("/")) {
+      pendingBroadcastDelay.delete(userId);
+      const seconds = Number(ctx.message.text.trim());
+      if (!Number.isInteger(seconds) || seconds < 1 || seconds > 60) {
+        await ctx.reply(
+          pageText(
+            "Broadcast Delay",
+            dangerResponse("Invalid delay", "Send a whole number from 1 to 60."),
+          ),
+          { parse_mode: "HTML", reply_markup: keyboard([[btn("Cancel", "settings:menu")]]) },
+        );
+        return;
+      }
+      const next = updateWorkspaceDefaults(broadcastWorkspaceId, {
+        defaultBroadcastDelayMs: seconds * 1000,
+      });
+      await ctx.reply(
+        pageText(
+          "Broadcast Delay",
+          successResponse(
+            "Updated",
+            `Allchat/allstatus delay is now <b>${Math.round(next.defaultBroadcastDelayMs / 1000)}s</b>.`,
+          ),
+        ),
+        { parse_mode: "HTML", reply_markup: keyboard([[btn("‹ Settings", "settings:menu")]]) },
+      );
       return;
     }
     const sessionSetting = pendingSessionSetting.get(userId);
@@ -2685,6 +2716,36 @@ export function createTelegramBot(): Telegraf<Context> {
     const current = getWorkspaceDefaults(user.workspaceId);
     const next = updateWorkspaceDefaults(user.workspaceId, {
       defaultAutoJoinEnabled: !current.defaultAutoJoinEnabled,
+    });
+    await edit(
+      ctx,
+      workspaceSettingsText(next),
+      workspaceSettingsKeyboard(next),
+    );
+  });
+  bot.action("settings:broadcastdelay:set", async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = resolveTelegramUser(ctx);
+    pendingBroadcastDelay.set(String(ctx.from?.id ?? ""), user.workspaceId);
+    await edit(
+      ctx,
+      pageText(
+        "Broadcast Delay",
+        infoResponse("Send exact delay", "Send a whole number from <b>1</b> to <b>60</b> seconds."),
+      ),
+      keyboard([[btn("Cancel", "settings:menu")]]),
+    );
+  });
+  bot.action("settings:broadcastdelay:cycle", async (ctx) => {
+    await ctx.answerCbQuery("Updating broadcast delay…");
+    const user = resolveTelegramUser(ctx);
+    const current = getWorkspaceDefaults(user.workspaceId);
+    const values = [1000, 5000, 10000, 20000, 30000, 45000, 60000];
+    const nextValue =
+      values[(values.indexOf(current.defaultBroadcastDelayMs) + 1) % values.length] ??
+      20000;
+    const next = updateWorkspaceDefaults(user.workspaceId, {
+      defaultBroadcastDelayMs: nextValue,
     });
     await edit(
       ctx,

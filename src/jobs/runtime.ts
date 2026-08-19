@@ -634,8 +634,8 @@ export function startWorkerRuntime(): JobOrchestrator {
       const groups = baseGroups.flatMap((jid) =>
         Array.from({ length: repeat }, () => jid),
       );
-      const text = payload.text?.trim() ?? "";
-      if (!text && !payload.media)
+      const text = typeof payload.text === "string" ? payload.text : "";
+      if (!text.trim() && !payload.media)
         throw new Error(`${kind} requires text or media payload.`);
       const delayMs = Math.max(
         1500,
@@ -678,11 +678,12 @@ export function startWorkerRuntime(): JobOrchestrator {
                 ...(media ? { media } : {}),
               });
             else if (kind === "allchat")
-              await sendGroupText(
+              await sendGroupMentions(
                 context.job.workspaceId,
                 sessionId,
                 jid,
                 text,
+                undefined,
                 media,
               );
             else

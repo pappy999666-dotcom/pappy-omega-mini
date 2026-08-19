@@ -1,5 +1,9 @@
 import { executeCommand, createCommandRegistry } from "./command-registry.js";
-import { getSession, getWorkspaceSudo } from "../core/session-registry.js";
+import {
+  getSession,
+  getWorkspaceDefaults,
+  getWorkspaceSudo,
+} from "../core/session-registry.js";
 import { createHash } from "node:crypto";
 import { persistJobMedia } from "./job-media-store.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
@@ -61,9 +65,9 @@ function isOwnerFor(
 }
 
 export function mergeQuotedPayload(text: string, quotedText?: string): string {
-  return text.trim()
-    ? [text.trim(), quotedText?.trim()].filter(Boolean).join(" ")
-    : (quotedText ?? "");
+  const primary = text.trim();
+  const quoted = quotedText?.trim() ?? "";
+  return primary ? [primary, quoted].filter(Boolean).join("\n") : quotedText ?? "";
 }
 
 export async function routeWhatsAppText(
@@ -140,8 +144,19 @@ export async function routeWhatsAppText(
                     : {}),
                 })
               : undefined;
+            const broadcastDelayMs = getWorkspaceDefaults(
+              message.workspaceId,
+            ).defaultBroadcastDelayMs;
             const enrichedPayload = {
               ...payload,
+              ...(kind === "allstatus" || kind === "allchat"
+                ? {
+                    delayMs:
+                      typeof payload.delayMs === "number"
+                        ? payload.delayMs
+                        : broadcastDelayMs,
+                  }
+                : {}),
               groups: payload.groups ?? groups.map((group) => group.jid),
               ...(mediaReference ? { media: mediaReference } : {}),
             };

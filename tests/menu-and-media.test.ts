@@ -347,6 +347,50 @@ describe("WhatsApp command registry", () => {
     expect(captured).toBe(".tag .tag 🥀");
   });
 
+  it("preserves multiline allchat payloads and does not treat numeric lines as repeats", async () => {
+    const user = resolveUser(`allchat-multiline-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "all-chat-multiline",
+      phoneNumber: "2348012345678",
+    });
+    let captured: { kind: string; payload: Record<string, unknown> } | undefined;
+    const text = "1\n2\n3\n3\n3";
+    const result = await executeCommand(createCommandRegistry(), `allchat ${text}`, {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      args: [],
+      enqueueJob: async (input) => {
+        captured = input;
+        return "job-multiline";
+      },
+    });
+    expect(result).toContain("job-multiline");
+    expect(captured).toMatchObject({ kind: "allchat", payload: { text, count: 1 } });
+  });
+
+  it("uses repeat counts only for explicit x broadcast variants", async () => {
+    const user = resolveUser(`allchat-repeat-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "all-chat-repeat",
+      phoneNumber: "2348012345678",
+    });
+    let captured: { kind: string; payload: Record<string, unknown> } | undefined;
+    await executeCommand(createCommandRegistry(), "allchatx 3 hello", {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      args: [],
+      enqueueJob: async (input) => {
+        captured = input;
+        return "job-repeat";
+      },
+    });
+    expect(captured).toMatchObject({ kind: "allchat", payload: { text: "hello", count: 3 } });
+  });
+
   it("uses a media caption as the payload when all-chat has no inline text", async () => {
     const user = resolveUser(`allchat-media-${Date.now()}-${Math.random()}`);
     const session = createSession({
@@ -409,9 +453,12 @@ describe("WhatsApp command registry", () => {
   it("appends a quoted message as the command payload", () => {
     expect(
       mergeQuotedPayload(".gstatus", "quoted payload https://example.com/item"),
-    ).toBe(".gstatus quoted payload https://example.com/item");
+    ).toBe(".gstatus\nquoted payload https://example.com/item");
     expect(mergeQuotedPayload("", "quoted-only payload")).toBe(
       "quoted-only payload",
+    );
+    expect(mergeQuotedPayload(".allchat 1\n2", "3\n4")).toBe(
+      ".allchat 1\n2\n3\n4",
     );
   });
 

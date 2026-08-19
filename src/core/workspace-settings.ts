@@ -17,6 +17,7 @@ export interface WorkspaceSettings {
   defaultJoinMaxConcurrency: number;
   defaultJoinRetryLimit: number;
   defaultJoinMode?: "auto" | "immediate" | "request";
+  defaultBroadcastDelayMs: number;
   timezone: string;
   updatedAt: number;
 }
@@ -60,6 +61,10 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
       defaultJoinRestrictionThreshold:
         existing.defaultJoinRestrictionThreshold ?? 5,
       defaultJoinMode: existing.defaultJoinMode ?? "auto",
+      defaultBroadcastDelayMs: Math.max(
+        1000,
+        Math.min(60000, existing.defaultBroadcastDelayMs ?? 20000),
+      ),
     };
   const created: WorkspaceSettings = {
     workspaceId,
@@ -76,6 +81,7 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
     defaultJoinMaxConcurrency: 2,
     defaultJoinRetryLimit: 2,
     defaultJoinMode: "auto",
+    defaultBroadcastDelayMs: 20000,
     timezone: "UTC",
     updatedAt: Date.now(),
   };
@@ -194,6 +200,15 @@ export function updateWorkspaceSettings(
         5,
         Number(
           patch.defaultJoinRetryLimit ?? current.defaultJoinRetryLimit ?? 2,
+        ),
+      ),
+    ),
+    defaultBroadcastDelayMs: Math.max(
+      1000,
+      Math.min(
+        60000,
+        Number(
+          patch.defaultBroadcastDelayMs ?? current.defaultBroadcastDelayMs ?? 20000,
         ),
       ),
     ),
