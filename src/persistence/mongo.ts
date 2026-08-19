@@ -63,6 +63,10 @@ export interface ModeratorGroupRecord {
   warnLimit: number;
   muteDefaultSeconds: number;
   rules?: string;
+  welcomeEnabled: boolean;
+  goodbyeEnabled: boolean;
+  welcomeText?: string;
+  goodbyeText?: string;
   whitelist: string[];
   staff: string[];
   updatedAt: number;
@@ -265,6 +269,10 @@ const moderatorGroupSchema = new mongoose.Schema<ModeratorGroupDocument>(
     warnLimit: { type: Number, default: 3 },
     muteDefaultSeconds: { type: Number, default: 600 },
     rules: String,
+    welcomeEnabled: { type: Boolean, default: false },
+    goodbyeEnabled: { type: Boolean, default: false },
+    welcomeText: String,
+    goodbyeText: String,
     whitelist: { type: [String], default: [] },
     staff: { type: [String], default: [] },
     updatedAt: { type: Number, required: true },

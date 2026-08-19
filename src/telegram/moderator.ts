@@ -76,6 +76,8 @@ async function ensureGroup(
     antiSpam: false,
     warnLimit: 3,
     muteDefaultSeconds: 600,
+    welcomeEnabled: false,
+    goodbyeEnabled: false,
     whitelist: [],
     staff: [],
     updatedAt: Date.now(),
@@ -518,6 +520,67 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     );
   });
 
+  const updateGreeting = async (
+    ctx: Context,
+    kind: "welcome" | "goodbye",
+  ): Promise<void> => {
+    if (!(await requireModerator(ctx))) return;
+    const group = await ensureGroup(ctx);
+    if (!group) return;
+    const values = args(ctx);
+    const value = values[0]?.toLowerCase();
+    const enabledKey = kind === "welcome" ? "welcomeEnabled" : "goodbyeEnabled";
+    const textKey = kind === "welcome" ? "welcomeText" : "goodbyeText";
+    if (value === "on" || value === "off") {
+      group[enabledKey] = value === "on";
+      const text = values.slice(1).join(" ").trim();
+      if (text) group[textKey] = text.slice(0, 1000);
+      group.updatedAt = Date.now();
+      await saveModeratorGroup(group);
+      await recordEvent(ctx, { rule: kind, action: value, success: true });
+    }
+    await ctx.reply(
+      `${kind}: ${group[enabledKey] ? "ON" : "OFF"}${group[textKey] ? `\\nTemplate: ${group[textKey]}` : ""}`,
+    );
+  };
+  bot.command("welcome", (ctx) => updateGreeting(ctx, "welcome"));
+  bot.command("goodbye", (ctx) => updateGreeting(ctx, "goodbye"));
+
+  bot.on("new_chat_members", async (ctx) => {
+    const id = groupId(ctx);
+    if (!id) return;
+    const group = await loadModeratorGroup(id).catch(() => undefined);
+    if (!group?.welcomeEnabled) return;
+    const members =
+      "new_chat_members" in ctx.message ? ctx.message.new_chat_members : [];
+    const names = members
+      .map((member) => `@${member.username ?? member.first_name}`)
+      .join(", ");
+    await ctx.reply(
+      (group.welcomeText ?? "Welcome {members} to the group!").replace(
+        "{members}",
+        names,
+      ),
+    );
+  });
+
+  bot.on("left_chat_member", async (ctx) => {
+    const id = groupId(ctx);
+    if (!id) return;
+    const group = await loadModeratorGroup(id).catch(() => undefined);
+    if (!group?.goodbyeEnabled) return;
+    const member =
+      "left_chat_member" in ctx.message
+        ? ctx.message.left_chat_member
+        : undefined;
+    const name = member
+      ? `@${member.username ?? member.first_name}`
+      : "A member";
+    await ctx.reply(
+      (group.goodbyeText ?? "Goodbye {member}.").replace("{member}", name),
+    );
+  });
+
   bot.command("settings", async (ctx) => {
     if (!(await requireModerator(ctx))) return;
     const group = await ensureGroup(ctx);
@@ -582,6 +645,8 @@ export const moderatorCommandScopes = [
   { command: "warnlimit", description: "Set warning escalation limit" },
   { command: "settings", description: "View group moderation settings" },
   { command: "rules", description: "Show group rules" },
+  { command: "welcome", description: "Configure welcome messages" },
+  { command: "goodbye", description: "Configure goodbye messages" },
   { command: "setrules", description: "Update group rules" },
   { command: "staff", description: "Manage delegated staff" },
   { command: "whitelist", description: "Manage trusted users" },
