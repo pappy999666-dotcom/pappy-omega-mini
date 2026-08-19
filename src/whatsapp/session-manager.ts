@@ -480,8 +480,20 @@ export async function hasPersistedWhatsAppAuth(
     await access(credsPath);
     const credentials = (await readEncryptedJson(credsPath)) as {
       registered?: unknown;
+      me?: unknown;
+      account?: unknown;
+      noiseKey?: unknown;
+      signedIdentityKey?: unknown;
+      signedPreKey?: unknown;
     };
-    return credentials?.registered === true;
+    return (
+      credentials?.registered === true ||
+      typeof credentials?.me === "object" ||
+      typeof credentials?.account === "object" ||
+      typeof credentials?.noiseKey === "object" ||
+      typeof credentials?.signedIdentityKey === "object" ||
+      typeof credentials?.signedPreKey === "object"
+    );
   } catch {
     return false;
   }
