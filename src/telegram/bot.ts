@@ -68,6 +68,7 @@ import {
 import {
   purgeWhatsAppSession,
   requestWhatsAppPairingCode,
+  restartWhatsAppSession,
   setPairingNotifier,
 } from "../whatsapp/session-manager.js";
 import {
@@ -2009,6 +2010,60 @@ export function createTelegramBot(): Telegraf<Context> {
     const action = ctx.match[2] ?? "";
     if (action === "sudo" && !isAdmin(ctx)) return deny(ctx);
     if (action === "bridge") return showSessionBridge(ctx, session.sessionId);
+    if (action === "reconnect") {
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Reconnect`,
+          infoResponse(
+            "Transport Recovery",
+            "Stopping the current WhatsApp socket, reopening the persisted authentication, and waiting for a verified ACTIVE state. No session data is deleted.",
+          ),
+        ),
+        keyboard([[btn("‹ Session", `session:${session.sessionId}:menu`)]]),
+      );
+      try {
+        const ready = await restartWhatsAppSession(
+          session.workspaceId,
+          session.sessionId,
+        );
+        const refreshed = getSession(session.workspaceId, session.sessionId);
+        return edit(
+          ctx,
+          pageText(
+            `${refreshed.sessionName} · Reconnect`,
+            ready
+              ? successResponse(
+                  "WhatsApp Reconnected",
+                  `<b>Status:</b> ${escapeHtml(effectiveSessionStatus(refreshed))}\n<b>Auth:</b> ${escapeHtml(refreshed.authHealth ?? "UNKNOWN")}\n\nThe persisted session is online again and ready for transport-backed commands.`,
+                )
+              : dangerResponse(
+                  "Recovery Still In Progress",
+                  `The socket did not reach verified ACTIVE state within the recovery window. Saved authentication was preserved; the lifecycle supervisor will continue recovery.\n\n<b>Status:</b> ${escapeHtml(effectiveSessionStatus(refreshed))}\n<b>Reason:</b> ${escapeHtml(refreshed.disconnectReason ?? "transport recovery pending")}`,
+                ),
+          ),
+          keyboard([
+            [btn("↻ Try Reconnect Again", `session:${session.sessionId}:action:reconnect`, "primary")],
+            [btn("‹ Session", `session:${session.sessionId}:menu`)],
+          ]),
+        );
+      } catch (error) {
+        return edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Reconnect`,
+            dangerResponse(
+              "Recovery Request Failed",
+              `The saved session was not purged. The transport supervisor may retry automatically.\n\n<code>${escapeHtml(error instanceof Error ? error.message : String(error))}</code>`,
+            ),
+          ),
+          keyboard([
+            [btn("↻ Try Again", `session:${session.sessionId}:action:reconnect`, "primary")],
+            [btn("‹ Session", `session:${session.sessionId}:menu`)],
+          ]),
+        );
+      }
+    }
     if (action === "join") return showJoinManager(ctx, session.sessionId);
     if (action === "groups") return showSessionGroups(ctx, session.sessionId);
     if (action === "health") return showSessionHealth(ctx, session.sessionId);
@@ -3023,6 +3078,20 @@ export function createTelegramBot(): Telegraf<Context> {
           user.workspaceId,
           session.sessionId,
         );
+        const existing = (await runtime.listRecent(200)).find(
+          (candidate) =>
+            candidate.workspaceId === user.workspaceId &&
+            candidate.sessionId === session.sessionId &&
+            candidate.kind === "join-manager" &&
+            ["QUEUED", "RUNNING", "PAUSED", "RETRYING"].includes(
+              candidate.state,
+            ),
+        );
+        if (existing) {
+          joinJobs.set(key, existing.jobId);
+          joinStates.set(key, jobStateToJoinStatus(existing.state));
+          return showJoinManager(ctx, session.sessionId);
+        }
         const job = await runtime.enqueue({
           workspaceId: user.workspaceId,
           sessionId: session.sessionId,

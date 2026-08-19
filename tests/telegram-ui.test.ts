@@ -194,6 +194,7 @@ describe("Telegram UI authorization", () => {
     }
     expect(userSession).not.toContain("session:session-1:section:access");
     expect(userSession).toContain("session:session-1:action:purge");
+    expect(userSession).toContain("session:session-1:action:reconnect");
     expect(userSession).not.toContain("Coming soon");
     expect(userSession).not.toContain("placeholder");
   });

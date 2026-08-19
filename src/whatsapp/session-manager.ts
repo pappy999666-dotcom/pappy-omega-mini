@@ -774,6 +774,21 @@ export async function startWhatsAppSession(
   return promise;
 }
 
+export async function restartWhatsAppSession(
+  workspaceId: string,
+  sessionId: string,
+): Promise<boolean> {
+  await stopWhatsAppSession(workspaceId, sessionId);
+  resetWhatsAppSessionLifecycle(workspaceId, sessionId);
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  await startWhatsAppSession(workspaceId, sessionId);
+  return waitForWhatsAppSessionReady(
+    workspaceId,
+    sessionId,
+    env.WHATSAPP_READY_TIMEOUT_MS,
+  );
+}
+
 export async function waitForWhatsAppSessionReady(
   workspaceId: string,
   sessionId: string,

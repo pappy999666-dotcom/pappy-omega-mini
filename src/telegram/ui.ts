@@ -227,6 +227,7 @@ export function sessionKeyboard(
       btn("🩺 Health & Jobs", `session:${id}:section:health`),
       btn("⚙ Session Settings", `session:${id}:section:settings`),
     ],
+    [btn("↻ Reconnect WhatsApp", `session:${id}:action:reconnect`, "primary")],
   ];
   if (isOwner)
     rows.push([btn("🔐 Access / Sudo", `session:${id}:section:access`)]);
