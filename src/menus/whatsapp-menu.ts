@@ -3,6 +3,7 @@ import {
   readMenuMedia,
 } from "../media/menu-media-store.js";
 import type { WhatsAppSession } from "../types/domain.js";
+import { createCommandRegistry } from "../whatsapp/command-registry.js";
 
 export interface WhatsappMenuPayload {
   text: string;
@@ -17,19 +18,21 @@ export interface WhatsappMenuPayload {
 
 function compactMenu(session: WhatsAppSession, isOwner: boolean): string {
   const ownerLine = isOwner ? "Owner mode: enabled" : "User mode: enabled";
+  const commands = createCommandRegistry()
+    .filter((command) => !command.ownerOnly || isOwner)
+    .map((command) => `.${command.name}`);
+  const commandLines: string[] = [];
+  for (let index = 0; index < commands.length; index += 3)
+    commandLines.push(commands.slice(index, index + 3).join("  "));
   return [
     "✦ PAPPY OMEGA MINI",
     `Session: ${session.sessionName} · ${session.status}`,
     `${ownerLine} · Auto-join: ${session.autoJoinEnabled ? "ON" : "OFF"}`,
     "",
     "COMMANDS",
-    ".profile  .pfp  .groups",
-    ".creategroup  .setgpp",
-    ".autojoin on|off  .health",
-    ".setprefix  .menu  .ping",
-    ...(isOwner ? [".setsudo add|remove|list", ".allstatusx <text>"] : []),
+    ...commandLines,
     "",
-    `Prefix: ${session.prefix || "none"} · Reply .help for details`,
+    `Prefix: ${session.prefix || "none"} · Reply ${session.prefix || "."}help for details`,
   ].join("\n");
 }
 

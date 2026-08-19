@@ -57,7 +57,8 @@ describe("shared session menu", () => {
     const payload = await buildWhatsappMenuPayload(session, true);
     expect(payload.text).toContain("COMMANDS");
     expect(payload.text).toContain(".profile");
-    expect(payload.text).toContain(".allstatusx <text>");
+    expect(payload.text).toContain(".allstatus");
+    expect(payload.text).toContain(".gstatus");
     expect(payload.text).not.toContain("╔");
     expect(payload.text).not.toContain(
       "One command surface, two polished interfaces.",
