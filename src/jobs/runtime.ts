@@ -285,7 +285,7 @@ export function startWorkerRuntime(): JobOrchestrator {
     });
   });
 
-  for (const kind of ["allstatus", "allchat", "tag"] as const) {
+  for (const kind of ["gstatus", "allstatus", "allchat", "tag"] as const) {
     orchestrator.register(kind, async (context) => {
       const sessionId = context.job.sessionId;
       if (!sessionId) throw new Error(`${kind} requires a WhatsApp session.`);
@@ -294,7 +294,13 @@ export function startWorkerRuntime(): JobOrchestrator {
         text?: string;
         count?: number;
       };
-      const groups = payload.groups ?? [];
+      const groups =
+        kind === "gstatus"
+          ? Array.from(
+              { length: Math.max(1, Math.min(20, payload.count ?? 1)) },
+              () => payload.groups?.[0],
+            ).filter((jid): jid is string => Boolean(jid))
+          : (payload.groups ?? []);
       const text = payload.text?.trim();
       if (!text) throw new Error(`${kind} requires a non-empty text payload.`);
       return runBoundedBatch({
@@ -303,7 +309,7 @@ export function startWorkerRuntime(): JobOrchestrator {
         context,
         processItem: async (jid) => {
           try {
-            if (kind === "allstatus")
+            if (kind === "gstatus" || kind === "allstatus")
               await sendGroupStatus(context.job.workspaceId, sessionId, jid, {
                 text,
               });

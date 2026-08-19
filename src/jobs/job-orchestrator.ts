@@ -293,7 +293,12 @@ function operationFor(
     kind === "group-sync"
   )
     return "massSend";
-  if (kind === "allstatus" || kind === "allchat" || kind === "tag")
+  if (
+    kind === "gstatus" ||
+    kind === "allstatus" ||
+    kind === "allchat" ||
+    kind === "tag"
+  )
     return "massSend";
   if (kind === "broadcast") return "broadcast";
   if (kind === "scheduled") return "schedule";

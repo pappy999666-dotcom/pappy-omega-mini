@@ -23,12 +23,15 @@ export interface CommandContext {
   sessionId: string;
   isOwner: boolean;
   senderJid?: string;
+  chatJid?: string;
   args: string[];
   enqueueJob?: (input: {
-    kind: "allstatus" | "allchat" | "tag";
+    kind: "gstatus" | "allstatus" | "allchat" | "tag";
     payload: Record<string, unknown>;
   }) => Promise<string>;
-  cancelJobs?: (kind: "allstatus" | "allchat" | "tag") => Promise<number>;
+  cancelJobs?: (
+    kind: "gstatus" | "allstatus" | "allchat" | "tag",
+  ) => Promise<number>;
 }
 
 export interface RegisteredCommand {
@@ -258,7 +261,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
     },
     {
       name: "allstatus",
-      aliases: ["allstatusx", "gstatusx"],
+      aliases: ["allstatusx"],
       description: "Queue bounded delivery to all eligible groups.",
       ownerOnly: true,
       run: async (ctx) => {
@@ -270,6 +273,29 @@ export function createCommandRegistry(): RegisteredCommand[] {
           payload: { text },
         });
         return `All-status job queued: ${jobId}`;
+      },
+    },
+    {
+      name: "gstatus",
+      aliases: ["gstatusx"],
+      description: "Queue status delivery for the current WhatsApp group.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
+        if (!ctx.chatJid || !ctx.chatJid.endsWith("@g.us"))
+          return "This command must be used inside a WhatsApp group.";
+        const repeat =
+          ctx.args[0] && /^\\d+$/.test(ctx.args[0])
+            ? Number(ctx.args.shift())
+            : 1;
+        const count = Math.max(1, Math.min(20, repeat));
+        const text = ctx.args.join(" ").trim();
+        if (!text) return "Usage: .gstatus [count] <text>.";
+        const jobId = await ctx.enqueueJob({
+          kind: "gstatus",
+          payload: { text, groups: [ctx.chatJid], count },
+        });
+        return `Group-status job queued: ${jobId}`;
       },
     },
     {

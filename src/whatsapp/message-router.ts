@@ -11,6 +11,7 @@ export interface IncomingTextMessage {
   workspaceId: string;
   sessionId: string;
   senderJid: string;
+  chatJid?: string;
   text: string;
   quotedText?: string;
 }
@@ -86,6 +87,7 @@ export async function routeWhatsAppText(
     sessionId: message.sessionId,
     isOwner,
     senderJid: message.senderJid,
+    ...(message.chatJid ? { chatJid: message.chatJid } : {}),
     args: [],
     ...(runtime
       ? {
@@ -93,16 +95,19 @@ export async function routeWhatsAppText(
             kind,
             payload,
           }: {
-            kind: "allstatus" | "allchat" | "tag";
+            kind: "gstatus" | "allstatus" | "allchat" | "tag";
+
             payload: Record<string, unknown>;
           }) => {
-            const groups = await listGroups(
-              message.workspaceId,
-              message.sessionId,
-            );
+            const groups =
+              kind === "gstatus"
+                ? message.chatJid
+                  ? [{ jid: message.chatJid }]
+                  : []
+                : await listGroups(message.workspaceId, message.sessionId);
             const enrichedPayload = {
               ...payload,
-              groups: groups.map((group) => group.jid),
+              groups: payload.groups ?? groups.map((group) => group.jid),
             };
             const payloadHash = createHash("sha256")
               .update(JSON.stringify(enrichedPayload))
@@ -120,7 +125,9 @@ export async function routeWhatsAppText(
       : {}),
     ...(runtime
       ? {
-          cancelJobs: async (kind: "allstatus" | "allchat" | "tag") => {
+          cancelJobs: async (
+            kind: "gstatus" | "allstatus" | "allchat" | "tag",
+          ) => {
             const jobs = await runtime.listRecent(100);
             const active = jobs.filter(
               (job) =>

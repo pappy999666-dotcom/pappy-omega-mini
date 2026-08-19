@@ -282,6 +282,7 @@ async function openWhatsAppSession(
         void routeWhatsAppText({
           workspaceId,
           sessionId,
+          chatJid: message.key.remoteJid,
           senderJid: message.key.fromMe
             ? ((socket as unknown as { user?: { id?: string } }).user?.id ??
               message.key.remoteJid)

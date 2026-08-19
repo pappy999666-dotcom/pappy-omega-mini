@@ -3,6 +3,7 @@ export type JobKind =
   | "link-collection"
   | "link-validation"
   | "link-export"
+  | "gstatus"
   | "allstatus"
   | "allchat"
   | "tag"
