@@ -174,13 +174,29 @@ describe("Session-scoped Join Manager settings", () => {
     const beforeSecond = getSessionJoinSettings(workspaceId, second.sessionId);
     updateSessionJoinSettings(workspaceId, first.sessionId, {
       targetCount: 1000,
+      delayMs: 12000,
+      minDelayMs: 5000,
+      maxDelayMs: 30000,
+      batchCycles: 4,
       mode: "request",
       maxConcurrency: 5,
+      retryLimit: 4,
+      retryBaseMs: 7000,
+      sessionCooldownMs: 45000,
+      restrictionThreshold: 7,
     });
     expect(getSessionJoinSettings(workspaceId, first.sessionId)).toMatchObject({
       targetCount: 1000,
+      delayMs: 12000,
+      minDelayMs: 5000,
+      maxDelayMs: 30000,
+      batchCycles: 4,
       mode: "request",
       maxConcurrency: 5,
+      retryLimit: 4,
+      retryBaseMs: 7000,
+      sessionCooldownMs: 45000,
+      restrictionThreshold: 7,
     });
     expect(getSessionJoinSettings(workspaceId, second.sessionId)).toEqual(
       beforeSecond,

@@ -13,6 +13,7 @@ import {
   forceJoinKeyboard,
   forceJoinText,
   globalBridgeKeyboard,
+  joinManagerKeyboard,
   pageText,
   sessionKeyboard,
   validatorLiveKeyboard,
@@ -196,6 +197,21 @@ describe("Telegram UI authorization", () => {
     expect(text).toContain("Validator Hub · Live");
     expect(text).toContain("AB12CD34");
     expect(text).toContain("Live validation workers");
+  });
+
+  it("renders editable Join Manager controls instead of fixed setting cycles", () => {
+    const join = JSON.stringify(joinManagerKeyboard("session-1", "stopped"));
+    expect(join).toContain("session:session-1:join:edit:target");
+    expect(join).toContain("session:session-1:join:edit:delay");
+    expect(join).toContain("session:session-1:join:edit:batch");
+    expect(join).not.toContain("join:setlimit");
+    expect(join).not.toContain("join:setdelay");
+  });
+
+  it("keeps My Groups pagination callbacks bounded to page navigation", () => {
+    const groupsRoute = "session:session-1:groups:2";
+    expect(groupsRoute.length).toBeLessThanOrEqual(64);
+    expect(groupsRoute).toContain(":groups:2");
   });
 
   it("renders advanced per-session submenu categories without placeholders", () => {

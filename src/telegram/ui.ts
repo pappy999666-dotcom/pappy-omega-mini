@@ -436,11 +436,11 @@ export function joinManagerKeyboard(
   const rows: Button[][] = [controls];
   if (status !== "running")
     rows.push([
-      btn("🎯 Target Groups", `session:${sessionId}:join:setlimit`),
-      btn("⏱ Delay", `session:${sessionId}:join:setdelay`),
+      btn("🎯 Edit Target", `session:${sessionId}:join:edit:target`),
+      btn("⏱ Edit Delay", `session:${sessionId}:join:edit:delay`),
     ]);
   if (status !== "running")
-    rows.push([btn("🔁 Batch Cycles", `session:${sessionId}:join:setbatch`)]);
+    rows.push([btn("🔁 Edit Batch Cycles", `session:${sessionId}:join:edit:batch`)]);
   rows.push([
     btn("⚙ Full Join Settings", `session:${sessionId}:join:settings`),
     btn("🔄 Refresh Live View", `session:${sessionId}:joinmgr`),

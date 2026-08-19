@@ -195,6 +195,8 @@ export async function updateProfileBio(
   await update(bio);
 }
 
+const GROUP_INVENTORY_TIMEOUT_MS = 15_000;
+
 export async function listGroups(
   workspaceId: string,
   sessionId: string,
@@ -202,7 +204,15 @@ export async function listGroups(
   const socket = socketFor(workspaceId, sessionId);
   const fetchGroups = method(socket, "groupFetchAllParticipating");
   if (!fetchGroups) throw new Error("Unsupported capability: groupMetadata");
-  const result = (await fetchGroups()) as Record<
+  const result = (await Promise.race([
+    fetchGroups(),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error("WhatsApp group inventory timed out. Retry after the session is fully connected.")),
+        GROUP_INVENTORY_TIMEOUT_MS,
+      ),
+    ),
+  ])) as Record<
     string,
     {
       subject?: string;

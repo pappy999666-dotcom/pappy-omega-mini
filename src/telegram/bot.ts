@@ -1,6 +1,7 @@
 import { Telegraf } from "telegraf";
 import type { Context } from "telegraf";
 import { env, ownerTelegramIds } from "../config/env.js";
+import type { SessionJoinSettings } from "../types/domain.js";
 import {
   resolveUser,
   listSessions,
@@ -200,6 +201,28 @@ const pendingSessionSetting = new Map<
   string,
   { workspaceId: string; sessionId: string; action: "name" | "bio" | "prefix" }
 >();
+type JoinSettingField =
+  | "target"
+  | "delay"
+  | "minDelay"
+  | "maxDelay"
+  | "batch"
+  | "retry"
+  | "retryBase"
+  | "cooldown"
+  | "restriction"
+  | "concurrency"
+  | "mode";
+const pendingJoinSettingInput = new Map<
+  string,
+  {
+    workspaceId: string;
+    sessionId: string;
+    field: JoinSettingField;
+    chatId: number;
+    messageId: number;
+  }
+>();
 const pendingBroadcastDelay = new Map<string, string>();
 const pendingPairing = new Map<
   string,
@@ -245,6 +268,7 @@ function clearPendingInputs(userId: string): void {
   pendingGroupPicture.delete(userId);
   pendingGroupLeave.delete(userId);
   pendingSessionSetting.delete(userId);
+  pendingJoinSettingInput.delete(userId);
   pendingBroadcastDelay.delete(userId);
   pendingPairing.delete(userId);
   pendingGlobalCommand.delete(userId);
@@ -502,6 +526,80 @@ export function createTelegramBot(): Telegraf<Context> {
       // consuming a later unrelated message.
       clearPendingInputs(userId);
       passiveIntakeSuspended.delete(userId);
+      return;
+    }
+    const joinInput = pendingJoinSettingInput.get(userId);
+    if (joinInput) {
+      const session = getSession(joinInput.workspaceId, joinInput.sessionId);
+      if (text.toLowerCase() === "cancel") {
+        pendingJoinSettingInput.delete(userId);
+        await ctx.telegram
+          .editMessageText(
+            joinInput.chatId,
+            joinInput.messageId,
+            undefined,
+            pageText("Join Manager · Settings", infoResponse("Cancelled", "No setting was changed.")),
+            {
+              parse_mode: "HTML",
+              reply_markup: keyboard([
+                [btn("⚙ Join Settings", `session:${session.sessionId}:join:settings`)],
+                [btn("‹ Join Manager", `session:${session.sessionId}:joinmgr`)],
+              ]),
+            },
+          )
+          .catch(() => undefined);
+        return;
+      }
+      const parsed = parseJoinSetting(joinInput.field, text, getSessionJoinSettings(session.workspaceId, session.sessionId));
+      if (!parsed.patch) {
+        await ctx.telegram
+          .editMessageText(
+            joinInput.chatId,
+            joinInput.messageId,
+            undefined,
+            pageText(
+              `${session.sessionName} · Join Settings`,
+              dangerResponse(
+                "Invalid Setting",
+                `${escapeHtml(parsed.error ?? "The value is not valid.")}\n\nCorrect the value or send <code>cancel</code>.`,
+              ),
+            ),
+            {
+              parse_mode: "HTML",
+              reply_markup: keyboard([[btn("✖ Cancel", `session:${session.sessionId}:join:settings`)] ]),
+            },
+          )
+          .catch(() => undefined);
+        return;
+      }
+      const next = updateSessionJoinSettings(
+        session.workspaceId,
+        session.sessionId,
+        parsed.patch,
+      );
+      pendingJoinSettingInput.delete(userId);
+      const settings = next.joinSettings ?? getSessionJoinSettings(session.workspaceId, session.sessionId);
+      await ctx.telegram
+        .editMessageText(
+          joinInput.chatId,
+          joinInput.messageId,
+          undefined,
+          pageText(
+            `${session.sessionName} · Join Settings`,
+            successResponse(
+              "Setting Updated",
+              `<b>Target:</b> ${settings.targetCount} · <b>Delay:</b> ${Math.round(settings.delayMs / 1000)}s · <b>Min/Max:</b> ${Math.round(settings.minDelayMs / 1000)}s/${Math.round(settings.maxDelayMs / 1000)}s\n<b>Batch:</b> ${settings.batchCycles} · <b>Concurrency:</b> ${settings.maxConcurrency} · <b>Retries:</b> ${settings.retryLimit} · <b>Backoff:</b> ${Math.round(settings.retryBaseMs / 1000)}s\n<b>Cooldown:</b> ${Math.round(settings.sessionCooldownMs / 1000)}s · <b>Stop:</b> ${settings.restrictionThreshold} rate limits · <b>Mode:</b> ${escapeHtml(settings.mode.toUpperCase())}`,
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [btn("⚙ More Settings", `session:${session.sessionId}:join:settings`)],
+              [btn("‹ Join Manager", `session:${session.sessionId}:joinmgr`)],
+            ]),
+          },
+        )
+        .catch(() => undefined);
       return;
     }
     const pairing =
@@ -1236,18 +1334,32 @@ export function createTelegramBot(): Telegraf<Context> {
       const urls = extractWhatsAppGroupInviteUrls(ctx.message.text);
       if (urls.length) {
         const user = resolveTelegramUser(ctx);
-        void collectLinks({
+        const collection = await collectLinks({
           workspaceId: user.workspaceId,
           text: ctx.message.text,
           sourceUserId: user.telegramUserId,
-        }).catch(() => undefined);
+        });
+        const runtime = getWorkerRuntime();
+        const validationJobs = runtime
+          ? await enqueueValidatorJobs(
+              runtime,
+              user.workspaceId,
+              collection.urls,
+              user.telegramUserId,
+            )
+          : [];
         await ctx.reply(
           pageText(
             "Validator Hub",
-            successResponse(
-              "WhatsApp Group Links Queued",
-              `${urls.length} WhatsApp group invite link${urls.length === 1 ? "" : "s"} queued into the workspace Main bucket. Other URLs are ignored by Validator Hub.`,
-            ),
+            validationJobs.length
+              ? successResponse(
+                  "Imported · Validation Started",
+                  `${collection.found} WhatsApp group invite link${collection.found === 1 ? "" : "s"} found; ${collection.added} new links added to Main. ${validationJobs.length} validation worker${validationJobs.length === 1 ? "" : "s"} started automatically.`,
+                )
+              : warningResponse(
+                  "Imported · Validation Waiting",
+                  `${collection.found} WhatsApp group invite link${collection.found === 1 ? "" : "s"} found; ${collection.added} new links added to Main. No active validation session is available yet; the links remain safe in Main.`,
+                ),
           ),
           { parse_mode: "HTML" },
         );
@@ -1373,6 +1485,18 @@ export function createTelegramBot(): Telegraf<Context> {
           sourceUserId: user.telegramUserId,
           originalUrl: fileName,
         });
+        const runtime = getWorkerRuntime();
+        const validationJobs = runtime
+          ? await enqueueValidatorJobs(
+              runtime,
+              user.workspaceId,
+              result.urls,
+              user.telegramUserId,
+            )
+          : [];
+        const validationMessage = validationJobs.length
+          ? `${validationJobs.length} validation worker${validationJobs.length === 1 ? "" : "s"} started automatically. Open Live Log to watch progress.`
+          : "No authenticated validation session is available yet; the links remain safely in Main and will be available for validation when a session is active.";
         await ctx.telegram.editMessageText(
           progress.chat.id,
           progress.message_id,
@@ -1380,10 +1504,15 @@ export function createTelegramBot(): Telegraf<Context> {
           pageText(
             "Link Intake",
             result.found
-              ? successResponse(
-                  "File Imported",
-                  `${result.found} links found; ${result.added} new links added to the Main bucket.`,
-                )
+              ? validationJobs.length
+                ? successResponse(
+                    "Imported · Validation Started",
+                    `${result.found} WhatsApp group links found; ${result.added} new links added to Main.\n\n${validationMessage}`,
+                  )
+                : warningResponse(
+                    "Imported · Validation Waiting",
+                    `${result.found} WhatsApp group links found; ${result.added} new links added to Main.\n\n${validationMessage}`,
+                  )
               : warningResponse(
                   "No Links Found",
                   "The file was read successfully but contained no WhatsApp group invite links.",
@@ -1570,11 +1699,11 @@ export function createTelegramBot(): Telegraf<Context> {
     await sendSessions(ctx, Number(ctx.match[1] ?? 0));
   });
 
-  bot.action(/^session:([^:]+):groups$/, async (ctx) => {
+  bot.action(/^session:([^:]+):groups(?::(\d+))?$/, async (ctx) => {
     await ctx.answerCbQuery("Loading groups…");
     const session = ownedSession(ctx, ctx.match[1] ?? "");
     if (!session) return deny(ctx);
-    await showSessionGroups(ctx, session.sessionId);
+    await showSessionGroups(ctx, session.sessionId, Number(ctx.match[2] ?? 0));
   });
 
   bot.action(/^session:([^:]+):menu$/, async (ctx) => {
@@ -3158,6 +3287,53 @@ export function createTelegramBot(): Telegraf<Context> {
     await showJoinManager(ctx, ctx.match[1] ?? "");
   });
   bot.action(
+    /^session:([^:]+):join:edit:(target|delay|minDelay|maxDelay|batch|retry|retryBase|cooldown|restriction|concurrency|mode)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      const session = ownedSession(ctx, ctx.match[1] ?? "");
+      if (!session) return deny(ctx);
+      const field = ctx.match[2] as JoinSettingField;
+      const message = ctx.callbackQuery?.message;
+      const chatId = ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : undefined);
+      const messageId = message && "message_id" in message ? message.message_id : undefined;
+      if (!chatId || !messageId) return;
+      const current = getSessionJoinSettings(session.workspaceId, session.sessionId);
+      const instructions: Record<JoinSettingField, string> = {
+        target: `Send the target link count as a whole number from 1 to 10,000. Current: <code>${current.targetCount}</code>.`,
+        delay: `Send the base delay in seconds from 1 to 600. Current: <code>${Math.round(current.delayMs / 1000)}s</code>.`,
+        minDelay: `Send the minimum delay in seconds from 1 to 600. It cannot exceed Max Delay (${Math.round(current.maxDelayMs / 1000)}s).`,
+        maxDelay: `Send the maximum delay in seconds from 1 to 600. It cannot be below Min Delay (${Math.round(current.minDelayMs / 1000)}s).`,
+        batch: `Send batch cycles as a whole number from 1 to 20. Current: <code>${current.batchCycles}</code>.`,
+        retry: `Send retry attempts as a whole number from 0 to 5. Current: <code>${current.retryLimit}</code>.`,
+        retryBase: `Send retry backoff in seconds from 1 to 600. Current: <code>${Math.round(current.retryBaseMs / 1000)}s</code>.`,
+        cooldown: `Send session cooldown in seconds from 0 to 3,600. Current: <code>${Math.round(current.sessionCooldownMs / 1000)}s</code>.`,
+        restriction: `Send the rate-limit stop threshold as a whole number from 1 to 20. Current: <code>${current.restrictionThreshold}</code>.`,
+        concurrency: `Send worker concurrency as a whole number from 1 to 8. Current: <code>${current.maxConcurrency}</code>.`,
+        mode: `Send one mode: <code>auto</code>, <code>immediate</code>, or <code>request</code>. Current: <code>${current.mode}</code>.`,
+      };
+      pendingJoinSettingInput.set(String(ctx.from?.id ?? ""), {
+        workspaceId: session.workspaceId,
+        sessionId: session.sessionId,
+        field,
+        chatId,
+        messageId,
+      });
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Join Settings`,
+          infoResponse(
+            `Edit ${field}`,
+            `${instructions[field]}\n\nThis setting belongs only to <b>${escapeHtml(session.sessionName)}</b>. Send <code>cancel</code> or press Cancel to leave it unchanged.`,
+          ),
+        ),
+        keyboard([
+          [btn("✖ Cancel", `session:${session.sessionId}:join:settings`)],
+        ]),
+      );
+    },
+  );
+  bot.action(
     /^session:([^:]+):join:(start|pause|stop|settings|setlimit|setdelay|setmindelay|setmaxdelay|setbatch|setretry|setretrybase|setcooldown|setrestriction|setconcurrency|setmode)$/,
     async (ctx) => {
       await ctx.answerCbQuery();
@@ -3244,44 +3420,44 @@ export function createTelegramBot(): Telegraf<Context> {
           ),
           keyboard([
             [
-              btn("🎯 Target", `session:${session.sessionId}:join:setlimit`),
-              btn("⏱ Delay", `session:${session.sessionId}:join:setdelay`),
+              btn("🎯 Edit Target", `session:${session.sessionId}:join:edit:target`),
+              btn("⏱ Edit Delay", `session:${session.sessionId}:join:edit:delay`),
             ],
             [
               btn(
                 "↘ Min Delay",
-                `session:${session.sessionId}:join:setmindelay`,
+                `session:${session.sessionId}:join:edit:minDelay`,
               ),
               btn(
                 "↗ Max Delay",
-                `session:${session.sessionId}:join:setmaxdelay`,
+                `session:${session.sessionId}:join:edit:maxDelay`,
               ),
             ],
             [
-              btn("🔁 Batch", `session:${session.sessionId}:join:setbatch`),
-              btn("↻ Retry", `session:${session.sessionId}:join:setretry`),
+              btn("🔁 Edit Batch", `session:${session.sessionId}:join:edit:batch`),
+              btn("↻ Edit Retries", `session:${session.sessionId}:join:edit:retry`),
             ],
             [
               btn(
                 "⏳ Retry Backoff",
-                `session:${session.sessionId}:join:setretrybase`,
+                `session:${session.sessionId}:join:edit:retryBase`,
               ),
               btn(
                 "❄ Cooldown",
-                `session:${session.sessionId}:join:setcooldown`,
+                `session:${session.sessionId}:join:edit:cooldown`,
               ),
             ],
             [
               btn(
                 "⚡ Concurrency",
-                `session:${session.sessionId}:join:setconcurrency`,
+                `session:${session.sessionId}:join:edit:concurrency`,
               ),
               btn(
                 "⛔ Stop Threshold",
-                `session:${session.sessionId}:join:setrestriction`,
+                `session:${session.sessionId}:join:edit:restriction`,
               ),
             ],
-            [btn("⇄ Join Mode", `session:${session.sessionId}:join:setmode`)],
+            [btn("⇄ Edit Join Mode", `session:${session.sessionId}:join:edit:mode`)],
             [btn("‹ Join Manager", `session:${session.sessionId}:joinmgr`)],
           ]),
         );
@@ -4381,36 +4557,48 @@ async function getSessionGroupAt(
 async function showSessionGroups(
   ctx: Context,
   sessionId: string,
+  page = 0,
 ): Promise<void> {
   const session = ownedSession(ctx, sessionId);
   if (!session) return deny(ctx);
   try {
     const groups = await listGroups(session.workspaceId, session.sessionId);
-    const body = groups.length
-      ? groups
+    const pageSize = 20;
+    const pageCount = Math.max(1, Math.ceil(groups.length / pageSize));
+    const safePage = Math.max(0, Math.min(pageCount - 1, Math.floor(page)));
+    const start = safePage * pageSize;
+    const visible = groups.slice(start, start + pageSize);
+    const body = visible.length
+      ? visible
           .map(
             (group, index) =>
-              `<b>${index + 1}. ${escapeHtml(group.subject)}</b> · ${group.participantCount} participants`,
+              `<b>${start + index + 1}. ${escapeHtml(group.subject || "Unnamed group")}</b> · ${group.participantCount} participants`,
           )
           .join("\n")
       : "No groups were returned by the connected WhatsApp session.";
-    const groupRows = groups.map((group, index) => [
+    const groupRows = visible.map((group, index) => [
       btn(
-        `${String(index + 1).padStart(2, "0")} · ${group.subject.slice(0, 28)}`,
-        `session:${session.sessionId}:group:view:${index}`,
+        `${String(start + index + 1).padStart(2, "0")} · ${(group.subject || "Unnamed group").replace(/\s+/g, " ").slice(0, 28)}`,
+        `session:${session.sessionId}:group:view:${start + index}`,
       ),
     ]);
+    const pageControls: Array<ReturnType<typeof btn>> = [];
+    if (safePage > 0)
+      pageControls.push(btn("‹ Previous", `session:${session.sessionId}:groups:${safePage - 1}`));
+    if (safePage + 1 < pageCount)
+      pageControls.push(btn("Next ›", `session:${session.sessionId}:groups:${safePage + 1}`));
     await edit(
       ctx,
       pageText(
         `${session.sessionName} · My Groups`,
         infoResponse(
           "Selectable Group Inventory",
-          `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Groups:</b> ${groups.length}\n\n${body}\n\nSelect a group to open its detail submenu.`,
+          `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Groups:</b> ${groups.length}\n<b>Page:</b> ${safePage + 1}/${pageCount}\n\n${body}\n\nSelect a group to open its detail submenu.`,
         ),
       ),
       keyboard([
         ...groupRows,
+        ...(pageControls.length ? [pageControls] : []),
         [
           btn(
             "＋ Create Group",
@@ -4426,7 +4614,7 @@ async function showSessionGroups(
         [
           btn(
             "↻ Refresh Groups",
-            `session:${session.sessionId}:action:groups`,
+            `session:${session.sessionId}:groups:${safePage}`,
             "primary",
           ),
         ],
@@ -4440,10 +4628,13 @@ async function showSessionGroups(
         `${session.sessionName} · Groups`,
         dangerResponse(
           "Group Inventory Unavailable",
-          escapeHtml(error instanceof Error ? error.message : String(error)),
+          `${escapeHtml(error instanceof Error ? error.message : String(error))}\n\nThe WhatsApp session may still be loading its group inventory.`,
         ),
       ),
-      keyboard([[btn("‹ Session", `session:${session.sessionId}:menu`)]]),
+      keyboard([
+        [btn("↻ Retry Groups", `session:${session.sessionId}:groups:0`, "primary")],
+        [btn("‹ Session", `session:${session.sessionId}:menu`)],
+      ]),
     );
   }
 }
@@ -5116,6 +5307,93 @@ function deny(ctx: Context): void {
   void ctx.answerCbQuery("This action is not available for your workspace.", {
     show_alert: true,
   });
+}
+
+function parseJoinSetting(
+  field: JoinSettingField,
+  raw: string,
+  current: SessionJoinSettings,
+): { patch?: Partial<SessionJoinSettings>; error?: string } {
+  const value = raw.trim();
+  const wholeNumber = (min: number, max: number): number | undefined => {
+    if (!/^\d+$/.test(value)) return undefined;
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed >= min && parsed <= max
+      ? parsed
+      : undefined;
+  };
+  const seconds = (min: number, max: number): number | undefined => {
+    const parsed = wholeNumber(min, max);
+    return parsed === undefined ? undefined : parsed * 1000;
+  };
+  switch (field) {
+    case "target": {
+      const parsed = wholeNumber(1, 10000);
+      return parsed === undefined
+        ? { error: "Target must be a whole number from 1 to 10,000." }
+        : { patch: { targetCount: parsed } };
+    }
+    case "delay": {
+      const parsed = seconds(1, 600);
+      return parsed === undefined
+        ? { error: "Delay must be whole seconds from 1 to 600." }
+        : { patch: { delayMs: parsed } };
+    }
+    case "minDelay": {
+      const parsed = seconds(1, 600);
+      if (parsed === undefined) return { error: "Minimum delay must be whole seconds from 1 to 600." };
+      if (parsed > current.maxDelayMs) return { error: "Minimum delay cannot exceed maximum delay." };
+      return { patch: { minDelayMs: parsed } };
+    }
+    case "maxDelay": {
+      const parsed = seconds(1, 600);
+      if (parsed === undefined) return { error: "Maximum delay must be whole seconds from 1 to 600." };
+      if (parsed < current.minDelayMs) return { error: "Maximum delay cannot be below minimum delay." };
+      return { patch: { maxDelayMs: parsed } };
+    }
+    case "batch": {
+      const parsed = wholeNumber(1, 20);
+      return parsed === undefined
+        ? { error: "Batch cycles must be a whole number from 1 to 20." }
+        : { patch: { batchCycles: parsed } };
+    }
+    case "retry": {
+      const parsed = wholeNumber(0, 5);
+      return parsed === undefined
+        ? { error: "Retry attempts must be a whole number from 0 to 5." }
+        : { patch: { retryLimit: parsed } };
+    }
+    case "retryBase": {
+      const parsed = seconds(1, 600);
+      return parsed === undefined
+        ? { error: "Retry backoff must be whole seconds from 1 to 600." }
+        : { patch: { retryBaseMs: parsed } };
+    }
+    case "cooldown": {
+      const parsed = seconds(0, 3600);
+      return parsed === undefined
+        ? { error: "Cooldown must be whole seconds from 0 to 3,600." }
+        : { patch: { sessionCooldownMs: parsed } };
+    }
+    case "restriction": {
+      const parsed = wholeNumber(1, 20);
+      return parsed === undefined
+        ? { error: "Restriction threshold must be a whole number from 1 to 20." }
+        : { patch: { restrictionThreshold: parsed } };
+    }
+    case "concurrency": {
+      const parsed = wholeNumber(1, 8);
+      return parsed === undefined
+        ? { error: "Concurrency must be a whole number from 1 to 8." }
+        : { patch: { maxConcurrency: parsed } };
+    }
+    case "mode": {
+      const normalized = value.toLowerCase();
+      return normalized === "auto" || normalized === "immediate" || normalized === "request"
+        ? { patch: { mode: normalized } }
+        : { error: "Mode must be auto, immediate, or request." };
+    }
+  }
 }
 
 function escapeHtml(value: string): string {
