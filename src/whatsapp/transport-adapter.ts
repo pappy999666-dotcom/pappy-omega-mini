@@ -196,34 +196,82 @@ export async function updateProfileBio(
 }
 
 const GROUP_INVENTORY_TIMEOUT_MS = 15_000;
+const GROUP_INVENTORY_CACHE_MS = 10_000;
+type GroupInventoryRecord = { subject?: string; participants?: unknown[] };
+const groupInventoryCache = new Map<
+  string,
+  { expiresAt: number; groups: GroupSummary[] }
+>();
+const groupInventoryLastKnown = new Map<string, GroupSummary[]>();
+const groupInventoryInflight = new Map<string, Promise<GroupSummary[]>>();
+
+function transientGroupInventoryError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /rate|over.?limit|429|timeout|tempor|network|closed|not connected/i.test(message);
+}
+
+async function loadGroupInventory(
+  fetchGroups: (...args: unknown[]) => Promise<unknown>,
+): Promise<GroupSummary[]> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const result = (await Promise.race([
+        fetchGroups(),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("WhatsApp group inventory timed out. Retry after the session is fully connected.")),
+            GROUP_INVENTORY_TIMEOUT_MS,
+          ),
+        ),
+      ])) as Record<string, GroupInventoryRecord>;
+      return Object.entries(result).map(([jid, metadata]) => ({
+        jid,
+        subject: metadata.subject ?? jid,
+        participantCount: metadata.participants?.length ?? 0,
+      }));
+    } catch (error) {
+      lastError = error;
+      if (!transientGroupInventoryError(error) || attempt === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("WhatsApp group inventory failed.");
+}
 
 export async function listGroups(
   workspaceId: string,
   sessionId: string,
 ): Promise<GroupSummary[]> {
+  const cacheKey = `${workspaceId}:${sessionId}`;
+  const cached = groupInventoryCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.groups.map((group) => ({ ...group }));
+  const inflight = groupInventoryInflight.get(cacheKey);
+  if (inflight) return (await inflight).map((group) => ({ ...group }));
   const socket = socketFor(workspaceId, sessionId);
   const fetchGroups = method(socket, "groupFetchAllParticipating");
   if (!fetchGroups) throw new Error("Unsupported capability: groupMetadata");
-  const result = (await Promise.race([
-    fetchGroups(),
-    new Promise<never>((_, reject) =>
-      setTimeout(
-        () => reject(new Error("WhatsApp group inventory timed out. Retry after the session is fully connected.")),
-        GROUP_INVENTORY_TIMEOUT_MS,
-      ),
-    ),
-  ])) as Record<
-    string,
-    {
-      subject?: string;
-      participants?: unknown[];
-    }
-  >;
-  return Object.entries(result).map(([jid, metadata]) => ({
-    jid,
-    subject: metadata.subject ?? jid,
-    participantCount: metadata.participants?.length ?? 0,
-  }));
+  const request = loadGroupInventory(fetchGroups)
+    .then((groups) => {
+      groupInventoryLastKnown.set(cacheKey, groups);
+      groupInventoryCache.set(cacheKey, {
+        expiresAt: Date.now() + GROUP_INVENTORY_CACHE_MS,
+        groups,
+      });
+      return groups;
+    })
+    .catch((error) => {
+      const stale = groupInventoryLastKnown.get(cacheKey);
+      if (stale) return stale;
+      throw error;
+    })
+    .finally(() => {
+      groupInventoryInflight.delete(cacheKey);
+    });
+  groupInventoryInflight.set(cacheKey, request);
+  return (await request).map((group) => ({ ...group }));
 }
 
 export async function sendDirectText(

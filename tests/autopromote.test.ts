@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isAutoPromoteWizardContinuation } from "../src/telegram/bot.js";
 import {
   autoPromoteCommandKeyboard,
   autoPromoteConfirmKeyboard,
@@ -71,6 +72,9 @@ describe("Auto Promote scheduling contracts", () => {
     ]));
     expect(scopeData).toContain("autopromote:scope:SESSION:s1");
     expect(scopeData).toContain("autopromote:scope:USER");
+    expect(isAutoPromoteWizardContinuation("autopromote:command:allstatus")).toBe(true);
+    expect(isAutoPromoteWizardContinuation("autopromote:global:toggle:s1")).toBe(true);
+    expect(isAutoPromoteWizardContinuation("admin:panel")).toBe(false);
   });
 
 });

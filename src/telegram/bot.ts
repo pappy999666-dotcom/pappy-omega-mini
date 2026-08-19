@@ -57,6 +57,7 @@ import {
   claimValidatorMainLinks,
   mergeValidatorBuckets,
   purgeValidatorBucket,
+  requeueValidatorMainLinks,
   type ValidatorBucket,
 } from "../links/validator-operations.js";
 import {
@@ -344,7 +345,7 @@ function clearPendingInputs(userId: string): void {
   pendingLiveJobCode.delete(userId);
 }
 
-function isAutoPromoteWizardContinuation(callbackData: string): boolean {
+export function isAutoPromoteWizardContinuation(callbackData: string): boolean {
   return (
     callbackData.startsWith("autopromote:scope:") ||
     callbackData.startsWith("autopromote:command:") ||
@@ -3478,9 +3479,9 @@ export function createTelegramBot(): Telegraf<Context> {
       const current = getSessionJoinSettings(session.workspaceId, session.sessionId);
       const instructions: Record<JoinSettingField, string> = {
         target: `Send the target link count as a whole number from 1 to 10,000. Current: <code>${current.targetCount}</code>.`,
-        delay: `Send the base delay in seconds from 1 to 600. Current: <code>${Math.round(current.delayMs / 1000)}s</code>.`,
-        minDelay: `Send the minimum delay in seconds from 1 to 600. It cannot exceed Max Delay (${Math.round(current.maxDelayMs / 1000)}s).`,
-        maxDelay: `Send the maximum delay in seconds from 1 to 600. It cannot be below Min Delay (${Math.round(current.minDelayMs / 1000)}s).`,
+        delay: `Send the base delay in seconds from 0 to 600. Use 0 for Immediate mode. Current: <code>${Math.round(current.delayMs / 1000)}s</code>.`,
+        minDelay: `Send the minimum delay in seconds from 0 to 600. It cannot exceed Max Delay (${Math.round(current.maxDelayMs / 1000)}s).`,
+        maxDelay: `Send the maximum delay in seconds from 0 to 600. It cannot be below Min Delay (${Math.round(current.minDelayMs / 1000)}s).`,
         batch: `Send batch cycles as a whole number from 1 to 20. Current: <code>${current.batchCycles}</code>.`,
         retry: `Send retry attempts as a whole number from 0 to 5. Current: <code>${current.retryLimit}</code>.`,
         retryBase: `Send retry backoff in seconds from 1 to 600. Current: <code>${Math.round(current.retryBaseMs / 1000)}s</code>.`,
@@ -5715,8 +5716,11 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
   const user = resolveTelegramUser(ctx);
   const key = `${user.workspaceId}:${session.sessionId}`;
   const runtime = getWorkerRuntime();
-  const totalGroups = await listGroups(session.workspaceId, session.sessionId)
-    .then((groups) => groups.length)
+  let totalGroups: number | undefined;
+  void listGroups(session.workspaceId, session.sessionId)
+    .then((groups) => {
+      totalGroups = groups.length;
+    })
     .catch(() => undefined);
   const jobId = joinJobs.get(key);
   const job = jobId ? await runtime?.get(jobId) : undefined;
@@ -5957,20 +5961,20 @@ function parseJoinSetting(
         : { patch: { targetCount: parsed } };
     }
     case "delay": {
-      const parsed = seconds(1, 600);
+      const parsed = seconds(0, 600);
       return parsed === undefined
-        ? { error: "Delay must be whole seconds from 1 to 600." }
+        ? { error: "Delay must be whole seconds from 0 to 600." }
         : { patch: { delayMs: parsed } };
     }
     case "minDelay": {
-      const parsed = seconds(1, 600);
-      if (parsed === undefined) return { error: "Minimum delay must be whole seconds from 1 to 600." };
+      const parsed = seconds(0, 600);
+      if (parsed === undefined) return { error: "Minimum delay must be whole seconds from 0 to 600." };
       if (parsed > current.maxDelayMs) return { error: "Minimum delay cannot exceed maximum delay." };
       return { patch: { minDelayMs: parsed } };
     }
     case "maxDelay": {
-      const parsed = seconds(1, 600);
-      if (parsed === undefined) return { error: "Maximum delay must be whole seconds from 1 to 600." };
+      const parsed = seconds(0, 600);
+      if (parsed === undefined) return { error: "Maximum delay must be whole seconds from 0 to 600." };
       if (parsed < current.minDelayMs) return { error: "Maximum delay cannot be below minimum delay." };
       return { patch: { maxDelayMs: parsed } };
     }
@@ -6038,31 +6042,43 @@ async function enqueueValidatorJobs(
   if (!sessions.length || !urls.length) return [];
   const chunks = sessions.map(() => [] as string[]);
   urls.forEach((url, index) => chunks[index % chunks.length]?.push(url));
-  return Promise.all(
-    chunks.flatMap((chunk, index) => {
-      if (!chunk.length) return [];
-      const session = sessions[index];
-      if (!session) return [];
-      void claimValidatorMainLinks(workspaceId, chunk, session.sessionId).catch(() => undefined);
-      const payload = {
-        urls: chunk,
-        sourceSessionId: session.sessionId,
-        sourceUserId,
-      };
-      const payloadHash = createHash("sha256")
-        .update(JSON.stringify(payload))
-        .digest("hex");
-      return [
-        runtime.enqueue({
+  const jobs: JobRecord[] = [];
+  for (const [index, rawChunk] of chunks.entries()) {
+    const session = sessions[index];
+    if (!session || !rawChunk.length) continue;
+    for (let offset = 0; offset < rawChunk.length; offset += 100) {
+      const chunk = rawChunk.slice(offset, offset + 100);
+    const claimed = await claimValidatorMainLinks(
+      workspaceId,
+      chunk,
+      session.sessionId,
+    ).catch(() => 0);
+    if (claimed !== chunk.length) continue;
+    const payload = {
+      urls: chunk,
+      sourceSessionId: session.sessionId,
+      sourceUserId,
+    };
+    const payloadHash = createHash("sha256")
+      .update(JSON.stringify(payload))
+      .digest("hex");
+    try {
+      jobs.push(
+        await runtime.enqueue({
           workspaceId,
           sessionId: session.sessionId,
           kind: "link-validation",
           payload,
           idempotencyKey: `${workspaceId}:${session.sessionId}:validator:${payloadHash}`,
         }),
-      ];
-    }),
-  );
+      );
+      } catch (error) {
+        await requeueValidatorMainLinks(workspaceId, chunk).catch(() => undefined);
+        throw error;
+      }
+    }
+  }
+  return jobs;
 }
 
 

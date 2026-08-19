@@ -5,7 +5,11 @@ import {
   LinkBucketStore,
   type LinkRecord,
 } from "../links/link-bucket-store.js";
-import { requeueLegacyValidatorErrors } from "../links/validator-operations.js";
+import {
+  claimValidatorMainLinks,
+  requeueLegacyValidatorErrors,
+  requeueValidatorMainLinks,
+} from "../links/validator-operations.js";
 import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
 import {
   getSession,
@@ -392,27 +396,46 @@ export function startWorkerRuntime(): JobOrchestrator {
       sourceBucket?: "active";
       selectedLinks?: string[];
     };
-    const allActive = await buckets.listAll(context.job.workspaceId);
     const selectedLinks = new Set(
       (payload.selectedLinks ?? []).map((link) => link.trim()).filter(Boolean),
     );
-    // Active links are workspace-owned work inventory. Their sourceSessionId
-    // records which session collected/validated the link; it must not prevent
-    // another explicitly selected session from joining it. The transport
-    // remains permanently bound to this job's sessionId below.
-    const activeRecords = allActive.filter(
-      (record) =>
-        record.bucket === "active" &&
-        (selectedLinks.size === 0 ||
-          selectedLinks.has(record.canonicalUrl) ||
-          selectedLinks.has(record.originalUrl)),
-    );
-    const sourceRecords = activeRecords.slice(
-      0,
+    const targetLimit =
       payload.targetCount && payload.targetCount > 0
-        ? Math.min(payload.targetCount, activeRecords.length)
-        : undefined,
-    );
+        ? Math.min(10000, payload.targetCount)
+        : 10000;
+    const sourceRecords: LinkRecord[] = [];
+    if (selectedLinks.size) {
+      for (const link of selectedLinks) {
+        const record = await buckets.get(context.job.workspaceId, link);
+        if (
+          record?.bucket === "active" &&
+          !["joined", "already-member", "request-required"].includes(
+            record.metadata?.joinClassification ?? "",
+          )
+        )
+          sourceRecords.push(record);
+      }
+    } else {
+      let cursor = 0;
+      do {
+        const page = await buckets.list(
+          context.job.workspaceId,
+          "active",
+          cursor,
+          Math.min(100, targetLimit - sourceRecords.length),
+        );
+        for (const record of page.records) {
+          if (
+            !["joined", "already-member", "request-required"].includes(
+              record.metadata?.joinClassification ?? "",
+            )
+          )
+            sourceRecords.push(record);
+          if (sourceRecords.length >= targetLimit) break;
+        }
+        cursor = page.nextCursor;
+      } while (cursor !== 0 && sourceRecords.length < targetLimit);
+    }
     const batchCycles = Math.max(
       1,
       Math.min(20, Number(payload.batchCycles ?? 1)),
@@ -663,6 +686,7 @@ export function startWorkerRuntime(): JobOrchestrator {
                 joinClassification: "dead-link",
                 joinRetryable: true,
                 needsValidation: true,
+                validationState: "pending",
               },
             },
           );
@@ -689,6 +713,7 @@ export function startWorkerRuntime(): JobOrchestrator {
                 joinClassification: classified.classification,
                 joinRetryable: retryable,
                 needsValidation: retryable,
+                ...(retryable ? { validationState: "pending" as const } : {}),
               },
               lastCheckedAt: Date.now(),
             },
@@ -933,33 +958,52 @@ async function sweepPendingMainValidation(
       )
       .sort((left, right) => left.canonicalUrl.localeCompare(right.canonicalUrl));
     if (!pending.length) continue;
+    const admissionLimit = Math.max(100, sessions.length * 100);
+    const admitted = pending.slice(0, admissionLimit);
     const chunks = sessions.map(() => [] as string[]);
-    pending.forEach((record, index) => {
+    admitted.forEach((record, index) => {
       chunks[index % chunks.length]?.push(record.canonicalUrl);
     });
     const jobs: Promise<unknown>[] = [];
-    chunks.forEach((urls, index) => {
+    for (const [index, urls] of chunks.entries()) {
       const session = sessions[index];
-      if (!session || !urls.length) return;
-      for (let offset = 0; offset < urls.length; offset += 100) {
-        const batch = urls.slice(offset, offset + 100);
-        const payload = {
-          urls: batch,
-          sourceSessionId: session.sessionId,
-          sourceUserId: "validator-auto",
-        };
-        const payloadHash = createHash("sha256")
-          .update(JSON.stringify(payload))
-          .digest("hex");
-        jobs.push(orchestrator.enqueue({
-          workspaceId,
-          sessionId: session.sessionId,
-          kind: "link-validation",
-          payload,
-          idempotencyKey: `validator-auto:${workspaceId}:${session.sessionId}:${payloadHash}`,
-        }));
-      }
-    });
+      if (!session || !urls.length) continue;
+      const batch = urls.slice(0, 100);
+      const claimed = await claimValidatorMainLinks(
+        workspaceId,
+        batch,
+        session.sessionId,
+      ).catch(() => 0);
+      if (claimed !== batch.length) continue;
+      const payload = {
+        urls: batch,
+        sourceSessionId: session.sessionId,
+        sourceUserId: "validator-auto",
+      };
+      const payloadHash = createHash("sha256")
+        .update(JSON.stringify(payload))
+        .digest("hex");
+      jobs.push(
+        orchestrator
+          .enqueue({
+            workspaceId,
+            sessionId: session.sessionId,
+            kind: "link-validation",
+            payload,
+            idempotencyKey: `validator-auto:${workspaceId}:${session.sessionId}:${payloadHash}`,
+          })
+          .catch(async (error) => {
+            for (const url of batch)
+              await buckets.move(workspaceId, url, "main", {
+                metadata: {
+                  needsValidation: true,
+                  validationState: "pending",
+                },
+              });
+            throw error;
+          }),
+      );
+    }
     await Promise.all(jobs);
   }
 }

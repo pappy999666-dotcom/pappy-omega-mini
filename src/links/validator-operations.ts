@@ -141,6 +141,34 @@ export async function claimValidatorMainLinks(
   });
 }
 
+export async function requeueValidatorMainLinks(
+  workspaceId: string,
+  urls: string[],
+): Promise<number> {
+  return withStore(async (store) => {
+    let moved = 0;
+    for (const raw of urls) {
+      let canonicalUrl: string;
+      try {
+        canonicalUrl = new URL(raw).toString();
+      } catch {
+        continue;
+      }
+      const current = await store.get(workspaceId, canonicalUrl);
+      if (current?.bucket !== "active") continue;
+      const next = await store.move(workspaceId, canonicalUrl, "main", {
+        metadata: {
+          ...current.metadata,
+          needsValidation: true,
+          validationState: "pending",
+        },
+      });
+      if (next) moved += 1;
+    }
+    return moved;
+  });
+}
+
 export async function requeueLegacyValidatorErrors(
   workspaceId: string,
 ): Promise<number> {
