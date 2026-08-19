@@ -3,7 +3,7 @@ import { Redis } from "ioredis";
 import type { Context, Telegraf } from "telegraf";
 import { env } from "../config/env.js";
 import { btn, keyboard, pageText, ui } from "./ui.js";
-import { escapeHtml, infoResponse, warningResponse } from "./renderer.js";
+import { escapeHtml, infoResponse, successResponse, warningResponse } from "./renderer.js";
 import {
   countModeratorWarnings,
   countModeratorWarningsForGroup,
@@ -20,6 +20,19 @@ import {
 const ADMIN_STATUSES = new Set(["creator", "administrator"]);
 const GROUP_TYPES = new Set(["group", "supergroup"]);
 let protectionRedis: Redis | undefined;
+
+type DestructiveConfirmation = {
+  token: string;
+  action: "ban" | "resetwarn";
+  groupId: string;
+  actorId: string;
+  targetId: string;
+  chatId: number;
+  promptMessageId?: number;
+  sourceMessageId?: number;
+  expiresAt: number;
+};
+const destructiveConfirmations = new Map<string, DestructiveConfirmation>();
 function getProtectionRedis(): Redis {
   return (protectionRedis ??= (() => {
     const client = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
@@ -342,6 +355,63 @@ async function callbackModerator(ctx: Context): Promise<ModeratorGroupRecord | u
   return ensureGroup(ctx);
 }
 
+function callbackMessageId(ctx: Context): number | undefined {
+  const message = ctx.callbackQuery?.message;
+  return message && "message_id" in message ? message.message_id : undefined;
+}
+
+function scheduleDelete(telegram: Context["telegram"], chatId: number, messageId: number | undefined, delayMs = 8_000): void {
+  if (!messageId) return;
+  setTimeout(() => {
+    void telegram.deleteMessage(chatId, messageId).catch(() => undefined);
+  }, delayMs);
+}
+
+function createDestructiveConfirmation(
+  ctx: Context,
+  action: DestructiveConfirmation["action"],
+  targetId: string,
+): DestructiveConfirmation | undefined {
+  const group = groupId(ctx);
+  const actor = actorId(ctx);
+  const chatId = ctx.chat?.id;
+  if (!group || !actor || !chatId) return undefined;
+  const token = randomUUID();
+  const sourceMessageId = commandMessage(ctx)?.message_id;
+  const confirmation: DestructiveConfirmation = {
+    token,
+    action,
+    groupId: group,
+    actorId: actor,
+    targetId,
+    chatId,
+    ...(sourceMessageId ? { sourceMessageId } : {}),
+    expiresAt: Date.now() + 60_000,
+  };
+  destructiveConfirmations.set(token, confirmation);
+  return confirmation;
+}
+
+function consumeDestructiveConfirmation(
+  ctx: Context,
+  token: string,
+): DestructiveConfirmation | undefined {
+  const confirmation = destructiveConfirmations.get(token);
+  if (!confirmation) return undefined;
+  if (confirmation.expiresAt < Date.now()) {
+    destructiveConfirmations.delete(token);
+    return undefined;
+  }
+  if (
+    confirmation.groupId !== groupId(ctx) ||
+    confirmation.actorId !== actorId(ctx) ||
+    confirmation.chatId !== ctx.chat?.id
+  )
+    return undefined;
+  destructiveConfirmations.delete(token);
+  return confirmation;
+}
+
 export function installModeratorCommands(bot: Telegraf<Context>): void {
   bot.command("moderation", async (ctx) => {
     if (!(await requireModerator(ctx))) return;
@@ -492,29 +562,90 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     const id = groupId(ctx);
     const target = targetId(ctx);
     if (!id || !target) {
-      await ctx.reply(
-        "Reply to a member or provide a numeric Telegram user ID.",
-      );
+      await ctx.reply("Reply to a member or provide a numeric Telegram user ID.");
+      return;
+    }
+    const confirmation = createDestructiveConfirmation(ctx, "ban", target);
+    if (!confirmation) return;
+    const prompt = await ctx.reply(
+      pageText(
+        "Confirm Ban",
+        warningResponse(
+          "Destructive Action",
+          `<b>Target:</b> <code>${escapeHtml(target)}</code>\\n\\nThis removes the member from the group. The action is recorded and cannot be undone with /unban unless you choose to restore access later.`,
+        ),
+      ),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard([
+          [btn("⛔ Confirm Ban", `mod:confirm:ban:${confirmation.token}`, "danger")],
+          [btn("Cancel", `mod:cancel:${confirmation.token}`)],
+        ]),
+      },
+    );
+    confirmation.promptMessageId = prompt.message_id;
+    destructiveConfirmations.set(confirmation.token, confirmation);
+    scheduleDelete(ctx.telegram, confirmation.chatId, confirmation.sourceMessageId, 12_000);
+  });
+
+  bot.action(/^mod:confirm:(ban|resetwarn):([a-f0-9-]+)$/, async (ctx) => {
+    if (!(await requireModerator(ctx))) return;
+    const token = ctx.match[2];
+    if (!token) {
+      await ctx.answerCbQuery("Invalid confirmation.", { show_alert: true });
+      return;
+    }
+    const confirmation = consumeDestructiveConfirmation(ctx, token);
+    if (!confirmation || confirmation.action !== ctx.match[1]) {
+      await ctx.answerCbQuery("This confirmation expired or was already used.", { show_alert: true });
       return;
     }
     let ok = true;
+    let detail = "";
     try {
-      await ctx.telegram.banChatMember(Number(id), Number(target));
+      if (confirmation.action === "ban") {
+        await ctx.telegram.banChatMember(Number(confirmation.groupId), Number(confirmation.targetId));
+        detail = `Member ${confirmation.targetId} banned.`;
+      } else {
+        const deleted = await deleteModeratorWarnings(confirmation.groupId, confirmation.targetId);
+        detail = `Cleared ${deleted} warning record(s) for ${confirmation.targetId}.`;
+      }
     } catch {
       ok = false;
+      detail = confirmation.action === "ban" ? "Ban failed; check administrator permissions." : "Clear failed; try again later.";
     }
     await recordEvent(ctx, {
-      rule: "manual",
-      action: "ban",
-      targetId: target,
+      rule: confirmation.action === "ban" ? "manual" : "warning",
+      action: confirmation.action === "ban" ? "ban" : "reset",
+      targetId: confirmation.targetId,
       success: ok,
-      ...(ok ? {} : { failureReason: "Telegram banChatMember failed" }),
+      ...(ok ? {} : { failureReason: detail }),
     });
-    await ctx.reply(
-      ok
-        ? `✅ Member ${target} banned.`
-        : "⛔ Ban failed; check my administrator permissions.",
-    );
+    await ctx.answerCbQuery(ok ? "Completed" : "Action failed", { show_alert: !ok });
+    await ctx.editMessageText(
+      pageText(ok ? "Completed" : "Action Failed", ok ? successResponse("Action Complete", detail) : warningResponse("No Change Applied", detail)),
+      { parse_mode: "HTML", reply_markup: keyboard([[btn(ui.close, "menu:main")]]) },
+    ).catch(() => undefined);
+    scheduleDelete(ctx.telegram, confirmation.chatId, callbackMessageId(ctx), ok ? 8_000 : 12_000);
+    scheduleDelete(ctx.telegram, confirmation.chatId, confirmation.sourceMessageId, 1_000);
+  });
+
+  bot.action(/^mod:cancel:([a-f0-9-]+)$/, async (ctx) => {
+    const token = ctx.match[1];
+    if (!token) {
+      await ctx.answerCbQuery("Invalid confirmation.", { show_alert: true });
+      return;
+    }
+    const confirmation = consumeDestructiveConfirmation(ctx, token);
+    if (!confirmation) {
+      await ctx.answerCbQuery("This confirmation expired or was already used.", { show_alert: true });
+      return;
+    }
+    if (!(await requireModerator(ctx))) return;
+    await ctx.answerCbQuery("Cancelled");
+    await ctx.editMessageText(pageText("Cancelled", infoResponse("No Change Applied", "The destructive action was cancelled.")), { parse_mode: "HTML" }).catch(() => undefined);
+    scheduleDelete(ctx.telegram, confirmation.chatId, callbackMessageId(ctx), 2_000);
+    scheduleDelete(ctx.telegram, confirmation.chatId, confirmation.sourceMessageId, 1_000);
   });
 
   bot.command("unban", async (ctx) => {
@@ -694,23 +825,29 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
 
   bot.command("resetwarn", async (ctx) => {
     if (!(await requireModerator(ctx))) return;
-    const group = await ensureGroup(ctx);
     const target = targetId(ctx);
-    if (!group || !target) {
-      await ctx.reply(
-        "Reply to a member or provide a numeric Telegram user ID.",
-      );
+    if (!groupId(ctx) || !target) {
+      await ctx.reply("Reply to a member or provide a numeric Telegram user ID.");
       return;
     }
-    const deleted = await deleteModeratorWarnings(group.groupId, target);
-    await recordEvent(ctx, {
-      rule: "warning",
-      action: "reset",
-      targetId: target,
-      success: true,
-      reason: String(deleted),
-    });
-    await ctx.reply(`✅ Reset ${deleted} warning record(s) for ${target}.`);
+    const confirmation = createDestructiveConfirmation(ctx, "resetwarn", target);
+    if (!confirmation) return;
+    const prompt = await ctx.reply(
+      pageText(
+        "Clear Warnings",
+        warningResponse("Confirm Clear", `<b>Target:</b> <code>${escapeHtml(target)}</code>\\n\\nThis permanently clears the stored warning records for this member.`),
+      ),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard([
+          [btn("🧹 Confirm Clear", `mod:confirm:resetwarn:${confirmation.token}`, "danger")],
+          [btn("Cancel", `mod:cancel:${confirmation.token}`)],
+        ]),
+      },
+    );
+    confirmation.promptMessageId = prompt.message_id;
+    destructiveConfirmations.set(confirmation.token, confirmation);
+    scheduleDelete(ctx.telegram, confirmation.chatId, confirmation.sourceMessageId, 12_000);
   });
 
   bot.command("rules", async (ctx) => {
