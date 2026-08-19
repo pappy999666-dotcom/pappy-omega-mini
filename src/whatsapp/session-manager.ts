@@ -275,7 +275,12 @@ async function openWhatsAppSession(
     content: any,
   ): Promise<void> => {
     try {
-      await socket.sendMessage(jid, content);
+      const outbound =
+        typeof content?.text === "string" &&
+        /https?:\/\/\S+/i.test(content.text)
+          ? { ...content, richPreview: true }
+          : content;
+      await socket.sendMessage(jid, outbound);
       const sentAt = noteOutboundMessage(key);
       updateSession(workspaceId, sessionId, {
         lastOutboundMessageAt: sentAt,

@@ -58,15 +58,18 @@ function isOwnerFor(
   );
 }
 
+export function mergeQuotedPayload(text: string, quotedText?: string): string {
+  return text.trim()
+    ? [text.trim(), quotedText?.trim()].filter(Boolean).join(" ")
+    : (quotedText ?? "");
+}
+
 export async function routeWhatsAppText(
   message: IncomingTextMessage,
 ): Promise<string | WhatsAppReply | null> {
   const session = getSession(message.workspaceId, message.sessionId);
-  const source =
-    message.quotedText && !message.text.trim()
-      ? message.quotedText
-      : message.text;
-  const trimmed = source.trim();
+  const commandInput = mergeQuotedPayload(message.text, message.quotedText);
+  const trimmed = commandInput.trim();
   const prefix = session.prefix;
   if (prefix && !trimmed.startsWith(prefix)) return null;
   const raw = prefix ? trimmed.slice(prefix.length) : trimmed;

@@ -7,7 +7,10 @@ import {
 } from "../src/core/session-registry.js";
 import { buildSessionMenu, renderAsciiMenu } from "../src/menus/menu-model.js";
 import { buildWhatsappMenuPayload } from "../src/menus/whatsapp-menu.js";
-import { routeWhatsAppText } from "../src/whatsapp/message-router.js";
+import {
+  mergeQuotedPayload,
+  routeWhatsAppText,
+} from "../src/whatsapp/message-router.js";
 import {
   createCommandRegistry,
   executeCommand,
@@ -18,6 +21,7 @@ import {
   setWhatsappMenuMedia,
 } from "../src/media/menu-media-store.js";
 import { moderatorCommandScopes } from "../src/telegram/moderator.js";
+import { nativePreview } from "../src/whatsapp/transport-adapter.js";
 
 beforeEach(() => {
   // Tests use unique Telegram IDs/workspaces, so state remains tenant-safe without global resets.
@@ -173,8 +177,17 @@ describe("WhatsApp command privacy", () => {
   });
 });
 
+describe("WhatsApp native previews", () => {
+  it("enables Baileys rich previews only for URL payloads", () => {
+    expect(nativePreview("open https://example.com/item")).toEqual({
+      richPreview: true,
+    });
+    expect(nativePreview("plain message")).toEqual({});
+  });
+});
+
 describe("WhatsApp command registry", () => {
-  it("sends gstatus directly to the current group and bounds repeat count", async () => {
+  it("sends one gstatus payload directly to the current group without an acknowledgment", async () => {
     const user = resolveUser(`gstatus-${Date.now()}-${Math.random()}`);
     const session = createSession({
       workspaceId: user.workspaceId,
@@ -184,7 +197,7 @@ describe("WhatsApp command registry", () => {
     let captured: { text: string; repeat: number } | undefined;
     const result = await executeCommand(
       createCommandRegistry(),
-      "gstatus 999 hello",
+      "gstatus hello",
       {
         workspaceId: user.workspaceId,
         sessionId: session.sessionId,
@@ -196,10 +209,10 @@ describe("WhatsApp command registry", () => {
         },
       },
     );
-    expect(result).toContain("sent directly");
+    expect(result).toBe("");
     expect(captured).toMatchObject({
       text: "hello",
-      repeat: 20,
+      repeat: 1,
     });
   });
 
@@ -225,7 +238,7 @@ describe("WhatsApp command registry", () => {
         },
       },
     );
-    expect(result).toContain("Hidetag sent");
+    expect(result).toBe("");
     expect(captured).toBe(".tag .tag 🥀");
   });
 
@@ -248,11 +261,20 @@ describe("WhatsApp command registry", () => {
         return "job-stag";
       },
     });
-    expect(result).toContain("job-stag");
+    expect(result).toBe("");
     expect(captured).toMatchObject({
       kind: "tag",
       payload: { text: "🥀", count: 3 },
     });
+  });
+
+  it("appends a quoted message as the command payload", () => {
+    expect(
+      mergeQuotedPayload(".gstatus", "quoted payload https://example.com/item"),
+    ).toBe(".gstatus quoted payload https://example.com/item");
+    expect(mergeQuotedPayload("", "quoted-only payload")).toBe(
+      "quoted-only payload",
+    );
   });
 
   it("does not pretend WhatsApp-side pairing creates a workspace session", async () => {

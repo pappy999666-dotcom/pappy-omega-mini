@@ -39,6 +39,8 @@ function compactMenu(session: WhatsAppSession, isOwner: boolean): string {
     "COMMANDS",
     ...commandLines,
     "",
+    "LOCAL  .gstatus <text/reply>  .tag <payload>",
+    "ALL-GROUP  .allstatus  .allchat  .stag",
     `Prefix ${session.prefix || "none"} · Use ${session.prefix || "."}help`,
   ].join("\n");
 }

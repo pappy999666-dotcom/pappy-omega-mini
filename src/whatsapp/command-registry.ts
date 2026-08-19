@@ -33,6 +33,7 @@ export interface CommandContext {
   chatJid?: string;
   media?: { kind: "image" | "video"; bytes: Buffer; mimeType?: string };
   args: string[];
+  invokedName?: string;
   enqueueJob?: (input: {
     kind: "gstatus" | "allstatus" | "allchat" | "tag";
     payload: Record<string, unknown>;
@@ -346,7 +347,8 @@ export function createCommandRegistry(): RegisteredCommand[] {
     {
       name: "gstatus",
       aliases: ["gstatusx"],
-      description: "Queue status delivery for the current WhatsApp group.",
+      description:
+        "Send one status payload directly to the current WhatsApp group.",
       ownerOnly: true,
       run: async (ctx) => {
         if (!ctx.chatJid || !ctx.chatJid.endsWith("@g.us"))
@@ -354,14 +356,16 @@ export function createCommandRegistry(): RegisteredCommand[] {
         if (!ctx.sendCurrentGroupStatus)
           return "WhatsApp transport is unavailable.";
         const repeat =
-          ctx.args[0] && /^\d+$/.test(ctx.args[0])
-            ? Number(ctx.args.shift())
+          ctx.invokedName === "gstatusx" && /^\d+$/.test(ctx.args[0] ?? "")
+            ? Math.max(1, Math.min(20, Number(ctx.args.shift())))
             : 1;
-        const count = Math.max(1, Math.min(20, repeat));
         const text = ctx.args.join(" ").trim();
-        if (!text) return "Usage: .gstatus [count] <text>.";
-        await ctx.sendCurrentGroupStatus({ text, repeat: count });
-        return `Group status sent directly to this group${count > 1 ? ` (${count}×)` : ""}.`;
+        if (!text)
+          return repeat > 1
+            ? "Usage: .gstatusx <count> <text> (or reply to a message)."
+            : "Usage: .gstatus <text> (or reply to a message).";
+        await ctx.sendCurrentGroupStatus({ text, repeat });
+        return "";
       },
     },
     {
@@ -416,7 +420,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const text = ctx.args.join(" ").trim();
         if (!text) return "Usage: .tag <payload>.";
         await ctx.sendCurrentGroupHidetag(text);
-        return "Hidetag sent to this group.";
+        return "";
       },
     },
     {
@@ -435,7 +439,8 @@ export function createCommandRegistry(): RegisteredCommand[] {
           kind: "tag",
           payload: { text, ...(count ? { count } : {}) },
         });
-        return `STag job queued: ${jobId}`;
+        void jobId;
+        return "";
       },
     },
     {
@@ -525,5 +530,9 @@ export async function executeCommand(
         : command.name === "pfp" && invokedName === "removepfp"
           ? ["remove", ...args]
           : args;
-  return command.run({ ...ctx, args: normalizedArgs });
+  return command.run({
+    ...ctx,
+    invokedName,
+    args: normalizedArgs,
+  });
 }

@@ -24,6 +24,10 @@ function ownJid(socket: WASocket): string {
   return (socket as WASocket & { user?: { id?: string } }).user?.id ?? "me";
 }
 
+export function nativePreview(text: string): { richPreview?: true } {
+  return /https?:\/\/\S+/i.test(text) ? { richPreview: true } : {};
+}
+
 function method(
   socket: WASocket,
   name: string,
@@ -224,7 +228,7 @@ export async function sendDirectText(
   if (!send) throw new Error("Unsupported capability: sendMessage");
   // The Baileys fork natively hydrates ordinary text URLs through getUrlInfo,
   // including high-quality thumbnails. Do not prefetch or replace that payload.
-  await send(jid, { text });
+  await send(jid, { text, ...nativePreview(text) });
 }
 
 export async function sendGroupText(
@@ -235,7 +239,7 @@ export async function sendGroupText(
 ): Promise<void> {
   const send = method(socketFor(workspaceId, sessionId), "sendMessage");
   if (!send) throw new Error("Unsupported capability: sendMessage");
-  await send(jid, { text });
+  await send(jid, { text, ...nativePreview(text) });
 }
 
 export async function sendGroupStatus(
@@ -252,7 +256,11 @@ export async function sendGroupStatus(
   }
   const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: groupStatus");
-  await send(jid, { ...payload, groupStatus: true });
+  await send(jid, {
+    ...payload,
+    ...(payload.text ? nativePreview(payload.text) : {}),
+    groupStatus: true,
+  });
 }
 
 export async function updateWhatsAppGroupSubject(
@@ -338,7 +346,7 @@ export async function sendGroupHidetag(
   const participants = await getGroupParticipants(workspaceId, sessionId, jid);
   if (!participants.length)
     throw new Error("No phone-number JIDs were available for this group.");
-  await send(jid, { text, mentions: participants });
+  await send(jid, { text, ...nativePreview(text), mentions: participants });
 }
 
 export async function sendGroupMentions(
@@ -358,7 +366,7 @@ export async function sendGroupMentions(
   );
   // Keep the body plain and pass recipients only through hidden mention
   // metadata; Baileys performs native URL hydration on the same message.
-  await send(jid, { text, mentions: selected });
+  await send(jid, { text, ...nativePreview(text), mentions: selected });
 }
 
 export async function validateInviteLink(
