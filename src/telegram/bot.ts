@@ -170,10 +170,40 @@ const pendingGlobalCommand = new Map<
   { workspaceId: string; chatId: number; messageId: number }
 >();
 
+async function registerTelegramCommandSuggestions(
+  bot: Telegraf<Context>,
+): Promise<void> {
+  const privateCommands = [
+    { command: "start", description: "Open the Pappy Omega dashboard" },
+    { command: "help", description: "Show available commands" },
+    { command: "menu", description: "Open the main menu" },
+    { command: "pair", description: "Pair a WhatsApp session" },
+    { command: "sessions", description: "List your WhatsApp sessions" },
+  ];
+  const groupCommands = [
+    { command: "help", description: "Show available commands" },
+    { command: "menu", description: "Open the main menu" },
+  ];
+  try {
+    await bot.telegram.setMyCommands(privateCommands, {
+      scope: { type: "all_private_chats" },
+    });
+    await bot.telegram.setMyCommands(groupCommands, {
+      scope: { type: "all_group_chats" },
+    });
+  } catch (error) {
+    console.error(
+      "[pappy-omega-mini] Telegram command-scope registration failed:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
 export function createTelegramBot(): Telegraf<Context> {
   if (!env.TELEGRAM_BOT_TOKEN)
     throw new Error("TELEGRAM_BOT_TOKEN is not configured.");
   const bot = new Telegraf<Context>(env.TELEGRAM_BOT_TOKEN);
+  void registerTelegramCommandSuggestions(bot);
   setPairingNotifier(async (chatId, message) => {
     await bot.telegram.sendMessage(
       chatId,
@@ -219,6 +249,13 @@ export function createTelegramBot(): Telegraf<Context> {
       reply_markup: keyboard([[btn(ui.back, "menu:main")]]),
     }),
   );
+  bot.command("menu", async (ctx) => {
+    resolveTelegramUser(ctx);
+    await ctx.reply(dashboardText(isAdmin(ctx)), {
+      parse_mode: "HTML",
+      reply_markup: dashboardKeyboard(isAdmin(ctx)),
+    });
+  });
   bot.command("pair", async (ctx) =>
     startPairing(ctx, ctx.message.text.split(/\s+/).slice(1).join(" ").trim()),
   );
