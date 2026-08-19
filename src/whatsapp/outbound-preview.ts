@@ -1,4 +1,9 @@
-import { firstHttpUrl } from "../preview/default-adapter.js";
+import { Redis } from "ioredis";
+import { env } from "../config/env.js";
+import {
+  createDefaultPreviewManager,
+  firstHttpUrl,
+} from "../preview/default-adapter.js";
 import type { PreviewRecord } from "../preview/preview-manager.js";
 
 export interface OutboundPreviewInput {
@@ -8,14 +13,28 @@ export interface OutboundPreviewInput {
   target?: "group-status";
 }
 
+let redis: Redis | undefined;
+let manager: ReturnType<typeof createDefaultPreviewManager> | undefined;
+
+function getPreviewManager(): ReturnType<typeof createDefaultPreviewManager> {
+  if (manager) return manager;
+  redis = new Redis(env.REDIS_URL, {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: true,
+  });
+  redis.on("error", () => undefined);
+  manager = createDefaultPreviewManager(redis);
+  return manager;
+}
+const inFlight = new Map<string, Promise<PreviewRecord>>();
+
 /**
  * One shared URL pipeline for every WhatsApp outbound route.
  *
- * URL-only content is intentionally left intact so the active Bailey socket can
- * run its native getUrlInfo -> uploadImage flow. This produces a flowing URL
- * preview with a real highQualityThumbnail instead of a manually injected small
- * jpegThumbnail. Media content is also left intact and is never converted into
- * a standalone preview image.
+ * Complete supplied previews are preserved. Incomplete text previews are
+ * enriched with resolver metadata and sent through the installed Baileys
+ * richPreview path. Media captions are resolved for cache/failure isolation but
+ * never receive richPreview, because Baileys requires a top-level text field.
  */
 export async function prepareOutboundContent(
   input: OutboundPreviewInput,
@@ -25,18 +44,34 @@ export async function prepareOutboundContent(
   const url = firstHttpUrl(text ?? "");
   if (!url) return content;
 
+  const supplied = input.existingPreview ?? readExistingPreview(content);
+  if (isCompletePreview(supplied)) return content;
+
+  let record: PreviewRecord;
+  try {
+    record = await resolveOnce(url);
+  } catch {
+    return content;
+  }
   const hasMedia = ["image", "video", "audio", "document", "sticker"].some(
     (key) => key in content,
   );
+  if (input.target === "group-status" && !hasMedia && !record.fallback) {
+    return buildNativeGroupStatusPreviewContent(content, record);
+  }
   if (hasMedia) return content;
-
-  // Leave URL-only chat and group-status messages untouched. The active Bailey
-  // socket now has generateHighQualityLinkPreview enabled, so sendMessage can
-  // run its native getUrlInfo -> uploadImage flow and attach a real
-  // highQualityThumbnail alongside the flowing URL text. Supplying our own
-  // jpegThumbnail here would bypass that upload path and recreate the small
-  // preview problem.
-  return content;
+  const thumbnail = record.thumbnailData
+    ? Buffer.from(record.thumbnailData, "base64")
+    : undefined;
+  return {
+    ...content,
+    linkPreview: {
+      "matched-text": record.canonicalUrl,
+      ...(record.title ? { title: record.title } : {}),
+      ...(record.description ? { description: record.description } : {}),
+      ...(thumbnail ? { jpegThumbnail: thumbnail } : {}),
+    },
+  };
 }
 
 export function buildNativeGroupStatusPreviewContent(
@@ -74,6 +109,27 @@ export function isCompletePreview(
   return Boolean(title && description && image);
 }
 
+async function resolveOnce(url: string): Promise<PreviewRecord> {
+  const canonicalUrl = safeCanonicalUrl(url);
+  const running = inFlight.get(canonicalUrl);
+  if (running) return running;
+  const promise = getPreviewManager()
+    .resolve(canonicalUrl)
+    .finally(() => {
+      if (inFlight.get(canonicalUrl) === promise) inFlight.delete(canonicalUrl);
+    });
+  inFlight.set(canonicalUrl, promise);
+  return promise;
+}
+
+function safeCanonicalUrl(url: string): string {
+  try {
+    return new URL(url).toString();
+  } catch {
+    return url;
+  }
+}
+
 function readExistingPreview(
   content: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
@@ -93,5 +149,7 @@ function readExistingPreview(
 }
 
 export async function closeOutboundPreview(): Promise<void> {
-  // Bailey owns the native preview resolver and upload lifecycle on each socket.
+  await redis?.quit().catch(() => undefined);
+  redis = undefined;
+  manager = undefined;
 }
