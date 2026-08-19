@@ -421,7 +421,7 @@ async function moderatorDashboardText(group: ModeratorGroupRecord): Promise<stri
     infoResponse(
       "Control Room",
       `<b>Group:</b> ${escapeHtml(group.title ?? group.groupId)}\n` +
-        `<b>Protection:</b> ${group.enabled ? "ON" : "OFF"} · <b>Anti-link:</b> ${group.antiLink ? "ON" : "OFF"} · <b>Anti-spam:</b> ${group.antiSpam ? "ON" : "OFF"}\n` +
+        `<b>Protection:</b> ${group.enabled ? "ON" : "OFF"} · <b>Anti-link:</b> ${group.antiLink ? "ON" : "OFF"} · <b>Anti-spam:</b> ${group.antiSpam ? "ON" : "OFF"} · <b>Raid:</b> ${group.raidEnabled ? "ON" : "OFF"}\n` +
         `<b>Welcome:</b> ${group.welcomeEnabled ? "ON" : "OFF"} · <b>Goodbye:</b> ${group.goodbyeEnabled ? "ON" : "OFF"}\n` +
         `<b>Warnings:</b> ${warnings} · <b>Filters:</b> ${group.filters.length} · <b>Staff:</b> ${group.staff.length} · <b>Whitelist:</b> ${group.whitelist.length}\n\n` +
         `<b>Recent activity</b>\n${escapeHtml(recent)}\n\n` +
@@ -432,7 +432,7 @@ async function moderatorDashboardText(group: ModeratorGroupRecord): Promise<stri
 
 function moderatorDashboardKeyboard(group: ModeratorGroupRecord) {
   return keyboard([
-    [btn(`🛡 Protection: ${group.enabled ? "ON" : "OFF"}`, "mod:toggle:enabled", group.enabled ? "success" : "danger")],
+    [btn(`🛡 Protection: ${group.enabled ? "ON" : "OFF"}`, "mod:toggle:enabled", group.enabled ? "success" : "danger"), btn("⚡ Quick Protect", "mod:quick-protect", "danger")],
     [
       btn(`🔗 Anti-link: ${group.antiLink ? "ON" : "OFF"}`, "mod:toggle:antiLink", group.antiLink ? "success" : "primary"),
       btn(`⚡ Anti-spam: ${group.antiSpam ? "ON" : "OFF"}`, "mod:toggle:antiSpam", group.antiSpam ? "success" : "primary"),
@@ -442,6 +442,7 @@ function moderatorDashboardKeyboard(group: ModeratorGroupRecord) {
       btn(`↩ Goodbye: ${group.goodbyeEnabled ? "ON" : "OFF"}`, "mod:toggle:goodbye", group.goodbyeEnabled ? "success" : "primary"),
     ],
     [btn("📜 Rules", "mod:view:rules"), btn("🧰 Filters", "mod:view:filters")],
+    [btn("⚙ Custom Setup", "mod:view:setup")],
     [btn("⚠ Warnings", "mod:view:warnings"), btn("🧾 Logs", "mod:view:logs")],
     [btn("🔄 Refresh", "mod:refresh")],
     [btn(ui.close, "menu:main")],
@@ -551,17 +552,39 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     if (group) await editModeratorDashboard(ctx, group);
   });
 
-  bot.action(/^mod:toggle:(enabled|antiLink|antiSpam|welcome|goodbye)$/, async (ctx) => {
+  bot.action(/^mod:toggle:(enabled|antiLink|antiSpam|welcome|goodbye|raid)$/, async (ctx) => {
     const group = await callbackModerator(ctx);
     if (!group) return;
-    const key = ctx.match[1] as "enabled" | "antiLink" | "antiSpam" | "welcome" | "goodbye";
-    const field = key === "welcome" ? "welcomeEnabled" : key === "goodbye" ? "goodbyeEnabled" : key;
+    const key = ctx.match[1] as "enabled" | "antiLink" | "antiSpam" | "welcome" | "goodbye" | "raid";
+    const field = key === "welcome" ? "welcomeEnabled" : key === "goodbye" ? "goodbyeEnabled" : key === "raid" ? "raidEnabled" : key;
     group[field] = !group[field];
     group.updatedAt = Date.now();
     await saveModeratorGroup(group);
     await recordEvent(ctx, { rule: "settings", action: `toggle_${key}`, success: true });
     await ctx.answerCbQuery(`${key} ${group[field] ? "enabled" : "disabled"}`);
     await editModeratorDashboard(ctx, group);
+  });
+
+  bot.action("mod:quick-protect", async (ctx) => {
+    const group = await callbackModerator(ctx);
+    if (!group) return;
+    const enabled = !(group.enabled && group.antiLink && group.antiSpam && group.raidEnabled);
+    group.enabled = enabled;
+    group.antiLink = enabled;
+    group.antiSpam = enabled;
+    group.raidEnabled = enabled;
+    group.updatedAt = Date.now();
+    await saveModeratorGroup(group);
+    await recordEvent(ctx, { rule: "settings", action: enabled ? "quick_protect_on" : "quick_protect_off", success: true });
+    await ctx.answerCbQuery(`Quick Protect ${enabled ? "enabled" : "disabled"}`);
+    await editModeratorDashboard(ctx, group);
+  });
+
+  bot.action("mod:view:setup", async (ctx) => {
+    const group = await callbackModerator(ctx);
+    if (!group) return;
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(pageText("Custom Setup", infoResponse("Protection Profile", `<b>Protection:</b> ${group.enabled ? "ON" : "OFF"}\n<b>Anti-link:</b> ${group.antiLink ? "ON" : "OFF"}\n<b>Anti-spam:</b> ${group.antiSpam ? "ON" : "OFF"}\n<b>Raid:</b> ${group.raidEnabled ? "ON" : "OFF"}\n<b>Raid threshold:</b> ${group.raidJoinThreshold ?? 8} joins / ${group.raidWindowSeconds ?? 30}s`)), { parse_mode: "HTML", reply_markup: keyboard([[btn(`Raid: ${group.raidEnabled ? "ON" : "OFF"}`, "mod:toggle:raid", group.raidEnabled ? "success" : "primary")], [btn(ui.back, "mod:refresh")]]) }).catch(() => undefined);
   });
 
   bot.action("mod:view:rules", async (ctx) => {
