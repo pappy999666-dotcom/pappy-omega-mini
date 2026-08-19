@@ -789,5 +789,11 @@ export function startWorkerRuntime(): JobOrchestrator {
     return { success: 1, failed: 0, skipped: 0 };
   });
 
+  void orchestrator.recoverStaleJobsNow().catch((error) => {
+    console.error(
+      "[pappy-omega-mini] immediate stale-job recovery failed:",
+      error instanceof Error ? error.message : String(error),
+    );
+  });
   return orchestrator;
 }

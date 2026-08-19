@@ -1,5 +1,5 @@
 import type { InlineKeyboardMarkup } from "telegraf/types";
-import type { WhatsAppSession } from "../types/domain.js";
+import type { MenuMedia, WhatsAppSession } from "../types/domain.js";
 import type { JobRecord } from "../jobs/job-contracts.js";
 import { effectiveSessionStatus } from "../menus/menu-model.js";
 import { infoResponse } from "./renderer.js";
@@ -90,6 +90,7 @@ export function dashboardKeyboard(isAdmin: boolean): InlineKeyboardMarkup {
       btn("⌁ Validator Hub", "bucket:status"),
       btn("🌉 Global Bridge", "bridge:global"),
     ],
+    [btn("♙ Membership Gate", "forcejoin:status")],
     [
       btn("◷ Scheduled Jobs", "jobs:list"),
       btn("📺 Live Show", "jobs:live:open", "success"),
@@ -869,9 +870,28 @@ export function mediaKeyboard(): InlineKeyboardMarkup {
       btn("＋ Add Image", "admin:media:add:image", "success"),
       btn("＋ Add Video", "admin:media:add:video", "success"),
     ],
-    [btn("▣ Select WhatsApp Menu Media", "admin:media:select")],
+    [btn("▣ Choose Menu Media", "admin:media:select")],
+    [btn("✎ Set Menu Caption", "admin:media:caption")],
+    [btn("▢ Clear Menu Media", "admin:media:clear", "danger")],
     [btn(ui.back, "admin:panel")],
   ]);
+}
+
+export function menuMediaPickerKeyboard(
+  items: MenuMedia[],
+  selectedMediaId?: string,
+): InlineKeyboardMarkup {
+  const rows: Button[][] = items.map((item) => [
+    btn(
+      `${item.mediaId === selectedMediaId ? "✅" : "▣"} ${item.kind.toUpperCase()} · ${item.fileName}`,
+      `admin:media:pick:${item.mediaId}`,
+      item.mediaId === selectedMediaId ? "success" : "primary",
+    ),
+  ]);
+  rows.push([btn("▢ Clear Selection", "admin:media:clear", "danger")]);
+  rows.push([btn("✎ Set Shared Caption", "admin:media:caption")]);
+  rows.push([btn(ui.back, "admin:media")]);
+  return keyboard(rows);
 }
 
 export function sessionText(session: WhatsAppSession): string {

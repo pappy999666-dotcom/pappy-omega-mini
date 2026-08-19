@@ -17,9 +17,16 @@ import {
   updateWorkspaceDefaults,
 } from "../core/session-registry.js";
 import {
+  clearWhatsappMenuMedia,
   getAdminMediaOverview,
+  selectWhatsappMenuMedia,
+  updateWhatsappMenuCaption,
   uploadWhatsappMenuMedia,
 } from "../admin/media-actions.js";
+import {
+  getWhatsappMenuSettings,
+  listMenuMedia,
+} from "../media/menu-media-store.js";
 import {
   getWorkerRuntime,
   setJobCompletionNotifier,
@@ -132,6 +139,7 @@ import {
   jobLiveText,
   linkCollectionKeyboard,
   mediaKeyboard,
+  menuMediaPickerKeyboard,
   pageText,
   sessionKeyboard,
   sessionText,
@@ -162,7 +170,20 @@ const validatorLiveStates = new Map<string, boolean>();
 const passiveIntakeSuspended = new Set<string>();
 const pendingAdminInput = new Map<
   string,
-  "forcejoin:add" | "broadcast:compose"
+  | "forcejoin:target"
+  | "forcejoin:name"
+  | "forcejoin:button"
+  | "broadcast:compose"
+  | "menu:caption"
+>();
+const pendingForceJoin = new Map<
+  string,
+  {
+    workspaceId: string;
+    target?: string;
+    targetType?: "channel" | "group";
+    displayName?: string;
+  }
 >();
 const pendingAdminBroadcasts = new Map<
   string,
@@ -258,6 +279,7 @@ const pendingLiveJobCode = new Map<
 function clearPendingInputs(userId: string): void {
   pendingMedia.delete(userId);
   pendingAdminInput.delete(userId);
+  pendingForceJoin.delete(userId);
   pendingAdminBroadcasts.delete(userId);
   pendingScheduleInput.delete(userId);
   pendingSupportInput.delete(userId);
@@ -1312,8 +1334,20 @@ export function createTelegramBot(): Telegraf<Context> {
       return;
     }
     const adminInput = pendingAdminInput.get(userId);
-    if (adminInput === "forcejoin:add" && !ctx.message.text.startsWith("/")) {
-      await handleForceJoinAdminInput(ctx, ctx.message.text.trim());
+    if (adminInput === "forcejoin:target" && !ctx.message.text.startsWith("/")) {
+      await handleForceJoinTargetInput(ctx, ctx.message.text.trim());
+      return;
+    }
+    if (adminInput === "forcejoin:name" && !ctx.message.text.startsWith("/")) {
+      await handleForceJoinNameInput(ctx, ctx.message.text.trim());
+      return;
+    }
+    if (adminInput === "forcejoin:button" && !ctx.message.text.startsWith("/")) {
+      await handleForceJoinButtonInput(ctx, ctx.message.text.trim());
+      return;
+    }
+    if (adminInput === "menu:caption" && !ctx.message.text.startsWith("/")) {
+      await handleMenuCaptionInput(ctx, ctx.message.text.trim());
       return;
     }
     if (
@@ -1609,12 +1643,14 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!photo) return;
     const file = await ctx.telegram.getFileLink(photo.file_id);
     const response = await fetch(file.href);
+    const workspaceId = resolveTelegramUser(ctx).workspaceId;
     const media = await uploadWhatsappMenuMedia({
-      workspaceId: resolveTelegramUser(ctx).workspaceId,
+      workspaceId,
       fileName: `whatsapp-menu-${photo.file_unique_id}.jpg`,
       mimeType: "image/jpeg",
       bytes: new Uint8Array(await response.arrayBuffer()),
     });
+    selectWhatsappMenuMedia(workspaceId, media.mediaId);
     pendingMedia.delete(String(ctx.from.id));
     await ctx.reply(
       pageText(
@@ -1635,12 +1671,14 @@ export function createTelegramBot(): Telegraf<Context> {
       return ctx.reply("Open Admin Panel → Media → Add Video first.");
     const file = await ctx.telegram.getFileLink(ctx.message.video.file_id);
     const response = await fetch(file.href);
+    const workspaceId = resolveTelegramUser(ctx).workspaceId;
     const media = await uploadWhatsappMenuMedia({
-      workspaceId: resolveTelegramUser(ctx).workspaceId,
+      workspaceId,
       fileName: `whatsapp-menu-${ctx.message.video.file_unique_id}.mp4`,
       mimeType: ctx.message.video.mime_type ?? "video/mp4",
       bytes: new Uint8Array(await response.arrayBuffer()),
     });
+    selectWhatsappMenuMedia(workspaceId, media.mediaId);
     pendingMedia.delete(String(ctx.from.id));
     await ctx.reply(
       pageText(
@@ -3910,22 +3948,29 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("admin:forcejoin", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
+    const userId = String(ctx.from?.id ?? "");
+    pendingAdminInput.delete(userId);
+    pendingForceJoin.delete(userId);
     await showAdminForceJoin(ctx);
   });
   bot.action("admin:forcejoin:add", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
-    pendingAdminInput.set(String(ctx.from?.id ?? ""), "forcejoin:add");
+    const userId = String(ctx.from?.id ?? "");
+    pendingForceJoin.set(userId, {
+      workspaceId: resolveTelegramUser(ctx).workspaceId,
+    });
+    pendingAdminInput.set(userId, "forcejoin:target");
     await edit(
       ctx,
       pageText(
-        "Admin · Add Force Join",
+        "Admin · Force Join",
         infoResponse(
-          "Send Target Details",
-          "Send one line in this format:\n<code>channel | @username-or-link | Display Name | Button Text</code>\n\nUse a public @username or numeric chat ID when automatic membership verification is required.",
+          "Step 1 of 3 · Channel or Group",
+          "Send the Telegram channel or group link now. Public forms such as <code>@mychannel</code>, <code>https://t.me/mychannel</code>, or a numeric chat ID can be checked automatically. You may prefix it with <code>channel | </code> or <code>group | </code> when the type is not obvious.",
         ),
       ),
-      keyboard([[btn(ui.back, "admin:forcejoin")]]),
+      keyboard([[btn("Cancel", "admin:forcejoin", "danger")]]),
     );
   });
   bot.action(/^admin:forcejoin:toggle:([^:]+)$/, async (ctx) => {
@@ -3977,6 +4022,20 @@ export function createTelegramBot(): Telegraf<Context> {
       ),
       { parse_mode: "HTML", reply_markup: forceJoinKeyboard([target]) },
     );
+  });
+  bot.action("forcejoin:status", async (ctx) => {
+    await ctx.answerCbQuery();
+    const gate = await getForceJoinGate(ctx);
+    if (!gate.targets.length)
+      return edit(
+        ctx,
+        pageText(
+          "Membership Gate",
+          infoResponse("No policy is active", "The owner has not configured a required channel or group yet."),
+        ),
+        keyboard([[btn(ui.back, "menu:main")]]),
+      );
+    await edit(ctx, forceJoinText(gate.targets, gate.passed), forceJoinKeyboard(gate.targets));
   });
   bot.action("forcejoin:check", async (ctx) => {
     await ctx.answerCbQuery();
@@ -4087,16 +4146,65 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("admin:media:select", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
+    const workspaceId = resolveTelegramUser(ctx).workspaceId;
+    const settings = getWhatsappMenuSettings(workspaceId);
+    const items = listMenuMedia(workspaceId);
     await edit(
       ctx,
       pageText(
         "WhatsApp Menu Media",
         infoResponse(
-          "Media Catalog",
-          getAdminMediaOverview(resolveTelegramUser(ctx).workspaceId),
+          "Choose the shared attachment",
+          items.length
+            ? `${getAdminMediaOverview(workspaceId)}\n\nTap one item to attach it to every user’s WhatsApp <code>.menu</code> in this workspace.`
+            : "No uploaded image or video is available yet. Use Add Image or Add Video first.",
         ),
       ),
-      mediaKeyboard(),
+      menuMediaPickerKeyboard(items, settings.whatsappMenuMediaId),
+    );
+  });
+  bot.action(/^admin:media:pick:([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Menu media attached");
+    if (!requireAdmin(ctx)) return;
+    const workspaceId = resolveTelegramUser(ctx).workspaceId;
+    try {
+      selectWhatsappMenuMedia(workspaceId, ctx.match[1] ?? "");
+      await sendAdminMedia(ctx);
+    } catch (error) {
+      await edit(
+        ctx,
+        pageText(
+          "Admin Media",
+          dangerResponse(
+            "Selection Failed",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        mediaKeyboard(),
+      );
+    }
+  });
+  bot.action("admin:media:clear", async (ctx) => {
+    await ctx.answerCbQuery("Menu media cleared");
+    if (!requireAdmin(ctx)) return;
+    clearWhatsappMenuMedia(resolveTelegramUser(ctx).workspaceId);
+    await sendAdminMedia(ctx);
+  });
+  bot.action("admin:media:caption", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const userId = String(ctx.from?.id ?? "");
+    pendingAdminInput.set(userId, "menu:caption");
+    await edit(
+      ctx,
+      pageText(
+        "Admin · Menu Caption",
+        infoResponse(
+          "Set the shared caption",
+          "Send the caption that should appear above the menu for every workspace user. Send <code>clear</code> to restore the default caption.",
+        ),
+      ),
+      keyboard([[btn("Cancel", "admin:media", "danger")]]),
     );
   });
   bot.action("admin:broadcast", async (ctx) => {
@@ -4419,45 +4527,147 @@ async function showAdminForceJoin(ctx: Context): Promise<void> {
   await edit(ctx, adminForceJoinText(targets), adminForceJoinKeyboard(targets));
 }
 
-async function handleForceJoinAdminInput(
+function inferForceJoinType(
+  raw: string,
+): { target: string; targetType: "channel" | "group" } {
+  const explicit = raw.match(/^(channel|group)\s*\|\s*(.+)$/i);
+  if (explicit?.[2])
+    return {
+      target: explicit[2].trim(),
+      targetType: explicit[1]!.toLowerCase() as "channel" | "group",
+    };
+  const target = raw.trim();
+  const targetType = /(?:joinchat|t\.me\/\+|chat\.whatsapp\.com)/i.test(target)
+    ? "group"
+    : "channel";
+  return { target, targetType };
+}
+
+async function handleForceJoinTargetInput(
   ctx: Context,
   text: string,
 ): Promise<void> {
-  pendingAdminInput.delete(String(ctx.from?.id ?? ""));
-  const [type, target, displayName, buttonText] = text
-    .split("|")
-    .map((value) => value.trim());
-  if (!["channel", "group"].includes(type ?? "") || !target || !displayName) {
+  const actorId = String(ctx.from?.id ?? "");
+  const draft = pendingForceJoin.get(actorId);
+  if (!draft || !text || text.length > 300) {
     await edit(
       ctx,
       pageText(
         "Admin · Force Join",
-        dangerResponse(
-          "Invalid Target Format",
-          "Use <code>channel | @username | Display Name | Button Text</code> and try again.",
-        ),
+        dangerResponse("Invalid Target", "Send one valid Telegram channel or group link, username, or chat ID."),
       ),
-      keyboard([[btn("↻ Add Target", "admin:forcejoin:add", "success")]]),
+      keyboard([[btn("↻ Try Target Again", "admin:forcejoin:add", "success")]]),
+    );
+    return;
+  }
+  const inferred = inferForceJoinType(text);
+  pendingForceJoin.set(actorId, { ...draft, ...inferred });
+  pendingAdminInput.set(actorId, "forcejoin:name");
+  await edit(
+    ctx,
+    pageText(
+      "Admin · Force Join",
+      infoResponse(
+        "Step 2 of 3 · Display Name",
+        `<b>Target:</b> <code>${escapeHtml(inferred.target)}</code>\n<b>Type:</b> ${inferred.targetType}\n\nSend the friendly name users should see, for example <code>Official Updates</code>.`,
+      ),
+    ),
+    keyboard([[btn("Cancel", "admin:forcejoin", "danger")]]),
+  );
+}
+
+async function handleForceJoinNameInput(
+  ctx: Context,
+  text: string,
+): Promise<void> {
+  const actorId = String(ctx.from?.id ?? "");
+  const draft = pendingForceJoin.get(actorId);
+  if (!draft || !text || text.length > 120) {
+    await edit(
+      ctx,
+      pageText("Admin · Force Join", dangerResponse("Invalid Name", "Send a display name between 1 and 120 characters.")),
+      keyboard([[btn("↻ Try Name Again", "admin:forcejoin:add", "success")]]),
+    );
+    return;
+  }
+  pendingForceJoin.set(actorId, { ...draft, displayName: text });
+  pendingAdminInput.set(actorId, "forcejoin:button");
+  await edit(
+    ctx,
+    pageText(
+      "Admin · Force Join",
+      infoResponse(
+        "Step 3 of 3 · Button Text",
+        `Send the label users should tap, for example <code>Join Official Updates</code>. The target will be saved immediately after this step.`,
+      ),
+    ),
+    keyboard([[btn("Cancel", "admin:forcejoin", "danger")]]),
+  );
+}
+
+async function handleForceJoinButtonInput(
+  ctx: Context,
+  text: string,
+): Promise<void> {
+  const actorId = String(ctx.from?.id ?? "");
+  const draft = pendingForceJoin.get(actorId);
+  if (!draft?.target || !draft.targetType || !draft.displayName || !text || text.length > 80) {
+    await edit(
+      ctx,
+      pageText("Admin · Force Join", dangerResponse("Invalid Button Text", "Send a button label between 1 and 80 characters.")),
+      keyboard([[btn("↻ Try Button Again", "admin:forcejoin:add", "success")]]),
     );
     return;
   }
   await upsertForceJoinTarget({
-    targetType: type as "channel" | "group",
-    usernameOrLink: target,
-    displayName,
-    buttonText: buttonText || displayName,
+    targetType: draft.targetType,
+    usernameOrLink: draft.target,
+    displayName: draft.displayName,
+    buttonText: text,
   });
+  pendingAdminInput.delete(actorId);
+  pendingForceJoin.delete(actorId);
   recordAudit({
-    workspaceId: resolveTelegramUser(ctx).workspaceId,
-    actorTelegramUserId: String(ctx.from?.id ?? ""),
+    workspaceId: draft.workspaceId,
+    actorTelegramUserId: actorId,
     action: "admin.forcejoin.add",
     success: true,
     metadata: {
-      targetType: type ?? "",
-      target: target?.slice(0, 120) ?? "",
+      targetType: draft.targetType,
+      target: draft.target.slice(0, 120),
+      displayName: draft.displayName,
+      buttonText: text,
     },
   });
-  await showAdminForceJoin(ctx);
+  await edit(
+    ctx,
+    pageText(
+      "Admin · Force Join",
+      successResponse("Policy Saved", `${escapeHtml(draft.displayName)} is now required for users. The user Membership Gate button will show it immediately.`),
+    ),
+    adminForceJoinKeyboard(await listForceJoinTargets()),
+  );
+}
+
+async function handleMenuCaptionInput(ctx: Context, text: string): Promise<void> {
+  const actorId = String(ctx.from?.id ?? "");
+  pendingAdminInput.delete(actorId);
+  const workspaceId = resolveTelegramUser(ctx).workspaceId;
+  const caption = text.toLowerCase() === "clear" ? "Choose a session and send a command." : text;
+  if (!caption || caption.length > 1024) {
+    await edit(
+      ctx,
+      pageText("Admin · Menu Caption", dangerResponse("Invalid Caption", "Send 1–1024 characters or <code>clear</code>.")),
+      keyboard([[btn("↻ Try Again", "admin:media:caption", "success")]]),
+    );
+    return;
+  }
+  updateWhatsappMenuCaption(workspaceId, caption);
+  await edit(
+    ctx,
+    pageText("Admin · Menu Caption", successResponse("Shared Caption Saved", "Every workspace user’s next WhatsApp <code>.menu</code> will use this caption.")),
+    mediaKeyboard(),
+  );
 }
 
 async function showSessionHealth(

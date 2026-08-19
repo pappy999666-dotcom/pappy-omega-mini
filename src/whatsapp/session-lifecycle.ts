@@ -138,8 +138,11 @@ export function scheduleReconnect(input: {
 }): void {
   const state = getLifecycleState(input.key);
   if (state.stopping || state.reconnectTimer) return;
-  const maxAttempts = input.maxAttempts ?? 8;
-  if (state.reconnectAttempt >= maxAttempts) {
+  // Persistent WhatsApp sessions must keep recovering from transient failures.
+  // A caller may still provide a finite cap for a deliberately bounded operation;
+  // normal session transport recovery has no retry ceiling.
+  const maxAttempts = input.maxAttempts;
+  if (maxAttempts !== undefined && state.reconnectAttempt >= maxAttempts) {
     updateSession(input.workspaceId, input.sessionId, {
       status: "ERROR",
       disconnectReason: "reconnect attempts exhausted",

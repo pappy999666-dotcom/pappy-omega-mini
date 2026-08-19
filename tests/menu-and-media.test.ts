@@ -504,5 +504,13 @@ describe("admin menu media", () => {
     expect(getWhatsappMenuSettings(user.workspaceId).whatsappMenuMediaId).toBe(
       media.mediaId,
     );
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "media-menu-session",
+    });
+    const payload = await buildWhatsappMenuPayload(session, false);
+    expect(payload.media?.kind).toBe("image");
+    expect(payload.caption).toContain("Welcome to pappy-omega-mini");
+    expect(payload.caption).toContain("COMMANDS");
   });
 });

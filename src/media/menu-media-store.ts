@@ -8,14 +8,19 @@ import type {
   MenuMediaSettings,
 } from "../types/domain.js";
 import { loadMenuMedia, persistMenuMedia } from "../persistence/mongo.js";
+import {
+  getWorkspaceSettings,
+  updateWorkspaceSettings,
+} from "../core/workspace-settings.js";
 
 const allowedTypes: Record<MediaKind, Set<string>> = {
   image: new Set(["image/jpeg", "image/png", "image/webp"]),
   video: new Set(["video/mp4", "video/webm"]),
 };
 
-const settings = new Map<string, MenuMediaSettings>();
 const catalog = new Map<string, MenuMedia>();
+
+const defaultMenuCaption = "Choose a session and send a command.";
 
 function inferKind(mimeType: string): MediaKind | null {
   if (mimeType.startsWith("image/")) return "image";
@@ -97,34 +102,36 @@ export function setWhatsappMenuMedia(
   caption?: string,
 ): MenuMediaSettings {
   if (mediaId) getMenuMedia(workspaceId, mediaId);
-  const current = settings.get(workspaceId) ?? {
+  const current = getWhatsappMenuSettings(workspaceId);
+  const nextCaption =
+    caption === undefined ? current.whatsappMenuCaption : caption.slice(0, 1024);
+  const nextWorkspace = updateWorkspaceSettings(workspaceId, {
+    ...(mediaId === undefined ? { whatsappMenuMediaId: undefined } : { whatsappMenuMediaId: mediaId }),
+    whatsappMenuCaption: nextCaption,
+  });
+  return {
     workspaceId,
-    whatsappMenuCaption: "Choose a session and send a command.",
-    updatedAt: 0,
+    ...(nextWorkspace.whatsappMenuMediaId
+      ? { whatsappMenuMediaId: nextWorkspace.whatsappMenuMediaId }
+      : {}),
+    whatsappMenuCaption:
+      nextWorkspace.whatsappMenuCaption ?? defaultMenuCaption,
+    updatedAt: nextWorkspace.updatedAt,
   };
-  const next: MenuMediaSettings = {
-    ...current,
-    ...(mediaId === undefined ? {} : { whatsappMenuMediaId: mediaId }),
-    ...(caption === undefined
-      ? {}
-      : { whatsappMenuCaption: caption.slice(0, 1024) }),
-    updatedAt: Date.now(),
-  };
-  if (mediaId === undefined) delete next.whatsappMenuMediaId;
-  settings.set(workspaceId, next);
-  return next;
 }
 
 export function getWhatsappMenuSettings(
   workspaceId: string,
 ): MenuMediaSettings {
-  return (
-    settings.get(workspaceId) ?? {
-      workspaceId,
-      whatsappMenuCaption: "Choose a session and send a command.",
-      updatedAt: 0,
-    }
-  );
+  const current = getWorkspaceSettings(workspaceId);
+  return {
+    workspaceId,
+    ...(current.whatsappMenuMediaId
+      ? { whatsappMenuMediaId: current.whatsappMenuMediaId }
+      : {}),
+    whatsappMenuCaption: current.whatsappMenuCaption ?? defaultMenuCaption,
+    updatedAt: current.updatedAt,
+  };
 }
 
 export async function readMenuMedia(

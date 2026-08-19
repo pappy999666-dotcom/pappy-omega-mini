@@ -18,6 +18,9 @@ export interface WorkspaceSettings {
   defaultJoinRetryLimit: number;
   defaultJoinMode?: "auto" | "immediate" | "request";
   defaultBroadcastDelayMs: number;
+  /** Shared WhatsApp .menu attachment applied to every session in this workspace. */
+  whatsappMenuMediaId?: string | undefined;
+  whatsappMenuCaption?: string | undefined;
   timezone: string;
   updatedAt: number;
 }
