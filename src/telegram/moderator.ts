@@ -1034,11 +1034,51 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
       await ctx.reply("Usage: /setrules your group rules");
       return;
     }
-    group.rules = text.slice(0, 4000);
+    group.rulesDraft = text.slice(0, 4000);
+    group.rulesUpdatedAt = Date.now();
     group.updatedAt = Date.now();
     await saveModeratorGroup(group);
-    await recordEvent(ctx, { rule: "rules", action: "update", success: true });
-    await ctx.reply("✅ Group rules updated.");
+    await recordEvent(ctx, { rule: "rules", action: "draft", success: true });
+    await ctx.reply(
+      pageText("Rules Draft", infoResponse("Preview", `<b>${escapeHtml(group.rulesDraft)}</b>\n\nPublish this draft?`)),
+      {
+        parse_mode: "HTML",
+        reply_markup: keyboard([
+          [btn("✅ Publish", `mod:rules:publish:${group.groupId}`)],
+          [btn("Cancel", `mod:rules:cancel:${group.groupId}`)],
+        ]),
+      },
+    );
+  });
+
+  bot.action(/^mod:rules:(publish|cancel):(-?\\d+)$/, async (ctx) => {
+    const group = await callbackModerator(ctx);
+    if (!group) return;
+    if (group.groupId !== ctx.match[2]) {
+      await ctx.answerCbQuery("This rules draft belongs to another group.", { show_alert: true });
+      return;
+    }
+    if (ctx.match[1] === "cancel") {
+      delete group.rulesDraft;
+      group.updatedAt = Date.now();
+      await saveModeratorGroup(group);
+      await ctx.answerCbQuery("Draft cancelled");
+      await ctx.editMessageText(pageText("Rules", infoResponse("No Change", "The rules draft was discarded.")), { parse_mode: "HTML" }).catch(() => undefined);
+      return;
+    }
+    if (!group.rulesDraft) {
+      await ctx.answerCbQuery("Draft expired.", { show_alert: true });
+      return;
+    }
+    group.rules = group.rulesDraft;
+    delete group.rulesDraft;
+    group.rulesVersion = (group.rulesVersion ?? 0) + 1;
+    group.rulesUpdatedAt = Date.now();
+    group.updatedAt = Date.now();
+    await saveModeratorGroup(group);
+    await recordEvent(ctx, { rule: "rules", action: "publish", success: true });
+    await ctx.answerCbQuery("Rules published");
+    await ctx.editMessageText(pageText("Rules", successResponse("Published", `Version ${group.rulesVersion} is now live.`)), { parse_mode: "HTML", reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]) }).catch(() => undefined);
   });
 
   bot.command("staff", async (ctx) => {
