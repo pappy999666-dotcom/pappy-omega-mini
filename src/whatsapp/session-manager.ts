@@ -391,7 +391,10 @@ export async function hasPersistedWhatsAppAuth(
   );
   try {
     await access(credsPath);
-    return true;
+    const credentials = (await readEncryptedJson(credsPath)) as {
+      registered?: unknown;
+    };
+    return credentials?.registered === true;
   } catch {
     return false;
   }
