@@ -71,6 +71,14 @@ export function createCommandRegistry(): RegisteredCommand[] {
       },
     },
     {
+      name: "pair",
+      aliases: [],
+      description: "Start pairing from the Telegram control plane.",
+      ownerOnly: true,
+      run: async () =>
+        "Pairing is controlled by Telegram for workspace ownership and safety. Open Telegram → Pair to create or attach a WhatsApp session.",
+    },
+    {
       name: "ping",
       aliases: [],
       description: "Fast session health check.",
