@@ -492,7 +492,8 @@ export async function hasPersistedWhatsAppAuth(
       typeof credentials?.account === "object" ||
       typeof credentials?.noiseKey === "object" ||
       typeof credentials?.signedIdentityKey === "object" ||
-      typeof credentials?.signedPreKey === "object"
+      typeof credentials?.signedPreKey === "object" ||
+      Object.keys(credentials ?? {}).length > 0
     );
   } catch (error) {
     console.warn(
