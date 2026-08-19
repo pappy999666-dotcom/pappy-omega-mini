@@ -3,8 +3,9 @@ import {
   createDecipheriv,
   createHash,
   randomBytes,
+  randomUUID,
 } from "node:crypto";
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { mkdir } from "node:fs/promises";
 import { env } from "../config/env.js";
@@ -47,7 +48,13 @@ export async function writeEncryptedJson(
   value: unknown,
 ): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, encryptJson(value), { mode: 0o600 });
+  const temporaryPath = `${path}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    await writeFile(temporaryPath, encryptJson(value), { mode: 0o600 });
+    await rename(temporaryPath, path);
+  } finally {
+    await unlink(temporaryPath).catch(() => undefined);
+  }
 }
 
 export async function readEncryptedJson(path: string): Promise<unknown> {

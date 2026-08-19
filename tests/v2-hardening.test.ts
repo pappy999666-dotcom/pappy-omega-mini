@@ -1,5 +1,13 @@
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { decryptJson, encryptJson } from "../src/core/encrypted-store.js";
+import {
+  decryptJson,
+  encryptJson,
+  readEncryptedJson,
+  writeEncryptedJson,
+} from "../src/core/encrypted-store.js";
 import {
   assertOperationAllowed,
   getEmergencyState,
@@ -27,6 +35,21 @@ describe("V2 hardening", () => {
     const encrypted = encryptJson(input);
     expect(encrypted).not.toContain("session-1");
     expect(decryptJson(encrypted)).toEqual(input);
+  });
+
+  it("writes encrypted auth records atomically without temporary leftovers", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pappy-auth-"));
+    const path = join(directory, "creds.json");
+    try {
+      await writeEncryptedJson(path, { registered: true, marker: "latest" });
+      expect(await readEncryptedJson(path)).toEqual({
+        registered: true,
+        marker: "latest",
+      });
+      expect(await readdir(directory)).toEqual(["creds.json"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("creates safe correlated errors without leaking diagnostics", () => {

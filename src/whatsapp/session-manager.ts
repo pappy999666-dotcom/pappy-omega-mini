@@ -77,6 +77,7 @@ interface RuntimeSocket extends WASocket {
 interface RuntimeSession {
   socket: RuntimeSocket;
   stop: () => void;
+  flushAuth: () => Promise<void>;
 }
 
 const runtimes = new Map<string, RuntimeSession>();
@@ -190,6 +191,8 @@ export function classifyDisconnect(error: unknown): DisconnectClassification {
 }
 
 class FileAuthStore implements CacheManagerStore {
+  private readonly pendingWrites = new Map<string, Promise<void>>();
+
   constructor(private readonly root: string) {}
 
   private path(key: string): string {
@@ -205,9 +208,24 @@ class FileAuthStore implements CacheManagerStore {
   }
 
   async set(key: string, value: unknown): Promise<unknown> {
-    await mkdir(this.root, { recursive: true });
-    await writeEncryptedJson(this.path(key), value);
-    return value;
+    const previous = this.pendingWrites.get(key) ?? Promise.resolve();
+    const write = previous
+      .catch(() => undefined)
+      .then(async () => {
+        await mkdir(this.root, { recursive: true });
+        await writeEncryptedJson(this.path(key), value);
+      });
+    this.pendingWrites.set(key, write);
+    try {
+      await write;
+      return value;
+    } finally {
+      if (this.pendingWrites.get(key) === write) this.pendingWrites.delete(key);
+    }
+  }
+
+  async flush(): Promise<void> {
+    await Promise.allSettled(this.pendingWrites.values());
   }
 
   async delete(key: string): Promise<boolean> {
@@ -253,8 +271,9 @@ async function openWhatsAppSession(
   const session = getSession(workspaceId, sessionId);
   const authRoot = join(env.SESSION_ROOT, workspaceId, sessionId);
   await mkdir(authRoot, { recursive: true });
+  const authStore = new FileAuthStore(authRoot);
   const { state, saveCreds } = await makeCacheManagerAuthState(
-    new FileAuthStore(authRoot),
+    authStore,
     sessionId,
   );
   let recoverStaleSocket: ((reason: string) => void) | undefined;
@@ -689,7 +708,11 @@ async function openWhatsAppSession(
     },
   );
 
-  runtimes.set(key, { socket, stop: () => socket.end() });
+  runtimes.set(key, {
+    socket,
+    stop: () => socket.end(),
+    flushAuth: () => authStore.flush(),
+  });
 }
 
 export async function hasPersistedWhatsAppAuth(
@@ -751,7 +774,7 @@ export async function requestWhatsAppPairingCode(
 ): Promise<string> {
   // Startup recovery can leave an unpaired socket reconnecting. Replace it
   // before issuing a new code so the code belongs to this pairing attempt.
-  stopWhatsAppSession(workspaceId, sessionId);
+  await stopWhatsAppSession(workspaceId, sessionId);
   resetWhatsAppSessionLifecycle(workspaceId, sessionId);
   await new Promise((resolve) => setTimeout(resolve, 500));
   await startWhatsAppSession(workspaceId, sessionId);
@@ -815,7 +838,7 @@ export async function purgeWhatsAppSession(
   sessionId: string,
 ): Promise<{ jobs: number; links: number; traces: number }> {
   getSession(workspaceId, sessionId);
-  stopWhatsAppSession(workspaceId, sessionId);
+  await stopWhatsAppSession(workspaceId, sessionId);
   const [{ purgeRuntimeSessionData }, { purgeWhatsAppSessionTraces }] =
     await Promise.all([
       import("../jobs/runtime.js"),
@@ -832,10 +855,10 @@ export async function purgeWhatsAppSession(
   return { ...runtimeData, traces };
 }
 
-export function stopWhatsAppSession(
+export async function stopWhatsAppSession(
   workspaceId: string,
   sessionId: string,
-): void {
+): Promise<void> {
   getSession(workspaceId, sessionId);
   const key = lifecycleKey(workspaceId, sessionId);
   markStopping(key);
@@ -843,6 +866,7 @@ export function stopWhatsAppSession(
   if (runtime) {
     runtime.stop();
     runtimes.delete(key);
+    await runtime.flushAuth().catch(() => undefined);
   }
   const ownedLock = sessionLocks.get(key);
   sessionLocks.delete(key);
@@ -853,13 +877,18 @@ export function stopWhatsAppSession(
   });
 }
 
-export function shutdownWhatsAppSessions(): void {
+export async function shutdownWhatsAppSessions(): Promise<void> {
   stopAllLifecycles();
-  for (const runtime of runtimes.values()) runtime.stop();
+  const flushes: Promise<void>[] = [];
+  for (const runtime of runtimes.values()) {
+    runtime.stop();
+    flushes.push(runtime.flushAuth().catch(() => undefined));
+  }
   runtimes.clear();
   for (const lock of sessionLocks.values()) void lock.release();
   sessionLocks.clear();
-  void closeSessionLockRedis();
+  await Promise.allSettled(flushes);
+  await closeSessionLockRedis();
 }
 
 export function getWhatsAppRuntimeCount(): number {

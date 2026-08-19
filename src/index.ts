@@ -13,6 +13,7 @@ import {
 import {
   hydrateSessionRegistry,
   listAllSessions,
+  updateSession,
 } from "./core/session-registry.js";
 import { hydrateControlPlane } from "./core/control-plane.js";
 import { startWorkerRuntime } from "./jobs/runtime.js";
@@ -47,8 +48,18 @@ async function main(): Promise<void> {
   for (const session of persistedSessions) {
     if (session.status === "LOGGED_OUT" || session.authHealth === "INVALID")
       continue;
-    if (await hasPersistedWhatsAppAuth(session.workspaceId, session.sessionId))
+    if (
+      await hasPersistedWhatsAppAuth(session.workspaceId, session.sessionId)
+    ) {
       recoverableSessions.push(session);
+    } else {
+      updateSession(session.workspaceId, session.sessionId, {
+        status: "PAIRING",
+        authHealth: "UNKNOWN",
+        disconnectReason:
+          "No complete persisted WhatsApp credentials were found; auth was preserved and pairing is required.",
+      });
+    }
   }
   await startRecoverableSessions(recoverableSessions, 6);
   console.log(
@@ -76,7 +87,7 @@ async function main(): Promise<void> {
     await scheduler?.close();
     await workers?.close();
     await closeValidatorSnapshot();
-    shutdownWhatsAppSessions();
+    await shutdownWhatsAppSessions();
     await closeMongo();
     await closeOutboundPreview();
     console.log("[pappy-omega-mini] transports closed; shutdown complete.");
@@ -98,9 +109,17 @@ async function startRecoverableSessions(
       try {
         await startWhatsAppSession(session.workspaceId, session.sessionId);
       } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        updateSession(session.workspaceId, session.sessionId, {
+          status: "ERROR",
+          authHealth: "DEGRADED",
+          lastError: `startup recovery: ${reason}`.slice(0, 500),
+          disconnectReason:
+            "Startup recovery failed; auth was preserved and retry remains available.",
+        });
         console.error(
           `[pappy-omega-mini] startup recovery failed session=${session.sessionId}:`,
-          error instanceof Error ? error.message : String(error),
+          reason,
         );
       }
     }
