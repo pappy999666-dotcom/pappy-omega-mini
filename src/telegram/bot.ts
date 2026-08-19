@@ -66,6 +66,7 @@ import {
   createCommandRegistry,
   executeCommand,
 } from "../whatsapp/command-registry.js";
+import { effectiveSessionStatus } from "../menus/menu-model.js";
 import {
   adminKeyboard,
   adminJobsKeyboard,
@@ -2649,7 +2650,7 @@ async function showSessionHealth(
       `${session.sessionName} · Health`,
       infoResponse(
         "Session Diagnostics",
-        `<b>Status:</b> ${escapeHtml(session.status)}\n<b>Phone:</b> ${escapeHtml(session.phoneNumber ?? "not paired")}\n<b>Prefix:</b> <code>${escapeHtml(session.prefix || "none")}</code>\n<b>Connected:</b> ${session.connectedAt ? new Date(session.connectedAt).toLocaleString() : "not recorded"}\n<b>Last healthy:</b> ${session.lastHealthyAt ? new Date(session.lastHealthyAt).toLocaleString() : "not recorded"}\n<b>Active jobs:</b> ${activeJobs.length}\n<b>Reconnect note:</b> ${escapeHtml(session.disconnectReason ?? "none")}`,
+        `<b>Status:</b> ${escapeHtml(effectiveSessionStatus(session))}\n<b>Auth:</b> ${escapeHtml(session.authHealth ?? "UNKNOWN")}\n<b>Phone:</b> ${escapeHtml(session.phoneNumber ?? "not paired")}\n<b>Prefix:</b> <code>${escapeHtml(session.prefix || "none")}</code>\n<b>Connected:</b> ${session.connectedAt ? new Date(session.connectedAt).toLocaleString() : "not recorded"}\n<b>Last healthy:</b> ${session.lastHealthyAt ? new Date(session.lastHealthyAt).toLocaleString() : "not recorded"}\n<b>Last inbound:</b> ${session.lastMessageReceivedAt ? new Date(session.lastMessageReceivedAt).toLocaleString() : "none"}\n<b>Last outbound:</b> ${session.lastOutboundMessageAt ? new Date(session.lastOutboundMessageAt).toLocaleString() : "none"}\n<b>Active jobs:</b> ${activeJobs.length}\n<b>Reconnect note:</b> ${escapeHtml(session.disconnectReason ?? "none")}`,
       ),
     ),
     keyboard([

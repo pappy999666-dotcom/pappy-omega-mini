@@ -6,7 +6,11 @@ import {
   updateSession,
   updateWorkspaceSudo,
 } from "../core/session-registry.js";
-import { buildSessionMenu, renderAsciiMenu } from "../menus/menu-model.js";
+import {
+  buildSessionMenu,
+  effectiveSessionStatus,
+  renderAsciiMenu,
+} from "../menus/menu-model.js";
 import { createSupportTicket } from "../persistence/mongo.js";
 import {
   createWhatsAppGroup,
@@ -83,7 +87,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
       aliases: [],
       description: "Fast session health check.",
       run: async (ctx) =>
-        `PAPPY OMEGA MINI · ${session(ctx).sessionName}\nONLINE · ${new Date().toISOString()}`,
+        `PAPPY OMEGA MINI · ${session(ctx).sessionName}\n${effectiveSessionStatus(session(ctx))} · ${new Date().toISOString()}`,
     },
     {
       name: "menu",
@@ -102,7 +106,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           `PAPPY OMEGA MINI`,
           `Session: ${current.sessionName}`,
           `Phone: ${current.phoneNumber ?? "pending"}`,
-          `Status: ${current.status}`,
+          `Status: ${effectiveSessionStatus(current)}`,
           `Prefix: ${current.prefix || "none"}`,
           `Auto-join: ${current.autoJoinEnabled ? "ON" : "OFF"}`,
         ].join("\n");
@@ -375,8 +379,12 @@ export function createCommandRegistry(): RegisteredCommand[] {
       name: "health",
       aliases: ["status"],
       description: "Show session health and runtime state.",
-      run: async (ctx) =>
-        `Health: ${session(ctx).status}\nQueue policy: bounded\nReconnect policy: non-destructive`,
+      run: async (ctx) => {
+        const current = session(ctx);
+        const inbound = current.lastMessageReceivedAt;
+        const outbound = current.lastOutboundMessageAt;
+        return `Health: ${effectiveSessionStatus(current)}\nAuth: ${current.authHealth ?? "UNKNOWN"}\nLast inbound: ${inbound ? new Date(inbound).toISOString() : "none"}\nLast outbound: ${outbound ? new Date(outbound).toISOString() : "none"}\nQueue policy: bounded\nReconnect policy: non-destructive`;
+      },
     },
     {
       name: "setsudo",

@@ -93,6 +93,10 @@ describe("WhatsApp command privacy", () => {
       sessionName: "private",
       phoneNumber: "2348012345678",
     });
+    updateSession(user.workspaceId, session.sessionId, {
+      status: "ACTIVE",
+      lastHealthyAt: Date.now(),
+    });
     expect(
       await routeWhatsAppText({
         workspaceId: user.workspaceId,
@@ -116,7 +120,7 @@ describe("WhatsApp command privacy", () => {
         senderJid: "2348012345678@s.whatsapp.net",
         text: ".ping",
       }),
-    ).toContain("ONLINE");
+    ).toContain("ACTIVE");
   });
 });
 

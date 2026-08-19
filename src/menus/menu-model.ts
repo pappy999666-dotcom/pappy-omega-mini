@@ -15,10 +15,23 @@ export interface SessionMenuModel {
   actions: MenuAction[];
 }
 
+export function effectiveSessionStatus(
+  session: WhatsAppSession,
+  now = Date.now(),
+): WhatsAppSession["status"] {
+  if (
+    session.status === "ACTIVE" &&
+    (!session.lastHealthyAt || now - session.lastHealthyAt > 90_000)
+  )
+    return "DEGRADED";
+  return session.status;
+}
+
 export function buildSessionMenu(
   session: WhatsAppSession,
   isOwner: boolean,
 ): SessionMenuModel {
+  const liveStatus = effectiveSessionStatus(session);
   const actions: MenuAction[] = [
     {
       id: "profile",
@@ -111,7 +124,7 @@ export function buildSessionMenu(
   return {
     title: `PAPPY OMEGA MINI · ${session.sessionName}`,
     subtitle: "One command surface, two polished interfaces.",
-    statusLine: `${session.status} · prefix ${session.prefix || "none"} · auto-join ${session.autoJoinEnabled ? "ON" : "OFF"}`,
+    statusLine: `${liveStatus} · prefix ${session.prefix || "none"} · auto-join ${session.autoJoinEnabled ? "ON" : "OFF"}`,
     actions: actions.filter((action) => !action.ownerOnly || isOwner),
   };
 }
