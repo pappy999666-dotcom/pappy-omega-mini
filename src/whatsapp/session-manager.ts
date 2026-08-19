@@ -263,7 +263,13 @@ async function openWhatsAppSession(
   if (!lock) {
     updateSession(workspaceId, sessionId, {
       status: "RECONNECTING",
-      disconnectReason: "session is already managed by another worker",
+      disconnectReason: "session is already managed by another worker; retry scheduled",
+    });
+    scheduleReconnect({
+      key,
+      workspaceId,
+      sessionId,
+      run: () => void startWhatsAppSession(workspaceId, sessionId),
     });
     return;
   }
