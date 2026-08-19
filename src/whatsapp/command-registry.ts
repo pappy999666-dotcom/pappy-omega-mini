@@ -41,6 +41,7 @@ export interface CommandContext {
     text: string;
     repeat: number;
   }) => Promise<void>;
+  sendCurrentGroupHidetag?: (text: string) => Promise<void>;
   cancelJobs?: (
     kind: "gstatus" | "allstatus" | "allchat" | "tag",
   ) => Promise<number>;
@@ -405,7 +406,23 @@ export function createCommandRegistry(): RegisteredCommand[] {
     {
       name: "tag",
       aliases: [],
-      description: "Queue safe WhatsApp mention entities in each group.",
+      description: "Fast hidetag of every member in this WhatsApp group.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.chatJid || !ctx.chatJid.endsWith("@g.us"))
+          return "This command must be used inside a WhatsApp group.";
+        if (!ctx.sendCurrentGroupHidetag)
+          return "WhatsApp transport is unavailable.";
+        const text = ctx.args.join(" ").trim();
+        if (!text) return "Usage: .tag <payload>.";
+        await ctx.sendCurrentGroupHidetag(text);
+        return "Hidetag sent to this group.";
+      },
+    },
+    {
+      name: "stag",
+      aliases: [],
+      description: "Queue hidetag delivery to every eligible WhatsApp group.",
       ownerOnly: true,
       run: async (ctx) => {
         if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
@@ -413,22 +430,22 @@ export function createCommandRegistry(): RegisteredCommand[] {
           ? Number(ctx.args.shift())
           : undefined;
         const text = ctx.args.join(" ").trim();
-        if (!text) return "Usage: .tag [count] <text>.";
+        if (!text) return "Usage: .stag [count] <payload>.";
         const jobId = await ctx.enqueueJob({
           kind: "tag",
           payload: { text, ...(count ? { count } : {}) },
         });
-        return `Tag job queued: ${jobId}`;
+        return `STag job queued: ${jobId}`;
       },
     },
     {
-      name: "stoptag",
-      aliases: [],
-      description: "Cancel active tag work.",
+      name: "stopstag",
+      aliases: ["stoptag"],
+      description: "Cancel active STag work.",
       ownerOnly: true,
       run: async (ctx) =>
         ctx.cancelJobs
-          ? `Cancelled ${await ctx.cancelJobs("tag")} tag job(s).`
+          ? `Cancelled ${await ctx.cancelJobs("tag")} STag job(s).`
           : "Queue runtime is unavailable.",
     },
     {

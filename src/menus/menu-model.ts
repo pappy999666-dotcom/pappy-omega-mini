@@ -124,7 +124,7 @@ export function buildSessionMenu(
   return {
     title: `PAPPY OMEGA MINI · ${session.sessionName}`,
     subtitle: "One command surface, two polished interfaces.",
-    statusLine: `${liveStatus} · prefix ${session.prefix || "none"} · join ${session.autoJoinEnabled ? "ON" : "OFF"} · collect ${session.autoCollectLinks ? "ON" : "OFF"} · validate ${session.autoValidateLinks ? "ON" : "OFF"} · links ${session.collectedLinkCount ?? 0}/${session.validatedLinkCount ?? 0}`,
+    statusLine: `${liveStatus} · prefix ${session.prefix || "none"} · join ${session.autoJoinEnabled ? "ON" : "OFF"} · validator AUTO · links ${session.collectedLinkCount ?? 0}/${session.validatedLinkCount ?? 0}`,
     actions: actions.filter((action) => !action.ownerOnly || isOwner),
   };
 }

@@ -497,7 +497,7 @@ export function startWorkerRuntime(): JobOrchestrator {
                 sessionId,
                 jid,
                 text,
-                payload.count,
+                undefined,
                 previewManager,
               );
             await context.report({

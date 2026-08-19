@@ -244,7 +244,7 @@ const sessionSchema = new mongoose.Schema<SessionDocument>(
     sudoList: { type: [String], default: [] },
     autoJoinEnabled: { type: Boolean, required: true, default: false },
     autoCollectLinks: { type: Boolean, default: true },
-    autoValidateLinks: { type: Boolean, default: false },
+    autoValidateLinks: { type: Boolean, default: true },
     collectedLinkCount: { type: Number, default: 0 },
     validatedLinkCount: { type: Number, default: 0 },
     lastLinkCollectedAt: Number,

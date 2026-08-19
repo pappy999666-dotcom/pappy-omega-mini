@@ -227,21 +227,9 @@ export function sessionKeyboard(
   }
   rows.push([
     btn(
-      `📥 Collect: ${session.autoCollectLinks ? "ON" : "OFF"}`,
-      `session:${session.sessionId}:auto:collect`,
-      session.autoCollectLinks ? "success" : "danger",
-    ),
-    btn(
-      `🧪 Validate: ${session.autoValidateLinks ? "ON" : "OFF"}`,
-      `session:${session.sessionId}:auto:validate`,
-      session.autoValidateLinks ? "success" : "danger",
-    ),
-  ]);
-  rows.push([
-    btn(
-      `📊 Links ${session.collectedLinkCount ?? 0}/${session.validatedLinkCount ?? 0}`,
+      `⚡ Validator AUTO · ${session.collectedLinkCount ?? 0}/${session.validatedLinkCount ?? 0}`,
       `session:${session.sessionId}:collect`,
-      "primary",
+      "success",
     ),
   ]);
   rows.push([

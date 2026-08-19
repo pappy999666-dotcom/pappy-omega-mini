@@ -1632,48 +1632,19 @@ export function createTelegramBot(): Telegraf<Context> {
     );
   });
   bot.action(/^session:([^:]+):auto:(collect|validate)$/, async (ctx) => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery("Automation is always ON");
     const session = ownedSession(ctx, ctx.match[1] ?? "");
     if (!session) return deny(ctx);
-    const kind =
-      ctx.match[2] === "collect" ? "autoCollectLinks" : "autoValidateLinks";
-    const next = updateSession(session.workspaceId, session.sessionId, {
-      [kind]: !session[kind],
-    });
-    let queued = 0;
-    if (
-      kind === "autoValidateLinks" &&
-      next.autoValidateLinks &&
-      next.status === "ACTIVE"
-    ) {
-      const runtime = getWorkerRuntime();
-      const records = await listAllValidatorBucket(
-        next.workspaceId,
-        "master",
-      ).catch(() => []);
-      const urls = records.map((record) => record.canonicalUrl).filter(Boolean);
-      if (runtime && urls.length) {
-        await enqueueValidatorJobs(
-          runtime,
-          next.workspaceId,
-          urls,
-          String(ctx.from?.id ?? "telegram"),
-        );
-        queued = urls.length;
-      }
-    }
     await edit(
       ctx,
       pageText(
-        `${session.sessionName} · Automation`,
+        `${session.sessionName} · Validator Hub`,
         successResponse(
-          kind === "autoCollectLinks"
-            ? "Auto-collection Updated"
-            : "Auto-validation Updated",
-          `<b>Collect:</b> ${next.autoCollectLinks ? "ON" : "OFF"}\n<b>Validate:</b> ${next.autoValidateLinks ? "ON" : "OFF"}\n<b>Collected:</b> ${next.collectedLinkCount}\n<b>Validated:</b> ${next.validatedLinkCount}${queued ? `\n<b>Queued now:</b> ${queued}` : ""}`,
+          "Automation Always ON",
+          `<b>Link collection:</b> automatic\n<b>Link validation:</b> automatic\n<b>Collected:</b> ${session.collectedLinkCount ?? 0}\n<b>Validated:</b> ${session.validatedLinkCount ?? 0}`,
         ),
       ),
-      sessionKeyboard(next, isAdmin(ctx)),
+      sessionKeyboard(session, isAdmin(ctx)),
     );
   });
   bot.action(/^session:([^:]+):action:([^:]+)$/, async (ctx) => {

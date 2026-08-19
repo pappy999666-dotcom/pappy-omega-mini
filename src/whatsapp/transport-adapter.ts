@@ -303,14 +303,47 @@ export async function getGroupParticipants(
   sessionId: string,
   jid: string,
 ): Promise<string[]> {
-  const metadata = method(socketFor(workspaceId, sessionId), "groupMetadata");
+  const socket = socketFor(workspaceId, sessionId);
+  const metadata = method(socket, "groupMetadata");
   if (!metadata) throw new Error("Unsupported capability: groupMetadata");
   const result = (await metadata(jid)) as {
-    participants?: Array<{ id?: string }>;
+    participants?: Array<{ id?: string; phoneNumber?: string; pn?: string }>;
   };
-  return (result.participants ?? [])
-    .map((participant) => participant.id)
-    .filter((id): id is string => Boolean(id));
+  const lidMapping = (
+    socket as unknown as {
+      signalRepository?: {
+        lidMapping?: { getPNForLID?: (lid: string) => Promise<string | null> };
+      };
+    }
+  ).signalRepository?.lidMapping;
+  const resolved: string[] = [];
+  for (const participant of result.participants ?? []) {
+    const candidate =
+      participant.phoneNumber ?? participant.pn ?? participant.id;
+    if (!candidate) continue;
+    let phoneJid = candidate;
+    if (phoneJid.endsWith("@lid") || phoneJid.endsWith("@hosted.lid"))
+      phoneJid = (await lidMapping?.getPNForLID?.(phoneJid)) ?? "";
+    else if (!phoneJid.includes("@")) phoneJid = `${phoneJid}@s.whatsapp.net`;
+    if (!phoneJid.endsWith("@s.whatsapp.net")) continue;
+    if (!resolved.includes(phoneJid)) resolved.push(phoneJid);
+  }
+  return resolved;
+}
+
+export async function sendGroupHidetag(
+  workspaceId: string,
+  sessionId: string,
+  jid: string,
+  text: string,
+): Promise<void> {
+  const socket = socketFor(workspaceId, sessionId);
+  const send = method(socket, "sendMessage");
+  if (!send) throw new Error("Unsupported capability: mentions");
+  const participants = await getGroupParticipants(workspaceId, sessionId, jid);
+  if (!participants.length)
+    throw new Error("No phone-number JIDs were available for this group.");
+  await send(jid, { text, mentions: participants });
 }
 
 export async function sendGroupMentions(
@@ -329,16 +362,14 @@ export async function sendGroupMentions(
     0,
     Math.max(1, Math.min(participantCount ?? participants.length, 100)),
   );
-  const mentionText = selected.map((id) => `@${id.split("@")[0]}`).join(" ");
-  const outboundText = `${mentionText}\n${text}`;
-  const url = firstHttpUrl(outboundText);
+  const url = firstHttpUrl(text);
   const preview =
     url && previewManager ? await previewManager.resolve(url) : undefined;
   await send(
     jid,
-    preview && linkPreviewPayload(preview, outboundText)
-      ? { ...linkPreviewPayload(preview, outboundText), mentions: selected }
-      : { text: outboundText, mentions: selected },
+    preview && linkPreviewPayload(preview, text)
+      ? { ...linkPreviewPayload(preview, text), mentions: selected }
+      : { text, mentions: selected },
   );
 }
 

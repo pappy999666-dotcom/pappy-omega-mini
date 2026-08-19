@@ -24,6 +24,7 @@ function compactMenu(session: WhatsAppSession, isOwner: boolean): string {
       if (command.name === "allstatus") return [".allstatus", ".allstatusx"];
       if (command.name === "allchat") return [".allchat", ".allchatx"];
       if (command.name === "gstatus") return [".gstatus", ".gstatusx"];
+      if (command.name === "tag") return [".tag", ".stag"];
       if (command.name === "pfp") return [".pfp", ".setpfp", ".getpfp"];
       return [`.${command.name}`];
     });

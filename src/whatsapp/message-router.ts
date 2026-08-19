@@ -2,7 +2,11 @@ import { executeCommand, createCommandRegistry } from "./command-registry.js";
 import { getSession, getWorkspaceSudo } from "../core/session-registry.js";
 import { createHash } from "node:crypto";
 import { getWorkerRuntime } from "../jobs/runtime.js";
-import { listGroups, sendGroupStatus } from "./transport-adapter.js";
+import {
+  listGroups,
+  sendGroupHidetag,
+  sendGroupStatus,
+} from "./transport-adapter.js";
 import { buildWhatsappMenuPayload } from "../menus/whatsapp-menu.js";
 
 const registry = createCommandRegistry();
@@ -126,6 +130,16 @@ export async function routeWhatsAppText(
           },
         }
       : {}),
+    sendCurrentGroupHidetag: async (text: string) => {
+      if (!message.chatJid || !message.chatJid.endsWith("@g.us"))
+        throw new Error("This command must be used inside a WhatsApp group.");
+      await sendGroupHidetag(
+        message.workspaceId,
+        message.sessionId,
+        message.chatJid,
+        text,
+      );
+    },
     sendCurrentGroupStatus: async ({
       text,
       repeat,

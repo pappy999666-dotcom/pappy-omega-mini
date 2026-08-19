@@ -397,8 +397,7 @@ async function openWhatsAppSession(
           timestamp: receivedAt,
         }).catch(() => undefined);
         if (!text && !quotedText) continue;
-        const currentSession = getSession(workspaceId, sessionId);
-        if (currentSession.autoCollectLinks) {
+        {
           void collectLinks({
             workspaceId,
             text: [text, quotedText].filter(Boolean).join("\n"),
@@ -414,7 +413,6 @@ async function openWhatsAppSession(
                   (latestSession.collectedLinkCount ?? 0) + collection.added,
                 lastLinkCollectedAt: collectedAt,
               });
-              if (!next.autoValidateLinks) return;
               const urls = collection.urls;
               if (!urls.length) return;
               const { getWorkerRuntime } = await import("../jobs/runtime.js");

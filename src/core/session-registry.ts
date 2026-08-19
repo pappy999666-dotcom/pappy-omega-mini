@@ -78,7 +78,7 @@ export function createSession(input: {
     sudoList: [],
     autoJoinEnabled: workspaceSettings.defaultAutoJoinEnabled,
     autoCollectLinks: true,
-    autoValidateLinks: false,
+    autoValidateLinks: true,
     collectedLinkCount: 0,
     validatedLinkCount: 0,
   };
@@ -204,8 +204,8 @@ export async function hydrateSessionRegistry(): Promise<void> {
   for (const session of snapshot.sessions)
     sessions.set(session.sessionId, {
       ...session,
-      autoCollectLinks: session.autoCollectLinks ?? true,
-      autoValidateLinks: session.autoValidateLinks ?? false,
+      autoCollectLinks: true,
+      autoValidateLinks: true,
       collectedLinkCount: session.collectedLinkCount ?? 0,
       validatedLinkCount: session.validatedLinkCount ?? 0,
     });

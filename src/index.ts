@@ -43,11 +43,7 @@ async function main(): Promise<void> {
   const persistedSessions = listAllSessions();
   const recoverableSessions = [];
   for (const session of persistedSessions) {
-    if (
-      session.status === "LOGGED_OUT" ||
-      session.status === "ERROR" ||
-      session.authHealth === "INVALID"
-    )
+    if (session.status === "LOGGED_OUT" || session.authHealth === "INVALID")
       continue;
     if (await hasPersistedWhatsAppAuth(session.workspaceId, session.sessionId))
       recoverableSessions.push(session);

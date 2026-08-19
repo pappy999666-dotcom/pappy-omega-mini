@@ -181,6 +181,58 @@ describe("WhatsApp command registry", () => {
     });
   });
 
+  it("sends literal tag payload directly without listing members", async () => {
+    const user = resolveUser(`tag-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "local-tag",
+      phoneNumber: "2348012345678",
+    });
+    let captured = "";
+    const result = await executeCommand(
+      createCommandRegistry(),
+      "tag .tag .tag 🥀",
+      {
+        workspaceId: user.workspaceId,
+        sessionId: session.sessionId,
+        isOwner: true,
+        chatJid: "120363000000000000@g.us",
+        args: [],
+        sendCurrentGroupHidetag: async (text) => {
+          captured = text;
+        },
+      },
+    );
+    expect(result).toContain("Hidetag sent");
+    expect(captured).toBe(".tag .tag 🥀");
+  });
+
+  it("queues stag for all groups while keeping tag local", async () => {
+    const user = resolveUser(`stag-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "all-tag",
+      phoneNumber: "2348012345678",
+    });
+    let captured:
+      { kind: string; payload: Record<string, unknown> } | undefined;
+    const result = await executeCommand(createCommandRegistry(), "stag 3 🥀", {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      args: [],
+      enqueueJob: async (input) => {
+        captured = input;
+        return "job-stag";
+      },
+    });
+    expect(result).toContain("job-stag");
+    expect(captured).toMatchObject({
+      kind: "tag",
+      payload: { text: "🥀", count: 3 },
+    });
+  });
+
   it("does not pretend WhatsApp-side pairing creates a workspace session", async () => {
     const user = resolveUser(`pair-command-${Date.now()}-${Math.random()}`);
     const session = createSession({
