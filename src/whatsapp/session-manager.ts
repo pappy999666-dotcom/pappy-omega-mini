@@ -7,7 +7,6 @@ import makeWASocket, {
   type WASocket,
 } from "@crysnovax/baileys";
 import pino from "pino";
-import { downloadMediaMessage } from "@crysnovax/baileys/lib/Utils/messages.js";
 import { env } from "../config/env.js";
 import {
   deleteSession,
@@ -27,6 +26,13 @@ import {
 } from "../core/encrypted-store.js";
 import { routeWhatsAppText, type WhatsAppReply } from "./message-router.js";
 import { collectLinks } from "../links/link-collector.js";
+import { prepareOutboundContent } from "./outbound-preview.js";
+import {
+  extractMessageText,
+  extractQuotedMessage,
+  extractQuotedText,
+  resolveMediaPayload,
+} from "./quoted-payload-resolver.js";
 import {
   clearLifecycle,
   getLifecycleState,
@@ -308,11 +314,16 @@ async function openWhatsAppSession(
     content: any,
   ): Promise<void> => {
     try {
-      const outbound =
-        typeof content?.text === "string" &&
-        /https?:\/\/\S+/i.test(content.text)
-          ? { ...content, richPreview: true }
-          : content;
+      const text =
+        typeof content?.text === "string"
+          ? content.text
+          : typeof content?.caption === "string"
+            ? content.caption
+            : undefined;
+      const outbound = await prepareOutboundContent({
+        ...(text ? { text } : {}),
+        content: content as Record<string, unknown>,
+      });
       await socket.sendMessage(jid, outbound);
       const sentAt = noteOutboundMessage(key);
       updateSession(workspaceId, sessionId, {
@@ -361,57 +372,33 @@ async function openWhatsAppSession(
         if (!message.key?.remoteJid) continue;
         const messageKey = message.key;
 
-        const text =
-          message.message?.conversation ??
-          message.message?.extendedTextMessage?.text ??
-          message.message?.imageMessage?.caption ??
-          message.message?.videoMessage?.caption ??
-          "";
-        let inboundMedia:
-          | { kind: "image" | "video"; bytes: Buffer; mimeType?: string }
-          | undefined;
-        const commandSource = text.trim().toLowerCase();
+        const envelope = {
+          key: message.key as Record<string, unknown>,
+          ...(message.message
+            ? { message: message.message as Record<string, unknown> }
+            : {}),
+        };
+        const text = extractMessageText(envelope.message);
+        const quoted = extractQuotedMessage(envelope.message);
+        const quotedText = extractQuotedText(quoted);
+        const commandSource = [text, quotedText]
+          .filter(Boolean)
+          .join(" ")
+          .trim()
+          .toLowerCase();
         const mediaCommand =
-          /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate)/.test(
+          /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate|allstatus|allchat|gstatus|tag|stag|status)/.test(
             commandSource,
           );
-        if (
-          mediaCommand &&
-          (message.message?.imageMessage || message.message?.videoMessage)
-        ) {
-          try {
-            const bytes = await downloadMediaMessage(
-              message,
-              "buffer",
-              {},
-              socket,
-            );
-            if (Buffer.isBuffer(bytes)) {
-              const source =
-                message.message?.imageMessage ?? message.message?.videoMessage;
-              inboundMedia = {
-                kind: message.message?.imageMessage ? "image" : "video",
-                bytes,
-                ...(source?.mimetype ? { mimeType: source.mimetype } : {}),
-              };
-            }
-          } catch (error) {
-            console.warn(
-              `[pappy-omega-mini] WhatsApp media download failed session=${sessionId}:`,
-              error instanceof Error ? error.message : String(error),
-            );
-          }
-        }
-        const quoted =
-          message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-        const quotedText =
-          typeof quoted?.conversation === "string"
-            ? quoted.conversation
-            : typeof (
-                  quoted?.extendedTextMessage as { text?: unknown } | undefined
-                )?.text === "string"
-              ? (quoted?.extendedTextMessage as { text: string }).text
-              : undefined;
+        const inboundMedia = mediaCommand
+          ? ((await resolveMediaPayload(envelope, socket)) ??
+            (quoted
+              ? await resolveMediaPayload(
+                  { key: envelope.key, message: quoted },
+                  socket,
+                )
+              : undefined))
+          : undefined;
         const senderJid = message.key.fromMe
           ? ((socket as unknown as { user?: { id?: string } }).user?.id ??
             message.key.remoteJid)

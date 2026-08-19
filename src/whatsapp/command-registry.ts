@@ -11,6 +11,7 @@ import {
   effectiveSessionStatus,
   renderAsciiMenu,
 } from "../menus/menu-model.js";
+import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { createSupportTicket } from "../persistence/mongo.js";
 import {
   createWhatsAppGroup,
@@ -31,7 +32,7 @@ export interface CommandContext {
   isOwner: boolean;
   senderJid?: string;
   chatJid?: string;
-  media?: { kind: "image" | "video"; bytes: Buffer; mimeType?: string };
+  media?: WhatsAppMediaPayload;
   args: string[];
   invokedName?: string;
   enqueueJob?: (input: {
@@ -335,7 +336,8 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const repeat = /^\d+$/.test(ctx.args[0] ?? "")
           ? Math.max(1, Math.min(20, Number(ctx.args.shift())))
           : 1;
-        const text = ctx.args.join(" ").trim();
+        const text =
+          ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
         if (!text) return "Usage: .allstatus [repeat] <text>.";
         const jobId = await ctx.enqueueJob({
           kind: "allstatus",
@@ -359,7 +361,8 @@ export function createCommandRegistry(): RegisteredCommand[] {
           ctx.invokedName === "gstatusx" && /^\d+$/.test(ctx.args[0] ?? "")
             ? Math.max(1, Math.min(20, Number(ctx.args.shift())))
             : 1;
-        const text = ctx.args.join(" ").trim();
+        const text =
+          ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
         if (!text)
           return repeat > 1
             ? "Usage: .gstatusx <count> <text> (or reply to a message)."
@@ -388,7 +391,8 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const repeat = /^\d+$/.test(ctx.args[0] ?? "")
           ? Math.max(1, Math.min(20, Number(ctx.args.shift())))
           : 1;
-        const text = ctx.args.join(" ").trim();
+        const text =
+          ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
         if (!text) return "Usage: .allchat [repeat] <text>.";
         const jobId = await ctx.enqueueJob({
           kind: "allchat",
@@ -417,7 +421,8 @@ export function createCommandRegistry(): RegisteredCommand[] {
           return "This command must be used inside a WhatsApp group.";
         if (!ctx.sendCurrentGroupHidetag)
           return "WhatsApp transport is unavailable.";
-        const text = ctx.args.join(" ").trim();
+        const text =
+          ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
         if (!text) return "Usage: .tag <payload>.";
         await ctx.sendCurrentGroupHidetag(text);
         return "";

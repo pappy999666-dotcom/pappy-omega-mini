@@ -22,6 +22,12 @@ import {
 } from "../src/media/menu-media-store.js";
 import { moderatorCommandScopes } from "../src/telegram/moderator.js";
 import { nativePreview } from "../src/whatsapp/transport-adapter.js";
+import { isCompletePreview } from "../src/whatsapp/outbound-preview.js";
+import {
+  extractMessageText,
+  extractQuotedMessage,
+  extractQuotedText,
+} from "../src/whatsapp/quoted-payload-resolver.js";
 
 beforeEach(() => {
   // Tests use unique Telegram IDs/workspaces, so state remains tenant-safe without global resets.
@@ -184,6 +190,39 @@ describe("WhatsApp native previews", () => {
     });
     expect(nativePreview("plain message")).toEqual({});
   });
+
+  it("recognizes complete supplied preview metadata without rebuilding it", () => {
+    expect(
+      isCompletePreview({
+        title: "Example",
+        description: "A complete card",
+        thumbnailUrl: "https://example.com/card.jpg",
+      }),
+    ).toBe(true);
+    expect(isCompletePreview({ title: "Example" })).toBe(false);
+  });
+});
+
+describe("quoted payload resolver", () => {
+  it("extracts quoted media captions and nested quoted messages", () => {
+    const quoted = {
+      imageMessage: {
+        caption: "quoted image https://example.com/image",
+        mimetype: "image/jpeg",
+      },
+    };
+    const message = {
+      extendedTextMessage: {
+        text: ".allchat",
+        contextInfo: { quotedMessage: quoted },
+      },
+    };
+    expect(extractMessageText(message)).toBe(".allchat");
+    expect(extractQuotedMessage(message)).toEqual(quoted);
+    expect(extractQuotedText(quoted)).toBe(
+      "quoted image https://example.com/image",
+    );
+  });
 });
 
 describe("WhatsApp command registry", () => {
@@ -240,6 +279,37 @@ describe("WhatsApp command registry", () => {
     );
     expect(result).toBe("");
     expect(captured).toBe(".tag .tag 🥀");
+  });
+
+  it("uses a media caption as the payload when all-chat has no inline text", async () => {
+    const user = resolveUser(`allchat-media-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "all-chat-media",
+      phoneNumber: "2348012345678",
+    });
+    let captured:
+      { kind: string; payload: Record<string, unknown> } | undefined;
+    const result = await executeCommand(createCommandRegistry(), "allchat", {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      args: [],
+      media: {
+        kind: "image",
+        bytes: Buffer.from([1, 2, 3]),
+        caption: "quoted caption",
+      },
+      enqueueJob: async (input) => {
+        captured = input;
+        return "job-media";
+      },
+    });
+    expect(result).toContain("job-media");
+    expect(captured).toMatchObject({
+      kind: "allchat",
+      payload: { text: "quoted caption", count: 1 },
+    });
   });
 
   it("queues stag for all groups while keeping tag local", async () => {

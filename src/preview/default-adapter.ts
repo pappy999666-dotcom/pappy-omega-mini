@@ -1,21 +1,37 @@
 import {
   PreviewManager,
+  assertSafePreviewUrl,
+  canonicalize,
   type PreviewAdapter,
   type PreviewRecord,
 } from "./preview-manager.js";
 
-const metadataPattern =
-  /<meta\s+[^>]*(?:property|name)=["'](?:og:title|twitter:title|description|og:description|og:image|og:site_name)["'][^>]*>/gi;
+const metadataPattern = /<meta\b[^>]*>/gi;
 function attribute(tag: string, name: string): string | undefined {
   const match = tag.match(new RegExp(`${name}=["']([^"']*)["']`, "i"));
   return match?.[1];
 }
 const adapter: PreviewAdapter = {
   async fetch(url) {
-    const response = await fetch(url, {
+    let response = await fetch(url, {
       headers: { accept: "text/html,application/xhtml+xml" },
       redirect: "manual",
     });
+    for (
+      let redirect = 0;
+      redirect < 2 && response.status >= 300 && response.status < 400;
+      redirect += 1
+    ) {
+      const location = response.headers.get("location");
+      if (!location) break;
+      const nextUrl = canonicalize(new URL(location, url).toString());
+      assertSafePreviewUrl(nextUrl);
+      response = await fetch(nextUrl, {
+        headers: { accept: "text/html,application/xhtml+xml" },
+        redirect: "manual",
+      });
+      url = nextUrl;
+    }
     if (!response.ok)
       throw new Error(`Preview upstream returned ${response.status}.`);
     const html = (await response.text()).slice(0, 512_000);
@@ -24,7 +40,13 @@ const adapter: PreviewAdapter = {
     for (const tag of tags) {
       const key = attribute(tag, "property") ?? attribute(tag, "name");
       const value = attribute(tag, "content");
-      if (key && value)
+      if (
+        key &&
+        value &&
+        /^(?:og:title|twitter:title|description|og:description|og:image|og:site_name)$/i.test(
+          key,
+        )
+      )
         values.set(key.toLowerCase(), value.trim().slice(0, 2_000));
     }
     const title = values.get("og:title") ?? values.get("twitter:title");

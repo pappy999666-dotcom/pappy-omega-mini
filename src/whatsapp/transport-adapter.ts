@@ -1,5 +1,7 @@
 import type { WASocket } from "@crysnovax/baileys";
 import { getWhatsAppSocket } from "./session-manager.js";
+import { prepareOutboundContent } from "./outbound-preview.js";
+import type { WhatsAppMediaPayload } from "./media-payload.js";
 
 export type TransportCapability =
   | "profileName"
@@ -226,26 +228,35 @@ export async function sendDirectText(
 ): Promise<void> {
   const send = method(socketFor(workspaceId, sessionId), "sendMessage");
   if (!send) throw new Error("Unsupported capability: sendMessage");
-  // The Baileys fork natively hydrates ordinary text URLs through getUrlInfo,
-  // including high-quality thumbnails. Do not prefetch or replace that payload.
-  await send(jid, { text, ...nativePreview(text) });
+  await send(jid, await prepareOutboundContent({ text, content: { text } }));
 }
 
-export interface GroupMediaPayload {
-  kind: "image" | "video";
-  bytes: Buffer;
-  mimeType?: string;
-}
+export type GroupMediaPayload = WhatsAppMediaPayload;
 
 function messagePayload(
   text: string,
   media?: GroupMediaPayload,
 ): Record<string, unknown> {
-  if (!media) return { text, ...nativePreview(text) };
+  if (!media) return { text };
+  const caption = media.caption ?? text;
+  if (media.kind === "audio")
+    return {
+      audio: media.bytes,
+      ...(media.mimeType ? { mimetype: media.mimeType } : {}),
+      ...(media.ptt !== undefined ? { ptt: media.ptt } : {}),
+    };
+  if (media.kind === "sticker")
+    return {
+      sticker: media.bytes,
+      mimetype: media.mimeType ?? "image/webp",
+    };
   return {
     [media.kind]: media.bytes,
-    caption: text,
+    ...(caption ? { caption } : {}),
     ...(media.mimeType ? { mimetype: media.mimeType } : {}),
+    ...(media.kind === "document"
+      ? { fileName: media.fileName ?? "document.bin" }
+      : {}),
   };
 }
 
@@ -258,7 +269,8 @@ export async function sendGroupText(
 ): Promise<void> {
   const send = method(socketFor(workspaceId, sessionId), "sendMessage");
   if (!send) throw new Error("Unsupported capability: sendMessage");
-  await send(jid, messagePayload(text, media));
+  const content = messagePayload(text, media);
+  await send(jid, await prepareOutboundContent({ text, content }));
 }
 
 export async function sendGroupStatus(
@@ -274,20 +286,20 @@ export async function sendGroupStatus(
 ): Promise<void> {
   const socket = socketFor(workspaceId, sessionId);
   const native = method(socket, "sendGroupStatus");
-  if (native && !payload.media) {
+  const text = payload.text ?? "";
+  if (native && !payload.media && !/https?:\/\/\S+/i.test(text)) {
     await native(jid, payload);
     return;
   }
   const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: groupStatus");
-  const text = payload.text ?? "";
   const { media, ...statusPayload } = payload;
-  await send(jid, {
+  const content = {
     ...statusPayload,
     ...(media ? messagePayload(text, media) : {}),
-    ...(text && !media ? nativePreview(text) : {}),
     groupStatus: true,
-  });
+  };
+  await send(jid, await prepareOutboundContent({ text, content }));
 }
 
 export async function updateWhatsAppGroupSubject(
@@ -373,7 +385,13 @@ export async function sendGroupHidetag(
   const participants = await getGroupParticipants(workspaceId, sessionId, jid);
   if (!participants.length)
     throw new Error("No phone-number JIDs were available for this group.");
-  await send(jid, { text, ...nativePreview(text), mentions: participants });
+  await send(
+    jid,
+    await prepareOutboundContent({
+      text,
+      content: { text, mentions: participants },
+    }),
+  );
 }
 
 export async function sendGroupMentions(
@@ -393,11 +411,14 @@ export async function sendGroupMentions(
     Math.max(1, Math.min(participantCount ?? participants.length, 100)),
   );
   // Keep the body plain and pass recipients only through hidden mention
-  // metadata; Baileys performs native URL hydration on the same message.
-  await send(jid, {
-    ...messagePayload(text, media),
-    mentions: selected,
-  });
+  // metadata; the shared pipeline handles URL preview preparation.
+  await send(
+    jid,
+    await prepareOutboundContent({
+      text,
+      content: { ...messagePayload(text, media), mentions: selected },
+    }),
+  );
 }
 
 export async function validateInviteLink(

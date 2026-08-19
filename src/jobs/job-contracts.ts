@@ -67,6 +67,7 @@ export interface JobRecord<TPayload = Record<string, unknown>> {
   pauseRequested?: boolean;
   createdAt: number;
   startedAt?: number;
+  heartbeatAt?: number;
   completedAt?: number;
   error?: string;
 }

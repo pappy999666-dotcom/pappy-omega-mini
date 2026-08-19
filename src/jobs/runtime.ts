@@ -297,13 +297,22 @@ export function startWorkerRuntime(): JobOrchestrator {
       sessionCooldownMs?: number;
       restrictionThreshold?: number;
       requestMode?: "auto" | "immediate" | "request";
+      maxConcurrency?: number;
+      sourceBucket?: "active";
+      selectedLinks?: string[];
     };
     const allActive = await buckets.listAll(context.job.workspaceId);
+    const selectedLinks = new Set(
+      (payload.selectedLinks ?? []).map((link) => link.trim()).filter(Boolean),
+    );
     const sourceRecords = allActive
       .filter(
         (record) =>
           record.bucket === "active" &&
-          (!record.sourceSessionId || record.sourceSessionId === sessionId),
+          (!record.sourceSessionId || record.sourceSessionId === sessionId) &&
+          (selectedLinks.size === 0 ||
+            selectedLinks.has(record.canonicalUrl) ||
+            selectedLinks.has(record.originalUrl)),
       )
       .slice(
         0,
@@ -354,7 +363,10 @@ export function startWorkerRuntime(): JobOrchestrator {
     );
     return runBoundedBatch({
       items: workItems,
-      concurrency: 1,
+      concurrency: Math.max(
+        1,
+        Math.min(8, Math.floor(Number(payload.maxConcurrency ?? 1))),
+      ),
       context,
       shouldStop: () => rateLimitHits >= restrictionThreshold,
       processItem: async (workItem, signal) => {

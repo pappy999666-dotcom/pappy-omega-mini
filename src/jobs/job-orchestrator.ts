@@ -106,6 +106,8 @@ export class JobOrchestrator {
   private readonly worker: Worker<JobRecord>;
   private readonly joinResults: JoinResultStore;
   private readonly closeHooks: Array<() => Promise<void> | void> = [];
+  private readonly reaperTimer: NodeJS.Timeout;
+  private reaperBusy = false;
 
   constructor(concurrency = env.QUEUE_CONCURRENCY) {
     this.redis = new Redis(env.REDIS_URL, {
@@ -132,9 +134,14 @@ export class JobOrchestrator {
         void this.store.update(job.data.jobId, {
           state: "FAILED",
           error: error.message,
+          heartbeatAt: Date.now(),
           completedAt: Date.now(),
         });
     });
+    this.reaperTimer = setInterval(() => {
+      void this.reapStaleJobs();
+    }, 30_000);
+    this.reaperTimer.unref?.();
   }
 
   register(kind: JobKind, handler: WorkerHandler): void {
@@ -280,6 +287,7 @@ export class JobOrchestrator {
   }
 
   async close(): Promise<void> {
+    clearInterval(this.reaperTimer);
     await this.worker.close();
     await this.queue.close();
     for (const hook of this.closeHooks) await hook();
@@ -295,6 +303,7 @@ export class JobOrchestrator {
       state: "RUNNING",
       attempts: bullJob.attemptsMade + 1,
       startedAt: Date.now(),
+      heartbeatAt: Date.now(),
     });
     const controller = new AbortController();
     const context: WorkerContext = {
@@ -309,6 +318,7 @@ export class JobOrchestrator {
             context.job = current ?? context.job;
             return;
           }
+          await this.store.update(record.jobId, { heartbeatAt: Date.now() });
           await new Promise((resolve) => setTimeout(resolve, 750));
         }
       },
@@ -321,7 +331,10 @@ export class JobOrchestrator {
           ...progress,
           elapsedMs: Date.now() - (current.startedAt ?? Date.now()),
         };
-        await this.store.update(record.jobId, { progress: nextProgress });
+        await this.store.update(record.jobId, {
+          progress: nextProgress,
+          heartbeatAt: Date.now(),
+        });
         await bullJob.updateProgress(nextProgress);
       },
     };
@@ -336,6 +349,7 @@ export class JobOrchestrator {
       await this.store.update(record.jobId, {
         state: finalState,
         completedAt: Date.now(),
+        heartbeatAt: Date.now(),
         cancellationRequested: context.isCancellationRequested(),
       });
     } catch (error) {
@@ -344,9 +358,62 @@ export class JobOrchestrator {
       await this.store.update(record.jobId, {
         state: retrying ? "RETRYING" : "FAILED",
         error: message,
+        heartbeatAt: Date.now(),
         ...(retrying ? {} : { completedAt: Date.now() }),
       });
       throw error;
+    }
+  }
+
+  private async reapStaleJobs(): Promise<void> {
+    if (this.reaperBusy) return;
+    this.reaperBusy = true;
+    try {
+      const cutoff = Date.now() - 2 * 60_000;
+      for (const record of await this.store.listAll()) {
+        if (!["RUNNING", "RETRYING"].includes(record.state)) continue;
+        if (
+          (record.heartbeatAt ?? record.startedAt ?? record.createdAt) > cutoff
+        )
+          continue;
+        const bullJob = await this.queue.getJob(record.jobId);
+        if (bullJob && (await bullJob.isActive())) continue;
+        if (record.cancellationRequested) {
+          await this.store.update(record.jobId, {
+            state: "CANCELLED",
+            heartbeatAt: Date.now(),
+            completedAt: Date.now(),
+          });
+          continue;
+        }
+        if (record.attempts < record.maxAttempts) {
+          await this.store.update(record.jobId, {
+            state: "RETRYING",
+            error: "Worker heartbeat expired; job recovery scheduled.",
+            heartbeatAt: Date.now(),
+          });
+          await this.queue.add(
+            `${record.kind}:recovery`,
+            { ...record, state: "QUEUED" },
+            {
+              jobId: `${record.jobId}:recovery:${Date.now()}`,
+              attempts: Math.max(1, record.maxAttempts - record.attempts),
+              backoff: { type: "exponential", delay: 1000 },
+            },
+          );
+        } else {
+          await this.store.update(record.jobId, {
+            state: "FAILED",
+            error: "Worker heartbeat expired after the configured retry limit.",
+            heartbeatAt: Date.now(),
+            completedAt: Date.now(),
+          });
+        }
+      }
+    } catch {
+      // A reaper error must never interfere with active workers.
+    } finally {
+      this.reaperBusy = false;
     }
   }
 }

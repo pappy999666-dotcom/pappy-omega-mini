@@ -2,6 +2,7 @@ import { executeCommand, createCommandRegistry } from "./command-registry.js";
 import { getSession, getWorkspaceSudo } from "../core/session-registry.js";
 import { createHash } from "node:crypto";
 import { persistJobMedia } from "./job-media-store.js";
+import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { getWorkerRuntime } from "../jobs/runtime.js";
 import {
   listGroups,
@@ -19,7 +20,7 @@ export interface IncomingTextMessage {
   chatJid?: string;
   text: string;
   quotedText?: string;
-  media?: { kind: "image" | "video"; bytes: Buffer; mimeType?: string };
+  media?: WhatsAppMediaPayload;
   bridgeAuthorized?: boolean;
   fromMe?: boolean;
 }
@@ -131,6 +132,9 @@ export async function routeWhatsAppText(
                   ...(message.media.mimeType
                     ? { mimeType: message.media.mimeType }
                     : {}),
+                  ...(message.media.fileName
+                    ? { fileName: message.media.fileName }
+                    : {}),
                 })
               : undefined;
             const enrichedPayload = {
@@ -180,7 +184,7 @@ export async function routeWhatsAppText(
           message.workspaceId,
           message.sessionId,
           message.chatJid,
-          { text },
+          { text, ...(message.media ? { media: message.media } : {}) },
         );
       }
     },
