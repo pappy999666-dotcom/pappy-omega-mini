@@ -428,6 +428,24 @@ export async function requestWhatsAppPairingCode(
         throw new Error(
           "The installed WhatsApp transport does not support pairing codes.",
         );
+      if (socket.waitForConnectionUpdate) {
+        await Promise.race([
+          socket.waitForConnectionUpdate(
+            (update) => update.connection === "open",
+          ),
+          new Promise((_, reject) =>
+            setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    "WhatsApp pairing transport timed out before ready.",
+                  ),
+                ),
+              20_000,
+            ),
+          ),
+        ]);
+      }
       const normalizedCode = customCode
         .replace(/[^a-zA-Z0-9]/g, "")
         .toUpperCase();
