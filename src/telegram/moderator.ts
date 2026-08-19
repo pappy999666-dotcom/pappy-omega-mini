@@ -311,6 +311,68 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     );
   });
 
+  bot.command("ban", async (ctx) => {
+    if (!(await requireModerator(ctx))) return;
+    const id = groupId(ctx);
+    const target = targetId(ctx);
+    if (!id || !target) {
+      await ctx.reply(
+        "Reply to a member or provide a numeric Telegram user ID.",
+      );
+      return;
+    }
+    let ok = true;
+    try {
+      await ctx.telegram.banChatMember(Number(id), Number(target));
+    } catch {
+      ok = false;
+    }
+    await recordEvent(ctx, {
+      rule: "manual",
+      action: "ban",
+      targetId: target,
+      success: ok,
+      ...(ok ? {} : { failureReason: "Telegram banChatMember failed" }),
+    });
+    await ctx.reply(
+      ok
+        ? `✅ Member ${target} banned.`
+        : "⛔ Ban failed; check my administrator permissions.",
+    );
+  });
+
+  bot.command("unban", async (ctx) => {
+    if (!(await requireModerator(ctx))) return;
+    const id = groupId(ctx);
+    const target = targetId(ctx);
+    if (!id || !target) {
+      await ctx.reply(
+        "Reply to a member or provide a numeric Telegram user ID.",
+      );
+      return;
+    }
+    let ok = true;
+    try {
+      await ctx.telegram.unbanChatMember(Number(id), Number(target), {
+        only_if_banned: true,
+      });
+    } catch {
+      ok = false;
+    }
+    await recordEvent(ctx, {
+      rule: "manual",
+      action: "unban",
+      targetId: target,
+      success: ok,
+      ...(ok ? {} : { failureReason: "Telegram unbanChatMember failed" }),
+    });
+    await ctx.reply(
+      ok
+        ? `✅ Member ${target} unbanned.`
+        : "⛔ Unban failed; check my administrator permissions.",
+    );
+  });
+
   bot.command("unmute", async (ctx) => {
     if (!(await requireModerator(ctx))) return;
     const target = targetId(ctx);
@@ -637,6 +699,8 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
 export const moderatorCommandScopes = [
   { command: "moderation", description: "Open group moderator commands" },
   { command: "mute", description: "Mute a replied-to member" },
+  { command: "ban", description: "Ban a replied-to member" },
+  { command: "unban", description: "Unban a member" },
   { command: "unmute", description: "Unmute a replied-to member" },
   { command: "warn", description: "Warn a replied-to member" },
   { command: "warns", description: "View warning records" },
