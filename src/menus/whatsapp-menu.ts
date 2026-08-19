@@ -17,7 +17,7 @@ export interface WhatsappMenuPayload {
 }
 
 function compactMenu(session: WhatsAppSession, isOwner: boolean): string {
-  const ownerLine = isOwner ? "Owner mode: enabled" : "User mode: enabled";
+  const ownerLine = isOwner ? "OWNER" : "USER";
   const commands = createCommandRegistry()
     .filter((command) => !command.ownerOnly || isOwner)
     .map((command) => `.${command.name}`);
@@ -26,13 +26,13 @@ function compactMenu(session: WhatsAppSession, isOwner: boolean): string {
     commandLines.push(commands.slice(index, index + 3).join("  "));
   return [
     "✦ PAPPY OMEGA MINI",
-    `Session: ${session.sessionName} · ${session.status}`,
-    `${ownerLine} · Auto-join: ${session.autoJoinEnabled ? "ON" : "OFF"}`,
+    `${session.sessionName} · ${session.status} · ${ownerLine}`,
+    `Auto-join ${session.autoJoinEnabled ? "ON" : "OFF"}`,
     "",
     "COMMANDS",
     ...commandLines,
     "",
-    `Prefix: ${session.prefix || "none"} · Reply ${session.prefix || "."}help for details`,
+    `Prefix ${session.prefix || "none"} · Use ${session.prefix || "."}help`,
   ].join("\n");
 }
 

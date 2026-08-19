@@ -296,7 +296,14 @@ export function createTelegramBot(): Telegraf<Context> {
       const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id).catch(() => undefined);
       moderator = member?.status === "creator" || member?.status === "administrator";
     }
-    await edit(ctx, groupStartText(title, moderator, group?.rules), groupStartKeyboard(moderator));
+    await edit(
+      ctx,
+      pageText(
+        "Group Rules",
+        infoResponse("Published Rules", escapeHtml(group?.rules ?? "No group rules have been configured.")),
+      ),
+      keyboard([[btn(ui.back, "group:start:refresh")]]),
+    );
   });
   bot.action("group:start:moderation", async (ctx) => {
     if (!ctx.chat || (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup")) {
