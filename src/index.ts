@@ -23,7 +23,7 @@ import type { JobOrchestrator } from "./jobs/job-orchestrator.js";
 import { DurableScheduler } from "./jobs/scheduler.js";
 import { hydrateMenuMedia } from "./media/menu-media-store.js";
 import { closeValidatorSnapshot } from "./links/validator-snapshot.js";
-import { closeOutboundPreview } from "./whatsapp/outbound-preview.js";
+import { closeCanonicalPreview } from "./whatsapp/baileys-native-preview.js";
 
 async function main(): Promise<void> {
   assertProductionSecrets();
@@ -90,7 +90,7 @@ async function main(): Promise<void> {
     await closeValidatorSnapshot();
     await shutdownWhatsAppSessions();
     await closeMongo();
-    await closeOutboundPreview();
+    await closeCanonicalPreview();
     console.log("[pappy-omega-mini] transports closed; shutdown complete.");
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));

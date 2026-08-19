@@ -12,6 +12,10 @@ import {
   renderAsciiMenu,
 } from "../menus/menu-model.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
+import {
+  getPreviewDebugSnapshot,
+  prepareCanonicalPreviewContent,
+} from "./baileys-native-preview.js";
 import { createSupportTicket } from "../persistence/mongo.js";
 import {
   createWhatsAppGroup,
@@ -127,6 +131,42 @@ export function createCommandRegistry(): RegisteredCommand[] {
       description: "Open the polished session menu.",
       run: async (ctx) =>
         renderAsciiMenu(buildSessionMenu(session(ctx), ctx.isOwner)),
+    },
+    {
+      name: "previewdebug",
+      aliases: ["previewdiag"],
+      description: "Inspect the canonical Baileys-native preview pipeline.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const url = ctx.args.join(" ").trim();
+        if (!url) return "Usage: .previewdebug <https://example.com/...>.";
+        const scope = `${ctx.workspaceId}:${ctx.sessionId}`;
+        await prepareCanonicalPreviewContent({
+          text: url,
+          content: { text: url },
+          cacheScope: scope,
+        });
+        const debug = getPreviewDebugSnapshot(scope);
+        if (!debug) return "LINK PREVIEW DEBUG\nResult: FALLBACK\nReason: no snapshot.";
+        return [
+          "LINK PREVIEW DEBUG",
+          `URL: ${debug.url}`,
+          `Canonical: ${debug.canonicalUrl}`,
+          `Title: ${debug.title ?? "—"}`,
+          `Description: ${debug.description ?? "—"}`,
+          `Selected Image: ${debug.selectedImageUrl ?? "—"}`,
+          `Source Dimensions: ${debug.sourceWidth ?? "—"} × ${debug.sourceHeight ?? "—"}`,
+          `Source Bytes: ${debug.sourceBytes ?? "—"}`,
+          `Processing: ${debug.processing}`,
+          `Crop: ${debug.crop}`,
+          `Compression: ${debug.compression}`,
+          `Baileys Preview Flag: ${debug.nativeFlag}`,
+          `Baileys Payload: ${debug.payload}`,
+          `Cache: ${debug.cache}`,
+          `Result: ${debug.result}`,
+          ...(debug.reason ? [`Reason: ${debug.reason}`] : []),
+        ].join("\n");
+      },
     },
     {
       name: "profile",

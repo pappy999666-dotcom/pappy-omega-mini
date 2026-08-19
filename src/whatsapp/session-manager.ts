@@ -26,7 +26,7 @@ import {
 } from "../core/encrypted-store.js";
 import { routeWhatsAppText, type WhatsAppReply } from "./message-router.js";
 import { collectLinks } from "../links/link-collector.js";
-import { prepareOutboundContent } from "./outbound-preview.js";
+import { prepareCanonicalPreviewContent } from "./baileys-native-preview.js";
 import {
   extractMessageText,
   extractQuotedMessage,
@@ -306,6 +306,7 @@ async function openWhatsAppSession(
   const socket = makeWASocket({
     auth: state,
     logger,
+    generateHighQualityLinkPreview: true,
   }) as unknown as RuntimeSocket;
   const forceSocketRecovery = (error?: unknown) => {
     const reason =
@@ -339,10 +340,11 @@ async function openWhatsAppSession(
           : typeof content?.caption === "string"
             ? content.caption
             : undefined;
-      const outbound = await prepareOutboundContent({
+      const outbound = await prepareCanonicalPreviewContent({
         ...(text ? { text } : {}),
         content: content as Record<string, unknown>,
         socket,
+        cacheScope: `${workspaceId}:${sessionId}`,
       });
       await socket.sendMessage(jid, outbound);
       const sentAt = noteOutboundMessage(key);

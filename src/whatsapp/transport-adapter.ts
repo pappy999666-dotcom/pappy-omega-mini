@@ -1,6 +1,6 @@
 import type { WASocket } from "@crysnovax/baileys";
 import { getWhatsAppSocket } from "./session-manager.js";
-import { prepareOutboundContent } from "./outbound-preview.js";
+import { prepareCanonicalPreviewContent } from "./baileys-native-preview.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 
 export type TransportCapability =
@@ -24,10 +24,6 @@ function socketFor(workspaceId: string, sessionId: string): WASocket {
 }
 function ownJid(socket: WASocket): string {
   return (socket as WASocket & { user?: { id?: string } }).user?.id ?? "me";
-}
-
-export function nativePreview(text: string): { richPreview?: true } {
-  return /https?:\/\/\S+/i.test(text) ? { richPreview: true } : {};
 }
 
 function method(
@@ -231,7 +227,12 @@ export async function sendDirectText(
   if (!send) throw new Error("Unsupported capability: sendMessage");
   await send(
     jid,
-    await prepareOutboundContent({ text, content: { text }, socket }),
+    await prepareCanonicalPreviewContent({
+      text,
+      content: { text },
+      socket,
+      cacheScope: `${workspaceId}:${sessionId}`,
+    }),
   );
 }
 
@@ -275,7 +276,15 @@ export async function sendGroupText(
   const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: sendMessage");
   const content = messagePayload(text, media);
-  await send(jid, await prepareOutboundContent({ text, content, socket }));
+  await send(
+    jid,
+    await prepareCanonicalPreviewContent({
+      text,
+      content,
+      socket,
+      cacheScope: `${workspaceId}:${sessionId}`,
+    }),
+  );
 }
 
 export async function sendGroupStatus(
@@ -304,11 +313,12 @@ export async function sendGroupStatus(
     ...(media ? messagePayload(text, media) : {}),
     groupStatus: true,
   };
-  const prepared = await prepareOutboundContent({
+  const prepared = await prepareCanonicalPreviewContent({
     text,
     content,
     target: "group-status",
     socket,
+    cacheScope: `${workspaceId}:${sessionId}`,
   });
   await send(jid, prepared);
 }
@@ -398,10 +408,11 @@ export async function sendGroupHidetag(
     throw new Error("No phone-number JIDs were available for this group.");
   await send(
     jid,
-    await prepareOutboundContent({
+    await prepareCanonicalPreviewContent({
       text,
       content: { text, mentions: participants },
       socket,
+      cacheScope: `${workspaceId}:${sessionId}`,
     }),
   );
 }
@@ -426,10 +437,11 @@ export async function sendGroupMentions(
   // metadata; the shared pipeline handles URL preview preparation.
   await send(
     jid,
-    await prepareOutboundContent({
+    await prepareCanonicalPreviewContent({
       text,
       content: { ...messagePayload(text, media), mentions: selected },
       socket,
+      cacheScope: `${workspaceId}:${sessionId}`,
     }),
   );
 }

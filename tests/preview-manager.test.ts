@@ -1,83 +1,21 @@
-import { describe, expect, it } from "vitest";
-import {
-  PreviewManager,
-  assertSafePreviewUrl,
-  canonicalize,
-} from "../src/preview/preview-manager.js";
+import { describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import {
-  decodeHtmlEntities,
+  assertSafePreviewUrl,
+  canonicalizePreviewUrl,
+  extractPreviewUrls,
   firstHttpUrl,
-  linkPreviewPayload,
-  resolveWhatsAppGroupInvitePreview,
-} from "../src/preview/default-adapter.js";
-import { buildNativeGroupStatusPreviewContent } from "../src/whatsapp/outbound-preview.js";
+  isCompletePreview,
+  prepareCanonicalPreviewContent,
+} from "../src/whatsapp/baileys-native-preview.js";
 import {
   extractWhatsAppGroupInviteUrls,
   isWhatsAppGroupInviteUrl,
 } from "../src/links/link-collector.js";
 
-function redisMock() {
-  const values = new Map<string, string>();
-  return {
-    get: async (key: string) => values.get(key) ?? null,
-    set: async (key: string, value: string) => {
-      values.set(key, value);
-      return "OK";
-    },
-  } as never;
-}
-
-describe("preview acceptance safeguards", () => {
-  it("resolves a WhatsApp group avatar from the connected socket at high quality", async () => {
-    const source = await sharp({
-      create: {
-        width: 1500,
-        height: 1000,
-        channels: 3,
-        background: { r: 36, g: 84, b: 140 },
-      },
-    })
-      .jpeg({ quality: 98 })
-      .toBuffer();
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input) => {
-      const requested = String(input);
-      if (requested === "https://cdn.example.test/group-avatar.jpg") {
-        return new Response(source, {
-          status: 200,
-          headers: { "content-type": "image/jpeg" },
-        });
-      }
-      return new Response(null, { status: 404 });
-    }) as typeof fetch;
-    try {
-      const resolved = await resolveWhatsAppGroupInvitePreview(
-        "https://chat.whatsapp.com/ABC123",
-        {
-          groupGetInviteInfo: async () => ({
-            id: "120363000000000001@g.us",
-            subject: "Earthens",
-            size: 42,
-          }),
-          profilePictureUrl: async () =>
-            "https://cdn.example.test/group-avatar.jpg",
-        },
-      );
-      expect(resolved?.title).toBe("Earthens");
-      expect(resolved?.description).toBe("42 members");
-      expect(resolved?.thumbnailData).toBeTruthy();
-      const output = await sharp(
-        Buffer.from(resolved!.thumbnailData!, "base64"),
-      ).metadata();
-      expect(output.width).toBe(1500);
-      expect(output.height).toBe(1000);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
+describe("canonical Baileys-native preview pipeline", () => {
   it("canonicalizes URLs and removes fragments", () => {
-    expect(canonicalize("HTTPS://Example.com/a#fragment")).toBe(
+    expect(canonicalizePreviewUrl("HTTPS://Example.com/a#fragment")).toBe(
       "https://example.com/a",
     );
   });
@@ -90,13 +28,15 @@ describe("preview acceptance safeguards", () => {
     expect(() => assertSafePreviewUrl("https://example.com")).not.toThrow();
   });
 
-  it("decodes escaped metadata and detects URLs embedded in text", () => {
-    expect(decodeHtmlEntities("Channel &#x1f4e2; &amp; news")).toBe(
-      "Channel 📢 & news",
+  it("detects all URLs embedded in text without changing the original text", () => {
+    const text = "Open https://example.com/a and https://example.org/b.";
+    expect(extractPreviewUrls(text)).toEqual([
+      "https://example.com/a",
+      "https://example.org/b",
+    ]);
+    expect(firstHttpUrl("Join https://chat.whatsapp.com/ABC123.")).toBe(
+      "https://chat.whatsapp.com/ABC123",
     );
-    expect(
-      firstHttpUrl("Join this text: https://chat.whatsapp.com/ABC123."),
-    ).toBe("https://chat.whatsapp.com/ABC123");
   });
 
   it("accepts only WhatsApp group invite URLs for Validator Hub", () => {
@@ -113,60 +53,169 @@ describe("preview acceptance safeguards", () => {
     ).toEqual(["https://chat.whatsapp.com/ABC123"]);
   });
 
-  it("emits normalized thumbnail bytes when the resolver has them", () => {
-    const payload = linkPreviewPayload(
-      {
-        schemaVersion: 2,
-        canonicalUrl: "https://example.com/a",
-        title: "Title",
-        description: "Description",
-        thumbnailData: Buffer.from("jpeg").toString("base64"),
-        fetchedAt: Date.now(),
-        expiresAt: Date.now() + 1_000,
-        fallback: false,
+  it("uses the exact native richPreview contract for a URL text message", async () => {
+    const source = await sharp({
+      create: {
+        width: 900,
+        height: 600,
+        channels: 3,
+        background: { r: 36, g: 84, b: 140 },
       },
-      "Read https://example.com/a",
-    );
-    expect(payload).toMatchObject({
-      text: "Read https://example.com/a",
-      linkPreview: { title: "Title", jpegThumbnail: Buffer.from("jpeg") },
-    });
+    })
+      .jpeg({ quality: 98 })
+      .toBuffer();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input) => {
+      const requested = String(input);
+      if (requested === "https://example.com/card.jpg")
+        return new Response(source, {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        });
+      return new Response(
+        '<html><head><meta property="og:title" content="Example title"><meta property="og:description" content="Example description"><meta property="og:image" content="https://example.com/card.jpg"></head></html>',
+        { status: 200, headers: { "content-type": "text/html" } },
+      );
+    }) as typeof fetch;
+    try {
+      const text = "Read this: https://example.com/article";
+      const content = await prepareCanonicalPreviewContent({
+        text,
+        content: { text },
+        cacheScope: `test-${Date.now()}`,
+      });
+      expect(content).toMatchObject({
+        richPreview: true,
+        text,
+        previewTitle: "Example title",
+        previewDescription: "Example description",
+      });
+      expect(Buffer.isBuffer(content.previewImage)).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
-  it("builds the native Bailey group-status preview contract", () => {
-    const content = buildNativeGroupStatusPreviewContent(
-      { groupStatus: true },
-      {
-        schemaVersion: 2,
-        canonicalUrl: "https://chat.whatsapp.com/ABC123",
-        title: "Mythic Vault",
-        description: "A channel preview",
-        thumbnailUrl: "https://cdn.example.com/card.jpg",
-        thumbnailData: Buffer.from("low-res-cache").toString("base64"),
-        fetchedAt: Date.now(),
-        expiresAt: Date.now() + 1_000,
-        fallback: false,
-      },
-    );
-    expect(content).toMatchObject({
-      groupStatus: true,
-      richPreview: true,
-      text: "https://chat.whatsapp.com/ABC123",
-      previewTitle: "Mythic Vault",
-      previewDescription: "A channel preview",
-      previewImage: Buffer.from("low-res-cache"),
-    });
-    expect(content).not.toHaveProperty("jpegThumbnail");
+  it("uses native group-status wrapping without replacing the original URL", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        '<html><head><meta property="og:title" content="Group title"><meta property="og:description" content="Group description"></head></html>',
+        { status: 200, headers: { "content-type": "text/html" } },
+      ),
+    ) as typeof fetch;
+    try {
+      const text = "https://example.com/group";
+      const content = await prepareCanonicalPreviewContent({
+        text,
+        content: { text },
+        target: "group-status",
+        cacheScope: `test-status-${Date.now()}`,
+      });
+      expect(content).toMatchObject({
+        richPreview: true,
+        groupStatus: true,
+        text,
+        previewTitle: "Group title",
+        previewDescription: "Group description",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
-  it("returns a safe fallback when the adapter fails", async () => {
-    const manager = new PreviewManager(redisMock(), {
-      fetch: async () => {
-        throw new Error("upstream failure");
+  it("preserves media captions and original payload when the native hybrid is unsupported", async () => {
+    const content = {
+      image: Buffer.from("image"),
+      caption: "See https://example.com/article",
+    };
+    await expect(
+      prepareCanonicalPreviewContent({
+        text: content.caption,
+        content,
+        cacheScope: `test-media-${Date.now()}`,
+      }),
+    ).resolves.toEqual(content);
+  });
+
+  it("does not alter an already complete preview", async () => {
+    const content = {
+      text: "https://example.com/article",
+      linkPreview: {
+        title: "Complete",
+        description: "Already built",
+        jpegThumbnail: Buffer.from("jpeg"),
       },
-    });
-    const result = await manager.resolve("https://example.com/article");
-    expect(result.fallback).toBe(true);
-    expect(result.canonicalUrl).toBe("https://example.com/article");
+    };
+    await expect(
+      prepareCanonicalPreviewContent({
+        text: content.text,
+        content,
+        cacheScope: `test-complete-${Date.now()}`,
+      }),
+    ).resolves.toEqual(content);
+    expect(isCompletePreview(content.linkPreview)).toBe(true);
+  });
+
+  it("coalesces concurrent sends of one URL into one resolver pass", async () => {
+    let htmlFetches = 0;
+    let imageFetches = 0;
+    const source = await sharp({
+      create: {
+        width: 800,
+        height: 500,
+        channels: 3,
+        background: { r: 12, g: 80, b: 160 },
+      },
+    })
+      .jpeg()
+      .toBuffer();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input) => {
+      const requested = String(input);
+      if (requested.endsWith("card.jpg")) {
+        imageFetches += 1;
+        return new Response(source, {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        });
+      }
+      htmlFetches += 1;
+      return new Response(
+        '<meta property="og:title" content="Cached"><meta property="og:description" content="Once"><meta property="og:image" content="https://example.com/card.jpg">',
+        { status: 200, headers: { "content-type": "text/html" } },
+      );
+    }) as typeof fetch;
+    try {
+      const text = "https://example.com/cached";
+      const scope = `test-coalesce-${Date.now()}`;
+      await Promise.all([
+        prepareCanonicalPreviewContent({ text, content: { text }, cacheScope: scope }),
+        prepareCanonicalPreviewContent({ text, content: { text }, cacheScope: scope }),
+      ]);
+      expect(htmlFetches).toBe(1);
+      expect(imageFetches).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("falls back to the exact original content when metadata fails", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () =>
+      new Response(null, { status: 503 }),
+    ) as typeof fetch;
+    try {
+      const content = { text: "https://example.com/failing" };
+      await expect(
+        prepareCanonicalPreviewContent({
+          text: content.text,
+          content,
+          cacheScope: `test-failure-${Date.now()}`,
+        }),
+      ).resolves.toEqual(content);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

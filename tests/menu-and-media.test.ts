@@ -22,8 +22,7 @@ import {
   setWhatsappMenuMedia,
 } from "../src/media/menu-media-store.js";
 import { moderatorCommandScopes } from "../src/telegram/moderator.js";
-import { nativePreview } from "../src/whatsapp/transport-adapter.js";
-import { isCompletePreview } from "../src/whatsapp/outbound-preview.js";
+import { isCompletePreview } from "../src/whatsapp/baileys-native-preview.js";
 import {
   extractMessageText,
   extractQuotedMessage,
@@ -185,13 +184,6 @@ describe("WhatsApp command privacy", () => {
 });
 
 describe("WhatsApp native previews", () => {
-  it("enables Baileys rich previews only for URL payloads", () => {
-    expect(nativePreview("open https://example.com/item")).toEqual({
-      richPreview: true,
-    });
-    expect(nativePreview("plain message")).toEqual({});
-  });
-
   it("recognizes complete supplied preview metadata without rebuilding it", () => {
     expect(
       isCompletePreview({
