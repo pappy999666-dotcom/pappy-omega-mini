@@ -765,6 +765,24 @@ export async function startWhatsAppSession(
   return promise;
 }
 
+export async function waitForWhatsAppSessionReady(
+  workspaceId: string,
+  sessionId: string,
+  timeoutMs = 30_000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const session = getSession(workspaceId, sessionId);
+    if (session.status === "ACTIVE" && session.authHealth === "VALID")
+      return true;
+    if (session.status === "LOGGED_OUT" || session.authHealth === "INVALID")
+      return false;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  const session = getSession(workspaceId, sessionId);
+  return session.status === "ACTIVE" && session.authHealth === "VALID";
+}
+
 export async function requestWhatsAppPairingCode(
   workspaceId: string,
   sessionId: string,

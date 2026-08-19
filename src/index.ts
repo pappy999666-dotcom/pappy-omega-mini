@@ -7,8 +7,9 @@ import {
 } from "./telegram/moderator.js";
 import {
   hasPersistedWhatsAppAuth,
-  shutdownWhatsAppSessions,
   startWhatsAppSession,
+  shutdownWhatsAppSessions,
+  waitForWhatsAppSessionReady,
 } from "./whatsapp/session-manager.js";
 import {
   hydrateSessionRegistry,
@@ -63,7 +64,7 @@ async function main(): Promise<void> {
   }
   await startRecoverableSessions(recoverableSessions, 6);
   console.log(
-    `[pappy-omega-mini] WhatsApp recovery scheduled for ${recoverableSessions.length} paired session(s); ${persistedSessions.length - recoverableSessions.length} session(s) await pairing.`,
+    `[pappy-omega-mini] WhatsApp recovery completed for ${recoverableSessions.length} persisted paired session(s); ${persistedSessions.length - recoverableSessions.length} session(s) await pairing or recovery.`,
   );
   const bot = createTelegramBot();
   startModeratorReconciliation(bot);
@@ -108,6 +109,14 @@ async function startRecoverableSessions(
       if (!session) return;
       try {
         await startWhatsAppSession(session.workspaceId, session.sessionId);
+        const ready = await waitForWhatsAppSessionReady(
+          session.workspaceId,
+          session.sessionId,
+        );
+        if (!ready)
+          console.warn(
+            `[pappy-omega-mini] startup recovery did not reach ACTIVE session=${session.sessionId}`,
+          );
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         updateSession(session.workspaceId, session.sessionId, {

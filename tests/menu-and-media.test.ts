@@ -356,30 +356,32 @@ describe("WhatsApp command registry", () => {
     });
   });
 
-  it("queues stag for all groups while keeping tag local", async () => {
+  it("sends stag as immediate same-group hidetag like tag", async () => {
     const user = resolveUser(`stag-${Date.now()}-${Math.random()}`);
     const session = createSession({
       workspaceId: user.workspaceId,
-      sessionName: "all-tag",
+      sessionName: "same-group-tag",
       phoneNumber: "2348012345678",
     });
-    let captured:
-      { kind: string; payload: Record<string, unknown> } | undefined;
-    const result = await executeCommand(createCommandRegistry(), "stag 3 🥀", {
+    let captured: { text: string; participantCount?: number } | undefined;
+    let enqueued = false;
+    const result = await executeCommand(createCommandRegistry(), "stag 🥀", {
       workspaceId: user.workspaceId,
       sessionId: session.sessionId,
       isOwner: true,
+      chatJid: "120363000000000001@g.us",
       args: [],
-      enqueueJob: async (input) => {
+      sendCurrentGroupHidetag: async (input) => {
         captured = input;
-        return "job-stag";
+      },
+      enqueueJob: async () => {
+        enqueued = true;
+        return "unexpected-job";
       },
     });
     expect(result).toBe("");
-    expect(captured).toMatchObject({
-      kind: "tag",
-      payload: { text: "🥀", count: 3 },
-    });
+    expect(captured).toEqual({ text: "🥀" });
+    expect(enqueued).toBe(false);
   });
 
   it("appends a quoted message as the command payload", () => {

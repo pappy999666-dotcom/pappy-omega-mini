@@ -634,8 +634,9 @@ export function startWorkerRuntime(): JobOrchestrator {
       const groups = baseGroups.flatMap((jid) =>
         Array.from({ length: repeat }, () => jid),
       );
-      const text = payload.text?.trim();
-      if (!text) throw new Error(`${kind} requires a non-empty text payload.`);
+      const text = payload.text?.trim() ?? "";
+      if (!text && !payload.media)
+        throw new Error(`${kind} requires text or media payload.`);
       const delayMs = Math.max(
         1500,
         Math.min(120000, Number(payload.delayMs ?? 2500)),

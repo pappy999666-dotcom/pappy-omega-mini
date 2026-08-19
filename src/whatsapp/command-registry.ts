@@ -345,7 +345,8 @@ export function createCommandRegistry(): RegisteredCommand[] {
           : 1;
         const text =
           ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
-        if (!text) return "Usage: .allstatus [repeat] <text>.";
+        if (!text && !ctx.media)
+          return "Usage: .allstatus [repeat] <text or media>.";
         const jobId = await ctx.enqueueJob({
           kind: "allstatus",
           payload: { text, count: repeat },
@@ -370,10 +371,10 @@ export function createCommandRegistry(): RegisteredCommand[] {
             : 1;
         const text =
           ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
-        if (!text)
+        if (!text && !ctx.media)
           return repeat > 1
-            ? "Usage: .gstatusx <count> <text> (or reply to a message)."
-            : "Usage: .gstatus <text> (or reply to a message).";
+            ? "Usage: .gstatusx <count> <text or media> (or reply to a message)."
+            : "Usage: .gstatus <text or media> (or reply to a message).";
         await ctx.sendCurrentGroupStatus({ text, repeat });
         return "";
       },
@@ -400,7 +401,8 @@ export function createCommandRegistry(): RegisteredCommand[] {
           : 1;
         const text =
           ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
-        if (!text) return "Usage: .allchat [repeat] <text>.";
+        if (!text && !ctx.media)
+          return "Usage: .allchat [repeat] <text or media>.";
         const jobId = await ctx.enqueueJob({
           kind: "allchat",
           payload: { text, count: repeat },
@@ -435,8 +437,8 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const text = numericCount
           ? (ctx.media?.caption?.trim() ?? "")
           : ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
-        if (!text && numericCount === undefined)
-          return "Usage: .tag <payload> or .tag <member-count> <payload>.";
+        if (!text && !ctx.media && numericCount === undefined)
+          return "Usage: .tag <payload or media> or .tag <member-count>.";
         await ctx.sendCurrentGroupHidetag({
           text,
           ...(numericCount !== undefined
@@ -449,20 +451,17 @@ export function createCommandRegistry(): RegisteredCommand[] {
     {
       name: "stag",
       aliases: [],
-      description: "Queue hidetag delivery to every eligible WhatsApp group.",
+      description: "Immediate hidetag of every member in this WhatsApp group.",
       ownerOnly: true,
       run: async (ctx) => {
-        if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
-        const count = /^\d+$/.test(ctx.args[0] ?? "")
-          ? Number(ctx.args.shift())
-          : undefined;
-        const text = ctx.args.join(" ").trim();
-        if (!text) return "Usage: .stag [count] <payload>.";
-        const jobId = await ctx.enqueueJob({
-          kind: "tag",
-          payload: { text, ...(count ? { count } : {}) },
-        });
-        void jobId;
+        if (!ctx.chatJid || !ctx.chatJid.endsWith("@g.us"))
+          return "This command must be used inside a WhatsApp group.";
+        if (!ctx.sendCurrentGroupHidetag)
+          return "WhatsApp transport is unavailable.";
+        const text =
+          ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
+        if (!text && !ctx.media) return "Usage: .stag <payload or media>.";
+        await ctx.sendCurrentGroupHidetag({ text });
         return "";
       },
     },
