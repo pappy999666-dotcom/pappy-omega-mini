@@ -303,17 +303,17 @@ async function moderatorDashboardText(group: ModeratorGroupRecord): Promise<stri
     listModeratorEvents(group.groupId, 3).catch(() => []),
   ]);
   const recent = events.length
-    ? events.map((event) => `${event.success ? "✅" : "⛔"} ${event.action}${event.targetId ? ` · ${event.targetId}` : ""}`).join("\\n")
+    ? events.map((event) => `${event.success ? "✅" : "⛔"} ${event.action}${event.targetId ? ` · ${event.targetId}` : ""}`).join("\n")
     : "No recent actions.";
   return pageText(
     "Group Moderator",
     infoResponse(
       "Control Room",
-      `<b>Group:</b> ${escapeHtml(group.title ?? group.groupId)}\\n` +
-        `<b>Protection:</b> ${group.enabled ? "ON" : "OFF"} · <b>Anti-link:</b> ${group.antiLink ? "ON" : "OFF"} · <b>Anti-spam:</b> ${group.antiSpam ? "ON" : "OFF"}\\n` +
-        `<b>Welcome:</b> ${group.welcomeEnabled ? "ON" : "OFF"} · <b>Goodbye:</b> ${group.goodbyeEnabled ? "ON" : "OFF"}\\n` +
-        `<b>Warnings:</b> ${warnings} · <b>Filters:</b> ${group.filters.length} · <b>Staff:</b> ${group.staff.length} · <b>Whitelist:</b> ${group.whitelist.length}\\n\\n` +
-        `<b>Recent activity</b>\\n${escapeHtml(recent)}\\n\\n` +
+      `<b>Group:</b> ${escapeHtml(group.title ?? group.groupId)}\n` +
+        `<b>Protection:</b> ${group.enabled ? "ON" : "OFF"} · <b>Anti-link:</b> ${group.antiLink ? "ON" : "OFF"} · <b>Anti-spam:</b> ${group.antiSpam ? "ON" : "OFF"}\n` +
+        `<b>Welcome:</b> ${group.welcomeEnabled ? "ON" : "OFF"} · <b>Goodbye:</b> ${group.goodbyeEnabled ? "ON" : "OFF"}\n` +
+        `<b>Warnings:</b> ${warnings} · <b>Filters:</b> ${group.filters.length} · <b>Staff:</b> ${group.staff.length} · <b>Whitelist:</b> ${group.whitelist.length}\n\n` +
+        `<b>Recent activity</b>\n${escapeHtml(recent)}\n\n` +
         `<i>Reply to a member and use /mute, /unmute, /warn, /ban, or /unban for target actions.</i>`,
     ),
   );
@@ -468,7 +468,7 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     if (!group) return;
     await ctx.answerCbQuery();
     const body = group.filters.length
-      ? group.filters.map((entry) => `<code>${escapeHtml(entry.trigger)}</code> → ${escapeHtml(entry.response)}`).join("\\n")
+      ? group.filters.map((entry) => `<code>${escapeHtml(entry.trigger)}</code> → ${escapeHtml(entry.response)}`).join("\n")
       : "No keyword filters configured.";
     await ctx.editMessageText(pageText("Filters", infoResponse("Keyword Filters", body)), {
       parse_mode: "HTML",
@@ -481,7 +481,7 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     if (!group) return;
     await ctx.answerCbQuery();
     const count = await countModeratorWarningsForGroup(group.groupId).catch(() => 0);
-    await ctx.editMessageText(pageText("Warnings", infoResponse("Warning Overview", `<b>Total records:</b> ${count}\\n\\nUse /warns or /warnlist for member-specific records.`)), {
+    await ctx.editMessageText(pageText("Warnings", infoResponse("Warning Overview", `<b>Total records:</b> ${count}\n\nUse /warns or /warnlist for member-specific records.`)), {
       parse_mode: "HTML",
       reply_markup: keyboard([[btn(ui.back, "mod:refresh")]]),
     });
@@ -493,7 +493,7 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     await ctx.answerCbQuery();
     const events = await listModeratorEvents(group.groupId, 15);
     const body = events.length
-      ? events.map((event) => `${event.success ? "✅" : "⛔"} ${escapeHtml(event.action)} · ${escapeHtml(event.targetId ?? "group")}`).join("\\n")
+      ? events.map((event) => `${event.success ? "✅" : "⛔"} ${escapeHtml(event.action)} · ${escapeHtml(event.targetId ?? "group")}`).join("\n")
       : "No moderation events recorded.";
     await ctx.editMessageText(pageText("Moderation Logs", infoResponse("Recent Actions", body)), {
       parse_mode: "HTML",

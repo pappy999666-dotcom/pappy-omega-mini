@@ -1,5 +1,19 @@
 import { updateSession } from "../core/session-registry.js";
 
+export type AuthoritativeLifecycleState =
+  | "CREATING"
+  | "PAIRING"
+  | "PAIRING_CODE_READY"
+  | "AUTHENTICATED"
+  | "CONNECTING"
+  | "ONLINE"
+  | "RECONNECTING"
+  | "DEGRADED"
+  | "LOGGED_OUT"
+  | "BANNED_OR_RESTRICTED"
+  | "FAILED"
+  | "PURGED";
+
 export interface SessionLifecycleState {
   reconnectAttempt: number;
   connected: boolean;
@@ -7,6 +21,8 @@ export interface SessionLifecycleState {
   heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   stopping: boolean;
   socketGeneration: number;
+  status: AuthoritativeLifecycleState;
+  lastTransitionAt: number;
   lastMessageReceivedAt?: number;
   lastCommandProcessedAt?: number;
   lastOutboundMessageAt?: number;
@@ -30,6 +46,8 @@ export function getLifecycleState(key: string): SessionLifecycleState {
     heartbeatTimer: undefined,
     stopping: false,
     socketGeneration: 0,
+    status: "CREATING",
+    lastTransitionAt: Date.now(),
   };
   states.set(key, created);
   return created;
@@ -46,10 +64,17 @@ export function setStart(key: string, promise: Promise<void>): void {
   });
 }
 
+export function setLifecycleStatus(key: string, status: AuthoritativeLifecycleState): void {
+  const state = getLifecycleState(key);
+  state.status = status;
+  state.lastTransitionAt = Date.now();
+}
+
 export function markOpening(key: string): void {
   const state = getLifecycleState(key);
   state.stopping = false;
   state.socketGeneration += 1;
+  setLifecycleStatus(key, "CONNECTING");
 }
 
 export function noteMessageReceived(key: string): number {
@@ -77,6 +102,7 @@ export function noteError(key: string, error: string): void {
 export function markConnected(key: string): void {
   const state = getLifecycleState(key);
   state.connected = true;
+  setLifecycleStatus(key, "ONLINE");
   state.reconnectAttempt = 0;
   if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
   state.reconnectTimer = undefined;
@@ -85,6 +111,7 @@ export function markConnected(key: string): void {
 export function markStopping(key: string): void {
   const state = getLifecycleState(key);
   state.stopping = true;
+  setLifecycleStatus(key, "DEGRADED");
   if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
   if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
   state.reconnectTimer = undefined;
@@ -94,6 +121,7 @@ export function markStopping(key: string): void {
 export function markClosed(key: string): void {
   const state = getLifecycleState(key);
   state.connected = false;
+  if (!state.stopping) setLifecycleStatus(key, "RECONNECTING");
   if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
   state.heartbeatTimer = undefined;
 }
@@ -119,6 +147,7 @@ export function scheduleReconnect(input: {
   const base = Math.min(60_000, 1_000 * 2 ** (state.reconnectAttempt - 1));
   const jitter = Math.floor(Math.random() * Math.max(250, base * 0.2));
   const delay = base + jitter;
+  setLifecycleStatus(input.key, "RECONNECTING");
   updateSession(input.workspaceId, input.sessionId, {
     status: "RECONNECTING",
     disconnectReason: `reconnect scheduled in ${delay}ms`,
@@ -143,6 +172,31 @@ export function startHeartbeat(input: {
         lastHealthyAt: Date.now(),
       });
   }, input.intervalMs ?? 30_000);
+}
+
+export function getLifecycleHealth(key: string, now = Date.now()): {
+  status: AuthoritativeLifecycleState;
+  connected: boolean;
+  socketGeneration: number;
+  reconnectAttempt: number;
+  lastMessageReceivedAt?: number;
+  lastCommandProcessedAt?: number;
+  lastOutboundMessageAt?: number;
+  lastError?: string;
+  ageSinceHeartbeatMs: number;
+} {
+  const state = getLifecycleState(key);
+  return {
+    status: state.status,
+    connected: state.connected,
+    socketGeneration: state.socketGeneration,
+    reconnectAttempt: state.reconnectAttempt,
+    ...(state.lastMessageReceivedAt !== undefined ? { lastMessageReceivedAt: state.lastMessageReceivedAt } : {}),
+    ...(state.lastCommandProcessedAt !== undefined ? { lastCommandProcessedAt: state.lastCommandProcessedAt } : {}),
+    ...(state.lastOutboundMessageAt !== undefined ? { lastOutboundMessageAt: state.lastOutboundMessageAt } : {}),
+    ...(state.lastError ? { lastError: state.lastError } : {}),
+    ageSinceHeartbeatMs: Math.max(0, now - state.lastTransitionAt),
+  };
 }
 
 export function clearLifecycle(key: string): void {
