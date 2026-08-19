@@ -41,7 +41,7 @@ export class PreviewManager {
   async resolve(url: string): Promise<PreviewRecord> {
     const canonicalUrl = canonicalize(url);
     assertSafePreviewUrl(canonicalUrl);
-    const cacheKey = `pappy-omega-mini:preview:v2:${createHash("sha256").update(canonicalUrl).digest("hex")}`;
+    const cacheKey = `pappy-omega-mini:preview:v3:${createHash("sha256").update(canonicalUrl).digest("hex")}`;
     const cached = await this.redis.get(cacheKey);
     if (cached) return JSON.parse(cached) as PreviewRecord;
     const host = new URL(canonicalUrl).hostname;
