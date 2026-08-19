@@ -638,6 +638,12 @@ async function openWhatsAppSession(
       const ownedLock = sessionLocks.get(key);
       sessionLocks.delete(key);
       void ownedLock?.release();
+      try {
+        getSession(workspaceId, sessionId);
+      } catch {
+        // Purge Session may have removed the registry record while the socket closed.
+        return;
+      }
       const authHealth = terminal ? "INVALID" : "DEGRADED";
       updateSession(workspaceId, sessionId, {
         status: classification.status,

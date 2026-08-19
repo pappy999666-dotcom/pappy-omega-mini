@@ -1,7 +1,10 @@
 import { mkdir } from "node:fs/promises";
 import { env, assertProductionSecrets } from "./config/env.js";
 import { createTelegramBot } from "./telegram/bot.js";
-import { startModeratorReconciliation, stopModeratorReconciliation } from "./telegram/moderator.js";
+import {
+  startModeratorReconciliation,
+  stopModeratorReconciliation,
+} from "./telegram/moderator.js";
 import {
   hasPersistedWhatsAppAuth,
   shutdownWhatsAppSessions,
@@ -40,6 +43,12 @@ async function main(): Promise<void> {
   const persistedSessions = listAllSessions();
   const recoverableSessions = [];
   for (const session of persistedSessions) {
+    if (
+      session.status === "LOGGED_OUT" ||
+      session.status === "ERROR" ||
+      session.authHealth === "INVALID"
+    )
+      continue;
     if (await hasPersistedWhatsAppAuth(session.workspaceId, session.sessionId))
       recoverableSessions.push(session);
   }
