@@ -5,6 +5,22 @@ import type { User, WhatsAppSession, Workspace } from "../types/domain.js";
 import type { AuditEvent, EmergencyState } from "../types/v2.js";
 import type { MenuMedia } from "../types/domain.js";
 
+export interface WhatsAppMessageTraceRecord {
+  traceId: string;
+  workspaceId: string;
+  sessionId: string;
+  messageId?: string;
+  direction: "inbound" | "outbound";
+  remoteJid?: string;
+  senderJid?: string;
+  normalizedText?: string;
+  authorized?: boolean;
+  handler?: string;
+  outcome: "received" | "ignored" | "processed" | "replied" | "failed";
+  failureReason?: string;
+  timestamp: number;
+}
+
 export interface SupportTicketRecord {
   ticketId: string;
   workspaceId: string;
@@ -31,6 +47,8 @@ export interface ForceJoinTargetRecord {
   updatedAt: number;
 }
 
+interface WhatsAppMessageTraceDocument
+  extends WhatsAppMessageTraceRecord, mongoose.Document {}
 interface SupportTicketDocument
   extends SupportTicketRecord, mongoose.Document {}
 interface ForceJoinTargetDocument
@@ -118,6 +136,26 @@ interface PairingRequestDocument extends mongoose.Document {
   sessionId?: string;
   updatedAt: number;
 }
+
+const whatsappMessageTraceSchema = new mongoose.Schema<WhatsAppMessageTraceDocument>(
+  {
+    traceId: { type: String, required: true, unique: true },
+    workspaceId: { type: String, required: true, index: true },
+    sessionId: { type: String, required: true, index: true },
+    messageId: String,
+    direction: { type: String, required: true },
+    remoteJid: String,
+    senderJid: String,
+    normalizedText: String,
+    authorized: Boolean,
+    handler: String,
+    outcome: { type: String, required: true },
+    failureReason: String,
+    timestamp: { type: Number, required: true, index: true },
+  },
+  { collection: "whatsapp_message_traces", versionKey: false },
+);
+whatsappMessageTraceSchema.index({ workspaceId: 1, sessionId: 1, timestamp: -1 });
 
 const supportTicketSchema = new mongoose.Schema<SupportTicketDocument>(
   {
@@ -371,6 +409,13 @@ export async function connectMongo(): Promise<typeof mongoose> {
     maxPoolSize: 10,
   });
   return connectionPromise;
+}
+
+function whatsappMessageTraceModel(): Model<WhatsAppMessageTraceDocument> {
+  return (
+    mongoose.models.WhatsAppMessageTrace ??
+    mongoose.model<WhatsAppMessageTraceDocument>("WhatsAppMessageTrace", whatsappMessageTraceSchema)
+  );
 }
 
 function supportTicketModel(): Model<SupportTicketDocument> {
@@ -722,6 +767,13 @@ export async function listModeratorWarnings(
     .lean<ModeratorWarningRecord[]>()
     .exec();
 }
+export async function saveWhatsAppMessageTrace(
+  record: WhatsAppMessageTraceRecord,
+): Promise<void> {
+  await connectMongo();
+  await whatsappMessageTraceModel().create(record);
+}
+
 export async function saveModeratorEvent(
   event: ModeratorEventRecord,
 ): Promise<void> {

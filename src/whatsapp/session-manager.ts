@@ -1,4 +1,5 @@
 import { access, mkdir, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import makeWASocket, {
   makeCacheManagerAuthState,
@@ -11,6 +12,7 @@ import {
   getSession,
   updateSession,
 } from "../core/session-registry.js";
+import { saveWhatsAppMessageTrace } from "../persistence/mongo.js";
 import {
   acquireSessionLock,
   closeSessionLockRedis,
@@ -270,6 +272,7 @@ async function openWhatsAppSession(
           participant?: string;
           participantAlt?: string;
           fromMe?: boolean;
+          id?: string;
         };
         message?: {
           conversation?: string;
@@ -291,6 +294,7 @@ async function openWhatsAppSession(
           lastMessageReceivedAt: receivedAt,
         });
         if (!message.key?.remoteJid) continue;
+        const messageKey = message.key;
 
         const text =
           message.message?.conversation ??
@@ -308,6 +312,24 @@ async function openWhatsAppSession(
                 )?.text === "string"
               ? (quoted?.extendedTextMessage as { text: string }).text
               : undefined;
+        const senderJid = message.key.fromMe
+          ? ((socket as unknown as { user?: { id?: string } }).user?.id ?? message.key.remoteJid)
+          : (message.key.participantAlt ??
+            message.key.participant ??
+            message.key.remoteJidAlt ??
+            message.key.remoteJid);
+        void saveWhatsAppMessageTrace({
+          traceId: randomUUID(),
+          workspaceId,
+          sessionId,
+          ...(message.key.id ? { messageId: message.key.id } : {}),
+          direction: "inbound",
+          remoteJid: message.key.remoteJid,
+          ...(senderJid ? { senderJid } : {}),
+          ...(text || quotedText ? { normalizedText: [text, quotedText].filter(Boolean).join("\\n") } : {}),
+          outcome: text || quotedText ? "received" : "ignored",
+          timestamp: receivedAt,
+        }).catch(() => undefined);
         if (!text && !quotedText) continue;
         void collectLinks({
           workspaceId,
@@ -319,25 +341,43 @@ async function openWhatsAppSession(
           workspaceId,
           sessionId,
           chatJid: message.key.remoteJid,
-          senderJid: message.key.fromMe
-            ? ((socket as unknown as { user?: { id?: string } }).user?.id ??
-              message.key.remoteJid)
-            : (message.key.participantAlt ??
-              message.key.participant ??
-              message.key.remoteJidAlt ??
-              message.key.remoteJid),
+          senderJid,
           text,
           ...(quotedText ? { quotedText } : {}),
         })
           .then((reply) => {
-            if (!reply) return;
+            if (!reply) {
+              void saveWhatsAppMessageTrace({
+                traceId: randomUUID(),
+                workspaceId,
+                sessionId,
+                ...(messageKey.id ? { messageId: messageKey.id } : {}),
+                direction: "outbound",
+                ...(messageKey.remoteJid ? { remoteJid: messageKey.remoteJid } : {}),
+                outcome: "ignored",
+                timestamp: Date.now(),
+              }).catch(() => undefined);
+              return;
+            }
             const processedAt = noteCommandProcessed(key);
             updateSession(workspaceId, sessionId, {
               lastCommandProcessedAt: processedAt,
             });
             const jid = message.key?.remoteJid ?? "";
             if (typeof reply === "string") {
-              void sendTrackedMessage(jid, { text: reply });
+              void sendTrackedMessage(jid, { text: reply }).then(() =>
+                saveWhatsAppMessageTrace({
+                  traceId: randomUUID(), workspaceId, sessionId,
+                  ...(messageKey.id ? { messageId: messageKey.id } : {}),
+                  direction: "outbound", remoteJid: jid, normalizedText: reply,
+                  handler: "routeWhatsAppText", outcome: "replied", timestamp: Date.now(),
+                }).catch(() => undefined),
+              ).catch((error) => saveWhatsAppMessageTrace({
+                traceId: randomUUID(), workspaceId, sessionId,
+                ...(messageKey.id ? { messageId: messageKey.id } : {}),
+                direction: "outbound", remoteJid: jid, handler: "routeWhatsAppText",
+                outcome: "failed", failureReason: error instanceof Error ? error.message : String(error), timestamp: Date.now(),
+              }).catch(() => undefined));
               return;
             }
             const mediaReply = reply as WhatsAppReply;
