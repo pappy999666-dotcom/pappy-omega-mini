@@ -44,6 +44,13 @@ async function main(): Promise<void> {
   await hydrateMenuMedia();
   await hydrateSessionRegistry();
   await hydrateControlPlane();
+  let workers: JobOrchestrator | undefined;
+  let scheduler: DurableScheduler | undefined;
+  if (env.TELEGRAM_BOT_TOKEN) {
+    workers = startWorkerRuntime();
+    scheduler = new DurableScheduler(workers);
+    scheduler.start();
+  }
   const persistedSessions = listAllSessions();
   const recoverableSessions = [];
   for (const session of persistedSessions) {
@@ -68,13 +75,6 @@ async function main(): Promise<void> {
   );
   const bot = createTelegramBot();
   startModeratorReconciliation(bot);
-  let workers: JobOrchestrator | undefined;
-  let scheduler: DurableScheduler | undefined;
-  if (env.TELEGRAM_BOT_TOKEN) {
-    workers = startWorkerRuntime();
-    scheduler = new DurableScheduler(workers);
-    scheduler.start();
-  }
   await bot.launch();
   console.log("[pappy-omega-mini] Telegram gateway online.");
 
