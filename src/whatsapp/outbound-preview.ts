@@ -10,6 +10,7 @@ export interface OutboundPreviewInput {
   text?: string;
   content: Record<string, unknown>;
   existingPreview?: Record<string, unknown>;
+  target?: "group-status";
 }
 
 let redis: Redis | undefined;
@@ -55,8 +56,10 @@ export async function prepareOutboundContent(
   const hasMedia = ["image", "video", "audio", "document", "sticker"].some(
     (key) => key in content,
   );
+  if (input.target === "group-status" && !hasMedia && !record.fallback) {
+    return buildNativeGroupStatusPreviewContent(content, record);
+  }
   if (hasMedia) return content;
-
   const thumbnail = record.thumbnailData
     ? Buffer.from(record.thumbnailData, "base64")
     : undefined;
@@ -68,6 +71,21 @@ export async function prepareOutboundContent(
       ...(record.description ? { description: record.description } : {}),
       ...(thumbnail ? { jpegThumbnail: thumbnail } : {}),
     },
+  };
+}
+
+export function buildNativeGroupStatusPreviewContent(
+  content: Record<string, unknown>,
+  record: PreviewRecord,
+): Record<string, unknown> {
+  return {
+    ...content,
+    richPreview: true,
+    text: record.canonicalUrl,
+    ...(record.title ? { previewTitle: record.title } : {}),
+    ...(record.description ? { previewDescription: record.description } : {}),
+    ...(record.thumbnailUrl ? { previewImage: record.thumbnailUrl } : {}),
+    groupStatus: true,
   };
 }
 

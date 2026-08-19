@@ -9,6 +9,7 @@ import {
   firstHttpUrl,
   linkPreviewPayload,
 } from "../src/preview/default-adapter.js";
+import { buildNativeGroupStatusPreviewContent } from "../src/whatsapp/outbound-preview.js";
 import {
   extractWhatsAppGroupInviteUrls,
   isWhatsAppGroupInviteUrl,
@@ -81,6 +82,32 @@ describe("preview acceptance safeguards", () => {
       text: "Read https://example.com/a",
       linkPreview: { title: "Title", jpegThumbnail: Buffer.from("jpeg") },
     });
+  });
+
+  it("builds the native Bailey group-status preview contract", () => {
+    const content = buildNativeGroupStatusPreviewContent(
+      { groupStatus: true },
+      {
+        schemaVersion: 2,
+        canonicalUrl: "https://chat.whatsapp.com/ABC123",
+        title: "Mythic Vault",
+        description: "A channel preview",
+        thumbnailUrl: "https://cdn.example.com/card.jpg",
+        thumbnailData: Buffer.from("low-res-cache").toString("base64"),
+        fetchedAt: Date.now(),
+        expiresAt: Date.now() + 1_000,
+        fallback: false,
+      },
+    );
+    expect(content).toMatchObject({
+      groupStatus: true,
+      richPreview: true,
+      text: "https://chat.whatsapp.com/ABC123",
+      previewTitle: "Mythic Vault",
+      previewDescription: "A channel preview",
+      previewImage: "https://cdn.example.com/card.jpg",
+    });
+    expect(content).not.toHaveProperty("jpegThumbnail");
   });
 
   it("returns a safe fallback when the adapter fails", async () => {

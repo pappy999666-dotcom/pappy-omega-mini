@@ -299,21 +299,11 @@ export async function sendGroupStatus(
     ...(media ? messagePayload(text, media) : {}),
     groupStatus: true,
   };
-  const prepared = await prepareOutboundContent({ text, content });
-  const preview =
-    prepared.linkPreview && typeof prepared.linkPreview === "object"
-      ? (prepared.linkPreview as Record<string, unknown>)
-      : undefined;
-  const thumbnail = preview?.jpegThumbnail;
-  if (!media && Buffer.isBuffer(thumbnail)) {
-    await send(jid, {
-      groupStatusMessage: {
-        image: thumbnail,
-        caption: text,
-      },
-    });
-    return;
-  }
+  const prepared = await prepareOutboundContent({
+    text,
+    content,
+    target: "group-status",
+  });
   await send(jid, prepared);
 }
 
