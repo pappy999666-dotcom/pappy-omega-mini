@@ -256,6 +256,36 @@ describe("WhatsApp command registry", () => {
     });
   });
 
+  it("strips the gstatus command token from a media caption", async () => {
+    const user = resolveUser(`gstatus-caption-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "group-status-caption",
+      phoneNumber: "2348012345678",
+    });
+    let captured: { text: string; repeat: number } | undefined;
+    const result = await executeCommand(createCommandRegistry(), "gstatus", {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      chatJid: "120363000000000000@g.us",
+      args: [],
+      media: {
+        kind: "image",
+        bytes: Buffer.from([1, 2, 3]),
+        caption: ".gstatus https://chat.whatsapp.com/ABC123",
+      },
+      sendCurrentGroupStatus: async (input) => {
+        captured = input;
+      },
+    });
+    expect(result).toBe("");
+    expect(captured).toEqual({
+      text: "https://chat.whatsapp.com/ABC123",
+      repeat: 1,
+    });
+  });
+
   it("supports null no-prefix mode per session", async () => {
     const user = resolveUser(`prefix-null-${Date.now()}-${Math.random()}`);
     const session = createSession({

@@ -64,6 +64,24 @@ function session(ctx: CommandContext): WhatsAppSession {
   return getSession(ctx.workspaceId, ctx.sessionId);
 }
 
+function mediaCommandPayload(ctx: CommandContext): string {
+  const inline = ctx.args.join(" ").trim();
+  if (inline) return inline;
+  const caption = ctx.media?.caption?.trim() ?? "";
+  if (!caption) return "";
+  const invokedName = ctx.invokedName?.trim() ?? "";
+  const prefix = session(ctx).prefix;
+  const commandToken = `${prefix}${invokedName}`.trim().toLowerCase();
+  if (
+    commandToken &&
+    caption.toLowerCase().startsWith(commandToken) &&
+    (!caption[commandToken.length] ||
+      /\s/.test(caption[commandToken.length] ?? ""))
+  )
+    return caption.slice(commandToken.length).trim();
+  return caption;
+}
+
 export function createCommandRegistry(): RegisteredCommand[] {
   return [
     {
@@ -343,8 +361,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const repeat = /^\d+$/.test(ctx.args[0] ?? "")
           ? Math.max(1, Math.min(20, Number(ctx.args.shift())))
           : 1;
-        const text =
-          ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
+        const text = mediaCommandPayload(ctx);
         if (!text && !ctx.media)
           return "Usage: .allstatus [repeat] <text or media>.";
         const jobId = await ctx.enqueueJob({
@@ -369,8 +386,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           ctx.invokedName === "gstatusx" && /^\d+$/.test(ctx.args[0] ?? "")
             ? Math.max(1, Math.min(20, Number(ctx.args.shift())))
             : 1;
-        const text =
-          ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
+        const text = mediaCommandPayload(ctx);
         if (!text && !ctx.media)
           return repeat > 1
             ? "Usage: .gstatusx <count> <text or media> (or reply to a message)."
@@ -399,8 +415,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const repeat = /^\d+$/.test(ctx.args[0] ?? "")
           ? Math.max(1, Math.min(20, Number(ctx.args.shift())))
           : 1;
-        const text =
-          ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
+        const text = mediaCommandPayload(ctx);
         if (!text && !ctx.media)
           return "Usage: .allchat [repeat] <text or media>.";
         const jobId = await ctx.enqueueJob({
@@ -435,8 +450,8 @@ export function createCommandRegistry(): RegisteredCommand[] {
             ? Math.max(1, Math.min(1000, Number(ctx.args[0])))
             : undefined;
         const text = numericCount
-          ? (ctx.media?.caption?.trim() ?? "")
-          : ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
+          ? mediaCommandPayload({ ...ctx, args: [] })
+          : mediaCommandPayload(ctx);
         if (!text && !ctx.media && numericCount === undefined)
           return "Usage: .tag <payload or media> or .tag <member-count>.";
         await ctx.sendCurrentGroupHidetag({
@@ -458,8 +473,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           return "This command must be used inside a WhatsApp group.";
         if (!ctx.sendCurrentGroupHidetag)
           return "WhatsApp transport is unavailable.";
-        const text =
-          ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
+        const text = mediaCommandPayload(ctx);
         if (!text && !ctx.media) return "Usage: .stag <payload or media>.";
         await ctx.sendCurrentGroupHidetag({ text });
         return "";
