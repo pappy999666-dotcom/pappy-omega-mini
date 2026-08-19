@@ -186,6 +186,21 @@ describe("Session-scoped Join Manager settings", () => {
       beforeSecond,
     );
   });
+
+  it("normalizes unsafe delay values instead of persisting zero-delay joins", () => {
+    const workspaceId = `join-delay-${Date.now()}-${Math.random()}`;
+    const session = createSession({ workspaceId, sessionName: "delay-test" });
+    updateSessionJoinSettings(workspaceId, session.sessionId, {
+      delayMs: 0,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+    });
+    expect(getSessionJoinSettings(workspaceId, session.sessionId)).toMatchObject({
+      delayMs: 1000,
+      minDelayMs: 1000,
+      maxDelayMs: 1000,
+    });
+  });
 });
 
 describe("Global Sudo policy", () => {

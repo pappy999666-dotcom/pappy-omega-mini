@@ -339,21 +339,23 @@ export function startWorkerRuntime(): JobOrchestrator {
     const selectedLinks = new Set(
       (payload.selectedLinks ?? []).map((link) => link.trim()).filter(Boolean),
     );
-    const sourceRecords = allActive
-      .filter(
-        (record) =>
-          record.bucket === "active" &&
-          (!record.sourceSessionId || record.sourceSessionId === sessionId) &&
-          (selectedLinks.size === 0 ||
-            selectedLinks.has(record.canonicalUrl) ||
-            selectedLinks.has(record.originalUrl)),
-      )
-      .slice(
-        0,
-        payload.targetCount && payload.targetCount > 0
-          ? Math.min(payload.targetCount, allActive.length)
-          : undefined,
-      );
+    // Active links are workspace-owned work inventory. Their sourceSessionId
+    // records which session collected/validated the link; it must not prevent
+    // another explicitly selected session from joining it. The transport
+    // remains permanently bound to this job's sessionId below.
+    const activeRecords = allActive.filter(
+      (record) =>
+        record.bucket === "active" &&
+        (selectedLinks.size === 0 ||
+          selectedLinks.has(record.canonicalUrl) ||
+          selectedLinks.has(record.originalUrl)),
+    );
+    const sourceRecords = activeRecords.slice(
+      0,
+      payload.targetCount && payload.targetCount > 0
+        ? Math.min(payload.targetCount, activeRecords.length)
+        : undefined,
+    );
     const batchCycles = Math.max(
       1,
       Math.min(20, Number(payload.batchCycles ?? 1)),

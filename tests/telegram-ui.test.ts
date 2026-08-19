@@ -142,6 +142,14 @@ describe("Telegram UI authorization", () => {
     expect(adminJobsText(jobs)).not.toContain("Owner Verified");
   });
 
+  it("opens Validator Hub Live Log explicitly from the stable dashboard", async () => {
+    const { bucketKeyboard } = await import("../src/telegram/ui.js");
+    const dashboard = JSON.stringify(bucketKeyboard());
+    expect(dashboard).toContain("bucket:live");
+    expect(dashboard).toContain("Open Live Log");
+    expect(dashboard).not.toContain("bucket:live:off");
+  });
+
   it("uses one Validator Hub live dashboard with pause and resume controls", () => {
     const off = JSON.stringify(validatorLiveKeyboard(false));
     const on = JSON.stringify(validatorLiveKeyboard(true));
@@ -183,7 +191,6 @@ describe("Telegram UI authorization", () => {
     for (const section of [
       "overview",
       "tools",
-      "groups",
       "bridge",
       "validator",
       "join",
@@ -193,6 +200,7 @@ describe("Telegram UI authorization", () => {
       expect(userSession).toContain(`session:session-1:section:${section}`);
     }
     expect(userSession).not.toContain("session:session-1:section:access");
+    expect(userSession).toContain("session:session-1:groups");
     expect(userSession).toContain("session:session-1:action:purge");
     expect(userSession).toContain("session:session-1:action:reconnect");
     expect(userSession).not.toContain("Coming soon");

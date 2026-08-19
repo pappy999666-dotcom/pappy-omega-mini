@@ -216,7 +216,7 @@ export function sessionKeyboard(
       btn("🧰 WhatsApp Tools", `session:${id}:section:tools`),
     ],
     [
-      btn("👥 My Groups", `session:${id}:section:groups`),
+      btn("👥 My Groups", `session:${id}:groups`),
       btn("🌉 Session Bridge", `session:${id}:section:bridge`),
     ],
     [
@@ -374,7 +374,7 @@ export function validatorLiveText(
     "Validator Hub · Live",
     infoResponse(
       active ? "Live dashboard is ON" : "Live dashboard is PAUSED",
-      `<b>What you see:</b> live collection and validation changes for this workspace.\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Error:</b> ${snapshot.counts.error ?? 0}\n<b>Master total:</b> ${snapshot.counts.master ?? 0}\n\n<b>Live validation workers</b>\n${work}\n\n<b>Recent records</b>\n${recent}\n\n<i>Buttons pause this message’s refresh only. Returning to Validator Hub resumes it.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+      `<b>What you see:</b> live collection and validation changes for this workspace.\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Error:</b> ${snapshot.counts.error ?? 0}\n<b>Master total:</b> ${snapshot.counts.master ?? 0}\n\n<b>Live validation workers</b>\n${work}\n\n<b>Recent records</b>\n${recent}\n\n<i>Stop pauses this message’s live refresh only. The Validator Hub dashboard remains available; open Live Log again when you want the feed.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
     ),
   );
 }
@@ -388,7 +388,8 @@ export function validatorLiveKeyboard(active = false): InlineKeyboardMarkup {
         active ? "danger" : "success",
       ),
     ],
-    [btn("↻ Refresh Dashboard", "bucket:live:refresh")],
+    [btn("↻ Refresh Live Log", "bucket:live:refresh")],
+    [btn("‹ Validator Hub", "bucket:status")],
     [btn(ui.back, "menu:main")],
   ]);
 }
@@ -396,10 +397,9 @@ export function validatorLiveKeyboard(active = false): InlineKeyboardMarkup {
 export function bucketKeyboard(): InlineKeyboardMarkup {
   return keyboard([
     [
-      btn("⏹ Stop Live Refresh", "bucket:live:off", "danger"),
-      btn("▶ Validate Master", "bucket:validate", "success"),
+      btn("▶ Open Live Log", "bucket:live", "success"),
+      btn("↻ Refresh Dashboard", "bucket:status", "primary"),
     ],
-    [btn("↻ Refresh Live Dashboard", "bucket:status")],
     [
       btn("📦 Main / Master", "bucket:view:main"),
       btn("✅ Active", "bucket:view:active"),

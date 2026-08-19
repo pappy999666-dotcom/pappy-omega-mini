@@ -1471,6 +1471,13 @@ export function createTelegramBot(): Telegraf<Context> {
     await sendSessions(ctx, Number(ctx.match[1] ?? 0));
   });
 
+  bot.action(/^session:([^:]+):groups$/, async (ctx) => {
+    await ctx.answerCbQuery("Loading groups…");
+    const session = ownedSession(ctx, ctx.match[1] ?? "");
+    if (!session) return deny(ctx);
+    await showSessionGroups(ctx, session.sessionId);
+  });
+
   bot.action(/^session:([^:]+):menu$/, async (ctx) => {
     await ctx.answerCbQuery();
     const session = ownedSession(ctx, ctx.match[1] ?? "");
@@ -2471,12 +2478,12 @@ export function createTelegramBot(): Telegraf<Context> {
     await showValidatorHub(ctx);
   });
   bot.action("bucket:live", async (ctx) => {
-    await ctx.answerCbQuery();
-    await showValidatorHub(ctx);
+    await ctx.answerCbQuery("Opening live log…");
+    await showValidatorLiveLog(ctx, true);
   });
   bot.action("bucket:live:on", async (ctx) => {
-    await ctx.answerCbQuery("Live dashboard resumed");
-    await showValidatorHub(ctx);
+    await ctx.answerCbQuery("Live log resumed");
+    await showValidatorLiveLog(ctx, true);
   });
   bot.action("bucket:live:off", async (ctx) => {
     await ctx.answerCbQuery("Live log stopped");
@@ -2484,7 +2491,7 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.action("bucket:live:refresh", async (ctx) => {
     await ctx.answerCbQuery();
-    await showValidatorHub(ctx);
+    await showValidatorLiveLog(ctx, true);
   });
   bot.action("bucket:downloads", async (ctx) => {
     await ctx.answerCbQuery();
@@ -3225,8 +3232,8 @@ export function createTelegramBot(): Telegraf<Context> {
             : operation === "setdelay"
               ? {
                   defaultJoinDelayMs:
-                    [0, 5000, 10000, 30000][
-                      ([0, 5000, 10000, 30000].indexOf(
+                    [5000, 10000, 30000, 60000][
+                      ([5000, 10000, 30000, 60000].indexOf(
                         current.defaultJoinDelayMs,
                       ) +
                         1) %
@@ -4542,7 +4549,11 @@ async function showAdminJobs(ctx: Context): Promise<void> {
 }
 
 async function showValidatorHub(ctx: Context): Promise<void> {
-  await showValidatorLiveLog(ctx, true);
+  const user = resolveTelegramUser(ctx);
+  validatorLiveStates.set(user.workspaceId, false);
+  stopValidatorLiveLoops(user.workspaceId);
+  const snapshot = await getValidatorSnapshot(user.workspaceId);
+  await edit(ctx, validatorDashboardText(snapshot), bucketKeyboard());
 }
 
 async function showValidatorLiveLog(

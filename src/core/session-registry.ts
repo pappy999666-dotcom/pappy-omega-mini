@@ -88,7 +88,32 @@ function normalizedSessionJoinSettings(
   workspaceId: string,
   current?: Partial<SessionJoinSettings>,
 ): SessionJoinSettings {
-  return { ...joinSettingsFromWorkspace(workspaceId), ...(current ?? {}) };
+  const base = joinSettingsFromWorkspace(workspaceId);
+  const next = { ...base, ...(current ?? {}) };
+  const clamp = (value: number, min: number, max: number): number =>
+    Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
+  const minDelayMs = clamp(next.minDelayMs, 1000, 600000);
+  const maxDelayMs = Math.max(
+    minDelayMs,
+    clamp(next.maxDelayMs, minDelayMs, 600000),
+  );
+  return {
+    ...next,
+    targetCount: clamp(next.targetCount, 1, 10000),
+    delayMs: clamp(next.delayMs, 1000, 600000),
+    minDelayMs,
+    maxDelayMs,
+    batchCycles: clamp(next.batchCycles, 1, 20),
+    maxConcurrency: clamp(next.maxConcurrency, 1, 10),
+    retryLimit: clamp(next.retryLimit, 0, 5),
+    retryBaseMs: clamp(next.retryBaseMs, 1000, 600000),
+    sessionCooldownMs: clamp(next.sessionCooldownMs, 0, 3600000),
+    restrictionThreshold: clamp(next.restrictionThreshold, 1, 20),
+    mode:
+      next.mode === "immediate" || next.mode === "request"
+        ? next.mode
+        : "auto",
+  };
 }
 
 export function getSessionJoinSettings(
