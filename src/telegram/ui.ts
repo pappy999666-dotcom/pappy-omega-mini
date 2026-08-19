@@ -50,6 +50,33 @@ export function keyboard(rows: Button[][]): InlineKeyboardMarkup {
   return { inline_keyboard: rows } as InlineKeyboardMarkup;
 }
 
+export function groupStartKeyboard(isModerator: boolean): InlineKeyboardMarkup {
+  const rows: Button[][] = [
+    [btn("📜 Group Rules", "group:start:rules")],
+    [btn("🔄 Refresh", "group:start:refresh")],
+  ];
+  if (isModerator) rows.push([btn("🛡 Moderator Controls", "mod:refresh", "success")]);
+  return keyboard(rows);
+}
+
+export function groupStartText(
+  title: string,
+  isModerator: boolean,
+  rules?: string,
+): string {
+  return pageText(
+    "Pappy Omega Mini",
+    infoResponse(
+      "WhatsApp Bot · Group Menu",
+      `<b>Group:</b> ${escapeHtml(title)}\\n\\n` +
+        "This is the compact group menu for the Pappy WhatsApp bot.\\n" +
+        `<b>Access:</b> ${isModerator ? "Moderator controls enabled" : "Member view"}\\n\\n` +
+        `<b>Rules:</b> ${escapeHtml(rules ?? "No group rules have been configured.")}\\n\\n` +
+        "Member moderation actions require a reply and the matching slash command. Configuration stays inside the moderator controls.",
+    ),
+  );
+}
+
 export function dashboardKeyboard(isAdmin: boolean): InlineKeyboardMarkup {
   const rows: Button[][] = [
     [

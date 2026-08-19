@@ -37,6 +37,7 @@ import {
   createSupportTicket,
   updateSupportTicket,
   listUsers,
+  loadModeratorGroup,
   removeForceJoinTarget,
   savePairingRequest,
   saveSchedule,
@@ -95,6 +96,8 @@ import {
   bridgeSessionPicker,
   dashboardKeyboard,
   dashboardText,
+  groupStartKeyboard,
+  groupStartText,
   featureText,
   globalBridgeKeyboard,
   globalBridgeText,
@@ -238,6 +241,21 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.start(async (ctx) => {
     resolveTelegramUser(ctx);
+    const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+    if (isGroup && ctx.chat) {
+      const group = await loadModeratorGroup(String(ctx.chat.id)).catch(() => undefined);
+      let moderator = false;
+      if (ctx.from) {
+        const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id).catch(() => undefined);
+        moderator = member?.status === "creator" || member?.status === "administrator";
+      }
+      const title = "title" in ctx.chat ? ctx.chat.title : "Telegram group";
+      await ctx.reply(groupStartText(title, moderator, group?.rules), {
+        parse_mode: "HTML",
+        reply_markup: groupStartKeyboard(moderator),
+      });
+      return;
+    }
     if (!isAdmin(ctx)) {
       const gate = await getForceJoinGate(ctx);
       if (!gate.allowed) {
@@ -252,6 +270,32 @@ export function createTelegramBot(): Telegraf<Context> {
       parse_mode: "HTML",
       reply_markup: dashboardKeyboard(isAdmin(ctx)),
     });
+  });
+
+  bot.action("group:start:refresh", async (ctx) => {
+    await ctx.answerCbQuery("Refreshing…");
+    if (!ctx.chat || (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup")) return;
+    const group = await loadModeratorGroup(String(ctx.chat.id)).catch(() => undefined);
+    const title = "title" in ctx.chat ? ctx.chat.title : "Telegram group";
+    let moderator = false;
+    if (ctx.from) {
+      const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id).catch(() => undefined);
+      moderator = member?.status === "creator" || member?.status === "administrator";
+    }
+    await edit(ctx, groupStartText(title, moderator, group?.rules), groupStartKeyboard(moderator));
+  });
+
+  bot.action("group:start:rules", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!ctx.chat || (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup")) return;
+    const group = await loadModeratorGroup(String(ctx.chat.id)).catch(() => undefined);
+    const title = "title" in ctx.chat ? ctx.chat.title : "Telegram group";
+    let moderator = false;
+    if (ctx.from) {
+      const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id).catch(() => undefined);
+      moderator = member?.status === "creator" || member?.status === "administrator";
+    }
+    await edit(ctx, groupStartText(title, moderator, group?.rules), groupStartKeyboard(moderator));
   });
 
   bot.command("help", async (ctx) =>
