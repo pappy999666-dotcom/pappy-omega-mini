@@ -355,6 +355,13 @@ async function callbackModerator(ctx: Context): Promise<ModeratorGroupRecord | u
   return ensureGroup(ctx);
 }
 
+export async function openModeratorDashboard(ctx: Context): Promise<void> {
+  const group = await callbackModerator(ctx);
+  if (!group) return;
+  await ctx.answerCbQuery("Opening moderator controls…");
+  await editModeratorDashboard(ctx, group);
+}
+
 function callbackMessageId(ctx: Context): number | undefined {
   const message = ctx.callbackQuery?.message;
   return message && "message_id" in message ? message.message_id : undefined;

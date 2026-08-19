@@ -55,7 +55,7 @@ export function groupStartKeyboard(isModerator: boolean): InlineKeyboardMarkup {
     [btn("📜 Group Rules", "group:start:rules")],
     [btn("🔄 Refresh", "group:start:refresh")],
   ];
-  if (isModerator) rows.push([btn("🛡 Moderator Controls", "mod:refresh", "success")]);
+  if (isModerator) rows.push([btn("🛡 Moderator Controls", "group:start:moderation", "success")]);
   return keyboard(rows);
 }
 
@@ -68,11 +68,11 @@ export function groupStartText(
     "Pappy Omega Mini",
     infoResponse(
       "WhatsApp Bot · Group Menu",
-      `<b>Group:</b> ${escapeHtml(title)}\\n\\n` +
-        "This is the compact group menu for the Pappy WhatsApp bot.\\n" +
-        `<b>Access:</b> ${isModerator ? "Moderator controls enabled" : "Member view"}\\n\\n` +
-        `<b>Rules:</b> ${escapeHtml(rules ?? "No group rules have been configured.")}\\n\\n` +
-        "Member moderation actions require a reply and the matching slash command. Configuration stays inside the moderator controls.",
+      `<b>Group:</b> ${escapeHtml(title)}\n` +
+        "WhatsApp bot group menu\n\n" +
+        `<b>View:</b> ${isModerator ? "Moderator" : "Member"}\n` +
+        `<b>Rules:</b> ${escapeHtml(rules ?? "Not configured.")}\n\n` +
+        "Reply to a member for moderation commands.",
     ),
   );
 }

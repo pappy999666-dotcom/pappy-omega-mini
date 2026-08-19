@@ -72,6 +72,7 @@ import {
   installModeratorCommands,
   installModeratorProtection,
   moderatorCommandScopes,
+  openModeratorDashboard,
 } from "./moderator.js";
 import {
   adminKeyboard,
@@ -296,6 +297,13 @@ export function createTelegramBot(): Telegraf<Context> {
       moderator = member?.status === "creator" || member?.status === "administrator";
     }
     await edit(ctx, groupStartText(title, moderator, group?.rules), groupStartKeyboard(moderator));
+  });
+  bot.action("group:start:moderation", async (ctx) => {
+    if (!ctx.chat || (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup")) {
+      await ctx.answerCbQuery("Open this in a Telegram group.", { show_alert: true });
+      return;
+    }
+    await openModeratorDashboard(ctx);
   });
 
   bot.command("help", async (ctx) =>
