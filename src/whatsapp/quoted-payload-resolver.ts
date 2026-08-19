@@ -20,13 +20,14 @@ const MEDIA_KINDS: WhatsAppMediaKind[] = [
 export function extractMessageText(
   message: Record<string, unknown> | undefined,
 ): string {
-  const conversation = message?.conversation;
+  const content = normalizedContent(message);
+  const conversation = content?.conversation;
   if (typeof conversation === "string") return conversation;
-  const extended = message?.extendedTextMessage;
+  const extended = content?.extendedTextMessage;
   if (isRecord(extended) && typeof extended.text === "string")
     return extended.text;
   for (const kind of MEDIA_KINDS) {
-    const media = message?.[`${kind}Message`];
+    const media = content?.[`${kind}Message`];
     if (isRecord(media) && typeof media.caption === "string")
       return media.caption;
   }
@@ -36,7 +37,8 @@ export function extractMessageText(
 export function extractQuotedMessage(
   message: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
-  const extended = message?.extendedTextMessage;
+  const content = normalizedContent(message);
+  const extended = content?.extendedTextMessage;
   const contextInfo = isRecord(extended) ? extended.contextInfo : undefined;
   const quoted = isRecord(contextInfo) ? contextInfo.quotedMessage : undefined;
   return isRecord(quoted) ? quoted : undefined;
@@ -53,17 +55,22 @@ export async function resolveMediaPayload(
   envelope: MessageEnvelope,
   socket: unknown,
 ): Promise<WhatsAppMediaPayload | undefined> {
-  const media = findMedia(envelope.message);
+  const content = normalizedContent(envelope.message);
+  const media = findMedia(content);
   if (!media) return undefined;
   try {
+    const downloadEnvelope =
+      content && content !== envelope.message
+        ? { ...envelope, message: content }
+        : envelope;
     const bytes = await downloadMediaMessage(
-      envelope as never,
+      downloadEnvelope as never,
       "buffer",
       {},
       socket as never,
     );
     if (!Buffer.isBuffer(bytes)) return undefined;
-    const mediaBody = envelope.message?.[`${media.kind}Message`];
+    const mediaBody = content?.[`${media.kind}Message`];
     const body = isRecord(mediaBody) ? mediaBody : {};
     const caption = typeof body.caption === "string" ? body.caption : undefined;
     const mimeType =
@@ -79,9 +86,41 @@ export async function resolveMediaPayload(
       ...(caption ? { caption } : {}),
       ...(ptt !== undefined ? { ptt } : {}),
     };
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[pappy-omega-mini] inbound media download failed kind=${media.kind} message=${String(envelope.key?.id ?? "unknown")}: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return undefined;
   }
+}
+
+function normalizedContent(
+  message: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!message) return undefined;
+  let current = message;
+  for (let index = 0; index < 5; index += 1) {
+    const wrapperKey = [
+      "associatedChildMessage",
+      "botForwardedMessage",
+      "botInvokeMessage",
+      "botTaskMessage",
+      "documentWithCaptionMessage",
+      "editedMessage",
+      "ephemeralMessage",
+      "groupStatusMessage",
+      "groupStatusMessageV2",
+      "statusMentionMessage",
+      "viewOnceMessage",
+      "viewOnceMessageV2",
+      "viewOnceMessageV2Extension",
+    ].find((key) => isRecord(current?.[key]));
+    if (!wrapperKey) break;
+    const wrapper = current[wrapperKey];
+    if (!isRecord(wrapper)) break;
+    current = isRecord(wrapper.message) ? wrapper.message : wrapper;
+  }
+  return current;
 }
 
 function findMedia(

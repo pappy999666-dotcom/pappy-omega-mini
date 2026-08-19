@@ -1,4 +1,5 @@
 import sharp from "sharp";
+import { env } from "../config/env.js";
 import {
   PreviewManager,
   assertSafePreviewUrl,
@@ -100,7 +101,15 @@ async function resolveThumbnail(
   const input = Buffer.from(await response.arrayBuffer());
   if (!input.length || input.length > maxThumbnailBytes)
     throw new Error("Preview thumbnail is empty or too large.");
-  const normalized = await sharp(input, { limitInputPixels: 40_000_000 })
+  const normalized = await normalizeImageBuffer(input);
+  return {
+    thumbnailUrl: finalUrl,
+    thumbnailData: normalized.toString("base64"),
+  };
+}
+
+async function normalizeImageBuffer(input: Buffer): Promise<Buffer> {
+  return sharp(input, { limitInputPixels: 40_000_000 })
     .rotate()
     .resize({
       width: 1200,
@@ -108,12 +117,59 @@ async function resolveThumbnail(
       fit: "inside",
       withoutEnlargement: true,
     })
-    .jpeg({ quality: 92, chromaSubsampling: "4:4:4" })
+    .sharpen({ sigma: 0.7, m1: 0.5, m2: 1.2 })
+    .jpeg({ quality: 94, chromaSubsampling: "4:4:4" })
     .toBuffer();
-  return {
-    thumbnailUrl: finalUrl,
-    thumbnailData: normalized.toString("base64"),
+}
+
+function telegramPublicUsername(url: string): string | undefined {
+  const match = url.match(
+    /^https?:\/\/(?:t\.me|telegram\.me)\/(?:s\/)?([A-Za-z0-9_]{5,32})\/?$/i,
+  );
+  return match?.[1];
+}
+
+async function resolveTelegramProfileImage(
+  url: string,
+): Promise<string | undefined> {
+  const token = env.TELEGRAM_BOT_TOKEN;
+  const username = telegramPublicUsername(url);
+  if (!token || !username) return undefined;
+  const api = `https://api.telegram.org/bot${token}`;
+  const chatResponse = await fetch(
+    `${api}/getChat?chat_id=${encodeURIComponent(`@${username}`)}`,
+    { signal: AbortSignal.timeout(3_000) },
+  );
+  if (!chatResponse.ok) return undefined;
+  const chat = (await chatResponse.json()) as {
+    ok?: boolean;
+    result?: { photo?: { big_file_id?: string } };
   };
+  const fileId = chat.result?.photo?.big_file_id;
+  if (!chat.ok || !fileId) return undefined;
+  const fileResponse = await fetch(`${api}/getFile`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ file_id: fileId }),
+    signal: AbortSignal.timeout(3_000),
+  });
+  if (!fileResponse.ok) return undefined;
+  const file = (await fileResponse.json()) as {
+    ok?: boolean;
+    result?: { file_path?: string };
+  };
+  const filePath = file.result?.file_path;
+  if (!file.ok || !filePath) return undefined;
+  const imageResponse = await fetch(
+    `${api.replace("api.telegram.org", "api.telegram.org/file")}/${filePath}`,
+    {
+      signal: AbortSignal.timeout(3_000),
+    },
+  );
+  if (!imageResponse.ok) return undefined;
+  const input = Buffer.from(await imageResponse.arrayBuffer());
+  if (!input.length || input.length > maxThumbnailBytes) return undefined;
+  return (await normalizeImageBuffer(input)).toString("base64");
 }
 
 const adapter: PreviewAdapter = {
@@ -162,8 +218,13 @@ const adapter: PreviewAdapter = {
     const description =
       values.get("og:description") ?? values.get("description");
     const siteName = values.get("og:site_name");
-    let thumbnail: { thumbnailUrl: string; thumbnailData?: string } | undefined;
-    for (const candidate of candidates.slice(0, 4)) {
+    let thumbnail:
+      { thumbnailUrl?: string; thumbnailData?: string } | undefined;
+    const telegramThumbnail = await resolveTelegramProfileImage(url).catch(
+      () => undefined,
+    );
+    if (telegramThumbnail) thumbnail = { thumbnailData: telegramThumbnail };
+    for (const candidate of thumbnail ? [] : candidates.slice(0, 4)) {
       try {
         thumbnail = await resolveThumbnail(candidate);
         break;

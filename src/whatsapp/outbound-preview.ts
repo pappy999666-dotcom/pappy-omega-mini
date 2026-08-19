@@ -78,13 +78,16 @@ export function buildNativeGroupStatusPreviewContent(
   content: Record<string, unknown>,
   record: PreviewRecord,
 ): Record<string, unknown> {
+  const previewImage = record.thumbnailData
+    ? Buffer.from(record.thumbnailData, "base64")
+    : record.thumbnailUrl;
   return {
     ...content,
     richPreview: true,
     text: record.canonicalUrl,
     ...(record.title ? { previewTitle: record.title } : {}),
     ...(record.description ? { previewDescription: record.description } : {}),
-    ...(record.thumbnailUrl ? { previewImage: record.thumbnailUrl } : {}),
+    ...(previewImage ? { previewImage } : {}),
     groupStatus: true,
   };
 }

@@ -105,7 +105,7 @@ describe("preview acceptance safeguards", () => {
       text: "https://chat.whatsapp.com/ABC123",
       previewTitle: "Mythic Vault",
       previewDescription: "A channel preview",
-      previewImage: "https://cdn.example.com/card.jpg",
+      previewImage: Buffer.from("low-res-cache"),
     });
     expect(content).not.toHaveProperty("jpegThumbnail");
   });
