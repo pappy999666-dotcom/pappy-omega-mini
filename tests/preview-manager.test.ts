@@ -55,7 +55,7 @@ describe("canonical Baileys-native preview pipeline", () => {
     ) as typeof fetch;
     try {
       const text =
-        "https://chat.whatsapp.com/JjF3McLM5gIKNz7zaQKJbZ?s=cl&p=a&mlu=4";
+        "Join this group now: https://chat.whatsapp.com/JjF3McLM5gIKNz7zaQKJbZ?s=cl&p=a&mlu=4 — welcome.";
       const content = await prepareCanonicalPreviewContent({
         text,
         content: { text },

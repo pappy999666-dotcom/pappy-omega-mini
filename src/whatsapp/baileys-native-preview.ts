@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { env } from "../config/env.js";
 import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
 
-const PREVIEW_CACHE_VERSION = "v5";
+const PREVIEW_CACHE_VERSION = "v6";
 const PREVIEW_TTL_SECONDS = 7 * 24 * 60 * 60;
 const PREVIEW_FAILURE_TTL_SECONDS = 60;
 const FETCH_TIMEOUT_MS = 8_000;
@@ -434,8 +434,13 @@ async function resolveRecord(
 ): Promise<CanonicalPreviewRecord | undefined> {
   const groupCode = groupInviteCode(canonicalUrl);
   if (groupCode && socket?.groupGetInviteInfo) {
+    let info: Record<string, unknown> | undefined;
     try {
-      const info = await socket.groupGetInviteInfo(groupCode);
+      info = await socket.groupGetInviteInfo(groupCode);
+    } catch {
+      info = undefined;
+    }
+    if (info) {
       const groupId = typeof info.id === "string" ? info.id : undefined;
       const candidates = [
         imageUrlFromValue(info.profilePic),
@@ -452,7 +457,19 @@ async function resolveRecord(
         const profileUrl = await socket.profilePictureUrl(groupId, "image").catch(() => null);
         if (profileUrl) candidates.push(profileUrl);
       }
-      const image = await resolveImageCandidates(candidates);
+      let image = await resolveImageCandidates(candidates);
+      if (!image) {
+        try {
+          const page = await readHtml(canonicalUrl);
+          const metadata = parsePageMetadata(page.html, page.finalUrl);
+          for (const candidate of metadata.images.slice(0, 8)) {
+            image = await resolveImageCandidates([candidate.url]);
+            if (image) break;
+          }
+        } catch {
+          // Socket metadata remains usable even when the public page image fails.
+        }
+      }
       return {
         schemaVersion: 4,
         canonicalUrl,
@@ -462,8 +479,6 @@ async function resolveRecord(
         fetchedAt: Date.now(),
         expiresAt: Date.now() + PREVIEW_TTL_SECONDS * 1000,
       };
-    } catch {
-      return undefined;
     }
   }
 
@@ -514,7 +529,12 @@ async function readCached(key: string): Promise<CanonicalPreviewRecord | undefin
 
 async function writeCached(key: string, value: CanonicalPreviewRecord): Promise<void> {
   try {
-    await getRedis().set(key, JSON.stringify(value), "EX", PREVIEW_TTL_SECONDS);
+    const ttl = value.imageData
+      ? PREVIEW_TTL_SECONDS
+      : groupInviteCode(value.canonicalUrl)
+        ? PREVIEW_FAILURE_TTL_SECONDS
+        : PREVIEW_TTL_SECONDS;
+    await getRedis().set(key, JSON.stringify(value), "EX", ttl);
   } catch {
     // Redis failure cannot block a WhatsApp send.
   }
@@ -528,7 +548,8 @@ async function resolveCached(
   const canonicalUrl = canonicalizePreviewUrl(url);
   const key = cacheKey(scope, canonicalUrl);
   const cached = await readCached(key);
-  if (cached) return { record: cached, cache: "HIT" };
+  if (cached && (cached.imageData || !groupInviteCode(canonicalUrl)))
+    return { record: cached, cache: "HIT" };
   const runningKey = `${scope ?? "global"}:${canonicalUrl}`;
   const running = inFlight.get(runningKey);
   if (running) return { record: await running, cache: "MISS" };
@@ -607,6 +628,7 @@ async function nativeLinkPreview(
       })();
       nativeUploadCache.set(uploadKey, pending);
       highQualityThumbnail = await pending;
+      if (!highQualityThumbnail) nativeUploadCache.delete(uploadKey);
     }
   }
   return {
