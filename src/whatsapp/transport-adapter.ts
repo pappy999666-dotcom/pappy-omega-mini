@@ -51,7 +51,7 @@ export function hasTransportCapability(
     profilePicture: ["updateProfilePicture", "profilePictureUrl"],
     groupMetadata: ["groupFetchAllParticipating", "groupMetadata"],
     groupInviteLink: ["groupInviteCode"],
-    groupStatus: ["sendGroupStatus"],
+    groupStatus: ["sendGroupStatus", "sendMessage"],
     mentions: ["sendMessage"],
   };
   return methods[capability].some((name) => Boolean(method(socket, name)));
@@ -255,9 +255,15 @@ export async function sendGroupStatus(
   jid: string,
   payload: { text?: string; image?: unknown; video?: unknown },
 ): Promise<void> {
-  const send = method(socketFor(workspaceId, sessionId), "sendGroupStatus");
+  const socket = socketFor(workspaceId, sessionId);
+  const native = method(socket, "sendGroupStatus");
+  if (native) {
+    await native(jid, payload);
+    return;
+  }
+  const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: groupStatus");
-  await send(jid, payload);
+  await send(jid, { ...payload, groupStatus: true });
 }
 
 export async function updateWhatsAppGroupSubject(
