@@ -6,7 +6,7 @@ import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { getWorkerRuntime } from "../jobs/runtime.js";
 import {
   listGroups,
-  sendGroupHidetag,
+  sendGroupMentions,
   sendGroupStatus,
 } from "./transport-adapter.js";
 import { buildWhatsappMenuPayload } from "../menus/whatsapp-menu.js";
@@ -135,6 +135,9 @@ export async function routeWhatsAppText(
                   ...(message.media.fileName
                     ? { fileName: message.media.fileName }
                     : {}),
+                  ...(message.media.ptt !== undefined
+                    ? { ptt: message.media.ptt }
+                    : {}),
                 })
               : undefined;
             const enrichedPayload = {
@@ -158,14 +161,22 @@ export async function routeWhatsAppText(
           },
         }
       : {}),
-    sendCurrentGroupHidetag: async (text: string) => {
+    sendCurrentGroupHidetag: async ({
+      text,
+      participantCount,
+    }: {
+      text: string;
+      participantCount?: number;
+    }) => {
       if (!message.chatJid || !message.chatJid.endsWith("@g.us"))
         throw new Error("This command must be used inside a WhatsApp group.");
-      await sendGroupHidetag(
+      await sendGroupMentions(
         message.workspaceId,
         message.sessionId,
         message.chatJid,
         text,
+        participantCount,
+        message.media,
       );
     },
     sendCurrentGroupStatus: async ({

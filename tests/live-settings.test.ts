@@ -7,7 +7,7 @@ import {
 } from "../src/core/session-registry.js";
 
 describe("live workspace settings", () => {
-  it("propagates defaults across owned sessions only", () => {
+  it("keeps existing session settings isolated while updating workspace defaults", () => {
     const workspaceId = `workspace-live-${Date.now()}`;
     const otherWorkspaceId = `${workspaceId}-other`;
     const first = createSession({ workspaceId, sessionName: "first" });
@@ -27,7 +27,7 @@ describe("live workspace settings", () => {
     expect(getWorkspaceDefaults(workspaceId).defaultPrefix).toBe("!");
     expect(
       listSessions(workspaceId).filter(
-        (item) => item.autoJoinEnabled && item.prefix === "!",
+        (item) => !item.autoJoinEnabled && item.prefix === ".",
       ),
     ).toHaveLength(2);
     expect(other.autoJoinEnabled).toBe(false);

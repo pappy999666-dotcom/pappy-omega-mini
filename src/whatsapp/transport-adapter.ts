@@ -408,7 +408,7 @@ export async function sendGroupMentions(
   const participants = await getGroupParticipants(workspaceId, sessionId, jid);
   const selected = participants.slice(
     0,
-    Math.max(1, Math.min(participantCount ?? participants.length, 100)),
+    Math.max(1, Math.min(participantCount ?? participants.length, 1000)),
   );
   // Keep the body plain and pass recipients only through hidden mention
   // metadata; the shared pipeline handles URL preview preparation.

@@ -456,8 +456,6 @@ export function joinManagerKeyboard(
 export function workspaceSettingsKeyboard(settings: {
   defaultAutoJoinEnabled: boolean;
   defaultPrefix: string;
-  defaultJoinDelayMs: number;
-  defaultJoinMode?: "auto" | "immediate" | "request";
 }): InlineKeyboardMarkup {
   return keyboard([
     [
@@ -473,18 +471,7 @@ export function workspaceSettingsKeyboard(settings: {
         "settings:prefix:cycle",
       ),
     ],
-    [
-      btn(
-        `Join delay: ${Math.round(settings.defaultJoinDelayMs / 1000)}s`,
-        "settings:delay:cycle",
-      ),
-    ],
-    [
-      btn(
-        `Join mode: ${(settings.defaultJoinMode ?? "auto").toUpperCase()}`,
-        "settings:joinmode:cycle",
-      ),
-    ],
+    [btn("Join Manager settings are per session", "menu:sessions")],
     [btn("↻ Refresh", "settings:menu")],
     [btn(ui.back, "menu:main")],
   ]);
@@ -890,14 +877,12 @@ export function sessionText(session: WhatsAppSession): string {
 export function workspaceSettingsText(settings: {
   defaultAutoJoinEnabled: boolean;
   defaultPrefix: string;
-  defaultJoinDelayMs: number;
-  defaultJoinMode?: "auto" | "immediate" | "request";
 }): string {
   return pageText(
     "Workspace Settings",
     infoResponse(
-      "Applies to all owned sessions",
-      `<b>Auto-join:</b> ${settings.defaultAutoJoinEnabled ? "ON" : "OFF"}\n<b>Default prefix:</b> <code>${escapeHtml(settings.defaultPrefix || "none")}</code>\n<b>Join delay:</b> <code>${Math.round(settings.defaultJoinDelayMs / 1000)}s</code>\n<b>Join mode:</b> <code>${escapeHtml((settings.defaultJoinMode ?? "auto").toUpperCase())}</code>\n\nAUTO uses Baileys’ response: immediate joins stay joined, approval-required invites are tracked as pending, and dead links are returned to Main.`,
+      "Workspace-wide defaults",
+      `<b>Auto-join default:</b> ${settings.defaultAutoJoinEnabled ? "ON" : "OFF"}\n<b>Prefix default:</b> <code>${escapeHtml(settings.defaultPrefix || "none")}</code>\n\nJoin Manager delay, concurrency, retry, cooldown, target, and mode are configured inside each WhatsApp session and never change another session.`,
     ),
   );
 }

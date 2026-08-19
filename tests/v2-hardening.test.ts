@@ -8,7 +8,12 @@ import {
 } from "../src/core/control-plane.js";
 import { createSafeError, renderSafeError } from "../src/core/errors.js";
 import { classifyDisconnect } from "../src/whatsapp/session-manager.js";
-import { createSession, updateSession } from "../src/core/session-registry.js";
+import {
+  createSession,
+  getSessionJoinSettings,
+  updateSession,
+  updateSessionJoinSettings,
+} from "../src/core/session-registry.js";
 import { selectHealthyWhatsAppSession } from "../src/whatsapp/session-allocator.js";
 import { routeWhatsAppText } from "../src/whatsapp/message-router.js";
 import {
@@ -135,6 +140,28 @@ describe("WhatsApp command smoke paths", () => {
     );
     expect(response).toContain("job-smoke");
     expect(captured).toMatchObject({ text: "hello", count: 3 });
+  });
+});
+
+describe("Session-scoped Join Manager settings", () => {
+  it("isolates settings between sessions and persists the updated shape", () => {
+    const workspaceId = `join-settings-${Date.now()}-${Math.random()}`;
+    const first = createSession({ workspaceId, sessionName: "first" });
+    const second = createSession({ workspaceId, sessionName: "second" });
+    const beforeSecond = getSessionJoinSettings(workspaceId, second.sessionId);
+    updateSessionJoinSettings(workspaceId, first.sessionId, {
+      targetCount: 1000,
+      mode: "request",
+      maxConcurrency: 5,
+    });
+    expect(getSessionJoinSettings(workspaceId, first.sessionId)).toMatchObject({
+      targetCount: 1000,
+      mode: "request",
+      maxConcurrency: 5,
+    });
+    expect(getSessionJoinSettings(workspaceId, second.sessionId)).toEqual(
+      beforeSecond,
+    );
   });
 });
 

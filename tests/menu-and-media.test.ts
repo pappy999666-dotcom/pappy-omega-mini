@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { extractUrls } from "../src/links/link-collector.js";
 import {
   createSession,
+  getSession,
   resolveUser,
   updateSession,
 } from "../src/core/session-registry.js";
@@ -255,6 +256,49 @@ describe("WhatsApp command registry", () => {
     });
   });
 
+  it("supports null no-prefix mode per session", async () => {
+    const user = resolveUser(`prefix-null-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "prefix-null",
+      phoneNumber: "2348012345678",
+    });
+    const result = await executeCommand(
+      createCommandRegistry(),
+      "setprefix null",
+      {
+        workspaceId: user.workspaceId,
+        sessionId: session.sessionId,
+        isOwner: true,
+        args: [],
+      },
+    );
+    expect(result).toContain("none");
+    expect(getSession(user.workspaceId, session.sessionId).prefix).toBe("");
+  });
+
+  it("supports numeric tag member counts without rewriting literal payloads", async () => {
+    const user = resolveUser(`tag-count-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "tag-count",
+      phoneNumber: "2348012345678",
+    });
+    let captured: { text: string; participantCount?: number } | undefined;
+    const result = await executeCommand(createCommandRegistry(), "tag 1000", {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      chatJid: "120363000000000000@g.us",
+      args: [],
+      sendCurrentGroupHidetag: async (input) => {
+        captured = input;
+      },
+    });
+    expect(result).toBe("");
+    expect(captured).toEqual({ text: "", participantCount: 1000 });
+  });
+
   it("sends literal tag payload directly without listing members", async () => {
     const user = resolveUser(`tag-${Date.now()}-${Math.random()}`);
     const session = createSession({
@@ -272,7 +316,7 @@ describe("WhatsApp command registry", () => {
         isOwner: true,
         chatJid: "120363000000000000@g.us",
         args: [],
-        sendCurrentGroupHidetag: async (text) => {
+        sendCurrentGroupHidetag: async ({ text }) => {
           captured = text;
         },
       },

@@ -7,7 +7,9 @@ import {
   listAllSessions,
   createSession,
   getSession,
+  getSessionJoinSettings,
   updateSession,
+  updateSessionJoinSettings,
   setUserStatusLocal,
   getWorkspaceDefaults,
   updateWorkspaceDefaults,
@@ -2903,23 +2905,26 @@ export function createTelegramBot(): Telegraf<Context> {
             ),
             joinManagerKeyboard(session.sessionId, "stopped"),
           );
-        const settings = getWorkspaceDefaults(user.workspaceId);
+        const settings = getSessionJoinSettings(
+          user.workspaceId,
+          session.sessionId,
+        );
         const job = await runtime.enqueue({
           workspaceId: user.workspaceId,
           sessionId: session.sessionId,
           kind: "join-manager",
           payload: {
-            targetCount: settings.defaultJoinTargetCount,
-            delayMs: settings.defaultJoinDelayMs,
-            minDelayMs: settings.defaultJoinMinDelayMs,
-            maxDelayMs: settings.defaultJoinMaxDelayMs,
-            batchCycles: settings.defaultJoinBatchCycles,
-            maxConcurrency: settings.defaultJoinMaxConcurrency,
-            retryLimit: settings.defaultJoinRetryLimit,
-            retryBaseMs: settings.defaultJoinRetryBaseMs,
-            sessionCooldownMs: settings.defaultJoinSessionCooldownMs,
-            restrictionThreshold: settings.defaultJoinRestrictionThreshold,
-            requestMode: settings.defaultJoinMode ?? "auto",
+            targetCount: settings.targetCount,
+            delayMs: settings.delayMs,
+            minDelayMs: settings.minDelayMs,
+            maxDelayMs: settings.maxDelayMs,
+            batchCycles: settings.batchCycles,
+            maxConcurrency: settings.maxConcurrency,
+            retryLimit: settings.retryLimit,
+            retryBaseMs: settings.retryBaseMs,
+            sessionCooldownMs: settings.sessionCooldownMs,
+            restrictionThreshold: settings.restrictionThreshold,
+            requestMode: settings.mode,
           },
           idempotencyKey: `join-manager:${user.workspaceId}:${session.sessionId}:${Date.now()}`,
         });
@@ -2935,14 +2940,17 @@ export function createTelegramBot(): Telegraf<Context> {
         joinStates.set(key, "stopped");
       }
       if (operation === "settings") {
-        const current = getWorkspaceDefaults(user.workspaceId);
+        const current = getSessionJoinSettings(
+          user.workspaceId,
+          session.sessionId,
+        );
         return edit(
           ctx,
           pageText(
             "Join Manager · Settings",
             infoResponse(
               "Durable Joining Settings",
-              `<b>Target links:</b> ${current.defaultJoinTargetCount}\n<b>Delay:</b> ${Math.round(current.defaultJoinDelayMs / 1000)}s\n<b>Min / max delay:</b> ${Math.round(current.defaultJoinMinDelayMs / 1000)}s / ${Math.round(current.defaultJoinMaxDelayMs / 1000)}s\n<b>Batch cycles:</b> ${current.defaultJoinBatchCycles}\n<b>Concurrency:</b> ${current.defaultJoinMaxConcurrency}\n<b>Retry limit / backoff:</b> ${current.defaultJoinRetryLimit} / ${Math.round(current.defaultJoinRetryBaseMs / 1000)}s\n<b>Session cooldown:</b> ${Math.round(current.defaultJoinSessionCooldownMs / 1000)}s\n<b>Restriction stop:</b> ${current.defaultJoinRestrictionThreshold} rate limits\n<b>Join mode:</b> ${escapeHtml((current.defaultJoinMode ?? "auto").toUpperCase())}`,
+              `<b>Target links:</b> ${current.targetCount}\n<b>Delay:</b> ${Math.round(current.delayMs / 1000)}s\n<b>Min / max delay:</b> ${Math.round(current.minDelayMs / 1000)}s / ${Math.round(current.maxDelayMs / 1000)}s\n<b>Batch cycles:</b> ${current.batchCycles}\n<b>Concurrency:</b> ${current.maxConcurrency}\n<b>Retry limit / backoff:</b> ${current.retryLimit} / ${Math.round(current.retryBaseMs / 1000)}s\n<b>Session cooldown:</b> ${Math.round(current.sessionCooldownMs / 1000)}s\n<b>Restriction stop:</b> ${current.restrictionThreshold} rate limits\n<b>Join mode:</b> ${escapeHtml(current.mode.toUpperCase())}`,
             ),
           ),
           keyboard([
@@ -3002,7 +3010,23 @@ export function createTelegramBot(): Telegraf<Context> {
         operation === "setconcurrency" ||
         operation === "setmode"
       ) {
-        const current = getWorkspaceDefaults(user.workspaceId);
+        const sessionCurrent = getSessionJoinSettings(
+          user.workspaceId,
+          session.sessionId,
+        );
+        const current = {
+          defaultJoinTargetCount: sessionCurrent.targetCount,
+          defaultJoinDelayMs: sessionCurrent.delayMs,
+          defaultJoinMinDelayMs: sessionCurrent.minDelayMs,
+          defaultJoinMaxDelayMs: sessionCurrent.maxDelayMs,
+          defaultJoinBatchCycles: sessionCurrent.batchCycles,
+          defaultJoinMaxConcurrency: sessionCurrent.maxConcurrency,
+          defaultJoinRetryLimit: sessionCurrent.retryLimit,
+          defaultJoinRetryBaseMs: sessionCurrent.retryBaseMs,
+          defaultJoinSessionCooldownMs: sessionCurrent.sessionCooldownMs,
+          defaultJoinRestrictionThreshold: sessionCurrent.restrictionThreshold,
+          defaultJoinMode: sessionCurrent.mode,
+        };
         const patch: Parameters<typeof updateWorkspaceDefaults>[1] =
           operation === "setlimit"
             ? {
@@ -3134,14 +3158,53 @@ export function createTelegramBot(): Telegraf<Context> {
                                         4
                                     ] ?? 2,
                                 };
-        const next = updateWorkspaceDefaults(user.workspaceId, patch);
+        const next = updateSessionJoinSettings(
+          user.workspaceId,
+          session.sessionId,
+          {
+            ...(patch.defaultJoinTargetCount !== undefined
+              ? { targetCount: patch.defaultJoinTargetCount }
+              : {}),
+            ...(patch.defaultJoinDelayMs !== undefined
+              ? { delayMs: patch.defaultJoinDelayMs }
+              : {}),
+            ...(patch.defaultJoinMinDelayMs !== undefined
+              ? { minDelayMs: patch.defaultJoinMinDelayMs }
+              : {}),
+            ...(patch.defaultJoinMaxDelayMs !== undefined
+              ? { maxDelayMs: patch.defaultJoinMaxDelayMs }
+              : {}),
+            ...(patch.defaultJoinBatchCycles !== undefined
+              ? { batchCycles: patch.defaultJoinBatchCycles }
+              : {}),
+            ...(patch.defaultJoinMaxConcurrency !== undefined
+              ? { maxConcurrency: patch.defaultJoinMaxConcurrency }
+              : {}),
+            ...(patch.defaultJoinRetryLimit !== undefined
+              ? { retryLimit: patch.defaultJoinRetryLimit }
+              : {}),
+            ...(patch.defaultJoinRetryBaseMs !== undefined
+              ? { retryBaseMs: patch.defaultJoinRetryBaseMs }
+              : {}),
+            ...(patch.defaultJoinSessionCooldownMs !== undefined
+              ? { sessionCooldownMs: patch.defaultJoinSessionCooldownMs }
+              : {}),
+            ...(patch.defaultJoinRestrictionThreshold !== undefined
+              ? { restrictionThreshold: patch.defaultJoinRestrictionThreshold }
+              : {}),
+            ...(patch.defaultJoinMode !== undefined
+              ? { mode: patch.defaultJoinMode }
+              : {}),
+          },
+        );
+        const nextSettings = next.joinSettings;
         return edit(
           ctx,
           pageText(
             "Join Manager · Settings",
             successResponse(
               "Setting Updated",
-              `<b>Target:</b> ${next.defaultJoinTargetCount} · <b>Delay:</b> ${Math.round(next.defaultJoinDelayMs / 1000)}s · <b>Min/Max:</b> ${Math.round(next.defaultJoinMinDelayMs / 1000)}s/${Math.round(next.defaultJoinMaxDelayMs / 1000)}s\n<b>Batch:</b> ${next.defaultJoinBatchCycles} · <b>Concurrency:</b> ${next.defaultJoinMaxConcurrency} · <b>Retries:</b> ${next.defaultJoinRetryLimit} · <b>Backoff:</b> ${Math.round(next.defaultJoinRetryBaseMs / 1000)}s\n<b>Cooldown:</b> ${Math.round(next.defaultJoinSessionCooldownMs / 1000)}s · <b>Stop:</b> ${next.defaultJoinRestrictionThreshold} rate limits · <b>Mode:</b> ${escapeHtml((next.defaultJoinMode ?? "auto").toUpperCase())}`,
+              `<b>Target:</b> ${nextSettings?.targetCount} · <b>Delay:</b> ${Math.round((nextSettings?.delayMs ?? 0) / 1000)}s · <b>Min/Max:</b> ${Math.round((nextSettings?.minDelayMs ?? 0) / 1000)}s/${Math.round((nextSettings?.maxDelayMs ?? 0) / 1000)}s\n<b>Batch:</b> ${nextSettings?.batchCycles} · <b>Concurrency:</b> ${nextSettings?.maxConcurrency} · <b>Retries:</b> ${nextSettings?.retryLimit} · <b>Backoff:</b> ${Math.round((nextSettings?.retryBaseMs ?? 0) / 1000)}s\n<b>Cooldown:</b> ${Math.round((nextSettings?.sessionCooldownMs ?? 0) / 1000)}s · <b>Stop:</b> ${nextSettings?.restrictionThreshold} rate limits · <b>Mode:</b> ${escapeHtml((nextSettings?.mode ?? "auto").toUpperCase())}`,
             ),
           ),
           keyboard([

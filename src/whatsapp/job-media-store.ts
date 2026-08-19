@@ -10,6 +10,8 @@ export interface JobMediaReference {
   kind: WhatsAppMediaKind;
   mimeType: string;
   fileName: string;
+  originalFileName?: string;
+  ptt?: boolean;
 }
 
 export async function persistJobMedia(input: {
@@ -18,6 +20,7 @@ export async function persistJobMedia(input: {
   bytes: Buffer;
   mimeType?: string;
   fileName?: string;
+  ptt?: boolean;
 }): Promise<JobMediaReference> {
   if (!input.bytes.length)
     throw new Error("Cannot queue an empty media payload.");
@@ -40,6 +43,8 @@ export async function persistJobMedia(input: {
     kind: input.kind,
     mimeType,
     fileName,
+    ...(input.fileName ? { originalFileName: input.fileName } : {}),
+    ...(input.ptt !== undefined ? { ptt: input.ptt } : {}),
   };
 }
 

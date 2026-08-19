@@ -646,6 +646,12 @@ export function startWorkerRuntime(): JobOrchestrator {
           kind: payload.media.kind,
           bytes: await readJobMedia(payload.media),
           mimeType: payload.media.mimeType,
+          ...(payload.media.originalFileName
+            ? { fileName: payload.media.originalFileName }
+            : {}),
+          ...(payload.media.ptt !== undefined
+            ? { ptt: payload.media.ptt }
+            : {}),
         };
       }
       let lastPostAt = 0;

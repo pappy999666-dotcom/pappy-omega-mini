@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { User, WhatsAppSession, Workspace } from "../types/domain.js";
+import type {
+  SessionJoinSettings,
+  User,
+  WhatsAppSession,
+  Workspace,
+} from "../types/domain.js";
 import {
   hydrateRegistry,
   deletePersistedSession,
@@ -62,6 +67,52 @@ export function resolveUser(
   return user;
 }
 
+function joinSettingsFromWorkspace(workspaceId: string): SessionJoinSettings {
+  const settings = getWorkspaceSettings(workspaceId);
+  return {
+    targetCount: settings.defaultJoinTargetCount,
+    delayMs: settings.defaultJoinDelayMs,
+    minDelayMs: settings.defaultJoinMinDelayMs,
+    maxDelayMs: settings.defaultJoinMaxDelayMs,
+    batchCycles: settings.defaultJoinBatchCycles,
+    maxConcurrency: settings.defaultJoinMaxConcurrency,
+    retryLimit: settings.defaultJoinRetryLimit,
+    retryBaseMs: settings.defaultJoinRetryBaseMs,
+    sessionCooldownMs: settings.defaultJoinSessionCooldownMs,
+    restrictionThreshold: settings.defaultJoinRestrictionThreshold,
+    mode: settings.defaultJoinMode ?? "auto",
+  };
+}
+
+function normalizedSessionJoinSettings(
+  workspaceId: string,
+  current?: Partial<SessionJoinSettings>,
+): SessionJoinSettings {
+  return { ...joinSettingsFromWorkspace(workspaceId), ...(current ?? {}) };
+}
+
+export function getSessionJoinSettings(
+  workspaceId: string,
+  sessionId: string,
+): SessionJoinSettings {
+  const session = getSession(workspaceId, sessionId);
+  return normalizedSessionJoinSettings(workspaceId, session.joinSettings);
+}
+
+export function updateSessionJoinSettings(
+  workspaceId: string,
+  sessionId: string,
+  patch: Partial<SessionJoinSettings>,
+): WhatsAppSession {
+  const current = getSessionJoinSettings(workspaceId, sessionId);
+  return updateSession(workspaceId, sessionId, {
+    joinSettings: normalizedSessionJoinSettings(workspaceId, {
+      ...current,
+      ...patch,
+    }),
+  });
+}
+
 export function createSession(input: {
   workspaceId: string;
   sessionName: string;
@@ -77,6 +128,7 @@ export function createSession(input: {
     prefix: workspaceSettings.defaultPrefix,
     sudoList: [],
     autoJoinEnabled: workspaceSettings.defaultAutoJoinEnabled,
+    joinSettings: joinSettingsFromWorkspace(input.workspaceId),
     autoCollectLinks: true,
     autoValidateLinks: true,
     collectedLinkCount: 0,
@@ -166,18 +218,9 @@ export function updateWorkspaceDefaults(
   workspaceId: string,
   patch: Partial<Omit<WorkspaceSettings, "workspaceId" | "updatedAt">>,
 ): WorkspaceSettings {
-  const next = updateWorkspaceSettings(workspaceId, patch);
-  for (const current of listSessions(workspaceId)) {
-    updateSession(workspaceId, current.sessionId, {
-      ...(patch.defaultPrefix !== undefined
-        ? { prefix: next.defaultPrefix }
-        : {}),
-      ...(patch.defaultAutoJoinEnabled !== undefined
-        ? { autoJoinEnabled: next.defaultAutoJoinEnabled }
-        : {}),
-    });
-  }
-  return next;
+  // Workspace values are defaults for newly created sessions only. Existing
+  // session prefix, auto-join, and Join Manager settings remain isolated.
+  return updateWorkspaceSettings(workspaceId, patch);
 }
 
 export function setUserStatusLocal(
@@ -206,6 +249,10 @@ export async function hydrateSessionRegistry(): Promise<void> {
       ...session,
       autoCollectLinks: true,
       autoValidateLinks: true,
+      joinSettings: normalizedSessionJoinSettings(
+        session.workspaceId,
+        session.joinSettings,
+      ),
       collectedLinkCount: session.collectedLinkCount ?? 0,
       validatedLinkCount: session.validatedLinkCount ?? 0,
     });

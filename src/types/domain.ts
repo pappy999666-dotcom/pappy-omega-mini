@@ -10,6 +10,20 @@ export type SessionStatus =
   | "BANNED";
 export type MediaKind = "image" | "video";
 
+export interface SessionJoinSettings {
+  targetCount: number;
+  delayMs: number;
+  minDelayMs: number;
+  maxDelayMs: number;
+  batchCycles: number;
+  maxConcurrency: number;
+  retryLimit: number;
+  retryBaseMs: number;
+  sessionCooldownMs: number;
+  restrictionThreshold: number;
+  mode: "auto" | "immediate" | "request";
+}
+
 export interface Workspace {
   workspaceId: string;
   ownerTelegramUserId: string;
@@ -37,6 +51,7 @@ export interface WhatsAppSession {
   prefix: string;
   sudoList: string[];
   autoJoinEnabled: boolean;
+  joinSettings?: SessionJoinSettings;
   autoCollectLinks?: boolean;
   autoValidateLinks?: boolean;
   collectedLinkCount?: number;

@@ -43,7 +43,10 @@ export interface CommandContext {
     text: string;
     repeat: number;
   }) => Promise<void>;
-  sendCurrentGroupHidetag?: (text: string) => Promise<void>;
+  sendCurrentGroupHidetag?: (input: {
+    text: string;
+    participantCount?: number;
+  }) => Promise<void>;
   cancelJobs?: (
     kind: "gstatus" | "allstatus" | "allchat" | "tag",
   ) => Promise<number>;
@@ -145,10 +148,14 @@ export function createCommandRegistry(): RegisteredCommand[] {
     {
       name: "setprefix",
       aliases: ["prefix"],
-      description: "Set the session prefix; use none for prefixless mode.",
+      description:
+        "Set the session prefix; use none or null for prefixless mode.",
       run: async (ctx) => {
+        const requested = ctx.args[0]?.toLowerCase();
         const value =
-          ctx.args[0] === "none" ? "" : (ctx.args[0] ?? ".").slice(0, 3);
+          requested === "none" || requested === "null"
+            ? ""
+            : (ctx.args[0] ?? ".").slice(0, 3);
         const next = updateSession(ctx.workspaceId, ctx.sessionId, {
           prefix: value,
         });
@@ -421,10 +428,21 @@ export function createCommandRegistry(): RegisteredCommand[] {
           return "This command must be used inside a WhatsApp group.";
         if (!ctx.sendCurrentGroupHidetag)
           return "WhatsApp transport is unavailable.";
-        const text =
-          ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
-        if (!text) return "Usage: .tag <payload>.";
-        await ctx.sendCurrentGroupHidetag(text);
+        const numericCount =
+          ctx.args.length === 1 && /^\d+$/.test(ctx.args[0] ?? "")
+            ? Math.max(1, Math.min(1000, Number(ctx.args[0])))
+            : undefined;
+        const text = numericCount
+          ? (ctx.media?.caption?.trim() ?? "")
+          : ctx.args.join(" ").trim() || ctx.media?.caption?.trim() || "";
+        if (!text && numericCount === undefined)
+          return "Usage: .tag <payload> or .tag <member-count> <payload>.";
+        await ctx.sendCurrentGroupHidetag({
+          text,
+          ...(numericCount !== undefined
+            ? { participantCount: numericCount }
+            : {}),
+        });
         return "";
       },
     },
