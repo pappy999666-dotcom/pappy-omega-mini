@@ -55,26 +55,27 @@ describe("shared session menu", () => {
     expect(commands).toEqual(
       expect.arrayContaining(["autojoin", "pfp", "setgpp", "groups", "health"]),
     );
-    expect(renderAsciiMenu(model)).toContain("PAPPY OMEGA MINI");
+    expect(renderAsciiMenu(model)).toContain("ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎");
     expect(renderAsciiMenu(model)).toContain("autojoin");
   });
 
-  it("renders a compact WhatsApp-native main menu", async () => {
+  it("renders the exact Crysnova WhatsApp-native main menu", async () => {
     const user = resolveUser(`wa-menu-${Date.now()}-${Math.random()}`);
     const session = createSession({
       workspaceId: user.workspaceId,
       sessionName: "Jesus",
     });
     const payload = await buildWhatsappMenuPayload(session, true);
-    expect(payload.text).toContain("COMMANDS");
-    expect(payload.text).toContain(".profile");
-    expect(payload.text).toContain(".allstatus");
-    expect(payload.text).toContain(".gstatus");
+    expect(payload.text).toContain("ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎");
+    expect(payload.text).toContain("˗ˏˋ ☏ ˎˊ˗  *Hello, 𝗝𝗲𝘀𝘂𝘀*  ✦");
+    expect(payload.text).toContain("⎔ Owner   · ⇆ 𝗝𝗲𝘀𝘂𝘀");
+    expect(payload.text).toContain("⎔ Status  · ⇆ PAIRING");
+    expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .menu`);
+    expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .allstatus`);
+    expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .stopstag`);
+    expect(payload.text).not.toContain("┌");
     expect(payload.text).not.toContain("╔");
-    expect(payload.text).not.toContain(
-      "One command surface, two polished interfaces.",
-    );
-    expect(payload.text.length).toBeLessThan(500);
+    expect(payload.text).not.toContain("One command surface, two polished interfaces.");
   });
 
   it("keeps session changes inside the owning workspace", () => {

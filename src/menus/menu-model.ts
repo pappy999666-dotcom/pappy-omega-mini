@@ -83,6 +83,17 @@ export function buildSessionMenu(
   };
 }
 
+function toMathBold(value: string): string {
+  return Array.from(value, (character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint >= 0x41 && codePoint <= 0x5a)
+      return String.fromCodePoint(0x1d5d4 + codePoint - 0x41);
+    if (codePoint >= 0x61 && codePoint <= 0x7a)
+      return String.fromCodePoint(0x1d5ee + codePoint - 0x61);
+    return character;
+  }).join("");
+}
+
 export function renderAsciiMenu(model: SessionMenuModel): string {
   const sessionName = model.title.split("·").slice(1).join("·").trim() || "Pappy";
   const [rawStatus = "UNKNOWN|USER", rawPrefix = "prefix none", rawAutoJoin = "join OFF", rawHealth = "health —", rawLinks = "links 0/0"] = model.statusLine.split(" · ");
@@ -95,24 +106,32 @@ export function renderAsciiMenu(model: SessionMenuModel): string {
   const commandSet = new Set(["menu", "ping", "profile", "health", "support"]);
   const sessionSet = new Set(["autojoin", "setprefix", "pfp", "setgpp", "setname", "setbio", "groups", "creategroup"]);
   const localSet = new Set(["gstatus", "tag", "stag"]);
-  const ownerSet = new Set(["pair", "previewdebug", "broadcastdelay", "allstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "setsudo"]);
+  const ownerSet = new Set(["pair", "previewdebug", "broadcastdelay", "allstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "stopstag", "setsudo"]);
+  const commandIndent = "︎ ".repeat(15);
   const renderSection = (title: string, icon: string, set: Set<string>): string[] => {
     const commands = model.actions
       .filter((action) => set.has(action.command))
-      .map((action) => `.${action.command}`);
+      .map((action) => action.command);
     if (!commands.length) return [];
-    const rows: string[] = [];
-    for (let index = 0; index < commands.length; index += 5)
-      rows.push(`⊹ ${commands.slice(index, index + 5).join("  ")}`);
-    return [`⌬ ⤷ *${title}* ${icon}`, ...rows];
+    return [
+      `⌬ ⤷ *${title}* ${icon}`,
+      ...commands.map((command) => `${commandIndent}⊹ .${command}`),
+      "",
+    ];
   };
   return [
-    "⚫︎ PAPPY OMEGA MINI ⚫︎",
-    `˗ˏˋ ☏ ˎˊ˗ *Hello, ${sessionName}* ✦`,
+    "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
+    "",
+    `˗ˏˋ ☏ ˎˊ˗  *Hello, ${toMathBold(sessionName)}*  ✦`,
     "─────────────",
-    `⎔ ${sessionName} · ${status} · AJ ${autoJoin}`,
-    `⎔ PFX [${prefix}] · H ${health} · L ${links}`,
+    `⎔ Owner   · ⇆ ${toMathBold(sessionName)}`,
+    `⎔ Status  · ⇆ ${status}`,
+    `⎔ AutoJ   · ⇆ ${autoJoin}`,
+    `⎔ Prefix  · ⇆ [ ${prefix} ]`,
+    `⎔ Health  · ⇆ ${health}`,
+    `⎔ Links   · ⇆ ${links}`,
     "─────────────",
+    "",
     ...renderSection("COMMANDS", "⚙️", commandSet),
     ...renderSection("SESSION", "🗝", sessionSet),
     ...renderSection("LOCAL", "⎔", localSet),
