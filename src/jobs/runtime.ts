@@ -539,10 +539,9 @@ export function startWorkerRuntime(): JobOrchestrator {
     );
     return runBoundedBatch({
       items: workItems,
-      concurrency: Math.max(
-        1,
-        Math.min(8, Math.floor(Number(payload.maxConcurrency ?? 1))),
-      ),
+      // One invite attempt at a time is deliberate: it makes the five-real-rate-limit
+      // stop threshold exact and avoids parallel Baileys join bursts on one socket.
+      concurrency: 1,
       context,
       shouldStop: () => rateLimitHits >= restrictionThreshold,
       processItem: async (workItem, signal) => {
