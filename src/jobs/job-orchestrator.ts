@@ -146,6 +146,7 @@ export class JobOrchestrator {
         });
     });
     this.reaperTimer = setInterval(() => {
+      void this.recoverOutstandingJobs().catch(() => undefined);
       void this.reapStaleJobs();
     }, 30_000);
     this.reaperTimer.unref?.();
@@ -182,7 +183,7 @@ export class JobOrchestrator {
       });
       await this.queue.add(
         `${record.kind}:startup-recovery`,
-        { ...record, state: "QUEUED" },
+        { ...record, state: "QUEUED", attempts: Math.min(record.maxAttempts, record.attempts + 1) },
         {
           jobId: `${record.jobId}:startup:${now}`,
           attempts: Math.max(1, record.maxAttempts - record.attempts),
@@ -356,7 +357,7 @@ export class JobOrchestrator {
     if (!handler) throw new Error(`No worker registered for ${record.kind}.`);
     await this.store.update(record.jobId, {
       state: "RUNNING",
-      attempts: bullJob.attemptsMade + 1,
+      attempts: Math.max(record.attempts, bullJob.attemptsMade + 1),
       startedAt: Date.now(),
       heartbeatAt: Date.now(),
     });
@@ -432,14 +433,16 @@ export class JobOrchestrator {
     try {
       const cutoff = Date.now() - 2 * 60_000;
       for (const record of await this.store.listAll()) {
-        if (!["RUNNING", "RETRYING"].includes(record.state)) continue;
-        if (
+        const heartbeatAge =
+          Date.now() - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
+        const retryableFailed = isRetryableBroadcastFailure(record, heartbeatAge);
+        if (!["RUNNING", "RETRYING"].includes(record.state) && !retryableFailed)
+          continue;
+        if (!retryableFailed &&
           (record.heartbeatAt ?? record.startedAt ?? record.createdAt) > cutoff
         )
           continue;
         const bullJob = await this.queue.getJob(record.jobId);
-        const heartbeatAge =
-          Date.now() - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
         const staleActive =
           record.state === "RUNNING" && heartbeatAge > STALE_ACTIVE_JOB_GRACE_MS;
         if (bullJob && (await bullJob.isActive()) && !staleActive) continue;
@@ -459,7 +462,7 @@ export class JobOrchestrator {
           });
           await this.queue.add(
             `${record.kind}:recovery`,
-            { ...record, state: "QUEUED" },
+            { ...record, state: "QUEUED", attempts: Math.min(record.maxAttempts, record.attempts + 1) },
             {
               jobId: `${record.jobId}:recovery:${Date.now()}`,
               attempts: Math.max(1, record.maxAttempts - record.attempts),
