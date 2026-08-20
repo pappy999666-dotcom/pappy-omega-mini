@@ -5840,6 +5840,7 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
       `<b>Active links available:</b> ${activeLinks ?? "loading"}${activeLinks === 0 ? " · <i>No links to join; collect or validate WhatsApp group invites first.</i>" : ""}`,
       `<b>Socket:</b> <code>${escapeHtml(session.sessionId.slice(0, 12))}</code> · generation ${escapeHtml(String(session.socketGeneration ?? "—"))}`,
       `<b>Mode:</b> ${escapeHtml(mode)} · <b>Target:</b> ${escapeHtml(String(target))} · <b>Delay:</b> ${escapeHtml(delayMs)}`,
+      `<b>Selection:</b> shuffled across the full Active bucket`,
       `<b>Cursor:</b> ${progress?.completed ?? 0}/${escapeHtml(String(total))} · <b>Job:</b> <code>${escapeHtml(code)}</code>`,
       `<b>Joined:</b> ${joined} · <b>Requested:</b> ${requested} · <b>Already member:</b> ${alreadyMember}`,
       `<b>Dead returned to Main:</b> ${deadLinks} · <b>Failed:</b> ${progress?.failed ?? 0} · <b>Retrying:</b> ${progress?.retrying ?? 0}`,
@@ -6154,8 +6155,7 @@ async function enqueueValidatorJobs(
   for (const [index, rawChunk] of chunks.entries()) {
     const session = sessions[index];
     if (!session || !rawChunk.length) continue;
-    for (let offset = 0; offset < rawChunk.length; offset += 100) {
-      const chunk = rawChunk.slice(offset, offset + 100);
+    const chunk = rawChunk.slice(0, 5);
     const claimed = await claimValidatorMainLinks(
       workspaceId,
       chunk,
@@ -6180,10 +6180,9 @@ async function enqueueValidatorJobs(
           idempotencyKey: `${workspaceId}:${session.sessionId}:validator:${payloadHash}`,
         }),
       );
-      } catch (error) {
-        await requeueValidatorMainLinks(workspaceId, chunk).catch(() => undefined);
-        throw error;
-      }
+    } catch (error) {
+      await requeueValidatorMainLinks(workspaceId, chunk).catch(() => undefined);
+      throw error;
     }
   }
   return jobs;

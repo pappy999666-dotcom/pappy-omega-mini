@@ -475,14 +475,15 @@ async function openWhatsAppSession(
               const { getWorkerRuntime } = await import("../jobs/runtime.js");
               const runtime = getWorkerRuntime();
               if (!runtime) return;
+              const batchUrls = urls.slice(0, 5);
               const claimed = await claimValidatorMainLinks(
                 workspaceId,
-                urls,
+                batchUrls,
                 sessionId,
               ).catch(() => 0);
-              if (claimed !== urls.length) return;
+              if (claimed !== batchUrls.length) return;
               const payload = {
-                urls,
+                urls: batchUrls,
                 sourceUserId: senderJid,
                 sourceSessionId: sessionId,
               };
@@ -498,7 +499,7 @@ async function openWhatsAppSession(
                   idempotencyKey: `${workspaceId}:${sessionId}:auto-validator:${payloadHash}`,
                 });
               } catch (error) {
-                await requeueValidatorMainLinks(workspaceId, urls).catch(() => undefined);
+                await requeueValidatorMainLinks(workspaceId, batchUrls).catch(() => undefined);
                 throw error;
               }
             })

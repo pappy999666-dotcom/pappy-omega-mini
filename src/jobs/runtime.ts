@@ -446,7 +446,7 @@ export function startWorkerRuntime(): JobOrchestrator {
           context.job.workspaceId,
           "active",
           cursor,
-          Math.min(100, targetLimit - sourceRecords.length),
+          100,
         );
         for (const record of page.records) {
           if (
@@ -455,11 +455,22 @@ export function startWorkerRuntime(): JobOrchestrator {
             )
           )
             sourceRecords.push(record);
-          if (sourceRecords.length >= targetLimit) break;
         }
         cursor = page.nextCursor;
-      } while (cursor !== 0 && sourceRecords.length < targetLimit);
+      } while (cursor !== 0);
     }
+    const shuffledRecords = sourceRecords
+      .map((record) => ({
+        record,
+        sortKey: createHash("sha256")
+          .update(`${context.job.jobId}:${record.canonicalUrl}`)
+          .digest("hex"),
+      }))
+      .sort((left, right) => left.sortKey.localeCompare(right.sortKey))
+      .map(({ record }) => record)
+      .slice(0, targetLimit);
+    sourceRecords.length = 0;
+    sourceRecords.push(...shuffledRecords);
     const batchCycles = Math.max(
       1,
       Math.min(20, Number(payload.batchCycles ?? 1)),
@@ -467,6 +478,10 @@ export function startWorkerRuntime(): JobOrchestrator {
     const workItems = Array.from({ length: batchCycles }).flatMap((_, cycle) =>
       sourceRecords.map((record) => ({ record, cycle })),
     );
+    await context.report({
+      total: workItems.length,
+      currentAction: `shuffled Active inventory · selected ${sourceRecords.length} link(s)`,
+    });
     let rateLimitHits = 0;
     let requested = 0;
     let alreadyMember = 0;
@@ -966,6 +981,21 @@ async function sweepPendingMainValidation(
       (session) => session.workspaceId === workspaceId,
     );
     if (!sessions.length) continue;
+    const activeValidationJobs = (await orchestrator.listRecent(500)).filter(
+      (job) =>
+        job.workspaceId === workspaceId &&
+        job.kind === "link-validation" &&
+        ["QUEUED", "RUNNING", "RETRYING"].includes(job.state),
+    );
+    const busySessionIds = new Set(
+      activeValidationJobs
+        .map((job) => job.sessionId)
+        .filter((sessionId): sessionId is string => Boolean(sessionId)),
+    );
+    const availableSessions = sessions.filter(
+      (session) => !busySessionIds.has(session.sessionId),
+    );
+    if (!availableSessions.length) continue;
     const records: LinkRecord[] = [];
     let cursor = 0;
     do {
@@ -982,17 +1012,18 @@ async function sweepPendingMainValidation(
       )
       .sort((left, right) => left.canonicalUrl.localeCompare(right.canonicalUrl));
     if (!pending.length) continue;
-    const admissionLimit = Math.max(100, sessions.length * 100);
+    const validatorBatchSize = 5;
+    const admissionLimit = availableSessions.length * validatorBatchSize;
     const admitted = pending.slice(0, admissionLimit);
-    const chunks = sessions.map(() => [] as string[]);
+    const chunks = availableSessions.map(() => [] as string[]);
     admitted.forEach((record, index) => {
       chunks[index % chunks.length]?.push(record.canonicalUrl);
     });
     const jobs: Promise<unknown>[] = [];
     for (const [index, urls] of chunks.entries()) {
-      const session = sessions[index];
+      const session = availableSessions[index];
       if (!session || !urls.length) continue;
-      const batch = urls.slice(0, 100);
+      const batch = urls.slice(0, validatorBatchSize);
       const claimed = await claimValidatorMainLinks(
         workspaceId,
         batch,
