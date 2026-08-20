@@ -13,6 +13,7 @@ import {
   getWorkloadWorker,
   getWorkloadWorkerByCredentialHash,
   getWorkloadWorkerByDisplayKey,
+  getWorkloadWorkerByWorkloadCode,
   getWorkloadCommand,
   listWorkloadAssignments,
   listWorkloadWorkers,
@@ -58,6 +59,20 @@ export interface AuthenticatedWorkloadWorker {
   credential: string;
 }
 
+function normalizeWorkerName(input?: string): string {
+  const normalized = String(input ?? "panel")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24);
+  return normalized || "panel";
+}
+
+function createWorkloadCode(workerName: string): string {
+  return `${workerName}-${crypto.randomBytes(3).toString("hex")}`;
+}
+
 export async function createWorkloadEnrollmentToken(
   workspaceId: string,
   ownerTelegramUserId: string,
@@ -86,10 +101,22 @@ export async function registerWorkloadWorker(
 
   const now = Date.now();
   const credential = createOpaqueToken(48);
+  const workerName = normalizeWorkerName(input.workerName);
+  let workloadCode: string | undefined;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const candidate = createWorkloadCode(workerName);
+    if (!(await getWorkloadWorkerByWorkloadCode(candidate))) {
+      workloadCode = candidate;
+      break;
+    }
+  }
+  if (!workloadCode) throw new Error("Could not allocate a unique workload code. Try again.");
   const worker: WorkloadWorkerRecord = {
     workerId: crypto.randomUUID(),
     workspaceId: enrollment.workspaceId,
     ownerTelegramUserId: enrollment.ownerTelegramUserId,
+    workerName,
+    workloadCode,
     displayKey: createDisplayKey(),
     credentialHash: hashCredential(credential),
     credentialIssuedAt: now,
@@ -106,10 +133,12 @@ export async function registerWorkloadWorker(
     workspaceId: worker.workspaceId,
     workerId: worker.workerId,
     kind: "worker.registered",
-    metadata: { version: worker.workerVersion, capabilities: worker.capabilities },
+    metadata: { version: worker.workerVersion, capabilities: worker.capabilities, workerName: worker.workerName, workloadCode: worker.workloadCode },
   });
   return {
     workerId: worker.workerId,
+    workerName: worker.workerName,
+    workloadCode: worker.workloadCode,
     displayKey: worker.displayKey,
     credential,
     heartbeatIntervalMs: WORKLOAD_HEARTBEAT_INTERVAL_MS,
@@ -363,6 +392,14 @@ export async function getWorkspaceWorkloadWorkerByDisplayKey(
   displayKey: string,
 ): Promise<WorkloadWorkerRecord | undefined> {
   const worker = await getWorkloadWorkerByDisplayKey(displayKey.trim());
+  return worker?.workspaceId === workspaceId ? worker : undefined;
+}
+
+export async function getWorkspaceWorkloadWorkerByCode(
+  workspaceId: string,
+  workloadCode: string,
+): Promise<WorkloadWorkerRecord | undefined> {
+  const worker = await getWorkloadWorkerByWorkloadCode(workloadCode.trim().toLowerCase());
   return worker?.workspaceId === workspaceId ? worker : undefined;
 }
 

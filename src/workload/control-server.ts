@@ -98,6 +98,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       const input = await body(request);
       const registration = await registerWorkloadWorker({
         enrollmentToken: stringField(input, "enrollmentToken"),
+        ...(typeof input.workerName === "string" && input.workerName.trim() ? { workerName: input.workerName.trim() } : {}),
         workerVersion: stringField(input, "workerVersion"),
         capabilities: stringListField(input, "capabilities"),
       } satisfies WorkloadRegistrationRequest);

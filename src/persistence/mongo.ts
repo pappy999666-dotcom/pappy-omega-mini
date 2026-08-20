@@ -254,6 +254,8 @@ const workloadWorkerSchema = new mongoose.Schema<WorkloadWorkerDocument>(
     workerId: { type: String, required: true, unique: true, index: true },
     workspaceId: { type: String, required: true, index: true },
     ownerTelegramUserId: { type: String, required: true, index: true },
+    workerName: { type: String, default: "panel", index: true },
+    workloadCode: { type: String, unique: true, sparse: true, index: true },
     displayKey: { type: String, required: true, unique: true, index: true },
     credentialHash: { type: String, required: true },
     credentialIssuedAt: { type: Number, required: true },
@@ -1479,6 +1481,17 @@ export async function getWorkloadWorkerByDisplayKey(
   await connectMongo();
   const record = await workloadWorkerModel()
     .findOne({ displayKey })
+    .lean<WorkloadWorkerRecord>()
+    .exec();
+  return record ?? undefined;
+}
+
+export async function getWorkloadWorkerByWorkloadCode(
+  workloadCode: string,
+): Promise<WorkloadWorkerRecord | undefined> {
+  await connectMongo();
+  const record = await workloadWorkerModel()
+    .findOne({ workloadCode: workloadCode.trim().toLowerCase() })
     .lean<WorkloadWorkerRecord>()
     .exec();
   return record ?? undefined;

@@ -205,6 +205,7 @@ import {
   createWorkloadEnrollmentToken,
   getWorkloadMode,
   getWorkspaceWorkloadWorkerByDisplayKey,
+  getWorkspaceWorkloadWorkerByCode,
   listWorkspaceWorkloadWorkers,
   revokeWorkloadWorker,
   setWorkloadMode,
@@ -264,7 +265,7 @@ const pendingAutoPromote = new Map<string, AutoPromoteWizard>();
 const pendingSupportInput = new Map<string, { workspaceId: string }>();
 const pendingSupportReply = new Map<string, { ticketId: string }>();
 const pendingWorkloadKey = new Map<string, { workspaceId: string }>();
-const preferredWorkloadWorker = new Map<string, { workspaceId: string; workerId: string; displayKey: string }>();
+const preferredWorkloadWorker = new Map<string, { workspaceId: string; workerId: string; workloadCode: string; displayKey: string }>();
 const pendingGroupCreate = new Map<
   string,
   {
@@ -823,17 +824,19 @@ export function createTelegramBot(): Telegraf<Context> {
     }
     const workloadInput = pendingWorkloadKey.get(userId);
     if (workloadInput && !ctx.message.text.startsWith("/")) {
-      const displayKey = ctx.message.text.trim();
-      if (displayKey.toLowerCase() === "cancel") {
+      const workloadCode = ctx.message.text.trim().toLowerCase();
+      if (workloadCode === "cancel") {
         pendingWorkloadKey.delete(userId);
         await ctx.reply(pageText("Workload", infoResponse("Cancelled", "No panel was added.")), { parse_mode: "HTML", reply_markup: workloadKeyboard(false) });
         return;
       }
-      if (!/^\d{5}$/.test(displayKey)) {
-        await ctx.reply(pageText("Workload", dangerResponse("Invalid panel key", "Send the five-digit key printed by your panel worker, or send <code>cancel</code>.")), { parse_mode: "HTML" });
+      if (!/^[a-z0-9][a-z0-9-]{2,47}$/.test(workloadCode) && !/^\d{5}$/.test(workloadCode)) {
+        await ctx.reply(pageText("Workload", dangerResponse("Invalid workload code", "Send the saved code printed by your panel, for example <code>pappy-AB12CD</code>, or send <code>cancel</code>.")), { parse_mode: "HTML" });
         return;
       }
-      const worker = await getWorkspaceWorkloadWorkerByDisplayKey(workloadInput.workspaceId, displayKey);
+      const worker = /^\d{5}$/.test(workloadCode)
+        ? await getWorkspaceWorkloadWorkerByDisplayKey(workloadInput.workspaceId, workloadCode)
+        : await getWorkspaceWorkloadWorkerByCode(workloadInput.workspaceId, workloadCode);
       if (!worker) {
         await ctx.reply(pageText("Workload", dangerResponse("Panel not found", "That key is not registered to this workspace.")), { parse_mode: "HTML" });
         return;
@@ -843,8 +846,8 @@ export function createTelegramBot(): Telegraf<Context> {
         return;
       }
       pendingWorkloadKey.delete(userId);
-      preferredWorkloadWorker.set(userId, { workspaceId: worker.workspaceId, workerId: worker.workerId, displayKey: worker.displayKey });
-      await ctx.reply(workloadPanelText(worker), { parse_mode: "HTML", reply_markup: workloadPanelKeyboard(worker.displayKey) });
+      preferredWorkloadWorker.set(userId, { workspaceId: worker.workspaceId, workerId: worker.workerId, workloadCode: worker.workloadCode ?? worker.displayKey, displayKey: worker.displayKey });
+      await ctx.reply(workloadPanelText(worker), { parse_mode: "HTML", reply_markup: workloadPanelKeyboard(worker.workloadCode ?? worker.displayKey) });
       return;
     }
     const pairing =
@@ -2057,6 +2060,26 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("session:new", async (ctx) => {
     await ctx.answerCbQuery();
     await beginPairingWizard(ctx);
+  });
+  bot.action(/^pair:workload:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = resolveTelegramUser(ctx);
+    const token = ctx.match[1] ?? "";
+    const worker = /^\d{5}$/.test(token)
+      ? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, token)
+      : await getWorkspaceWorkloadWorkerByCode(user.workspaceId, token);
+    if (!worker || !isWorkloadWorkerReady(worker)) {
+      await edit(ctx, pageText("Pairing", dangerResponse("Workload is not ready", "Choose an ACTIVE workload with a fresh heartbeat.")), keyboard([[btn("◌ Workload", "workload:menu")], [btn(ui.back, "menu:main")]]));
+      return;
+    }
+    const code = worker.workloadCode ?? worker.displayKey;
+    preferredWorkloadWorker.set(String(ctx.from?.id ?? ""), { workspaceId: worker.workspaceId, workerId: worker.workerId, workloadCode: code, displayKey: worker.displayKey });
+    await beginPairingWizard(ctx, true);
+  });
+  bot.action("pair:local", async (ctx) => {
+    await ctx.answerCbQuery();
+    preferredWorkloadWorker.delete(String(ctx.from?.id ?? ""));
+    await beginPairingWizard(ctx, true);
   });
   bot.action(/^pair:number:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -4413,8 +4436,11 @@ export function createTelegramBot(): Telegraf<Context> {
       ctx,
       workloadText(await getWorkloadMode(user.workspaceId), workers),
       keyboard([
-        ...workers.map((worker) => [btn(`▣ ${worker.displayKey} · ${worker.status}`, `workload:select:${worker.displayKey}`)]),
-        [btn("➕ Add Panel Key", "workload:add")],
+        ...workers.map((worker) => {
+          const code = worker.workloadCode ?? worker.displayKey;
+          return [btn(`▣ ${worker.workerName ?? "Panel"} · ${code} · ${worker.status}`, `workload:select:${code}`)];
+        }),
+        [btn("➕ Add My Workload Code", "workload:add")],
         [btn(ui.back, "workload:menu")],
       ]),
     );
@@ -4425,7 +4451,7 @@ export function createTelegramBot(): Telegraf<Context> {
     pendingWorkloadKey.set(String(ctx.from?.id ?? ""), { workspaceId: user.workspaceId });
     await edit(
       ctx,
-      pageText("Workload · Add Panel", infoResponse("Enter five-digit panel key", "Send the key printed by the restricted worker after it registers, or send <code>cancel</code>.")),
+      pageText("Workload · Add Workload", infoResponse("Paste your saved workload code", "Send the code printed by your panel, for example <code>pappy-AB12CD</code>, or send <code>cancel</code>.")),
       keyboard([[btn(ui.close, "workload:menu", "danger")]]),
     );
   });
@@ -4435,10 +4461,11 @@ export function createTelegramBot(): Telegraf<Context> {
     try {
       const enrollment = await createWorkloadEnrollmentToken(user.workspaceId, user.telegramUserId);
       recordAudit({ workspaceId: user.workspaceId, actorTelegramUserId: user.telegramUserId, action: "workload.enrollment.create", success: true, metadata: { enrollmentId: enrollment.enrollmentId, expiresAt: enrollment.expiresAt } });
+      const setupCommand = `npm install --omit=dev && node index.js --enrollment ${enrollment.token}`;
       await edit(
         ctx,
-        pageText("Workload · Enrollment", successResponse("One-time token ready", `Use this token only in the panel worker environment. It expires at <code>${escapeHtml(new Date(enrollment.expiresAt).toISOString())}</code>.`)),
-        keyboard([[copyBtn("📋 Copy enrollment token", enrollment.token, "success")], [btn("📖 Deployment Guide", "workload:guide")], [btn(ui.back, "workload:menu")]]),
+        pageText("Workload · Setup", successResponse("Copy one setup command", `Download the worker package first, open its folder, then paste the command below. It installs the small runtime, asks for a friendly name, and prints the permanent code to save.\n\n<b>Expires:</b> <code>${escapeHtml(new Date(enrollment.expiresAt).toISOString())}</code>`)),
+        keyboard([[copyBtn("📋 Copy setup command", setupCommand, "success")], [btn("⬇ Download Panel Worker", "workload:download", "success")], [btn("📖 Simple Setup Guide", "workload:guide")], [btn(ui.back, "workload:menu")]]),
       );
     } catch (error) {
       await edit(ctx, pageText("Workload · Enrollment", dangerResponse("Could not create token", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn(ui.back, "workload:menu")]]));
@@ -4458,34 +4485,44 @@ export function createTelegramBot(): Telegraf<Context> {
       await edit(ctx, pageText("Workload · Download", dangerResponse("Package unavailable", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn(ui.back, "workload:menu")]]));
     }
   });
-  bot.action(/^workload:select:(\d{5})$/, async (ctx) => {
+  bot.action(/^workload:select:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
-    const worker = await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, ctx.match[1] ?? "");
+    const token = ctx.match[1] ?? "";
+    const worker = /^\d{5}$/.test(token)
+      ? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, token)
+      : await getWorkspaceWorkloadWorkerByCode(user.workspaceId, token);
     if (!worker) {
-      await edit(ctx, pageText("Workload", dangerResponse("Panel not found", "Refresh the workload list and try again.")), workloadKeyboard(false));
+      await edit(ctx, pageText("Workload", dangerResponse("Workload not found", "Refresh your workload list and try again.")), workloadKeyboard(false));
       return;
     }
-    await edit(ctx, workloadPanelText(worker), workloadPanelKeyboard(worker.displayKey));
+    await edit(ctx, workloadPanelText(worker), workloadPanelKeyboard(worker.workloadCode ?? worker.displayKey));
   });
-  bot.action(/^workload:use:(\d{5})$/, async (ctx) => {
+  bot.action(/^workload:use:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
-    const worker = await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, ctx.match[1] ?? "");
+    const token = ctx.match[1] ?? "";
+    const worker = /^\d{5}$/.test(token)
+      ? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, token)
+      : await getWorkspaceWorkloadWorkerByCode(user.workspaceId, token);
     if (!worker || !isWorkloadWorkerReady(worker)) {
-      await edit(ctx, pageText("Workload", dangerResponse("Panel is not ready", "Only an ACTIVE, compatible worker with a fresh heartbeat can host a session.")), workloadKeyboard(Boolean(worker)));
+      await edit(ctx, pageText("Workload", dangerResponse("Workload is not ready", "Only an ACTIVE, compatible workload with a fresh heartbeat can host a session.")), workloadKeyboard(Boolean(worker)));
       return;
     }
-    preferredWorkloadWorker.set(String(ctx.from?.id ?? ""), { workspaceId: worker.workspaceId, workerId: worker.workerId, displayKey: worker.displayKey });
-    await edit(ctx, pageText("Workload", successResponse("Panel selected", `New pairing will use panel <code>${escapeHtml(worker.displayKey)}</code>. Existing sessions are unchanged.`)), keyboard([[btn("⚡ Pair Number", "session:new", "success")], [btn(ui.back, "workload:menu")]]));
+    const code = worker.workloadCode ?? worker.displayKey;
+    preferredWorkloadWorker.set(String(ctx.from?.id ?? ""), { workspaceId: worker.workspaceId, workerId: worker.workerId, workloadCode: code, displayKey: worker.displayKey });
+    await edit(ctx, pageText("Workload", successResponse("Workload selected", `New pairing will use <code>${escapeHtml(code)}</code>. Tap Pair Number when ready.`)), keyboard([[btn("⚡ Pair Number", "session:new", "success")], [btn(ui.back, "workload:menu")]]));
   });
-  bot.action(/^workload:remove:(\d{5})$/, async (ctx) => {
-    await ctx.answerCbQuery("Removing panel key…");
+  bot.action(/^workload:remove:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Removing workload…");
     const user = resolveTelegramUser(ctx);
-    const worker = await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, ctx.match[1] ?? "");
+    const token = ctx.match[1] ?? "";
+    const worker = /^\d{5}$/.test(token)
+      ? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, token)
+      : await getWorkspaceWorkloadWorkerByCode(user.workspaceId, token);
     if (worker) await revokeWorkloadWorker(worker.workerId);
     preferredWorkloadWorker.delete(String(ctx.from?.id ?? ""));
-    await edit(ctx, pageText("Workload", successResponse("Panel key removed", "The worker record was revoked. Existing session metadata and auth are preserved.")), workloadKeyboard(false));
+    await edit(ctx, pageText("Workload", successResponse("Workload removed", "The workload record was revoked. Existing session metadata and auth are preserved.")), workloadKeyboard(false));
   });
   bot.action("admin:workload", async (ctx) => {
     await ctx.answerCbQuery();
@@ -5259,20 +5296,21 @@ async function startPairing(
   const workloadMode = await getWorkloadMode(user.workspaceId);
   const preferred = preferredWorkloadWorker.get(userId);
   let targetWorker = preferred
-    ? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, preferred.displayKey)
+    ? await getWorkspaceWorkloadWorkerByCode(user.workspaceId, preferred.workloadCode)
+      ?? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, preferred.displayKey)
     : undefined;
   if (preferred && (!targetWorker || !isWorkloadWorkerReady(targetWorker))) {
     preferredWorkloadWorker.delete(userId);
     targetWorker = undefined;
     if (workloadMode === "OFF") {
-      await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("🔑 Setup Panel", "workload:enroll", "success")], [btn("📖 Deployment Guide", "workload:guide")], [btn(ui.back, "menu:main")]]));
+      await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("⚡ Create Panel Code", "workload:enroll", "success")], [btn("📖 Simple Setup Guide", "workload:guide")], [btn(ui.back, "menu:main")]]));
       return;
     }
     await sendOrEdit(ctx, pageText("Pairing", dangerResponse("Selected panel is offline", "Check the panel status or choose another panel before pairing.")), keyboard([[btn("◌ Workload", "workload:menu")], [btn(ui.back, "menu:main")]]));
     return;
   }
   if (workloadMode === "OFF" && !targetWorker) {
-    await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("🔑 Setup Panel", "workload:enroll", "success")], [btn("➕ Add Panel Key", "workload:add")], [btn(ui.back, "menu:main")]]));
+    await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("⚡ Create Panel Code", "workload:enroll", "success")], [btn("➕ Add My Workload Code", "workload:add")], [btn(ui.back, "menu:main")]]));
     return;
   }
   const normalizedName = requestedName.trim().replace(/\s+/g, "-");
@@ -5321,7 +5359,24 @@ async function startPairing(
   );
 }
 
-async function beginPairingWizard(ctx: Context): Promise<void> {
+async function beginPairingWizard(ctx: Context, workloadSelected = false): Promise<void> {
+  const user = resolveTelegramUser(ctx);
+  if (!workloadSelected) {
+    const workers = await listWorkspaceWorkloadWorkers(user.workspaceId);
+    const readyWorkers = workers.filter((worker) => isWorkloadWorkerReady(worker));
+    const rows = readyWorkers.map((worker) => {
+      const code = worker.workloadCode ?? worker.displayKey;
+      return [btn(`▣ ${worker.workerName ?? "Panel"} · ${code}`, `pair:workload:${code}`, "success")];
+    });
+    if (await getWorkloadMode(user.workspaceId) === "ON") rows.push([btn("▣ Use Central Workload", "pair:local")]);
+    if (!rows.length) {
+      await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("⚡ Create Panel Code", "workload:enroll", "success")], [btn("⬇ Download Panel Worker", "workload:download")], [btn(ui.back, "menu:main")]]));
+      return;
+    }
+    rows.push([btn(ui.close, "menu:main", "danger")]);
+    await sendOrEdit(ctx, pageText("Pairing · Choose Workload", infoResponse("Where should this new WhatsApp session run?", "Choose one of your ACTIVE workloads. Your choice applies only to this new pairing.")), keyboard(rows));
+    return;
+  }
   const message = ctx.callbackQuery?.message;
   const chatId =
     ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : 0);

@@ -37,6 +37,8 @@ export interface WorkloadWorkerRecord {
   workerId: string;
   workspaceId: string;
   ownerTelegramUserId: string;
+  workerName: string;
+  workloadCode: string;
   displayKey: string;
   credentialHash: string;
   credentialIssuedAt: number;
@@ -115,12 +117,15 @@ export interface WorkloadEventRecord {
 
 export interface WorkloadRegistrationRequest {
   enrollmentToken: string;
+  workerName?: string;
   workerVersion: string;
   capabilities: string[];
 }
 
 export interface WorkloadRegistrationResponse {
   workerId: string;
+  workerName: string;
+  workloadCode: string;
   displayKey: string;
   credential: string;
   heartbeatIntervalMs: number;

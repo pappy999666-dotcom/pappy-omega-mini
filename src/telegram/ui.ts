@@ -1204,52 +1204,53 @@ export function autoPromoteGlobalTargetsKeyboard(
 
 export function workloadKeyboard(hasWorker: boolean): InlineKeyboardMarkup {
   return keyboard([
-    [btn("🔑 Setup Panel", "workload:enroll", "success")],
-    [btn("➕ Add Panel Key", "workload:add")],
-    [btn(hasWorker ? "▣ My Panel" : "▣ My Panels", "workload:list")],
-    [btn("⬇ Download Worker", "workload:download", "success")],
-    [btn("📖 Deployment Guide", "workload:guide")],
-    [btn("↻ Check Status", "workload:status")],
+    [btn("⚡ Create Panel Code", "workload:enroll", "success")],
+    [btn("➕ Add My Workload Code", "workload:add")],
+    [btn(hasWorker ? "▣ My Workloads" : "▣ My Workload", "workload:list")],
+    [btn("⬇ Download Panel Worker", "workload:download", "success")],
+    [btn("📖 Simple Setup Guide", "workload:guide")],
+    [btn("↻ Refresh Status", "workload:status")],
     [btn(ui.back, "menu:main")],
   ]);
 }
 
 export function workloadText(
   mode: "ON" | "OFF",
-  workers: Array<{ displayKey: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[] }>,
+  workers: Array<{ workerName?: string; workloadCode?: string; displayKey: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[] }>,
 ): string {
   const body = workers.length
     ? workers.map((worker) => {
         const heartbeat = worker.lastHeartbeatAt ? new Date(worker.lastHeartbeatAt).toISOString() : "never";
-        return `<b>Panel:</b> <code>${escapeHtml(worker.displayKey)}</code> · ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Heartbeat:</b> ${escapeHtml(heartbeat)}\n<b>Sessions:</b> ${worker.assignedSessionIds.length}`;
+        const code = worker.workloadCode ?? worker.displayKey;
+        return `<b>${escapeHtml(worker.workerName ?? "Panel")}</b> · <code>${escapeHtml(code)}</code> · ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Heartbeat:</b> ${escapeHtml(heartbeat)}\n<b>Sessions:</b> ${worker.assignedSessionIds.length}`;
       }).join("\n\n")
     : "No workload panel is attached to this workspace.";
   return pageText(
     "Workload",
     infoResponse(
       "Central control · panel execution",
-      `<b>Owner workload:</b> ${mode === "ON" ? "🟢 ON" : "⚪ OFF"}\n\n${body}\n\n${mode === "OFF" ? "New sessions require a verified active panel worker." : "New sessions use the owner workload unless a verified panel is selected."}`,
+      `<b>Panel workload:</b> ${mode === "ON" ? "🟢 ON" : "⚪ OFF"}\n\n${body}\n\n${mode === "OFF" ? "New sessions need one of your ACTIVE workloads." : "When you tap Pair, choose which ACTIVE workload should host the new session."}`,
     ),
   );
 }
 
 export function workloadPanelText(
-  worker: { displayKey: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[] },
+  worker: { workerName?: string; workloadCode?: string; displayKey: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[] },
 ): string {
   return pageText(
     "Workload Panel",
     infoResponse(
-      `Panel ${escapeHtml(worker.displayKey)}`,
-      `<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Last heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}\n<b>Assigned sessions:</b> ${worker.assignedSessionIds.length}`,
+      `${escapeHtml(worker.workerName ?? "Panel")} · ${escapeHtml(worker.workloadCode ?? worker.displayKey)}`,
+      `<b>Code:</b> <code>${escapeHtml(worker.workloadCode ?? worker.displayKey)}</code>\n<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Last heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}\n<b>Assigned sessions:</b> ${worker.assignedSessionIds.length}`,
     ),
   );
 }
 
-export function workloadPanelKeyboard(displayKey: string): InlineKeyboardMarkup {
+export function workloadPanelKeyboard(workloadCode: string): InlineKeyboardMarkup {
   return keyboard([
-    [btn("✓ Use This Panel", `workload:use:${displayKey}`, "success")],
+    [btn("✓ Use This Workload", `workload:use:${workloadCode}`, "success")],
     [btn("↻ Check Again", "workload:status")],
-    [btn("🗑 Remove Key", `workload:remove:${displayKey}`, "danger")],
+    [btn("🗑 Remove Workload", `workload:remove:${workloadCode}`, "danger")],
     [btn(ui.back, "workload:list")],
   ]);
 }
@@ -1258,18 +1259,18 @@ export function workloadGuideText(controlUrl?: string): string {
   return pageText(
     "Workload Deployment Guide",
     infoResponse(
-      "Panel worker · upload → install → start",
-      `<b>1.</b> Download the official worker package.\n<b>2.</b> Create a Node.js 20+ application on any compatible panel.\n<b>3.</b> Upload the package and run <code>npm install</code>.\n<b>4.</b> Set <code>PAPPY_WORKLOAD_URL</code> to the official control URL.\n<b>5.</b> Set the one-time <code>PAPPY_WORKLOAD_ENROLLMENT_TOKEN</code>.\n<b>6.</b> Set a private 32+ character <code>PAPPY_WORKLOAD_SESSION_SECRET</code>.\n<b>7.</b> Start <code>node index.js</code>.\n<b>8.</b> Copy the five-digit panel key printed after registration and add it here.\n\n<b>Control URL:</b> <code>${escapeHtml(controlUrl ?? "configured by the owner")}</code>\n\nThe package contains only the assigned WhatsApp workload. Do not add the Telegram token, MongoDB URI, Redis URI, or admin credentials.`,
+      "One command · one saved workload code",
+      `<b>1.</b> Tap <b>Create Panel Code</b> and copy the one-time command.\n<b>2.</b> On the user’s Node.js panel, paste that command and run it.\n<b>3.</b> When asked, choose a simple name such as <code>pappy</code>.\n<b>4.</b> The worker installs its own local secret and prints a permanent code such as <code>pappy-ab12cd</code>.\n<b>5.</b> Keep that code safe, then tap <b>Add My Workload Code</b> in Telegram and paste it.\n<b>6.</b> When the user taps <b>Pair</b>, they choose one of their ACTIVE workloads before entering the WhatsApp number.\n\n<b>Control URL:</b> <code>${escapeHtml(controlUrl ?? "configured by the owner")}</code>\n\nThe worker package contains only WhatsApp workload runtime. It does not need Telegram, MongoDB, Redis, or admin credentials. Do not share the saved workload code with another workspace.`,
     ),
   );
 }
 
 export function adminWorkloadText(
   mode: "ON" | "OFF",
-  workers: Array<{ workerId: string; displayKey: string; ownerTelegramUserId: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[] }>,
+  workers: Array<{ workerId: string; workerName?: string; workloadCode?: string; displayKey: string; ownerTelegramUserId: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[] }>,
 ): string {
   const body = workers.length
-    ? workers.map((worker) => `<b>${escapeHtml(worker.displayKey)}</b> · ${escapeHtml(worker.status)}\n<code>${escapeHtml(worker.workerId.slice(0, 12))}</code> · owner <code>${escapeHtml(worker.ownerTelegramUserId)}</code>\nversion ${escapeHtml(worker.workerVersion)} · sessions ${worker.assignedSessionIds.length} · heartbeat ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}`).join("\n\n")
+    ? workers.map((worker) => `<b>${escapeHtml(worker.workerName ?? "Panel")}</b> · <code>${escapeHtml(worker.workloadCode ?? worker.displayKey)}</code> · ${escapeHtml(worker.status)}\n<code>${escapeHtml(worker.workerId.slice(0, 12))}</code> · owner <code>${escapeHtml(worker.ownerTelegramUserId)}</code>\nversion ${escapeHtml(worker.workerVersion)} · sessions ${worker.assignedSessionIds.length} · heartbeat ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}`).join("\n\n")
     : "No external workload workers are registered.";
   return pageText(
     "Admin · Workload",
@@ -1289,12 +1290,12 @@ export function adminWorkloadKeyboard(mode: "ON" | "OFF", workers: Array<{ worke
   ]);
 }
 
-export function adminWorkloadWorkerText(worker: { workerId: string; displayKey: string; status: string; ownerTelegramUserId: string; workerVersion: string; assignedSessionIds: string[]; lastHeartbeatAt?: number; lastError?: string }): string {
+export function adminWorkloadWorkerText(worker: { workerId: string; workerName?: string; workloadCode?: string; displayKey: string; status: string; ownerTelegramUserId: string; workerVersion: string; assignedSessionIds: string[]; lastHeartbeatAt?: number; lastError?: string }): string {
   return pageText(
     "Admin · Workload Worker",
     infoResponse(
-      `Worker ${escapeHtml(worker.displayKey)}`,
-      `<b>ID:</b> <code>${escapeHtml(worker.workerId)}</code>\n<b>Owner:</b> <code>${escapeHtml(worker.ownerTelegramUserId)}</code>\n<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Sessions:</b> ${worker.assignedSessionIds.length}\n<b>Heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}${worker.lastError ? `\n<b>Last error:</b> ${escapeHtml(worker.lastError)}` : ""}`,
+      `Worker ${escapeHtml(worker.workerName ?? "Panel")} · ${escapeHtml(worker.workloadCode ?? worker.displayKey)}`,
+      `<b>Code:</b> <code>${escapeHtml(worker.workloadCode ?? worker.displayKey)}</code>\n<b>ID:</b> <code>${escapeHtml(worker.workerId)}</code>\n<b>Owner:</b> <code>${escapeHtml(worker.ownerTelegramUserId)}</code>\n<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Sessions:</b> ${worker.assignedSessionIds.length}\n<b>Heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}${worker.lastError ? `\n<b>Last error:</b> ${escapeHtml(worker.lastError)}` : ""}`,
     ),
   );
 }

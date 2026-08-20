@@ -1,14 +1,25 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 import makeWASocket, { makeCacheManagerAuthState } from "@crysnovax/baileys";
 import pino from "pino";
 
-const CONTROL_URL = String(process.env.PAPPY_WORKLOAD_URL ?? "").replace(/\/$/, "");
-const ENROLLMENT_TOKEN = process.env.PAPPY_WORKLOAD_ENROLLMENT_TOKEN ?? "";
+const cliArgs = process.argv.slice(2);
+function cliValue(...names) {
+  for (const name of names) {
+    const index = cliArgs.indexOf(name);
+    if (index >= 0 && cliArgs[index + 1]) return cliArgs[index + 1];
+  }
+  return "";
+}
+const CONTROL_URL = String(process.env.PAPPY_WORKLOAD_URL ?? "https://pappy-omega-mini.duckdns.org").replace(/\/$/, "");
+const ENROLLMENT_TOKEN = process.env.PAPPY_WORKLOAD_ENROLLMENT_TOKEN ?? cliValue("--enrollment", "--token");
 const DATA_DIR = process.env.PAPPY_WORKER_DATA_DIR ?? "./pappy-workload-data";
-const STORAGE_SECRET = process.env.PAPPY_WORKLOAD_SESSION_SECRET ?? "";
+let STORAGE_SECRET = process.env.PAPPY_WORKLOAD_SESSION_SECRET ?? "";
+let WORKER_NAME = (process.env.PAPPY_WORKLOAD_NAME ?? cliValue("--name")) || "";
 const WORKER_VERSION = process.env.PAPPY_WORKER_VERSION ?? "1.0.0";
+const secretPath = join(DATA_DIR, ".secret");
 const CONTROL_POLL_MS = 2_000;
 const HEARTBEAT_MS = 20_000;
 const workerStatePath = join(DATA_DIR, "worker.json");
@@ -19,6 +30,30 @@ let stopping = false;
 
 function key() {
   return createHash("sha256").update(STORAGE_SECRET, "utf8").digest();
+}
+async function ensureWorkerName() {
+  if (WORKER_NAME || !process.stdin.isTTY || !process.stdout.isTTY) {
+    WORKER_NAME = WORKER_NAME || "panel";
+    return;
+  }
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    WORKER_NAME = (await prompt.question("Choose a name for this workload (example: pappy): ")).trim() || "panel";
+  } finally {
+    prompt.close();
+  }
+}
+async function ensureStorageSecret() {
+  await mkdir(DATA_DIR, { recursive: true });
+  if (!STORAGE_SECRET) {
+    try {
+      STORAGE_SECRET = (await readFile(secretPath, "utf8")).trim();
+    } catch {
+      STORAGE_SECRET = randomBytes(32).toString("base64url");
+      await writeFile(secretPath, STORAGE_SECRET, { mode: 0o600 });
+    }
+  }
+  if (STORAGE_SECRET.length < 32) throw new Error("The local worker secret must be at least 32 characters.");
 }
 function encrypt(value) {
   const iv = randomBytes(12);
@@ -62,8 +97,7 @@ function decode(value) {
   return value;
 }
 function assertConfig() {
-  if (!CONTROL_URL.startsWith("https://")) throw new Error("PAPPY_WORKLOAD_URL must use HTTPS.");
-  if (!STORAGE_SECRET || STORAGE_SECRET.length < 32) throw new Error("PAPPY_WORKLOAD_SESSION_SECRET must be at least 32 characters.");
+  if (!CONTROL_URL.startsWith("https://")) throw new Error("The workload control URL must use HTTPS.");
 }
 async function control(path, payload, credential) {
   const response = await fetch(`${CONTROL_URL}${path}`, {
@@ -223,15 +257,16 @@ async function execute(command) {
 async function register() {
   const existing = await loadState();
   if (existing?.credential && existing.workerId) { credentialState = existing; return; }
-  if (!ENROLLMENT_TOKEN) throw new Error("PAPPY_WORKLOAD_ENROLLMENT_TOKEN is required on first start.");
+  if (!ENROLLMENT_TOKEN) throw new Error("Paste the one-time enrollment command from Telegram for the first start.");
   const registration = await control("/workload/register", {
     enrollmentToken: ENROLLMENT_TOKEN,
+    workerName: WORKER_NAME,
     workerVersion: WORKER_VERSION,
     capabilities: ["baileys", "group-transport", "media", "pairing"],
   });
-  credentialState = { workerId: registration.workerId, displayKey: registration.displayKey, credential: registration.credential };
+  credentialState = { workerId: registration.workerId, workerName: registration.workerName, workloadCode: registration.workloadCode, displayKey: registration.displayKey, credential: registration.credential };
   await saveState(credentialState);
-  console.log(`[pappy-workload-worker] registered worker=${registration.workerId} key=${registration.displayKey} version=${WORKER_VERSION}`);
+  console.log(`[pappy-workload-worker] ready name=${registration.workerName} code=${registration.workloadCode} (save this code in Telegram)`);
 }
 async function heartbeat() {
   return control("/workload/heartbeat", {
@@ -253,6 +288,8 @@ async function poll() {
   }
 }
 async function run() {
+  await ensureWorkerName();
+  await ensureStorageSecret();
   assertConfig();
   await mkdir(DATA_DIR, { recursive: true });
   await register();

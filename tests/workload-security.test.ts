@@ -22,10 +22,12 @@ describe("hybrid workload security primitives", () => {
     expect(isFreshRequest(now - 91_000, now)).toBe(false);
   });
 
-  it("does not put central secrets in the worker guide", () => {
+  it("keeps central secrets out of the noob-friendly worker guide", () => {
     const guide = workloadGuideText("https://control.example/workload");
-    expect(guide).toContain("PAPPY_WORKLOAD_SESSION_SECRET");
-    expect(guide).toContain("Telegram token");
+    expect(guide).toContain("one saved workload code");
+    expect(guide).toContain("pappy-ab12cd");
+    expect(guide).toContain("Telegram");
+    expect(guide).not.toContain("PAPPY_WORKLOAD_SESSION_SECRET");
     expect(guide).not.toContain("TELEGRAM_BOT_TOKEN=");
     expect(guide).not.toContain("MONGODB_URI=");
     expect(guide).not.toContain("REDIS_URL=");
