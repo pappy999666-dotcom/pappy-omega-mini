@@ -234,7 +234,19 @@ async function loadGroupJids(socket: WASocket): Promise<string[]> {
       },
     ],
   })) as RawBinaryNode;
-  const groups = rawChildren(rawChildren(result, "groups")[0], "group");
+  const groupsNode = rawChildren(result, "groups")[0];
+  const groups = rawChildren(groupsNode, "group");
+  if (!groups.length) {
+    const rootTags = Array.isArray(result.content)
+      ? result.content
+          .filter((child): child is RawBinaryNode => typeof child === "object" && child !== null)
+          .map((child) => child.tag ?? "?")
+          .slice(0, 12)
+      : [];
+    console.warn(
+      `[pappy-omega-mini] raw group roster empty root=${result.tag ?? "?"} groupsNode=${Boolean(groupsNode)} rootChildren=${rootTags.join("|")}`,
+    );
+  }
   return [...new Set(
     groups
       .map((group) => group.attrs?.id ?? group.attrs?.jid)
