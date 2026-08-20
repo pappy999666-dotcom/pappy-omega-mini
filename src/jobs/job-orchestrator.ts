@@ -146,7 +146,6 @@ export class JobOrchestrator {
         });
     });
     this.reaperTimer = setInterval(() => {
-      void this.recoverOutstandingJobs(false).catch(() => undefined);
       void this.reapStaleJobs();
     }, 30_000);
     this.reaperTimer.unref?.();
