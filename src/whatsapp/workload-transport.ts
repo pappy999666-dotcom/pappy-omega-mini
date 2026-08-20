@@ -32,7 +32,7 @@ export async function callAssignedWorkloadTransport(
     args: encode(args),
   });
   const completed = await waitForWorkloadCommand(command.commandId);
-  return decode(completed.result?.value);
+  return decode(completed.result);
 }
 
 function remoteMethod(workspaceId: string, sessionId: string, method: string) {
