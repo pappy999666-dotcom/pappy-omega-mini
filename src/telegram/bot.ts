@@ -461,11 +461,13 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   setJobCompletionNotifier(async (job) => {
     if (job.kind !== "allstatus" && job.kind !== "allchat") return;
-    const ownerId = getWorkspaceOwnerTelegramUserId(job.workspaceId);
-    const chatId = ownerId ? Number(ownerId) : NaN;
-    if (!Number.isFinite(chatId)) return;
-    const payload = job.payload as { groups?: string[]; count?: number; delayMs?: number };
-    const totalGroups = new Set(payload.groups ?? []).size;
+    const payload = job.payload as {
+      groups?: string[];
+      count?: number;
+      delayMs?: number;
+      sourceChatJid?: string;
+    };
+    const totalGroups = job.progress.total ?? new Set(payload.groups ?? []).size;
     const repeat = Math.max(1, Math.min(20, Number(payload.count ?? 1)));
     const expectedPosts = totalGroups * repeat;
     const progress = job.progress;
@@ -473,31 +475,72 @@ export function createTelegramBot(): Telegraf<Context> {
     const minutes = Math.floor(elapsedSeconds / 60);
     const seconds = elapsedSeconds % 60;
     const delay = Math.max(1, Math.round(Number(payload.delayMs ?? 20000) / 1000));
-    await bot.telegram.sendMessage(
-      chatId,
-      [
-        `✦ <b>PAPPY OMEGA MINI · ${job.kind === "allstatus" ? "ALL-STATUS" : "ALL-CHAT"} DONE</b>`,
-        "──────────────────────────────",
-        `<b>State</b> · ${escapeHtml(job.state)}`,
-        `<b>Total groups</b> · ${totalGroups}`,
-        `<b>Expected posts</b> · ${expectedPosts}`,
-        `<b>Posted</b> · ${progress.success}`,
-        `<b>Failed</b> · ${progress.failed}`,
-        `<b>Skipped</b> · ${progress.skipped}`,
-        `<b>Delay</b> · ${delay}s`,
-        `<b>Total time</b> · ${minutes}m ${seconds}s`,
-        `<b>Live code</b> · <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>`,
+    const code = job.jobCode ?? job.jobId.slice(0, 8);
+    const kindLabel = job.kind === "allstatus" ? "ALL-STATUS" : "ALL-CHAT";
+    const terminalLabel =
+      job.state === "COMPLETED"
+        ? "DONE"
+        : job.state === "PARTIAL"
+          ? "PARTIAL"
+          : "FAILED";
+    const telegramOwnerId = getWorkspaceOwnerTelegramUserId(job.workspaceId);
+    const telegramChatId = telegramOwnerId ? Number(telegramOwnerId) : NaN;
+    if (Number.isFinite(telegramChatId))
+      await bot.telegram.sendMessage(
+        telegramChatId,
+        [
+          `✦ <b>PAPPY OMEGA MINI · ${kindLabel} ${terminalLabel}</b>`,
+          "──────────────────────────────",
+          `<b>State</b> · ${escapeHtml(job.state)}`,
+          `<b>Total groups</b> · ${totalGroups}`,
+          `<b>Expected posts</b> · ${expectedPosts}`,
+          `<b>Posted</b> · ${progress.success}`,
+          `<b>Failed</b> · ${progress.failed}`,
+          `<b>Skipped</b> · ${progress.skipped}`,
+          `<b>Delay</b> · ${delay}s`,
+          `<b>Total time</b> · ${minutes}m ${seconds}s`,
+          `<b>Live code</b> · <code>${escapeHtml(code)}</code>`,
+          "",
+          "<i>One terminal report was emitted. Refresh Live Show for the durable ledger.</i>",
+        ].join("\n"),
+        {
+          parse_mode: "HTML",
+          reply_markup: keyboard([
+            [copyBtn("📋 Copy live code", code, "success")],
+            [btn("📺 Live Show", `job:live:${code}`)],
+          ]),
+        },
+      );
+    if (job.sessionId && payload.sourceChatJid) {
+      const whatsappReport = [
+        `✦ PAPPY OMEGA MINI · ${kindLabel} ${terminalLabel}`,
+        "─────────────────────",
+        `State         · ${job.state}`,
+        `Total groups  · ${totalGroups}`,
+        `Expected posts · ${expectedPosts}`,
+        `Posted        · ${progress.success}`,
+        `Failed        · ${progress.failed}`,
+        `Skipped       · ${progress.skipped}`,
+        `Delay         · ${delay}s`,
+        `Total time    · ${minutes}m ${seconds}s`,
+        `Live code     · ${code}`,
         "",
-        "<i>One terminal report was emitted. Refresh Live Show for the durable ledger.</i>",
-      ].join("\n"),
-      {
-        parse_mode: "HTML",
-        reply_markup: keyboard([
-          [copyBtn("📋 Copy live code", job.jobCode ?? job.jobId.slice(0, 8), "success")],
-          [btn("📺 Live Show", `job:live:${job.jobCode ?? job.jobId.slice(0, 8)}`)],
-        ]),
-      },
-    );
+        job.state === "COMPLETED"
+          ? "The broadcast finished successfully."
+          : "The broadcast ended with failures or skips. Open Telegram Live Show for the durable details.",
+      ].join("\n");
+      void sendDirectText(
+        job.workspaceId,
+        job.sessionId,
+        payload.sourceChatJid,
+        whatsappReport,
+      ).catch((error) =>
+        console.error(
+          `[pappy-omega-mini] WhatsApp completion report failed job=${code}:`,
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
   });
   bot.use(async (ctx, next) => {
     if (isAdmin(ctx) || !ctx.from) return next();

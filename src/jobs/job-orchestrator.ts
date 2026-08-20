@@ -147,13 +147,17 @@ export class JobOrchestrator {
       },
     );
     this.worker.on("failed", (job, error) => {
-      if (job)
-        void this.store.update(job.data.jobId, {
-          state: "FAILED",
+      if (!job) return;
+      void (async () => {
+        const retrying = job.attemptsMade + 1 < job.data.maxAttempts;
+        await this.store.update(job.data.jobId, {
+          state: retrying ? "RETRYING" : "FAILED",
           error: error.message,
           heartbeatAt: Date.now(),
-          completedAt: Date.now(),
+          ...(retrying ? {} : { completedAt: Date.now() }),
         });
+        if (!retrying) await this.emitCompletionHooks(job.data.jobId);
+      })().catch(() => undefined);
     });
     this.reaperTimer = setInterval(() => {
       void this.reapStaleJobs();
@@ -372,6 +376,21 @@ export class JobOrchestrator {
     throw new Error("Unable to allocate a unique live job code.");
   }
 
+  private async emitCompletionHooks(jobId: string): Promise<void> {
+    const claimed = await this.redis.set(
+      `pappy-omega-mini:completion-notified:${jobId}`,
+      "1",
+      "EX",
+      60 * 60 * 24 * 30,
+      "NX",
+    );
+    if (claimed !== "OK") return;
+    const completedRecord = await this.store.get(jobId);
+    if (!completedRecord) return;
+    for (const hook of this.completionHooks)
+      await Promise.resolve(hook(completedRecord)).catch(() => undefined);
+  }
+
   async close(): Promise<void> {
     clearInterval(this.reaperTimer);
     await this.worker.close();
@@ -441,11 +460,7 @@ export class JobOrchestrator {
         cancellationRequested: context.isCancellationRequested(),
       });
       if (finalState === "COMPLETED") await this.store.clearError(record.jobId);
-      const completedRecord = await this.store.get(record.jobId);
-      if (completedRecord) {
-        for (const hook of this.completionHooks)
-          await Promise.resolve(hook(completedRecord)).catch(() => undefined);
-      }
+      await this.emitCompletionHooks(record.jobId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const retrying = bullJob.attemptsMade + 1 < record.maxAttempts;

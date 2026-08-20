@@ -228,6 +228,12 @@ export async function routeWhatsAppText(
                 : {}),
               groups: payload.groups ?? groups.map((group) => group.jid),
               ...(mediaReference ? { media: mediaReference } : {}),
+              ...(kind === "allstatus" || kind === "allchat"
+                ? {
+                    sourceChatJid: message.chatJid ?? message.senderJid,
+                    sourceSenderJid: message.senderJid,
+                  }
+                : {}),
             };
             const payloadHash = createHash("sha256")
               .update(JSON.stringify(enrichedPayload))
