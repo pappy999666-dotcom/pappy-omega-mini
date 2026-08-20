@@ -47,6 +47,7 @@ import {
   acquireSessionOperationLock,
   type SessionLock,
 } from "../core/session-lock.js";
+import { formatBroadcastReadyMessage } from "./broadcast-format.js";
 import {
   JoinResultStore,
   joinOutcomeFromClassification,
@@ -877,25 +878,20 @@ export function startWorkerRuntime(): JobOrchestrator {
           const expectedSeconds = Math.max(0, expectedPosts - 1) * delaySeconds;
           const minutes = Math.floor(expectedSeconds / 60);
           const seconds = expectedSeconds % 60;
-          const label = kind === "allstatus" ? "ALL-STATUS" : "ALL-CHAT";
-          const action =
-            kind === "allstatus"
-              ? "Status delivery is now posting to every resolved group."
-              : "Hidden-member mention delivery is now posting to every resolved group.";
+          const readyKind = kind === "allchat" ? "allchat" : "allstatus";
           void sendDirectText(
             context.job.workspaceId,
             sessionId,
             originJid,
-            [
-              `✦ PAPPY OMEGA MINI · ${label} READY`,
-              "──────────────────────────────",
-              `Total groups  · ${uniqueGroups.length}`,
-              `Expected posts · ${expectedPosts}`,
-              `Delay         · ${delaySeconds}s`,
-              `Expected time · ${minutes}m ${seconds}s`,
-              `Live code     · ${context.job.jobCode ?? context.job.jobId.slice(0, 8)}`,
-              `Action        · ${action}`,
-            ].join("\\n"),
+            formatBroadcastReadyMessage({
+              kind: readyKind,
+              totalGroups: uniqueGroups.length,
+              expectedPosts,
+              delaySeconds,
+              expectedMinutes: minutes,
+              expectedSeconds: seconds,
+              jobCode: context.job.jobCode ?? context.job.jobId.slice(0, 8),
+            }),
           ).catch((error) => {
             console.warn(
               `[pappy-omega-mini] broadcast roster notification failed job=${context.job.jobId}:`,
