@@ -939,17 +939,17 @@ export function startWorkerRuntime(): JobOrchestrator {
       const autoPromoteRunId = typeof (context.job.payload as { autoPromoteRunId?: unknown }).autoPromoteRunId === "string"
         ? (context.job.payload as { autoPromoteRunId: string }).autoPromoteRunId
         : undefined;
-      const sessionLock = await waitForSessionOperationLock(
+      const sessionLock = await acquireSessionOperationLock(
         context.job.workspaceId,
         sessionId,
-        context.signal,
-        () =>
-          context.report({
-            currentAction: "waiting for session operation lock",
-            lastResult: "Another broadcast is using this WhatsApp session; this job remains queued safely.",
-          }),
       );
-      if (!sessionLock) throw new Error("WhatsApp session operation was cancelled before its lock became available.");
+      if (!sessionLock) {
+        await context.report({
+          currentAction: "waiting for session operation lock",
+          lastResult: "Another broadcast is using this WhatsApp session; retry scheduled without occupying a worker.",
+        });
+        throw new Error("Broadcast session operation busy; retry scheduled.");
+      }
       try {
         return await runBoundedBatch({
         items: deliveries,
@@ -1246,20 +1246,4 @@ export function stopWorkerRuntimeForTests(): void {
   if (validatorSweepTimer) clearInterval(validatorSweepTimer);
   validatorSweepTimer = undefined;
   validatorErrorMigrations.clear();
-}
-
-
-async function waitForSessionOperationLock(
-  workspaceId: string,
-  sessionId: string,
-  signal: AbortSignal,
-  onWait?: () => Promise<void>,
-): Promise<SessionLock | undefined> {
-  while (!signal.aborted) {
-    const lock = await acquireSessionOperationLock(workspaceId, sessionId);
-    if (lock) return lock;
-    await onWait?.().catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
-  return undefined;
 }
