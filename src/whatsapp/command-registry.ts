@@ -108,18 +108,27 @@ function queuedJobAcknowledgement(
   if (typeof result === "string")
     return `${kind === "allstatus" ? "All-status" : "All-chat"} job queued: ${result}`;
   const delay = Math.max(1, Math.round((result.delayMs ?? 20000) / 1000));
-  const totalGroups = result.totalGroups ?? "—";
-  const totalPosts = result.totalPosts ?? totalGroups;
-  const expectedSeconds = Math.max(0, Math.ceil((result.expectedTimeMs ?? 0) / 1000));
-  const minutes = Math.floor(expectedSeconds / 60);
-  const seconds = expectedSeconds % 60;
+  const totalGroups = result.totalGroups ?? "resolving…";
+  const totalPosts = result.totalPosts ?? "calculating…";
+  const expectedTime =
+    result.expectedTimeMs === undefined
+      ? "calculating…"
+      : (() => {
+          const expectedSeconds = Math.max(
+            0,
+            Math.ceil(result.expectedTimeMs / 1000),
+          );
+          const minutes = Math.floor(expectedSeconds / 60);
+          const seconds = expectedSeconds % 60;
+          return `${minutes}m ${seconds}s`;
+        })();
   return [
     `✦ PAPPY OMEGA MINI · ${kind === "allstatus" ? "ALL-STATUS" : "ALL-CHAT"}`,
     "──────────────────────────────",
     `Total groups  · ${totalGroups}`,
     `Expected posts · ${totalPosts}`,
     `Delay         · ${delay}s`,
-    `Expected time · ${minutes}m ${seconds}s`,
+    `Expected time · ${expectedTime}`,
     `Live code     · ${result.jobCode}`,
     "",
     "Open Telegram → Live Show and paste the live code for durable progress.",

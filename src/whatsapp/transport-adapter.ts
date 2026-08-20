@@ -197,6 +197,7 @@ export async function updateProfileBio(
 
 const GROUP_INVENTORY_TIMEOUT_MS = 15_000;
 const GROUP_INVENTORY_CACHE_MS = 10_000;
+const GROUP_INVENTORY_INFLIGHT_TIMEOUT_MS = 20_000;
 type GroupInventoryRecord = { subject?: string; participants?: unknown[] };
 const groupInventoryCache = new Map<
   string,
@@ -249,7 +250,24 @@ export async function listGroups(
   const cached = groupInventoryCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.groups.map((group) => ({ ...group }));
   const inflight = groupInventoryInflight.get(cacheKey);
-  if (inflight) return (await inflight).map((group) => ({ ...group }));
+  if (inflight) {
+    try {
+      const groups = await Promise.race([
+        inflight,
+        new Promise<GroupSummary[]>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("WhatsApp group inventory request remained in-flight too long.")),
+            GROUP_INVENTORY_INFLIGHT_TIMEOUT_MS,
+          ),
+        ),
+      ]);
+      return groups.map((group) => ({ ...group }));
+    } catch (error) {
+      const stale = groupInventoryLastKnown.get(cacheKey);
+      if (stale) return stale.map((group) => ({ ...group }));
+      throw error;
+    }
+  }
   const socket = socketFor(workspaceId, sessionId);
   const fetchGroups = method(socket, "groupFetchAllParticipating");
   if (!fetchGroups) throw new Error("Unsupported capability: groupMetadata");

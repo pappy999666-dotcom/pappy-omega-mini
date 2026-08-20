@@ -211,7 +211,9 @@ export async function routeWhatsAppText(
               ...(totalGroups > 0 ? { totalGroups } : {}),
               ...(totalGroups > 0 ? { totalPosts: totalGroups * repeat } : {}),
               delayMs,
-              expectedTimeMs: Math.max(0, totalGroups * repeat - 1) * delayMs,
+              ...(totalGroups > 0
+                ? { expectedTimeMs: Math.max(0, totalGroups * repeat - 1) * delayMs }
+                : {}),
             } satisfies EnqueueJobResult;
           },
         }

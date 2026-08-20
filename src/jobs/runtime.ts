@@ -789,14 +789,31 @@ export function startWorkerRuntime(): JobOrchestrator {
         delayMs?: number;
         media?: JobMediaReference;
       };
-      const baseGroups =
-        kind === "gstatus"
-          ? [payload.groups?.[0]].filter((jid): jid is string => Boolean(jid))
-          : payload.groups?.length
-            ? payload.groups
-            : (await listGroups(context.job.workspaceId, sessionId))
-                .map((group) => group.jid)
-                .filter(Boolean);
+      let baseGroups: string[];
+      if (kind === "gstatus") {
+        baseGroups = [payload.groups?.[0]].filter(
+          (jid): jid is string => Boolean(jid),
+        );
+      } else if (payload.groups?.length) {
+        baseGroups = payload.groups;
+      } else {
+        await context.report({
+          currentAction: "resolving group inventory",
+          lastResult: "The worker is fetching the current WhatsApp group list.",
+        });
+        try {
+          baseGroups = (await listGroups(context.job.workspaceId, sessionId))
+            .map((group) => group.jid)
+            .filter(Boolean);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          await context.report({
+            currentAction: "group inventory failed",
+            lastResult: message,
+          });
+          throw error;
+        }
+      }
       if (!baseGroups.length) {
         await context.report({
           total: 0,
