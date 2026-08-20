@@ -13,6 +13,8 @@ import {
   getWorkspaceSudo,
 } from "../core/session-registry.js";
 import { createHash } from "node:crypto";
+
+const BROADCAST_INVENTORY_ACK_TIMEOUT_MS = 4_000;
 import { persistJobMedia } from "./job-media-store.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { getWorkerRuntime } from "../jobs/runtime.js";
@@ -249,11 +251,14 @@ export async function routeWhatsAppText(
               idempotencyKey: `${message.workspaceId}:${message.sessionId}:${kind}:${payloadHash}`,
               ...(kind === "allstatus" || kind === "allchat" ? { maxAttempts: 12 } : {}),
             });
+            let inventoryPending = false;
             const inventoryPromise =
               kind === "allstatus" || kind === "allchat"
-                ? listGroups(message.workspaceId, message.sessionId).catch(() => [])
+                ? listGroups(message.workspaceId, message.sessionId).catch(() => {
+                    inventoryPending = true;
+                    return [];
+                  })
                 : Promise.resolve([]);
-            let inventoryPending = false;
             const record = await recordPromise;
             const inventory = await Promise.race([
               inventoryPromise,
@@ -261,7 +266,7 @@ export async function routeWhatsAppText(
                 const timer = setTimeout(() => {
                   inventoryPending = true;
                   resolve([]);
-                }, 750);
+                }, BROADCAST_INVENTORY_ACK_TIMEOUT_MS);
                 timer.unref?.();
               }),
             ]);

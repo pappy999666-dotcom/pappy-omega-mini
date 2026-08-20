@@ -319,6 +319,105 @@ export class JobOrchestrator {
     return this.store.list(limit);
   }
 
+  async listAllJobs(): Promise<JobRecord[]> {
+    return this.store.listAll();
+  }
+
+  async forceRecoverJob(
+    jobId: string,
+    reason = "Inceptor recovered a stale worker heartbeat.",
+  ): Promise<"recovered" | "failed" | "ignored" | "missing"> {
+    const record = await this.store.get(jobId);
+    if (!record) return "missing";
+    if (["COMPLETED", "PARTIAL", "CANCELLED", "FAILED"].includes(record.state))
+      return "ignored";
+    const now = Date.now();
+    const heartbeatAge = now - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
+    if (heartbeatAge < STALE_ACTIVE_JOB_GRACE_MS) return "ignored";
+    const claimKey = `pappy-omega-mini:recovery:${record.jobId}`;
+    const claimed = await this.redis.set(claimKey, "1", "EX", 120, "NX");
+    if (claimed !== "OK") return "ignored";
+    if (record.attempts >= record.maxAttempts) {
+      await this.store.update(record.jobId, {
+        state: "FAILED",
+        error: `${reason} Retry limit exhausted.`,
+        heartbeatAt: now,
+        completedAt: now,
+      });
+      await this.emitCompletionHooks(record.jobId);
+      return "failed";
+    }
+    await this.store.update(record.jobId, {
+      state: "RETRYING",
+      error: reason,
+      heartbeatAt: now,
+    });
+    await this.queue.add(
+      `${record.kind}:inceptor-recovery`,
+      { ...record, state: "QUEUED", attempts: Math.min(record.maxAttempts, record.attempts + 1) },
+      {
+        jobId: `${record.jobId}:inceptor:${now}`,
+        attempts: Math.max(1, record.maxAttempts - record.attempts),
+        backoff: { type: "exponential", delay: 1000 },
+        ...(isImmediatePostingKind(record.kind) ? { priority: 1 } : {}),
+      },
+    );
+    return "recovered";
+  }
+
+  async flushJob(jobId: string): Promise<boolean> {
+    const record = await this.store.get(jobId);
+    if (!record) return false;
+    this.forcedCancellation.add(jobId);
+    if (!["COMPLETED", "FAILED", "CANCELLED", "PARTIAL"].includes(record.state))
+      await this.cancel(jobId).catch(() => undefined);
+    const bullJob = await this.queue.getJob(jobId);
+    if (bullJob && !(await bullJob.isActive()))
+      await bullJob.remove().catch(() => undefined);
+    await this.redis.del(
+      `pappy-omega-mini:idempotency:${record.idempotencyKey}`,
+      `${CODE_PREFIX}${record.workspaceId}:${record.jobCode ?? ""}`,
+      `pappy-omega-mini:completion-notified:${jobId}`,
+    );
+    if (record.jobCode)
+      await this.redis.del(`${CODE_PREFIX}${record.workspaceId}:${record.jobCode}`);
+    let cursor = "0";
+    do {
+      const [next, keys] = await this.redis.scan(
+        cursor,
+        "MATCH",
+        `pappy-omega-mini:broadcast-done:${jobId}:*`,
+        "COUNT",
+        100,
+      );
+      cursor = next;
+      if (keys.length) await this.redis.unlink(...keys).catch(() => undefined);
+    } while (cursor !== "0");
+    await this.joinResults.purgeJob(jobId);
+    await this.store.delete(jobId);
+    const timer = setTimeout(() => this.forcedCancellation.delete(jobId), 60_000);
+    timer.unref?.();
+    return true;
+  }
+
+  async pruneTerminalJobs(
+    olderThanMs: number,
+    limit = 200,
+  ): Promise<number> {
+    const cutoff = Date.now() - olderThanMs;
+    const records = (await this.store.listAll())
+      .filter((record) =>
+        ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(record.state) &&
+        (record.completedAt ?? record.createdAt) < cutoff,
+      )
+      .sort((left, right) => (left.completedAt ?? left.createdAt) - (right.completedAt ?? right.createdAt))
+      .slice(0, limit);
+    let removed = 0;
+    for (const record of records)
+      if (await this.flushJob(record.jobId)) removed += 1;
+    return removed;
+  }
+
   async clearAllJobs(): Promise<number> {
     const records = await this.store.listAll();
     for (const record of records) this.forcedCancellation.add(record.jobId);

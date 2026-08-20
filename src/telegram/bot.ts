@@ -28,7 +28,9 @@ import {
   listMenuMedia,
 } from "../media/menu-media-store.js";
 import {
+  getInceptorSnapshot,
   getWorkerRuntime,
+  runInceptorSweep,
   setJobCompletionNotifier,
 } from "../jobs/runtime.js";
 import type { JobRecord } from "../jobs/job-contracts.js";
@@ -130,6 +132,8 @@ import {
   adminAuditText,
   adminBucketKeyboard,
   adminBucketText,
+  adminInceptorKeyboard,
+  adminInceptorText,
   adminBridgeKeyboard,
   adminBridgeTargetToken,
   adminBridgeText,
@@ -4344,6 +4348,27 @@ export function createTelegramBot(): Telegraf<Context> {
       ),
       adminKeyboard(),
     );
+  });
+  bot.action("admin:inceptor", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    await edit(ctx, adminInceptorText(getInceptorSnapshot()), adminInceptorKeyboard());
+  });
+  bot.action("admin:inceptor:run", async (ctx) => {
+    await ctx.answerCbQuery("Inceptor sweep running…");
+    if (!requireAdmin(ctx)) return;
+    const snapshot = await runInceptorSweep();
+    const user = resolveTelegramUser(ctx);
+    recordAudit({
+      workspaceId: user.workspaceId,
+      actorTelegramUserId: user.telegramUserId,
+      action: "admin.inceptor.sweep",
+      success: Boolean(snapshot),
+      metadata: snapshot
+        ? { scanned: snapshot.scanned, recovered: snapshot.recovered, flushed: snapshot.flushedDeadSessionJobs, pruned: snapshot.prunedTerminalJobs }
+        : { unavailable: true },
+    });
+    await edit(ctx, adminInceptorText(snapshot), adminInceptorKeyboard());
   });
   bot.action("admin:home", async (ctx) => {
     await ctx.answerCbQuery();

@@ -42,6 +42,7 @@ import {
 } from "../whatsapp/session-allocator.js";
 import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
+import { getInceptor, startInceptor } from "./inceptor.js";
 import { joinWhatsAppInvite } from "./join-operation.js";
 import {
   recordAutoPromoteChildCompletion,
@@ -116,6 +117,14 @@ const validatorErrorMigrations = new Set<string>();
 
 export function getWorkerRuntime(): JobOrchestrator | undefined {
   return activeRuntime;
+}
+
+export function getInceptorSnapshot() {
+  return getInceptor()?.getSnapshot();
+}
+
+export async function runInceptorSweep() {
+  return getInceptor()?.sweep();
 }
 
 export function setJobCompletionNotifier(
@@ -1129,6 +1138,8 @@ export function startWorkerRuntime(): JobOrchestrator {
     return { success: 1, failed: 0, skipped: 0 };
   });
 
+  const inceptor = startInceptor(orchestrator);
+  orchestrator.addCloseHook(() => inceptor.stop());
   void orchestrator.recoverStaleJobsNow().catch((error) => {
     console.error(
       "[pappy-omega-mini] immediate stale-job recovery failed:",

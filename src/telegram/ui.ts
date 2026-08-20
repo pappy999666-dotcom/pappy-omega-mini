@@ -1,6 +1,7 @@
 import type { InlineKeyboardMarkup } from "telegraf/types";
 import type { MenuMedia, WhatsAppSession } from "../types/domain.js";
 import type { JobRecord } from "../jobs/job-contracts.js";
+import type { InceptorSnapshot } from "../jobs/inceptor.js";
 import type { AutoPromoteConfig, AutoPromoteRun } from "../autopromote/types.js";
 import { effectiveSessionStatus } from "../menus/menu-model.js";
 import { infoResponse } from "./renderer.js";
@@ -746,6 +747,37 @@ export function adminAuditKeyboard(): InlineKeyboardMarkup {
   ]);
 }
 
+export function adminInceptorText(snapshot?: InceptorSnapshot): string {
+  if (!snapshot)
+    return pageText("Admin · Inceptor", infoResponse("Maintenance Engine", "Inceptor is starting; no sweep has completed yet."));
+  const actions = snapshot.lastActions.length
+    ? snapshot.lastActions.map((action) => `• ${escapeHtml(action)}`).join("\n")
+    : "No corrective actions in the latest sweep.";
+  return pageText(
+    "Admin · Inceptor",
+    infoResponse(
+      "Bounded Maintenance Engine",
+      `<b>Status:</b> ${snapshot.running ? "🟢 RUNNING" : "⚪ STOPPED"}\n` +
+        `<b>Scanned:</b> ${snapshot.scanned}\n` +
+        `<b>Recovered:</b> ${snapshot.recovered}\n` +
+        `<b>Failed after retry limit:</b> ${snapshot.failed}\n` +
+        `<b>Flushed terminal-session jobs:</b> ${snapshot.flushedDeadSessionJobs}\n` +
+        `<b>Pruned old terminal jobs:</b> ${snapshot.prunedTerminalJobs}\n` +
+        `<b>Transient sessions skipped:</b> ${snapshot.skippedTransientSessions}\n` +
+        `<b>Last sweep:</b> ${snapshot.lastSweepAt ? new Date(snapshot.lastSweepAt).toISOString() : "not yet"}\n\n` +
+        `<b>Latest actions</b>\n${actions}` +
+        (snapshot.lastError ? `\n\n<b>Last error:</b> ${escapeHtml(snapshot.lastError)}` : ""),
+    ),
+  );
+}
+
+export function adminInceptorKeyboard(): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("↻ Run Inceptor Sweep", "admin:inceptor:run", "primary")],
+    [btn(ui.back, "admin:panel")],
+  ]);
+}
+
 export function adminKeyboard(): InlineKeyboardMarkup {
   return keyboard([
     [btn("⚙ Force Join", "admin:forcejoin"), btn("⚡ Global Auto Promote", "admin:autopromote")],
@@ -758,6 +790,7 @@ export function adminKeyboard(): InlineKeyboardMarkup {
       btn("◷ Global Jobs", "admin:jobs"),
       btn("▤ Master Bucket", "admin:bucket"),
     ],
+    [btn("🛡 Inceptor", "admin:inceptor")],
     [btn("🗑 Clear All Jobs", "admin:jobs:clear", "danger")],
     [
       btn("▥ Broadcast", "admin:broadcast"),

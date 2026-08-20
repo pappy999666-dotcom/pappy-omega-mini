@@ -3,6 +3,8 @@ import {
   adminKeyboard,
   adminJobsKeyboard,
   adminJobsText,
+  adminInceptorKeyboard,
+  adminInceptorText,
   adminForceJoinKeyboard,
   adminForceJoinText,
   adminBridgeKeyboard,
@@ -155,6 +157,25 @@ describe("Telegram UI authorization", () => {
     expect(JSON.stringify(dashboardKeyboard(false))).not.toContain(
       "admin:support",
     );
+  });
+
+  it("renders the owner-facing Inceptor maintenance view", () => {
+    const text = adminInceptorText({
+      name: "INCEPTOR",
+      running: true,
+      lastSweepAt: 1,
+      nextSweepAt: 2,
+      scanned: 10,
+      recovered: 2,
+      failed: 1,
+      flushedDeadSessionJobs: 3,
+      prunedTerminalJobs: 4,
+      skippedTransientSessions: 5,
+      lastActions: ["recovered stuck allstatus ABCD1234"],
+    });
+    expect(text).toContain("Bounded Maintenance Engine");
+    expect(text).toContain("Flushed terminal-session jobs");
+    expect(JSON.stringify(adminInceptorKeyboard())).toContain("admin:inceptor:run");
   });
 
   it("renders the dynamic Auto Promote schedule details", () => {
