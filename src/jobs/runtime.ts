@@ -852,6 +852,7 @@ export function startWorkerRuntime(): JobOrchestrator {
         {
           total: uniqueGroups.length,
           currentAction: `${kind} inventory resolved`,
+          nextActionAt: Date.now(),
           lastResult: `Resolved ${uniqueGroups.length} WhatsApp group(s); delivery is starting.`,
         },
         { payload: resolvedPayload },
@@ -960,12 +961,21 @@ export function startWorkerRuntime(): JobOrchestrator {
           }
           if (lastPostAt) {
             const wait = Math.max(0, delayMs - (Date.now() - lastPostAt));
-            if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+            if (wait) {
+              await context.report({
+                currentGroup: jid,
+                currentAction: `waiting for next ${kind} post`,
+                nextActionAt: Date.now() + wait,
+                lastResult: `Next group post in ${Math.ceil(wait / 1000)}s.`,
+              });
+              await new Promise((resolve) => setTimeout(resolve, wait));
+            }
           }
           lastPostAt = Date.now();
           await context.report({
             currentGroup: jid,
             currentAction: `posting ${kind}`,
+            nextActionAt: Date.now(),
           });
           try {
             if (kind === "gstatus" || kind === "allstatus")
@@ -1009,9 +1019,11 @@ export function startWorkerRuntime(): JobOrchestrator {
                 totalGroups: uniqueGroups.length,
                 totalRepetitions: repeat,
               }).catch(() => undefined);
+            const remainingDeliveries = deliveries.length - completedDeliveries;
             await context.report({
               currentGroup: jid,
-              currentAction: "posted",
+              currentAction: remainingDeliveries ? "posted" : "completed",
+              nextActionAt: remainingDeliveries ? Date.now() + delayMs : Date.now(),
               lastResult: `${kind} posted to ${jid}${repeat > 1 ? ` · repeat ${repeatIndex}/${repeat}` : ""}`,
             });
             return { status: "success" as const };

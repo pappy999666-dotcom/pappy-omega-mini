@@ -168,11 +168,7 @@ export class JobOrchestrator {
       const bullDelayed = bullJob ? await bullJob.isDelayed() : false;
       const shouldRecover =
         !bullJob ||
-        (record.state === "RUNNING" &&
-          !bullWaiting &&
-          !bullDelayed &&
-          (!bullActive || heartbeatAge > STALE_ACTIVE_JOB_GRACE_MS) &&
-          heartbeatAge > 10_000) ||
+        (record.state === "RUNNING" && heartbeatAge > 0) ||
         (record.state === "RETRYING" && !bullWaiting && !bullActive && !bullDelayed);
       if (!shouldRecover) continue;
       const claimKey = `pappy-omega-mini:recovery:${record.jobId}:${record.heartbeatAt ?? record.createdAt}`;

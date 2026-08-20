@@ -804,6 +804,12 @@ export function adminJobsText(jobs: AdminJobView[]): string {
   );
 }
 
+function liveProgressBar(completed: number, total?: number): string {
+  if (!total || total <= 0) return "[░░░░░░░░░░]";
+  const filled = Math.max(0, Math.min(10, Math.round((completed / total) * 10)));
+  return `[${"█".repeat(filled)}${"░".repeat(10 - filled)}]`;
+}
+
 export function jobLiveText(job: JobRecord | undefined): string {
   if (!job)
     return pageText(
@@ -815,13 +821,28 @@ export function jobLiveText(job: JobRecord | undefined): string {
     );
   const progress = job.progress;
   const title = `${job.kind.replace(/-/g, " ").toUpperCase()} · ${job.jobCode ?? job.jobId.slice(0, 8)}`;
+  const terminal = ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED", "EXPIRED"].includes(job.state);
+  const indicator = terminal ? "■" : job.state === "RUNNING" ? "●" : "◌";
+  const remaining = progress.total === undefined
+    ? "—"
+    : Math.max(0, progress.total - progress.completed);
+  const countdownMs = progress.nextActionAt === undefined
+    ? undefined
+    : Math.max(0, progress.nextActionAt - Date.now());
+  const countdown = terminal || countdownMs === undefined
+    ? "—"
+    : `${Math.ceil(countdownMs / 1000)}s`;
+  const cadence = typeof job.payload.delayMs === "number"
+    ? `${Math.max(1, Math.round(job.payload.delayMs / 1000))}s/group`
+    : "—";
   return pageText(
     "Live Show",
     infoResponse(
       title,
-      `<blockquote><b>State</b> ${escapeHtml(job.state)}
+      `<blockquote><b>Signal</b> ${indicator} ${escapeHtml(job.state)}
 <b>Code</b> <code>${escapeHtml(job.jobCode ?? "—")}</code>
-<b>Progress</b> ${progress.completed}/${progress.total ?? "—"}
+<b>Flow</b> ${liveProgressBar(progress.completed, progress.total)} ${progress.completed}/${progress.total ?? "—"} · ${remaining} remaining
+<b>Next post</b> ${countdown}  <b>Cadence</b> ${cadence}
 <b>Success</b> ${progress.success}  <b>Failed</b> ${progress.failed}  <b>Skipped</b> ${progress.skipped}
 <b>Joined</b> ${progress.joined ?? progress.success}  <b>Already member</b> ${progress.alreadyMember ?? 0}
 <b>Requested</b> ${progress.requested ?? 0}  <b>Dead links</b> ${progress.deadLinks ?? 0}  <b>Rate-limit</b> ${progress.rateLimitHits ?? 0}
@@ -829,7 +850,7 @@ export function jobLiveText(job: JobRecord | undefined): string {
 <b>Target</b> ${escapeHtml(progress.currentGroup ?? progress.currentLink ?? "—")}
 <b>Last result</b> ${escapeHtml(progress.lastResult ?? job.error ?? "—")}</blockquote>
 
-<i>Updates are read from the durable worker record; this view does not simulate progress.</i>`,
+<i>Live state is edited in place from the durable worker record.</i>`,
     ),
   );
 }

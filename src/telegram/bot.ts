@@ -321,6 +321,46 @@ const pendingLiveJobCode = new Map<
   { workspaceId: string; chatId: number; messageId: number }
 >();
 
+function stopJobLiveLoop(loopKey: string): void {
+  const current = liveLoops.get(loopKey);
+  if (!current) return;
+  clearInterval(current);
+  liveLoops.delete(loopKey);
+}
+
+function startJobLiveLoop(
+  ctx: Context,
+  workspaceId: string,
+  code: string,
+  chatId: number,
+  messageId: number,
+): void {
+  const loopKey = `job-live:${workspaceId}:${chatId}:${messageId}`;
+  stopJobLiveLoop(loopKey);
+  const refresh = async (): Promise<void> => {
+    const job = await getWorkerRuntime()?.getByCode(workspaceId, code);
+    const terminal = Boolean(
+      job &&
+        ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED", "EXPIRED"].includes(
+          job.state,
+        ),
+    );
+    await ctx.telegram.editMessageText(
+      chatId,
+      messageId,
+      undefined,
+      jobLiveText(job),
+      { parse_mode: "HTML", reply_markup: jobLiveKeyboard(job) },
+    );
+    if (terminal) stopJobLiveLoop(loopKey);
+  };
+  const interval = setInterval(() => {
+    void refresh().catch(() => stopJobLiveLoop(loopKey));
+  }, 1_000);
+  liveLoops.set(loopKey, interval);
+  setTimeout(() => stopJobLiveLoop(loopKey), 30 * 60_000).unref?.();
+}
+
 function clearPendingInputs(userId: string): void {
   pendingMedia.delete(userId);
   pendingAdminInput.delete(userId);
@@ -1434,6 +1474,14 @@ export function createTelegramBot(): Telegraf<Context> {
           { parse_mode: "HTML", reply_markup: jobLiveKeyboard(job) },
         )
         .catch(() => undefined);
+      if (job)
+        startJobLiveLoop(
+          ctx,
+          liveCodeInput.workspaceId,
+          input.toUpperCase(),
+          liveCodeInput.chatId,
+          liveCodeInput.messageId,
+        );
       return;
     }
     const supportReply = pendingSupportReply.get(userId);
@@ -3191,6 +3239,14 @@ export function createTelegramBot(): Telegraf<Context> {
     const code = String(ctx.match[1] ?? "").toUpperCase();
     const job = await getWorkerRuntime()?.getByCode(user.workspaceId, code);
     await edit(ctx, jobLiveText(job), jobLiveKeyboard(job));
+    const message = ctx.callbackQuery?.message;
+    const chatId =
+      ctx.chat?.id ??
+      (message && "chat" in message ? message.chat.id : undefined);
+    const messageId =
+      message && "message_id" in message ? message.message_id : undefined;
+    if (job && chatId && messageId)
+      startJobLiveLoop(ctx, user.workspaceId, code, chatId, messageId);
   });
   bot.action("jobs:list", async (ctx) => {
     await ctx.answerCbQuery();

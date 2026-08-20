@@ -54,6 +54,7 @@ export interface JobProgress {
   currentGroup?: string;
   currentAction?: string;
   lastResult?: string;
+  nextActionAt?: number;
 }
 
 export interface JobRecord<TPayload = Record<string, unknown>> {
