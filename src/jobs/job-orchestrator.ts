@@ -158,6 +158,18 @@ export class JobOrchestrator {
 
   private async recoverOutstandingJobs(forceRunningRecovery: boolean): Promise<void> {
     const now = Date.now();
+    const recoveryJobs = await this.queue.getJobs(
+      ["active", "waiting", "delayed"],
+      0,
+      2000,
+      true,
+    );
+    const recoveryParents = new Set(
+      recoveryJobs
+        .map((job) => String(job.id))
+        .filter((jobId) => jobId.includes(":startup:"))
+        .map((jobId) => jobId.split(":startup:", 1)[0]),
+    );
     for (const record of await this.store.listAll()) {
       if (!["QUEUED", "RUNNING", "RETRYING", "FAILED"].includes(record.state)) continue;
       if (record.cancellationRequested) continue;
@@ -179,6 +191,7 @@ export class JobOrchestrator {
         (record.state === "RETRYING" && !bullWaiting && !bullActive && !bullDelayed) ||
         isRetryableBroadcastFailure(record, heartbeatAge);
       if (!shouldRecover) continue;
+      if (recoveryParents.has(record.jobId)) continue;
       const claimKey = `pappy-omega-mini:recovery:${record.jobId}`;
       const claimed = await this.redis.set(claimKey, "1", "EX", 120, "NX");
       if (claimed !== "OK") continue;
@@ -197,6 +210,7 @@ export class JobOrchestrator {
           ...(isImmediatePostingKind(record.kind) ? { priority: 1 } : {}),
         },
       );
+      recoveryParents.add(record.jobId);
     }
   }
 
