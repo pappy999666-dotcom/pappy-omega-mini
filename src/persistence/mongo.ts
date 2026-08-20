@@ -5,6 +5,13 @@ import type { User, WhatsAppSession, Workspace } from "../types/domain.js";
 import type { AuditEvent, EmergencyState } from "../types/v2.js";
 import type { MenuMedia } from "../types/domain.js";
 import type { AutoPromoteConfig, AutoPromoteRun } from "../autopromote/types.js";
+import type {
+  WorkloadAssignmentRecord,
+  WorkloadCommandRecord,
+  WorkloadEnrollmentRecord,
+  WorkloadEventRecord,
+  WorkloadWorkerRecord,
+} from "../workload/types.js";
 
 export interface WhatsAppMessageTraceRecord {
   traceId: string;
@@ -143,6 +150,11 @@ interface PairingRequestDocument extends mongoose.Document {
   sessionId?: string;
   updatedAt: number;
 }
+interface WorkloadWorkerDocument extends WorkloadWorkerRecord, mongoose.Document {}
+interface WorkloadEnrollmentDocument extends WorkloadEnrollmentRecord, mongoose.Document {}
+interface WorkloadAssignmentDocument extends WorkloadAssignmentRecord, mongoose.Document {}
+interface WorkloadCommandDocument extends WorkloadCommandRecord, mongoose.Document {}
+interface WorkloadEventDocument extends WorkloadEventRecord, mongoose.Document {}
 
 const whatsappMessageTraceSchema =
   new mongoose.Schema<WhatsAppMessageTraceDocument>(
@@ -231,10 +243,98 @@ const workspaceSchema = new mongoose.Schema<WorkspaceDocument>(
     workspaceId: { type: String, required: true, unique: true, index: true },
     ownerTelegramUserId: { type: String, required: true, index: true },
     globalSudoList: { type: [String], default: [] },
+    workloadMode: { type: String, enum: ["ON", "OFF"], default: "ON", index: true },
     createdAt: { type: Number, required: true },
   },
   { collection: "workspaces", versionKey: false },
 );
+
+const workloadWorkerSchema = new mongoose.Schema<WorkloadWorkerDocument>(
+  {
+    workerId: { type: String, required: true, unique: true, index: true },
+    workspaceId: { type: String, required: true, index: true },
+    ownerTelegramUserId: { type: String, required: true, index: true },
+    displayKey: { type: String, required: true, unique: true, index: true },
+    credentialHash: { type: String, required: true },
+    credentialIssuedAt: { type: Number, required: true },
+    status: { type: String, required: true, index: true },
+    workerVersion: { type: String, required: true },
+    capabilities: { type: [String], default: [] },
+    assignedSessionIds: { type: [String], default: [] },
+    lastHeartbeatAt: Number,
+    connectedAt: Number,
+    lastError: String,
+    disabledAt: Number,
+    createdAt: { type: Number, required: true, index: true },
+    updatedAt: { type: Number, required: true, index: true },
+  },
+  { collection: "workload_workers", versionKey: false },
+);
+workloadWorkerSchema.index({ workspaceId: 1, status: 1, updatedAt: -1 });
+
+const workloadEnrollmentSchema = new mongoose.Schema<WorkloadEnrollmentDocument>(
+  {
+    enrollmentId: { type: String, required: true, unique: true, index: true },
+    workspaceId: { type: String, required: true, index: true },
+    ownerTelegramUserId: { type: String, required: true, index: true },
+    tokenHash: { type: String, required: true, unique: true },
+    expiresAt: { type: Number, required: true, index: true },
+    consumedAt: Number,
+    createdAt: { type: Number, required: true, index: true },
+  },
+  { collection: "workload_enrollments", versionKey: false },
+);
+
+const workloadAssignmentSchema = new mongoose.Schema<WorkloadAssignmentDocument>(
+  {
+    assignmentId: { type: String, required: true, unique: true, index: true },
+    workspaceId: { type: String, required: true, index: true },
+    sessionId: { type: String, required: true, unique: true, index: true },
+    workerId: { type: String, required: true, index: true },
+    status: { type: String, required: true, index: true },
+    assignedAt: { type: Number, required: true },
+    updatedAt: { type: Number, required: true, index: true },
+    lastError: String,
+  },
+  { collection: "workload_assignments", versionKey: false },
+);
+workloadAssignmentSchema.index({ workerId: 1, status: 1, updatedAt: -1 });
+
+const workloadCommandSchema = new mongoose.Schema<WorkloadCommandDocument>(
+  {
+    commandId: { type: String, required: true, unique: true, index: true },
+    assignmentId: { type: String, required: true, index: true },
+    workspaceId: { type: String, required: true, index: true },
+    sessionId: { type: String, required: true, index: true },
+    workerId: { type: String, required: true, index: true },
+    kind: { type: String, required: true, index: true },
+    payload: { type: mongoose.Schema.Types.Mixed, required: true },
+    status: { type: String, required: true, index: true },
+    requestId: { type: String, required: true, unique: true, index: true },
+    createdAt: { type: Number, required: true, index: true },
+    expiresAt: { type: Number, required: true, index: true },
+    leasedAt: Number,
+    completedAt: Number,
+    result: mongoose.Schema.Types.Mixed,
+    error: String,
+  },
+  { collection: "workload_commands", versionKey: false },
+);
+workloadCommandSchema.index({ workerId: 1, status: 1, createdAt: 1 });
+
+const workloadEventSchema = new mongoose.Schema<WorkloadEventDocument>(
+  {
+    eventId: { type: String, required: true, unique: true, index: true },
+    workspaceId: { type: String, required: true, index: true },
+    workerId: { type: String, index: true },
+    sessionId: { type: String, index: true },
+    kind: { type: String, required: true, index: true },
+    metadata: { type: mongoose.Schema.Types.Mixed, required: true },
+    createdAt: { type: Number, required: true, index: true },
+  },
+  { collection: "workload_events", versionKey: false },
+);
+workloadEventSchema.index({ workspaceId: 1, createdAt: -1 });
 
 const sessionSchema = new mongoose.Schema<SessionDocument>(
   {
@@ -497,6 +597,11 @@ let EmergencyModel: Model<EmergencyDocument> | undefined;
 let ModeratorGroupModel: Model<ModeratorGroupDocument> | undefined;
 let ModeratorWarningModel: Model<ModeratorWarningDocument> | undefined;
 let ModeratorEventModel: Model<ModeratorEventDocument> | undefined;
+let WorkloadWorkerModel: Model<WorkloadWorkerDocument> | undefined;
+let WorkloadEnrollmentModel: Model<WorkloadEnrollmentDocument> | undefined;
+let WorkloadAssignmentModel: Model<WorkloadAssignmentDocument> | undefined;
+let WorkloadCommandModel: Model<WorkloadCommandDocument> | undefined;
+let WorkloadEventModel: Model<WorkloadEventDocument> | undefined;
 
 export async function connectMongo(): Promise<typeof mongoose> {
   if (mongoose.connection.readyState === 1) return mongoose;
@@ -610,6 +715,31 @@ function pairingRequestModel(): Model<PairingRequestDocument> {
       pairingRequestSchema,
     ));
 }
+function workloadWorkerModel(): Model<WorkloadWorkerDocument> {
+  return (WorkloadWorkerModel ??=
+    mongoose.models.WorkloadWorker ??
+    mongoose.model<WorkloadWorkerDocument>("WorkloadWorker", workloadWorkerSchema));
+}
+function workloadEnrollmentModel(): Model<WorkloadEnrollmentDocument> {
+  return (WorkloadEnrollmentModel ??=
+    mongoose.models.WorkloadEnrollment ??
+    mongoose.model<WorkloadEnrollmentDocument>("WorkloadEnrollment", workloadEnrollmentSchema));
+}
+function workloadAssignmentModel(): Model<WorkloadAssignmentDocument> {
+  return (WorkloadAssignmentModel ??=
+    mongoose.models.WorkloadAssignment ??
+    mongoose.model<WorkloadAssignmentDocument>("WorkloadAssignment", workloadAssignmentSchema));
+}
+function workloadCommandModel(): Model<WorkloadCommandDocument> {
+  return (WorkloadCommandModel ??=
+    mongoose.models.WorkloadCommand ??
+    mongoose.model<WorkloadCommandDocument>("WorkloadCommand", workloadCommandSchema));
+}
+function workloadEventModel(): Model<WorkloadEventDocument> {
+  return (WorkloadEventModel ??=
+    mongoose.models.WorkloadEvent ??
+    mongoose.model<WorkloadEventDocument>("WorkloadEvent", workloadEventSchema));
+}
 
 export async function ensureMongoIndexes(): Promise<void> {
   await connectMongo();
@@ -629,6 +759,11 @@ export async function ensureMongoIndexes(): Promise<void> {
     moderatorGroupModel().createIndexes(),
     moderatorWarningModel().createIndexes(),
     moderatorEventModel().createIndexes(),
+    workloadWorkerModel().createIndexes(),
+    workloadEnrollmentModel().createIndexes(),
+    workloadAssignmentModel().createIndexes(),
+    workloadCommandModel().createIndexes(),
+    workloadEventModel().createIndexes(),
   ]);
 }
 
@@ -1262,4 +1397,285 @@ export async function setAutoPromoteConfigState(
   await autoPromoteConfigModel()
     .updateOne({ id }, { $set: { state, enabled, updatedAt: Date.now() } })
     .exec();
+}
+
+
+export async function getWorkspaceWorkloadMode(
+  workspaceId: string,
+): Promise<"ON" | "OFF"> {
+  await connectMongo();
+  const workspace = await workspaceModel()
+    .findOne({ workspaceId })
+    .lean<Workspace>()
+    .exec();
+  return workspace?.workloadMode ?? "ON";
+}
+
+export async function setWorkspaceWorkloadMode(
+  workspaceId: string,
+  mode: "ON" | "OFF",
+): Promise<void> {
+  await connectMongo();
+  await workspaceModel().updateOne(
+    { workspaceId },
+    { $set: { workloadMode: mode } },
+  );
+}
+
+export async function createWorkloadEnrollment(
+  record: WorkloadEnrollmentRecord,
+): Promise<void> {
+  await connectMongo();
+  await workloadEnrollmentModel().create(record);
+}
+
+export async function getWorkloadEnrollmentByTokenHash(
+  tokenHash: string,
+): Promise<WorkloadEnrollmentRecord | undefined> {
+  await connectMongo();
+  const record = await workloadEnrollmentModel()
+    .findOne({ tokenHash, consumedAt: { $exists: false }, expiresAt: { $gt: Date.now() } })
+    .lean<WorkloadEnrollmentRecord>()
+    .exec();
+  return record ?? undefined;
+}
+
+export async function consumeWorkloadEnrollment(
+  enrollmentId: string,
+): Promise<boolean> {
+  await connectMongo();
+  const updated = await workloadEnrollmentModel()
+    .findOneAndUpdate(
+      { enrollmentId, consumedAt: { $exists: false }, expiresAt: { $gt: Date.now() } },
+      { $set: { consumedAt: Date.now() } },
+      { new: true },
+    )
+    .lean<WorkloadEnrollmentRecord>()
+    .exec();
+  return Boolean(updated);
+}
+
+export async function createWorkloadWorker(
+  record: WorkloadWorkerRecord,
+): Promise<void> {
+  await connectMongo();
+  await workloadWorkerModel().create(record);
+}
+
+export async function getWorkloadWorker(
+  workerId: string,
+): Promise<WorkloadWorkerRecord | undefined> {
+  await connectMongo();
+  const record = await workloadWorkerModel()
+    .findOne({ workerId })
+    .lean<WorkloadWorkerRecord>()
+    .exec();
+  return record ?? undefined;
+}
+
+export async function getWorkloadWorkerByDisplayKey(
+  displayKey: string,
+): Promise<WorkloadWorkerRecord | undefined> {
+  await connectMongo();
+  const record = await workloadWorkerModel()
+    .findOne({ displayKey })
+    .lean<WorkloadWorkerRecord>()
+    .exec();
+  return record ?? undefined;
+}
+
+export async function getWorkloadWorkerByCredentialHash(
+  credentialHash: string,
+): Promise<WorkloadWorkerRecord | undefined> {
+  await connectMongo();
+  const record = await workloadWorkerModel()
+    .findOne({ credentialHash })
+    .lean<WorkloadWorkerRecord>()
+    .exec();
+  return record ?? undefined;
+}
+
+export async function listWorkloadWorkers(
+  workspaceId?: string,
+): Promise<WorkloadWorkerRecord[]> {
+  await connectMongo();
+  return workloadWorkerModel()
+    .find(workspaceId ? { workspaceId } : {})
+    .sort({ updatedAt: -1 })
+    .lean<WorkloadWorkerRecord[]>()
+    .exec();
+}
+
+export async function updateWorkloadWorker(
+  workerId: string,
+  patch: Partial<WorkloadWorkerRecord>,
+): Promise<WorkloadWorkerRecord | undefined> {
+  await connectMongo();
+  const updated = await workloadWorkerModel()
+    .findOneAndUpdate({ workerId }, { $set: { ...patch, updatedAt: Date.now() } }, { new: true })
+    .lean<WorkloadWorkerRecord>()
+    .exec();
+  return updated ?? undefined;
+}
+
+export async function createWorkloadAssignment(
+  record: WorkloadAssignmentRecord,
+): Promise<void> {
+  await connectMongo();
+  await workloadAssignmentModel().create(record);
+}
+
+export async function getWorkloadAssignment(
+  assignmentId: string,
+): Promise<WorkloadAssignmentRecord | undefined> {
+  await connectMongo();
+  const record = await workloadAssignmentModel()
+    .findOne({ assignmentId })
+    .lean<WorkloadAssignmentRecord>()
+    .exec();
+  return record ?? undefined;
+}
+
+export async function getWorkloadAssignmentBySession(
+  sessionId: string,
+): Promise<WorkloadAssignmentRecord | undefined> {
+  await connectMongo();
+  const record = await workloadAssignmentModel()
+    .findOne({ sessionId })
+    .lean<WorkloadAssignmentRecord>()
+    .exec();
+  return record ?? undefined;
+}
+
+export async function listWorkloadAssignments(
+  workspaceId?: string,
+): Promise<WorkloadAssignmentRecord[]> {
+  await connectMongo();
+  return workloadAssignmentModel()
+    .find(workspaceId ? { workspaceId } : {})
+    .sort({ updatedAt: -1 })
+    .lean<WorkloadAssignmentRecord[]>()
+    .exec();
+}
+
+export async function updateWorkloadAssignment(
+  assignmentId: string,
+  patch: Partial<WorkloadAssignmentRecord>,
+): Promise<WorkloadAssignmentRecord | undefined> {
+  await connectMongo();
+  const updated = await workloadAssignmentModel()
+    .findOneAndUpdate({ assignmentId }, { $set: { ...patch, updatedAt: Date.now() } }, { new: true })
+    .lean<WorkloadAssignmentRecord>()
+    .exec();
+  return updated ?? undefined;
+}
+
+export async function createWorkloadCommand(
+  record: WorkloadCommandRecord,
+): Promise<void> {
+  await connectMongo();
+  await workloadCommandModel().create(record);
+}
+
+export async function getWorkloadCommand(
+  commandId: string,
+): Promise<WorkloadCommandRecord | undefined> {
+  await connectMongo();
+  const record = await workloadCommandModel()
+    .findOne({ commandId })
+    .lean<WorkloadCommandRecord>()
+    .exec();
+  return record ?? undefined;
+}
+
+export async function requeueStaleWorkloadCommands(
+  workerId: string,
+  leaseTimeoutMs = 90_000,
+): Promise<number> {
+  await connectMongo();
+  const result = await workloadCommandModel().updateMany(
+    { workerId, status: "LEASED", leasedAt: { $lt: Date.now() - leaseTimeoutMs } },
+    { $set: { status: "QUEUED" }, $unset: { leasedAt: 1 } },
+  );
+  return result.modifiedCount;
+}
+
+export async function leaseWorkloadCommands(
+  workerId: string,
+  limit = 10,
+): Promise<WorkloadCommandRecord[]> {
+  await connectMongo();
+  const leased: WorkloadCommandRecord[] = [];
+  const now = Date.now();
+  for (let index = 0; index < Math.max(1, Math.min(limit, 25)); index += 1) {
+    const command = await workloadCommandModel()
+      .findOneAndUpdate(
+        { workerId, status: "QUEUED", expiresAt: { $gt: now } },
+        { $set: { status: "LEASED", leasedAt: now } },
+        { new: true, sort: { createdAt: 1 } },
+      )
+      .lean<WorkloadCommandRecord>()
+      .exec();
+    if (!command) break;
+    leased.push(command);
+  }
+  return leased;
+}
+
+export async function completeWorkloadCommand(
+  input: WorkloadCommandRecord & { ok: boolean },
+): Promise<WorkloadCommandRecord | undefined> {
+  await connectMongo();
+  const updated = await workloadCommandModel()
+    .findOneAndUpdate(
+      { commandId: input.commandId, requestId: input.requestId, status: "LEASED" },
+      {
+        $set: {
+          status: input.ok ? "COMPLETED" : "FAILED",
+          completedAt: Date.now(),
+          ...(input.ok ? { result: input.result } : { error: input.error ?? "Worker command failed." }),
+        },
+      },
+      { new: true },
+    )
+    .lean<WorkloadCommandRecord>()
+    .exec();
+  return updated ?? undefined;
+}
+
+export async function appendWorkloadEvent(
+  input: Omit<WorkloadEventRecord, "eventId" | "createdAt">,
+): Promise<WorkloadEventRecord> {
+  const record: WorkloadEventRecord = {
+    ...input,
+    eventId: crypto.randomUUID(),
+    createdAt: Date.now(),
+  };
+  await connectMongo();
+  await workloadEventModel().create(record);
+  return record;
+}
+
+export async function listWorkloadEvents(
+  workspaceId: string,
+  limit = 100,
+): Promise<WorkloadEventRecord[]> {
+  await connectMongo();
+  return workloadEventModel()
+    .find({ workspaceId })
+    .sort({ createdAt: -1 })
+    .limit(Math.max(1, Math.min(limit, 500)))
+    .lean<WorkloadEventRecord[]>()
+    .exec();
+}
+
+export async function ensureWorkloadIndexes(): Promise<void> {
+  await connectMongo();
+  await Promise.all([
+    workloadWorkerModel().createIndexes(),
+    workloadEnrollmentModel().createIndexes(),
+    workloadAssignmentModel().createIndexes(),
+    workloadCommandModel().createIndexes(),
+    workloadEventModel().createIndexes(),
+  ]);
 }

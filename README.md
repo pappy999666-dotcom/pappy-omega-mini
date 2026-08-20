@@ -78,3 +78,14 @@ pnpm doctor
 ```
 
 The VPS deployment also verifies Telegram identity, Redis, MongoDB, storage permissions, encryption configuration, and PM2 health. Emergency controls are designed to pause mass sends, joins, broadcasts, scheduling, or new pairing without destroying healthy sessions.
+
+
+## Hybrid Workload Mode
+
+PAPPY OMEGA-MINI keeps one central Telegram control plane while allowing a user to run only their assigned WhatsApp session workload on a compatible Node.js panel. The panel worker package is intentionally restricted: it contains no Telegram bot, admin panel, MongoDB URI, Redis URI, or other users' session data. It uses outbound HTTPS to the central workload control endpoint and stores its own encrypted credential and WhatsApp auth state locally.
+
+The workload control server is opt-in and disabled by default. Before enabling it, configure a domain with TLS termination/reverse proxy to the main VPS and set `WORKLOAD_CONTROL_ENABLED=true`, `WORKLOAD_CONTROL_BIND=127.0.0.1`, and `WORKLOAD_CONTROL_URL=https://your-domain.example`. The public reverse proxy should forward only `/workload/*` to the configured local control port; Redis, MongoDB, Telegram credentials, and the application source must remain private.
+
+A user opens **Workload** in Telegram, generates a one-time enrollment token, downloads the official worker files, starts the worker on a Node.js panel, and enters the five-digit display key printed after registration. The central bot remains the user-facing control surface. The workload mode toggle affects placement of new sessions only; existing sessions are never deleted or moved implicitly. A worker heartbeat timeout marks the worker unreachable/offline and preserves its session metadata and auth state.
+
+See `docs/HYBRID_WORKLOAD_ARCHITECTURE_20260820.md` for the control protocol, assignment fencing, persistence model, failure behavior, and migration policy. The restricted worker package is under `worker-package/` and is delivered through the Telegram Workload menu.

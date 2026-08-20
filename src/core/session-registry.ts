@@ -48,6 +48,7 @@ export function resolveUser(
     workspaceId: randomUUID(),
     ownerTelegramUserId: telegramUserId,
     globalSudoList: [],
+    workloadMode: "ON",
     createdAt: now,
   };
   workspaces.set(workspace.workspaceId, workspace);
@@ -247,6 +248,18 @@ export function getWorkspaceDefaults(workspaceId: string): WorkspaceSettings {
   return getWorkspaceSettings(workspaceId);
 }
 
+export function updateWorkspaceWorkloadMode(
+  workspaceId: string,
+  mode: "ON" | "OFF",
+): Workspace {
+  const workspace = workspaces.get(workspaceId);
+  if (!workspace) throw new Error("Workspace not found.");
+  const next = { ...workspace, workloadMode: mode };
+  workspaces.set(workspaceId, next);
+  void persistWorkspace(next).catch(() => undefined);
+  return next;
+}
+
 export function updateWorkspaceDefaults(
   workspaceId: string,
   patch: Partial<Omit<WorkspaceSettings, "workspaceId" | "updatedAt">>,
@@ -276,6 +289,7 @@ export async function hydrateSessionRegistry(): Promise<void> {
     workspaces.set(workspace.workspaceId, {
       ...workspace,
       globalSudoList: workspace.globalSudoList ?? [],
+      workloadMode: workspace.workloadMode ?? "ON",
     });
   for (const session of snapshot.sessions)
     sessions.set(session.sessionId, {

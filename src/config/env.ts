@@ -39,6 +39,16 @@ const envSchema = z.object({
     .min(30_000)
     .max(300_000)
     .default(90_000),
+  WORKLOAD_CONTROL_ENABLED: z.coerce.boolean().default(false),
+  WORKLOAD_CONTROL_URL: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().url().optional(),
+  ),
+  WORKLOAD_CONTROL_BIND: z.string().default("127.0.0.1"),
+  WORKLOAD_CONTROL_PORT: z.coerce.number().int().positive().max(65535).default(8787),
+  WORKLOAD_PACKAGE_VERSION: z.string().default("1.0.0"),
+  WORKLOAD_MIN_WORKER_VERSION: z.string().default("1.0.0"),
+  WORKLOAD_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().min(30_000).max(10 * 60_000).default(75_000),
 });
 
 export const env = envSchema.parse(process.env);

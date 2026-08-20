@@ -37,6 +37,8 @@ import {
   extractQuotedText,
   resolveMediaPayload,
 } from "./quoted-payload-resolver.js";
+import { createAssignedWorkloadSocket, callAssignedWorkloadTransport } from "./workload-transport.js";
+import { queueWorkloadCommand, waitForWorkloadCommand } from "../workload/service.js";
 import {
   clearLifecycle,
   getLifecycleState,
@@ -833,6 +835,14 @@ export async function startWhatsAppSession(
   workspaceId: string,
   sessionId: string,
 ): Promise<void> {
+  const assigned = getSession(workspaceId, sessionId).workloadWorkerId;
+  if (assigned) {
+    updateSession(workspaceId, sessionId, { status: "RECONNECTING", disconnectReason: "Starting on assigned workload worker." });
+    const command = await queueWorkloadCommand(workspaceId, sessionId, "session.start", {});
+    await waitForWorkloadCommand(command.commandId);
+    updateSession(workspaceId, sessionId, { status: "ACTIVE", authHealth: "VALID", connectedAt: Date.now(), lastHealthyAt: Date.now() });
+    return;
+  }
   const key = lifecycleKey(workspaceId, sessionId);
   if (runtimes.has(key)) return;
   const existing = getStart(key);
@@ -846,6 +856,11 @@ export async function restartWhatsAppSession(
   workspaceId: string,
   sessionId: string,
 ): Promise<boolean> {
+  if (getSession(workspaceId, sessionId).workloadWorkerId) {
+    await stopWhatsAppSession(workspaceId, sessionId);
+    await startWhatsAppSession(workspaceId, sessionId);
+    return waitForWhatsAppSessionReady(workspaceId, sessionId, env.WHATSAPP_READY_TIMEOUT_MS);
+  }
   await stopWhatsAppSession(workspaceId, sessionId);
   resetWhatsAppSessionLifecycle(workspaceId, sessionId);
   await new Promise((resolve) => setTimeout(resolve, 250));
@@ -882,6 +897,14 @@ export async function requestWhatsAppPairingCode(
   customCode = env.PAIRING_CUSTOM_CODE,
   telegramChatId?: number,
 ): Promise<string> {
+  const assigned = getSession(workspaceId, sessionId).workloadWorkerId;
+  if (assigned) {
+    const result = await callAssignedWorkloadTransport(workspaceId, sessionId, "requestPairingCode", [phoneNumber.replace(/\D/g, ""), customCode]);
+    const code = result && typeof result === "object" && "code" in result ? (result as { code?: unknown }).code : result;
+    if (typeof code !== "string" || !code) throw new Error("Assigned workload worker did not return a pairing code.");
+    updateSession(workspaceId, sessionId, { status: "PAIRING", phoneNumber: phoneNumber.replace(/\D/g, "") });
+    return code;
+  }
   // Startup recovery can leave an unpaired socket reconnecting. Replace it
   // before issuing a new code so the code belongs to this pairing attempt.
   await stopWhatsAppSession(workspaceId, sessionId);
@@ -937,7 +960,9 @@ export function getWhatsAppSocket(
   workspaceId: string,
   sessionId: string,
 ): WASocket {
-  getSession(workspaceId, sessionId);
+  const session = getSession(workspaceId, sessionId);
+  if (session.workloadWorkerId)
+    return createAssignedWorkloadSocket(workspaceId, sessionId);
   const runtime = runtimes.get(lifecycleKey(workspaceId, sessionId));
   if (!runtime) throw new Error("WhatsApp session is not connected.");
   return runtime.socket;
@@ -969,7 +994,13 @@ export async function stopWhatsAppSession(
   workspaceId: string,
   sessionId: string,
 ): Promise<void> {
-  getSession(workspaceId, sessionId);
+  const assigned = getSession(workspaceId, sessionId).workloadWorkerId;
+  if (assigned) {
+    const command = await queueWorkloadCommand(workspaceId, sessionId, "session.stop", {});
+    await waitForWorkloadCommand(command.commandId);
+    updateSession(workspaceId, sessionId, { status: "DEGRADED", disconnectReason: "Stopped on assigned workload worker." });
+    return;
+  }
   const key = lifecycleKey(workspaceId, sessionId);
   markStopping(key);
   const runtime = runtimes.get(key);

@@ -28,6 +28,8 @@ export interface Workspace {
   workspaceId: string;
   ownerTelegramUserId: string;
   globalSudoList: string[];
+  /** Existing workspaces default to owner-VPS placement for zero-regression rollout. */
+  workloadMode?: "ON" | "OFF";
   createdAt: number;
 }
 
@@ -70,6 +72,8 @@ export interface WhatsAppSession {
   socketGeneration?: number;
   authHealth?: "UNKNOWN" | "VALID" | "INVALID" | "DEGRADED";
   workerNodeId?: string;
+  /** Persisted external/owner worker assignment, if this session is panel-hosted. */
+  workloadWorkerId?: string;
   lastError?: string;
   disconnectReason?: string;
 }

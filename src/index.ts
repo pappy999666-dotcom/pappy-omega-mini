@@ -43,6 +43,10 @@ import {
   startRemoteBridgeResponder,
   stopRemoteBridgeResponder,
 } from "./whatsapp/remote-bridge.js";
+import {
+  startWorkloadControlServer,
+  stopWorkloadControlServer,
+} from "./workload/control-server.js";
 
 async function main(): Promise<void> {
   assertProductionSecrets();
@@ -69,6 +73,7 @@ async function main(): Promise<void> {
   let pairingCleanupTimer: NodeJS.Timeout | undefined;
   workers = startWorkerRuntime();
   if (isWorkerProcess) await startRemoteBridgeResponder(routeWhatsAppText);
+  if (!isWorkerProcess) await startWorkloadControlServer();
   if (!isWorkerProcess) {
     scheduler = new DurableScheduler(workers);
     scheduler.start();
@@ -87,7 +92,7 @@ async function main(): Promise<void> {
   const persistedSessions = listAllSessions();
   const ownedSessions = persistedSessions.filter((session) => {
     if (isWorkerProcess) return workerSessionIds.has(session.sessionId);
-    return !excludedSessionIds.has(session.sessionId);
+    return !excludedSessionIds.has(session.sessionId) && !session.workloadWorkerId;
   });
   const recoverableSessions = [];
   for (const session of ownedSessions) {
@@ -133,6 +138,7 @@ async function main(): Promise<void> {
     await workers?.close();
     await closeValidatorSnapshot();
     await shutdownWhatsAppSessions();
+    await stopWorkloadControlServer();
     await closeMongo();
     await closeCanonicalPreview();
     await closeSessionLockRedis();
@@ -146,7 +152,7 @@ async function main(): Promise<void> {
 async function cleanupLoggedOutSessions(): Promise<void> {
   const terminal = listAllSessions().filter(
     (session) =>
-      (isWorkerProcess ? workerSessionIds.has(session.sessionId) : !excludedSessionIds.has(session.sessionId)) &&
+      (isWorkerProcess ? workerSessionIds.has(session.sessionId) : !excludedSessionIds.has(session.sessionId) && !session.workloadWorkerId) &&
       (session.status === "LOGGED_OUT" ||
         (session.authHealth === "INVALID" && session.status !== "ACTIVE")),
   );
@@ -176,7 +182,7 @@ async function cleanupExpiredPairingSessions(): Promise<void> {
   );
   const candidates = listAllSessions().filter(
     (session) =>
-      (isWorkerProcess ? workerSessionIds.has(session.sessionId) : !excludedSessionIds.has(session.sessionId)) &&
+      (isWorkerProcess ? workerSessionIds.has(session.sessionId) : !excludedSessionIds.has(session.sessionId) && !session.workloadWorkerId) &&
       session.status === "PAIRING" &&
       typeof session.createdAt === "number" &&
       session.createdAt < cutoffAt,

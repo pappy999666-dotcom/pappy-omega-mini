@@ -97,6 +97,7 @@ export function dashboardKeyboard(isAdmin: boolean): InlineKeyboardMarkup {
       btn("◷ Scheduled Jobs", "jobs:list"),
       btn("📺 Live Show", "jobs:live:open", "success"),
     ],
+    [btn("◌ Workload", "workload:menu", "success")],
     [btn("⚙ Settings", "settings:menu")],
     [btn("◌ Support", "support:menu"), btn("▤ Help", "help:main")],
   ];
@@ -786,6 +787,7 @@ export function adminKeyboard(): InlineKeyboardMarkup {
       btn("▣ Media", "admin:media"),
       btn("🌉 Global Bridge Ops", "admin:bridge"),
     ],
+    [btn("◌ Workload", "admin:workload", "success")],
     [
       btn("◷ Global Jobs", "admin:jobs"),
       btn("▤ Master Bucket", "admin:bucket"),
@@ -1197,4 +1199,110 @@ export function autoPromoteGlobalTargetsKeyboard(
   rows.push([btn("↻ Refresh ACTIVE Sessions", "admin:autopromote:targets:refresh", "primary")]);
   rows.push([btn("Cancel", "autopromote:cancel", "danger")]);
   return keyboard(rows);
+}
+
+
+export function workloadKeyboard(hasWorker: boolean): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("🔑 Setup Panel", "workload:enroll", "success")],
+    [btn("➕ Add Panel Key", "workload:add")],
+    [btn(hasWorker ? "▣ My Panel" : "▣ My Panels", "workload:list")],
+    [btn("⬇ Download Worker", "workload:download", "success")],
+    [btn("📖 Deployment Guide", "workload:guide")],
+    [btn("↻ Check Status", "workload:status")],
+    [btn(ui.back, "menu:main")],
+  ]);
+}
+
+export function workloadText(
+  mode: "ON" | "OFF",
+  workers: Array<{ displayKey: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[] }>,
+): string {
+  const body = workers.length
+    ? workers.map((worker) => {
+        const heartbeat = worker.lastHeartbeatAt ? new Date(worker.lastHeartbeatAt).toISOString() : "never";
+        return `<b>Panel:</b> <code>${escapeHtml(worker.displayKey)}</code> · ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Heartbeat:</b> ${escapeHtml(heartbeat)}\n<b>Sessions:</b> ${worker.assignedSessionIds.length}`;
+      }).join("\n\n")
+    : "No workload panel is attached to this workspace.";
+  return pageText(
+    "Workload",
+    infoResponse(
+      "Central control · panel execution",
+      `<b>Owner workload:</b> ${mode === "ON" ? "🟢 ON" : "⚪ OFF"}\n\n${body}\n\n${mode === "OFF" ? "New sessions require a verified active panel worker." : "New sessions use the owner workload unless a verified panel is selected."}`,
+    ),
+  );
+}
+
+export function workloadPanelText(
+  worker: { displayKey: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[] },
+): string {
+  return pageText(
+    "Workload Panel",
+    infoResponse(
+      `Panel ${escapeHtml(worker.displayKey)}`,
+      `<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Last heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}\n<b>Assigned sessions:</b> ${worker.assignedSessionIds.length}`,
+    ),
+  );
+}
+
+export function workloadPanelKeyboard(displayKey: string): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("✓ Use This Panel", `workload:use:${displayKey}`, "success")],
+    [btn("↻ Check Again", "workload:status")],
+    [btn("🗑 Remove Key", `workload:remove:${displayKey}`, "danger")],
+    [btn(ui.back, "workload:list")],
+  ]);
+}
+
+export function workloadGuideText(controlUrl?: string): string {
+  return pageText(
+    "Workload Deployment Guide",
+    infoResponse(
+      "Panel worker · upload → install → start",
+      `<b>1.</b> Download the official worker package.\n<b>2.</b> Create a Node.js 20+ application on any compatible panel.\n<b>3.</b> Upload the package and run <code>npm install</code>.\n<b>4.</b> Set <code>PAPPY_WORKLOAD_URL</code> to the official control URL.\n<b>5.</b> Set the one-time <code>PAPPY_WORKLOAD_ENROLLMENT_TOKEN</code>.\n<b>6.</b> Set a private 32+ character <code>PAPPY_WORKLOAD_SESSION_SECRET</code>.\n<b>7.</b> Start <code>node index.js</code>.\n<b>8.</b> Copy the five-digit panel key printed after registration and add it here.\n\n<b>Control URL:</b> <code>${escapeHtml(controlUrl ?? "configured by the owner")}</code>\n\nThe package contains only the assigned WhatsApp workload. Do not add the Telegram token, MongoDB URI, Redis URI, or admin credentials.`,
+    ),
+  );
+}
+
+export function adminWorkloadText(
+  mode: "ON" | "OFF",
+  workers: Array<{ workerId: string; displayKey: string; ownerTelegramUserId: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[] }>,
+): string {
+  const body = workers.length
+    ? workers.map((worker) => `<b>${escapeHtml(worker.displayKey)}</b> · ${escapeHtml(worker.status)}\n<code>${escapeHtml(worker.workerId.slice(0, 12))}</code> · owner <code>${escapeHtml(worker.ownerTelegramUserId)}</code>\nversion ${escapeHtml(worker.workerVersion)} · sessions ${worker.assignedSessionIds.length} · heartbeat ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}`).join("\n\n")
+    : "No external workload workers are registered.";
+  return pageText(
+    "Admin · Workload",
+    infoResponse(
+      `Owner workload mode: ${mode}`,
+      `${body}\n\nUse the controls below to change placement policy or inspect a worker. Existing sessions are never deleted by the mode toggle.`,
+    ),
+  );
+}
+
+export function adminWorkloadKeyboard(mode: "ON" | "OFF", workers: Array<{ workerId: string; displayKey: string; status: string }>): InlineKeyboardMarkup {
+  return keyboard([
+    [btn(mode === "ON" ? "⚪ Turn Workload OFF" : "🟢 Turn Workload ON", "admin:workload:toggle", mode === "ON" ? "danger" : "success")],
+    ...workers.map((worker) => [btn(`${worker.status === "DISABLED" ? "▶" : "⏸"} ${worker.displayKey}`, `admin:workload:worker:${worker.workerId}`)]),
+    [btn("↻ Refresh", "admin:workload")],
+    [btn(ui.back, "admin:panel")],
+  ]);
+}
+
+export function adminWorkloadWorkerText(worker: { workerId: string; displayKey: string; status: string; ownerTelegramUserId: string; workerVersion: string; assignedSessionIds: string[]; lastHeartbeatAt?: number; lastError?: string }): string {
+  return pageText(
+    "Admin · Workload Worker",
+    infoResponse(
+      `Worker ${escapeHtml(worker.displayKey)}`,
+      `<b>ID:</b> <code>${escapeHtml(worker.workerId)}</code>\n<b>Owner:</b> <code>${escapeHtml(worker.ownerTelegramUserId)}</code>\n<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Sessions:</b> ${worker.assignedSessionIds.length}\n<b>Heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}${worker.lastError ? `\n<b>Last error:</b> ${escapeHtml(worker.lastError)}` : ""}`,
+    ),
+  );
+}
+
+export function adminWorkloadWorkerKeyboard(workerId: string, disabled: boolean): InlineKeyboardMarkup {
+  return keyboard([
+    [btn(disabled ? "▶ Re-enable Worker" : "⏸ Disable Worker", `admin:workload:worker:toggle:${workerId}`, disabled ? "success" : "danger")],
+    [btn("↻ Force Health Check", `admin:workload:worker:check:${workerId}`)],
+    [btn(ui.back, "admin:workload")],
+  ]);
 }
