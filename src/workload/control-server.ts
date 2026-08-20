@@ -2,16 +2,19 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { env } from "../config/env.js";
 import {
   authenticateWorkloadWorker,
+  getAuthorizedWorkloadAssignment,
   completeWorkloadCommand,
   disconnectWorkloadWorker,
   markUnreachableWorkloadWorkers,
   pollWorkloadCommands,
   recordWorkloadHeartbeat,
+  recordWorkloadSessionStatus,
   registerWorkloadWorker,
   workloadControlSummary,
 } from "./service.js";
+import { handleWorkloadInboundEvent } from "./events.js";
 import { WORKLOAD_CONTROL_VERSION } from "./security.js";
-import type { WorkloadRegistrationRequest } from "./types.js";
+import type { WorkloadInboundEvent, WorkloadRegistrationRequest } from "./types.js";
 
 const MAX_BODY_BYTES = 512 * 1024;
 
@@ -53,10 +56,23 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown>> 
   });
 }
 
+function encode(value: unknown): unknown {
+  if (Buffer.isBuffer(value)) return { __pappyBuffer: value.toString("base64") };
+  if (Array.isArray(value)) return value.map(encode);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, encode(item)]));
+  return value;
+}
+
 function stringField(input: Record<string, unknown>, key: string): string {
   const value = input[key];
   if (typeof value !== "string" || !value.trim()) throw new Error(`${key} is required.`);
   return value.trim();
+}
+
+function enumField<T extends string>(input: Record<string, unknown>, key: string, allowed: readonly T[]): T {
+  const value = stringField(input, key) as T;
+  if (!allowed.includes(value)) throw new Error(`${key} has an unsupported value.`);
+  return value;
 }
 
 function stringListField(input: Record<string, unknown>, key: string): string[] {
@@ -98,11 +114,46 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       const worker = await recordWorkloadHeartbeat(credential, {
         workerVersion: stringField(input, "workerVersion"),
         capabilities: stringListField(input, "capabilities"),
-        status: stringField(input, "status") as never,
+        status: enumField(input, "status", ["PENDING", "CONNECTING", "ACTIVE", "UNREACHABLE", "OFFLINE", "ERROR", "DISABLED", "INCOMPATIBLE", "REVOKED"] as const),
         assignedSessionIds: stringListField(input, "assignedSessionIds"),
         ...(typeof input.lastError === "string" && input.lastError.trim() ? { lastError: input.lastError.trim() } : {}),
       });
       json(response, 200, { ok: true, workerId: worker.workerId, status: worker.status, assignedSessionIds: worker.assignedSessionIds });
+      return;
+    }
+    if (path === "/workload/session-status") {
+      const input = await body(request);
+      const { worker } = await authenticateWorkloadWorker(credential);
+      await recordWorkloadSessionStatus(worker.workerId, {
+        workspaceId: stringField(input, "workspaceId"),
+        sessionId: stringField(input, "sessionId"),
+        status: enumField(input, "status", ["PAIRING", "ACTIVE", "RECONNECTING", "DEGRADED", "ERROR", "LOGGED_OUT"] as const),
+        ...(input.authHealth !== undefined ? { authHealth: enumField(input, "authHealth", ["UNKNOWN", "VALID", "INVALID", "DEGRADED"] as const) } : {}),
+        ...(typeof input.phoneNumber === "string" ? { phoneNumber: input.phoneNumber } : {}),
+        ...(typeof input.reason === "string" ? { reason: input.reason } : {}),
+      });
+      json(response, 200, { ok: true, sessionId: stringField(input, "sessionId") });
+      return;
+    }
+    if (path === "/workload/event") {
+      const input = await body(request);
+      const event = {
+        workspaceId: stringField(input, "workspaceId"),
+        sessionId: stringField(input, "sessionId"),
+        remoteJid: stringField(input, "remoteJid"),
+        senderJid: stringField(input, "senderJid"),
+        text: typeof input.text === "string" ? input.text : "",
+        ...(typeof input.messageId === "string" ? { messageId: input.messageId } : {}),
+        ...(typeof input.quotedText === "string" ? { quotedText: input.quotedText } : {}),
+        ...(typeof input.quotedSenderJid === "string" ? { quotedSenderJid: input.quotedSenderJid } : {}),
+        ...(Array.isArray(input.mentionedJids) ? { mentionedJids: input.mentionedJids.filter((item): item is string => typeof item === "string").slice(0, 100) } : {}),
+        ...(input.fromMe === true ? { fromMe: true } : {}),
+      } satisfies WorkloadInboundEvent;
+      const { worker } = await authenticateWorkloadWorker(credential);
+      const assignment = await getAuthorizedWorkloadAssignment(worker.workerId, event.sessionId);
+      if (assignment.workspaceId !== event.workspaceId) throw new Error("Inbound event workspace mismatch.");
+      const result = await handleWorkloadInboundEvent(event);
+      json(response, 200, { ok: true, result: encode(result) });
       return;
     }
     if (path === "/workload/poll") {

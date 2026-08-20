@@ -38,7 +38,9 @@ import { hydrateMenuMedia } from "./media/menu-media-store.js";
 import { closeValidatorSnapshot } from "./links/validator-snapshot.js";
 import { closeCanonicalPreview } from "./whatsapp/baileys-native-preview.js";
 import { closeSessionLockRedis } from "./core/session-lock.js";
-import { routeWhatsAppText } from "./whatsapp/message-router.js";
+import { routeWhatsAppText, type WhatsAppReply } from "./whatsapp/message-router.js";
+import { callAssignedWorkloadTransport } from "./whatsapp/workload-transport.js";
+import { setWorkloadInboundEventHandler } from "./workload/events.js";
 import {
   startRemoteBridgeResponder,
   stopRemoteBridgeResponder,
@@ -73,7 +75,42 @@ async function main(): Promise<void> {
   let pairingCleanupTimer: NodeJS.Timeout | undefined;
   workers = startWorkerRuntime();
   if (isWorkerProcess) await startRemoteBridgeResponder(routeWhatsAppText);
-  if (!isWorkerProcess) await startWorkloadControlServer();
+  if (!isWorkerProcess) {
+    setWorkloadInboundEventHandler(async (event) => {
+      const reply = await routeWhatsAppText({
+        workspaceId: event.workspaceId,
+        sessionId: event.sessionId,
+        chatJid: event.remoteJid,
+        senderJid: event.senderJid,
+        text: event.text,
+        ...(event.messageId ? { quotedSenderJid: event.quotedSenderJid } : {}),
+        ...(event.quotedText ? { quotedText: event.quotedText } : {}),
+        ...(event.quotedSenderJid ? { quotedSenderJid: event.quotedSenderJid } : {}),
+        ...(event.mentionedJids?.length ? { mentionedJids: event.mentionedJids } : {}),
+        ...(event.fromMe ? { fromMe: true } : {}),
+      });
+      if (!reply) return { reply: null };
+      let payload: Record<string, unknown>;
+      if (typeof reply === "string") payload = { text: reply };
+      else {
+        const result = reply as WhatsAppReply;
+        payload = result.media
+          ? {
+              [result.media.kind]: result.media.bytes,
+              caption: result.caption ?? "",
+              mimetype: result.media.mimeType,
+              ...(result.nativeFlow ? { nativeFlow: result.nativeFlow } : {}),
+            }
+          : {
+              ...(result.text ? { text: result.text } : {}),
+              ...(result.nativeFlow ? { nativeFlow: result.nativeFlow } : {}),
+            };
+      }
+      await callAssignedWorkloadTransport(event.workspaceId, event.sessionId, "sendMessage", [event.remoteJid, payload]);
+      return { reply: { delivered: true } };
+    });
+    await startWorkloadControlServer();
+  }
   if (!isWorkerProcess) {
     scheduler = new DurableScheduler(workers);
     scheduler.start();

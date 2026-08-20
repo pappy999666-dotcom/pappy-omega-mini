@@ -98,6 +98,16 @@ class FileAuthStore {
   async keys() { return []; }
 }
 
+async function reportSessionStatus(runtime, status, authHealth, reason) {
+  await control("/workload/session-status", {
+    workspaceId: runtime.workspaceId,
+    sessionId: runtime.sessionId,
+    status,
+    ...(authHealth ? { authHealth } : {}),
+    ...(runtime.socket.user?.id ? { phoneNumber: String(runtime.socket.user.id).split(":")[0].replace(/\D/g, "") } : {}),
+    ...(reason ? { reason: String(reason).slice(0, 240) } : {}),
+  }, credentialState.credential).catch((error) => console.error("[pappy-workload-worker] status report failed", error instanceof Error ? error.message : String(error)));
+}
 async function startSession(workspaceId, sessionId) {
   const existing = runtimes.get(sessionId);
   if (existing) return existing;
@@ -107,10 +117,20 @@ async function startSession(workspaceId, sessionId) {
   const socket = makeWASocket({ auth: state, logger: pino({ level: "warn" }), generateHighQualityLinkPreview: true });
   socket.ev.on("creds.update", saveCreds);
   const runtime = { workspaceId, sessionId, socket, store, ready: false };
+  socket.ev.on("messages.upsert", (event) => {
+    for (const message of event.messages ?? []) void emitInbound(runtime, message).catch((error) => console.error("[pappy-workload-worker] inbound event failed", error instanceof Error ? error.message : String(error)));
+  });
   runtimes.set(sessionId, runtime);
   socket.ev.on("connection.update", (update) => {
-    if (update.connection === "open") runtime.ready = true;
-    if (update.connection === "close") { runtime.ready = false; runtimes.delete(sessionId); }
+    if (update.connection === "open") {
+      runtime.ready = true;
+      void reportSessionStatus(runtime, "ACTIVE", "VALID");
+    }
+    if (update.connection === "close") {
+      runtime.ready = false;
+      void reportSessionStatus(runtime, "DEGRADED", "DEGRADED", "WhatsApp connection closed.");
+      runtimes.delete(sessionId);
+    }
   });
   const deadline = Date.now() + 90_000;
   while (!runtime.ready && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 250));
@@ -118,6 +138,39 @@ async function startSession(workspaceId, sessionId) {
   assignedSessions.add(sessionId);
   return runtime;
 }
+function messageText(message) {
+  if (!message || typeof message !== "object") return "";
+  const value = message;
+  if (typeof value.conversation === "string") return value.conversation;
+  if (typeof value.extendedTextMessage?.text === "string") return value.extendedTextMessage.text;
+  if (typeof value.imageMessage?.caption === "string") return value.imageMessage.caption;
+  if (typeof value.videoMessage?.caption === "string") return value.videoMessage.caption;
+  if (typeof value.documentMessage?.caption === "string") return value.documentMessage.caption;
+  return "";
+}
+async function emitInbound(runtime, message) {
+  const key = message?.key ?? {};
+  const remoteJid = key.remoteJid;
+  if (typeof remoteJid !== "string" || !message.message) return;
+  const text = messageText(message.message);
+  const context = message.message.extendedTextMessage?.contextInfo ?? message.message.imageMessage?.contextInfo ?? message.message.videoMessage?.contextInfo;
+  const quotedText = messageText(context?.quotedMessage);
+  if (!text && !quotedText) return;
+  const senderJid = key.fromMe ? (runtime.socket.user?.id ?? remoteJid) : (key.participantAlt ?? key.remoteJidAlt ?? key.participant ?? remoteJid);
+  await control("/workload/event", {
+    workspaceId: runtime.workspaceId,
+    sessionId: runtime.sessionId,
+    ...(typeof key.id === "string" ? { messageId: key.id } : {}),
+    remoteJid,
+    senderJid,
+    text,
+    ...(quotedText ? { quotedText } : {}),
+    ...(typeof context?.participant === "string" ? { quotedSenderJid: context.participant } : {}),
+    ...(Array.isArray(context?.mentionedJid) ? { mentionedJids: context.mentionedJid } : {}),
+    ...(key.fromMe ? { fromMe: true } : {}),
+  }, credentialState.credential);
+}
+
 async function stopSession(sessionId) {
   const runtime = runtimes.get(sessionId);
   if (!runtime) return;
@@ -155,6 +208,7 @@ async function execute(command) {
   }
   if (command.kind === "session.pair.request") {
     const runtime = await startSession(command.workspaceId, command.sessionId);
+    await reportSessionStatus(runtime, "PAIRING", "UNKNOWN");
     const phoneNumber = String(command.payload.phoneNumber ?? "").replace(/\D/g, "");
     const customCode = String(command.payload.customCode ?? "PAPPYBOT").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
     if (typeof runtime.socket.requestPairingCode !== "function") throw new Error("Pairing codes are not supported by this transport.");

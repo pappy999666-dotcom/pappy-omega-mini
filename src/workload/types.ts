@@ -142,3 +142,29 @@ export interface WorkloadCommandResultRequest {
   result?: Record<string, unknown>;
   error?: string;
 }
+
+export interface WorkloadInboundEvent {
+  workspaceId: string;
+  sessionId: string;
+  messageId?: string;
+  remoteJid: string;
+  senderJid: string;
+  text: string;
+  quotedText?: string;
+  quotedSenderJid?: string;
+  mentionedJids?: string[];
+  fromMe?: boolean;
+}
+
+export interface WorkloadInboundResult {
+  reply?: string | Record<string, unknown> | null;
+}
+
+export interface WorkloadSessionStatusEvent {
+  workspaceId: string;
+  sessionId: string;
+  status: "PAIRING" | "ACTIVE" | "RECONNECTING" | "DEGRADED" | "ERROR" | "LOGGED_OUT";
+  authHealth?: "UNKNOWN" | "VALID" | "INVALID" | "DEGRADED";
+  phoneNumber?: string;
+  reason?: string;
+}

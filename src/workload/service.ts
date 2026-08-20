@@ -24,6 +24,7 @@ import {
 } from "../persistence/mongo.js";
 import { getSession, updateSession, updateWorkspaceWorkloadMode } from "../core/session-registry.js";
 import { env } from "../config/env.js";
+import { isWorkloadWorkerReady } from "./readiness.js";
 import {
   createDisplayKey,
   createOpaqueToken,
@@ -128,6 +129,27 @@ export async function authenticateWorkloadWorker(
   return { worker, credential };
 }
 
+export async function recordWorkloadSessionStatus(
+  workerId: string,
+  input: { workspaceId: string; sessionId: string; status: "PAIRING" | "ACTIVE" | "RECONNECTING" | "DEGRADED" | "ERROR" | "LOGGED_OUT"; authHealth?: "UNKNOWN" | "VALID" | "INVALID" | "DEGRADED"; phoneNumber?: string; reason?: string },
+): Promise<void> {
+  const worker = await getWorkloadWorker(workerId);
+  if (!worker || worker.workspaceId !== input.workspaceId) throw new Error("Workload worker workspace mismatch.");
+  const assignment = await getAuthorizedWorkloadAssignment(workerId, input.sessionId);
+  updateSession(input.workspaceId, input.sessionId, {
+    status: input.status,
+    ...(input.authHealth ? { authHealth: input.authHealth } : {}),
+    ...(input.phoneNumber ? { phoneNumber: input.phoneNumber } : {}),
+    ...(input.reason ? { disconnectReason: input.reason.slice(0, 240) } : {}),
+    ...(input.status === "ACTIVE" ? { connectedAt: Date.now(), lastHealthyAt: Date.now() } : {}),
+  });
+  await updateWorkloadAssignment(assignment.assignmentId, {
+    status: input.status === "ACTIVE" ? "RUNNING" : input.status === "ERROR" ? "ERROR" : input.status === "LOGGED_OUT" ? "OFFLINE" : "DEGRADED",
+    ...(input.reason ? { lastError: input.reason.slice(0, 500) } : {}),
+  });
+  await appendWorkloadEvent({ workspaceId: input.workspaceId, workerId, sessionId: input.sessionId, kind: "worker.status", metadata: { status: input.status, authHealth: input.authHealth } });
+}
+
 export async function recordWorkloadHeartbeat(
   credential: string,
   input: WorkloadHeartbeatRequest,
@@ -146,6 +168,11 @@ export async function recordWorkloadHeartbeat(
     ...(input.lastError ? { lastError: input.lastError.slice(0, 500) } : {}),
   });
   if (!next) throw new Error("Workload worker no longer exists.");
+  for (const sessionId of next.assignedSessionIds) {
+    const assignment = await getWorkloadAssignmentBySession(sessionId);
+    if (assignment && assignment.workerId === next.workerId && assignment.status === "OFFLINE")
+      await updateWorkloadAssignment(assignment.assignmentId, { status: "RUNNING" });
+  }
   await appendWorkloadEvent({
     workspaceId: next.workspaceId,
     workerId: next.workerId,
@@ -164,7 +191,7 @@ export async function assignWorkloadSession(
   if (!session || session.workspaceId !== workspaceId) throw new Error("Session is not in this workspace.");
   const worker = await getWorkloadWorker(workerId);
   if (!worker || worker.workspaceId !== workspaceId) throw new Error("Worker is not owned by this workspace.");
-  if (worker.status !== "ACTIVE") throw new Error("Worker must be ACTIVE before assignment.");
+  if (!isWorkloadWorkerReady(worker)) throw new Error("Worker must be ACTIVE, compatible, and have a fresh heartbeat before assignment.");
   const existing = await getWorkloadAssignmentBySession(sessionId);
   if (existing && existing.workerId !== workerId && ["ASSIGNED", "RUNNING", "DEGRADED", "OFFLINE"].includes(existing.status))
     throw new Error("Session already has an active workload assignment.");

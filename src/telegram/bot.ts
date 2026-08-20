@@ -210,6 +210,7 @@ import {
   setWorkloadMode,
   toggleWorkloadWorker,
 } from "../workload/service.js";
+import { isWorkloadWorkerReady } from "../workload/readiness.js";
 
 const pendingMedia = new Map<string, "image" | "video">();
 const globalBridgeSelections = new Map<string, Set<string>>();
@@ -835,6 +836,10 @@ export function createTelegramBot(): Telegraf<Context> {
       const worker = await getWorkspaceWorkloadWorkerByDisplayKey(workloadInput.workspaceId, displayKey);
       if (!worker) {
         await ctx.reply(pageText("Workload", dangerResponse("Panel not found", "That key is not registered to this workspace.")), { parse_mode: "HTML" });
+        return;
+      }
+      if (!isWorkloadWorkerReady(worker)) {
+        await ctx.reply(pageText("Workload", dangerResponse("Panel is not ready", "The worker must be ACTIVE, compatible, and have a fresh heartbeat before it can host a session.")), { parse_mode: "HTML" });
         return;
       }
       pendingWorkloadKey.delete(userId);
@@ -4467,8 +4472,8 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
     const worker = await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, ctx.match[1] ?? "");
-    if (!worker || worker.status !== "ACTIVE") {
-      await edit(ctx, pageText("Workload", dangerResponse("Panel is not ready", "Only an ACTIVE worker with a recent heartbeat can host a session.")), workloadKeyboard(Boolean(worker)));
+    if (!worker || !isWorkloadWorkerReady(worker)) {
+      await edit(ctx, pageText("Workload", dangerResponse("Panel is not ready", "Only an ACTIVE, compatible worker with a fresh heartbeat can host a session.")), workloadKeyboard(Boolean(worker)));
       return;
     }
     preferredWorkloadWorker.set(String(ctx.from?.id ?? ""), { workspaceId: worker.workspaceId, workerId: worker.workerId, displayKey: worker.displayKey });
@@ -5256,7 +5261,7 @@ async function startPairing(
   let targetWorker = preferred
     ? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, preferred.displayKey)
     : undefined;
-  if (preferred && (!targetWorker || targetWorker.status !== "ACTIVE")) {
+  if (preferred && (!targetWorker || !isWorkloadWorkerReady(targetWorker))) {
     preferredWorkloadWorker.delete(userId);
     targetWorker = undefined;
     if (workloadMode === "OFF") {
