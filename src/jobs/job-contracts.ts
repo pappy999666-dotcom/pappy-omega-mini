@@ -80,7 +80,10 @@ export interface JobRecord<TPayload = Record<string, unknown>> {
 export interface WorkerContext {
   job: JobRecord;
   signal: AbortSignal;
-  report(progress: Partial<JobProgress>): Promise<void>;
+  report(
+    progress: Partial<JobProgress>,
+    patch?: { payload?: Record<string, unknown> },
+  ): Promise<void>;
   isCancellationRequested(): boolean;
   waitIfPaused(): Promise<void>;
 }

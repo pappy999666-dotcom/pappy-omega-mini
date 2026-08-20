@@ -380,7 +380,7 @@ export class JobOrchestrator {
           await new Promise((resolve) => setTimeout(resolve, 750));
         }
       },
-      report: async (progress) => {
+      report: async (progress, patch) => {
         const current = await this.store.get(record.jobId);
         if (!current) return;
         context.job = current;
@@ -392,6 +392,7 @@ export class JobOrchestrator {
         await this.store.update(record.jobId, {
           progress: nextProgress,
           heartbeatAt: Date.now(),
+          ...(patch?.payload ? { payload: patch.payload } : {}),
         });
         await bullJob.updateProgress(nextProgress);
       },

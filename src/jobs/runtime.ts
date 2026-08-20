@@ -24,6 +24,7 @@ import {
   sendGroupMentions,
   sendGroupStatus,
   sendGroupText,
+  sendDirectText,
   type GroupMediaPayload,
   validateInviteLink,
 } from "../whatsapp/transport-adapter.js";
@@ -787,6 +788,7 @@ export function startWorkerRuntime(): JobOrchestrator {
       if (!sessionId) throw new Error(`${kind} requires a WhatsApp session.`);
       const payload = context.job.payload as {
         groups?: string[];
+        originJid?: string;
         text?: string;
         count?: number;
         delayMs?: number;
@@ -842,6 +844,65 @@ export function startWorkerRuntime(): JobOrchestrator {
           ? Math.max(1, Math.min(20, Number(payload.count ?? 1)))
           : 1;
       const uniqueGroups = [...new Set(baseGroups)];
+      const resolvedPayload = {
+        ...payload,
+        groups: uniqueGroups,
+      };
+      await context.report(
+        {
+          total: uniqueGroups.length,
+          currentAction: `${kind} inventory resolved`,
+          lastResult: `Resolved ${uniqueGroups.length} WhatsApp group(s); delivery is starting.`,
+        },
+        { payload: resolvedPayload },
+      );
+      const originJid =
+        typeof payload.originJid === "string" ? payload.originJid : undefined;
+      if (originJid) {
+        const notifyKey = `pappy-omega-mini:broadcast-resolved:${context.job.jobId}`;
+        const claimed = await redis.set(
+          notifyKey,
+          "done",
+          "EX",
+          60 * 60 * 24 * 30,
+          "NX",
+        );
+        if (claimed === "OK") {
+          const delaySeconds = Math.max(
+            1,
+            Math.round(Number(payload.delayMs ?? 20_000) / 1000),
+          );
+          const expectedPosts = uniqueGroups.length * repeat;
+          const expectedSeconds = Math.max(0, expectedPosts - 1) * delaySeconds;
+          const minutes = Math.floor(expectedSeconds / 60);
+          const seconds = expectedSeconds % 60;
+          const label = kind === "allstatus" ? "ALL-STATUS" : "ALL-CHAT";
+          const action =
+            kind === "allstatus"
+              ? "Status delivery is now posting to every resolved group."
+              : "Hidden-member mention delivery is now posting to every resolved group.";
+          void sendDirectText(
+            context.job.workspaceId,
+            sessionId,
+            originJid,
+            [
+              `✦ PAPPY OMEGA MINI · ${label} READY`,
+              "──────────────────────────────",
+              `Total groups  · ${uniqueGroups.length}`,
+              `Expected posts · ${expectedPosts}`,
+              `Delay         · ${delaySeconds}s`,
+              `Expected time · ${minutes}m ${seconds}s`,
+              `Live code     · ${context.job.jobCode ?? context.job.jobId.slice(0, 8)}`,
+              `Action        · ${action}`,
+            ].join("\\n"),
+          ).catch((error) => {
+            console.warn(
+              `[pappy-omega-mini] broadcast roster notification failed job=${context.job.jobId}:`,
+              error instanceof Error ? error.message : String(error),
+            );
+          });
+        }
+      }
       const deliveries = uniqueGroups.flatMap((jid) =>
         Array.from({ length: repeat }, (_, repeatIndex) => ({
           jid,
