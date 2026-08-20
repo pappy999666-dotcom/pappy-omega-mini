@@ -120,6 +120,7 @@ export class JobOrchestrator {
   private readonly joinResults: JoinResultStore;
   private readonly closeHooks: Array<() => Promise<void> | void> = [];
   private readonly completionHooks: Array<(job: JobRecord) => Promise<void> | void> = [];
+  private readonly forcedCancellation = new Set<string>();
   private readonly reaperTimer: NodeJS.Timeout;
   private reaperBusy = false;
 
@@ -318,6 +319,45 @@ export class JobOrchestrator {
     return this.store.list(limit);
   }
 
+  async clearAllJobs(): Promise<number> {
+    const records = await this.store.listAll();
+    for (const record of records) this.forcedCancellation.add(record.jobId);
+    await Promise.all(
+      records
+        .filter((record) => !["COMPLETED", "FAILED", "CANCELLED"].includes(record.state))
+        .map((record) => this.cancel(record.jobId).catch(() => undefined)),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await this.queue.obliterate({ force: true }).catch(() => undefined);
+    const patterns = [
+      `${STORE_PREFIX}*`,
+      `${CODE_PREFIX}*`,
+      "pappy-omega-mini:idempotency:*",
+      "pappy-omega-mini:completion-notified:*",
+      "pappy-omega-mini:broadcast-done:*",
+      "pappy-omega-mini:recovery:*",
+    ];
+    for (const pattern of patterns) {
+      let cursor = "0";
+      do {
+        const [next, keys] = await this.redis.scan(
+          cursor,
+          "MATCH",
+          pattern,
+          "COUNT",
+          500,
+        );
+        cursor = next;
+        if (keys.length) await this.redis.unlink(...keys);
+      } while (cursor !== "0");
+    }
+    for (const jobId of records.map((record) => record.jobId)) {
+      const timer = setTimeout(() => this.forcedCancellation.delete(jobId), 60_000);
+      timer.unref?.();
+    }
+    return records.length;
+  }
+
   async purgeSession(workspaceId: string, sessionId: string): Promise<number> {
     const jobs = await this.store.listAll();
     let removed = 0;
@@ -416,6 +456,7 @@ export class JobOrchestrator {
       job: (await this.store.get(record.jobId)) ?? record,
       signal: controller.signal,
       isCancellationRequested: () =>
+        this.forcedCancellation.has(record.jobId) ||
         Boolean((context.job as JobRecord).cancellationRequested),
       waitIfPaused: async () => {
         while (true) {

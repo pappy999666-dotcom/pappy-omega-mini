@@ -4746,6 +4746,60 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!requireAdmin(ctx)) return;
     await showAdminJobs(ctx);
   });
+  bot.action("admin:jobs:clear", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    await edit(
+      ctx,
+      pageText(
+        "Clear All Jobs",
+        dangerResponse(
+          "Destructive queue action",
+          "This will cancel active Pappy jobs and remove queued, delayed, completed, failed, live-code, idempotency, recovery, and broadcast-marker records. WhatsApp sessions, Validator Hub links, Join Manager result data, and persistent storage are preserved.",
+        ),
+      ),
+      keyboard([
+        [btn("🗑 Confirm Clear All Jobs", "admin:jobs:clear:confirm", "danger")],
+        [btn("Cancel", "admin:jobs")],
+      ]),
+    );
+  });
+  bot.action("admin:jobs:clear:confirm", async (ctx) => {
+    await ctx.answerCbQuery("Clearing Pappy jobs…");
+    if (!requireAdmin(ctx)) return;
+    const user = resolveTelegramUser(ctx);
+    const runtime = getWorkerRuntime();
+    if (!runtime) {
+      await edit(
+        ctx,
+        pageText("Clear All Jobs", dangerResponse("Unavailable", "The Pappy worker runtime is not available.")),
+        keyboard([[btn("‹ Admin Panel", "admin:panel")]]),
+      );
+      return;
+    }
+    const removed = await runtime.clearAllJobs();
+    recordAudit({
+      workspaceId: user.workspaceId,
+      actorTelegramUserId: user.telegramUserId,
+      action: "admin.jobs.clear_all",
+      success: true,
+      metadata: { removed },
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Jobs Cleared",
+        successResponse(
+          "Pappy queue cleared",
+          `${removed} durable Pappy job record(s) were removed. Sessions, Validator Hub data, Join Manager result data, and persistent storage were preserved.`,
+        ),
+      ),
+      keyboard([
+        [btn("↻ View Jobs", "admin:jobs", "primary")],
+        [btn("‹ Admin Panel", "admin:panel")],
+      ]),
+    );
+  });
   bot.action(/^admin:jobs:cancel:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery("Cancellation requested");
     if (!requireAdmin(ctx)) return;

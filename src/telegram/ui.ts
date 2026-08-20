@@ -754,6 +754,7 @@ export function adminKeyboard(): InlineKeyboardMarkup {
       btn("◷ Global Jobs", "admin:jobs"),
       btn("▤ Master Bucket", "admin:bucket"),
     ],
+    [btn("🗑 Clear All Jobs", "admin:jobs:clear", "danger")],
     [
       btn("▥ Broadcast", "admin:broadcast"),
       btn("◌ Support Inbox", "admin:support"),
@@ -896,6 +897,7 @@ export function adminJobsKeyboard(
         "danger",
       ),
     ]);
+  rows.push([btn("🗑 Clear All Jobs", "admin:jobs:clear", "danger")]);
   rows.push([btn("↻ Refresh Jobs", "admin:jobs:refresh", "primary")]);
   rows.push([btn(ui.back, "admin:panel")]);
   return keyboard(rows);

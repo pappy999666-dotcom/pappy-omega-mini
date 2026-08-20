@@ -196,6 +196,10 @@ describe("Telegram UI authorization", () => {
     expect(JSON.stringify(adminJobsKeyboard(jobs))).toContain(
       "admin:jobs:cancel:1234567890abcdef",
     );
+    expect(JSON.stringify(adminJobsKeyboard(jobs))).toContain(
+      "admin:jobs:clear",
+    );
+    expect(JSON.stringify(adminKeyboard())).toContain("admin:jobs:clear");
     expect(adminJobsText(jobs)).not.toContain("Owner Verified");
   });
 
