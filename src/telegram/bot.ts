@@ -5804,16 +5804,13 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
   const runtime = getWorkerRuntime();
   let totalGroups: number | undefined;
   let activeLinks: number | undefined;
-  void countValidatorBucket(session.workspaceId, "active")
-    .then((count) => {
-      activeLinks = count;
-    })
-    .catch(() => undefined);
-  void listGroups(session.workspaceId, session.sessionId)
-    .then((groups) => {
-      totalGroups = groups.length;
-    })
-    .catch(() => undefined);
+  const inventoryPromise = Promise.all([
+    countValidatorBucket(session.workspaceId, "active").catch(() => undefined),
+    listGroups(session.workspaceId, session.sessionId).catch(() => undefined),
+  ]).then(([count, groups]) => {
+    activeLinks = count;
+    totalGroups = groups?.length;
+  });
   const jobId = joinJobs.get(key);
   const job = jobId ? await runtime?.get(jobId) : undefined;
   const status = job
@@ -5867,14 +5864,32 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
     (message && "chat" in message ? message.chat.id : undefined);
   const messageId =
     message && "message_id" in message ? message.message_id : undefined;
-  if (!chatId || !messageId || !jobId || !runtime) return;
+  if (!chatId || !messageId) return;
+  if (!jobId || !runtime) {
+    void inventoryPromise.then(() =>
+      ctx.telegram
+        .editMessageText(
+          chatId,
+          messageId,
+          undefined,
+          render(),
+          { parse_mode: "HTML", reply_markup: joinManagerKeyboard(session.sessionId, status) },
+        )
+        .catch(() => undefined),
+    );
+    return;
+  }
   const loopKey = `join:${chatId}:${messageId}`;
   const previous = liveLoops.get(loopKey);
   if (previous) clearInterval(previous);
   const interval = setInterval(() => {
-    void runtime
-      .get(jobId)
-      .then((nextJob) => {
+    void Promise.all([
+      runtime.get(jobId),
+      countValidatorBucket(session.workspaceId, "active").catch(() => undefined),
+      listGroups(session.workspaceId, session.sessionId).catch(() => undefined),
+    ]).then(([nextJob, nextActiveLinks, nextGroups]) => {
+        activeLinks = nextActiveLinks;
+        totalGroups = nextGroups?.length;
         if (!nextJob) return;
         const nextStatus = jobStateToJoinStatus(nextJob.state);
         void ctx.telegram
