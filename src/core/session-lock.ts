@@ -12,11 +12,12 @@ export interface SessionLock {
   release(): Promise<void>;
 }
 
-export async function acquireSessionLock(
+async function acquireLock(
   workspaceId: string,
   sessionId: string,
+  namespace: "lifecycle" | "operation",
 ): Promise<SessionLock | undefined> {
-  const key = `workspace:${workspaceId}:session:${sessionId}:lock`;
+  const key = `workspace:${workspaceId}:session:${sessionId}:${namespace}-lock`;
   const token = crypto.randomUUID();
   const acquired = await redis.set(key, token, "EX", LOCK_TTL_SECONDS, "NX");
   if (acquired !== "OK") return undefined;
@@ -50,6 +51,20 @@ export async function acquireSessionLock(
         .catch(() => undefined);
     },
   };
+}
+
+export function acquireSessionLock(
+  workspaceId: string,
+  sessionId: string,
+): Promise<SessionLock | undefined> {
+  return acquireLock(workspaceId, sessionId, "lifecycle");
+}
+
+export function acquireSessionOperationLock(
+  workspaceId: string,
+  sessionId: string,
+): Promise<SessionLock | undefined> {
+  return acquireLock(workspaceId, sessionId, "operation");
 }
 
 export async function closeSessionLockRedis(): Promise<void> {

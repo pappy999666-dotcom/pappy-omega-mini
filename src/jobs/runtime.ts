@@ -43,7 +43,10 @@ import {
   recordAutoPromoteChildCompletion,
   recordAutoPromoteProgress,
 } from "../autopromote/service.js";
-import { acquireSessionLock, type SessionLock } from "../core/session-lock.js";
+import {
+  acquireSessionOperationLock,
+  type SessionLock,
+} from "../core/session-lock.js";
 import {
   JoinResultStore,
   joinOutcomeFromClassification,
@@ -1125,7 +1128,7 @@ async function waitForSessionOperationLock(
   signal: AbortSignal,
 ): Promise<SessionLock | undefined> {
   while (!signal.aborted) {
-    const lock = await acquireSessionLock(workspaceId, sessionId);
+    const lock = await acquireSessionOperationLock(workspaceId, sessionId);
     if (lock) return lock;
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
