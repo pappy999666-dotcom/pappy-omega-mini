@@ -16,9 +16,9 @@ const QUEUE_NAME = "pappy-omega-mini-jobs";
 const STORE_PREFIX = "pappy-omega-mini:job:";
 const CODE_PREFIX = "pappy-omega-mini:job-code:";
 const STALE_ACTIVE_JOB_GRACE_MS = 60_000;
-const WORKER_LOCK_DURATION_MS = 10 * 60_000;
-const WORKER_LOCK_RENEW_MS = 30_000;
-const WORKER_STALLED_INTERVAL_MS = 60_000;
+const WORKER_LOCK_DURATION_MS = 30 * 60_000;
+const WORKER_LOCK_RENEW_MS = 10_000;
+const WORKER_STALLED_INTERVAL_MS = 120_000;
 
 export class RedisJobStore {
   constructor(private readonly redis: Redis) {}
@@ -143,6 +143,7 @@ export class JobOrchestrator {
         lockDuration: WORKER_LOCK_DURATION_MS,
         lockRenewTime: WORKER_LOCK_RENEW_MS,
         stalledInterval: WORKER_STALLED_INTERVAL_MS,
+        maxStalledCount: 3,
       },
     );
     this.worker.on("failed", (job, error) => {

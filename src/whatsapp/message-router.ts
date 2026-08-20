@@ -194,6 +194,11 @@ export async function routeWhatsAppText(
             const payloadHash = createHash("sha256")
               .update(JSON.stringify(enrichedPayload))
               .digest("hex");
+            if (
+              (kind === "allstatus" || kind === "allchat") &&
+              session.status !== "ACTIVE"
+            )
+              return `\u26d4 ${kind} not started: WhatsApp session is ${session.status.toLowerCase()}, not ACTIVE.`;
             const recordPromise = runtime.enqueue({
               workspaceId: message.workspaceId,
               sessionId: message.sessionId,
