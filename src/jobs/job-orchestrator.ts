@@ -177,8 +177,8 @@ export class JobOrchestrator {
     const recoveryParents = new Set(
       recoveryJobs
         .map((job) => String(job.id))
-        .filter((jobId) => jobId.includes(":startup:"))
-        .map((jobId) => jobId.split(":startup:", 1)[0]),
+        .filter((jobId) => jobId.includes(":"))
+        .map((jobId) => jobId.split(":", 1)[0]),
     );
     for (const record of await this.store.listAll()) {
       if (!["QUEUED", "RUNNING", "RETRYING", "FAILED"].includes(record.state)) continue;
@@ -473,8 +473,8 @@ export class JobOrchestrator {
       const recoveryParents = new Set(
         recoveryJobs
           .map((job) => String(job.id))
-          .filter((jobId) => jobId.includes(":startup:"))
-          .map((jobId) => jobId.split(":startup:", 1)[0]),
+          .filter((jobId) => jobId.includes(":"))
+          .map((jobId) => jobId.split(":", 1)[0]),
       );
       for (const record of await this.store.listAll()) {
         const heartbeatAge =
