@@ -41,7 +41,7 @@ function priority(scope: AutoPromoteScope): number {
 
 function resolveTargetSessionIds(config: AutoPromoteConfig): string[] {
   const sessions = listAllSessions().filter(
-    (session) => session.status !== "LOGGED_OUT" && session.authHealth !== "INVALID",
+    (session) => session.status === "ACTIVE" && session.authHealth !== "INVALID",
   );
   if (config.scope === "SESSION")
     return config.sessionId ? [config.sessionId] : [];
