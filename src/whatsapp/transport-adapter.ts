@@ -198,6 +198,7 @@ export async function updateProfileBio(
 const GROUP_INVENTORY_TIMEOUT_MS = 15_000;
 const GROUP_INVENTORY_CACHE_MS = 10_000;
 const GROUP_INVENTORY_INFLIGHT_TIMEOUT_MS = 20_000;
+const GROUP_PARTICIPANT_CACHE_MS = 30_000;
 type GroupInventoryRecord = { subject?: string; participants?: unknown[] };
 const groupInventoryCache = new Map<
   string,
@@ -205,6 +206,11 @@ const groupInventoryCache = new Map<
 >();
 const groupInventoryLastKnown = new Map<string, GroupSummary[]>();
 const groupInventoryInflight = new Map<string, Promise<GroupSummary[]>>();
+const groupParticipantCache = new Map<
+  string,
+  { expiresAt: number; participants: string[] }
+>();
+const groupParticipantInflight = new Map<string, Promise<string[]>>();
 
 function transientGroupInventoryError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -455,32 +461,50 @@ export async function getGroupParticipants(
   sessionId: string,
   jid: string,
 ): Promise<string[]> {
-  const socket = socketFor(workspaceId, sessionId);
-  const metadata = method(socket, "groupMetadata");
-  if (!metadata) throw new Error("Unsupported capability: groupMetadata");
-  const result = (await metadata(jid)) as {
-    participants?: Array<{ id?: string; phoneNumber?: string; pn?: string }>;
-  };
-  const lidMapping = (
-    socket as unknown as {
-      signalRepository?: {
-        lidMapping?: { getPNForLID?: (lid: string) => Promise<string | null> };
-      };
+  const cacheKey = `${workspaceId}:${sessionId}:${jid}`;
+  const cached = groupParticipantCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return [...cached.participants];
+  const inflight = groupParticipantInflight.get(cacheKey);
+  if (inflight) return [...(await inflight)];
+  const request = (async (): Promise<string[]> => {
+    const socket = socketFor(workspaceId, sessionId);
+    const metadata = method(socket, "groupMetadata");
+    if (!metadata) throw new Error("Unsupported capability: groupMetadata");
+    const result = (await metadata(jid)) as {
+      participants?: Array<{ id?: string; phoneNumber?: string; pn?: string }>;
+    };
+    const lidMapping = (
+      socket as unknown as {
+        signalRepository?: {
+          lidMapping?: { getPNForLID?: (lid: string) => Promise<string | null> };
+        };
+      }
+    ).signalRepository?.lidMapping;
+    const resolved = new Set<string>();
+    for (const participant of result.participants ?? []) {
+      const candidate =
+        participant.phoneNumber ?? participant.pn ?? participant.id;
+      if (!candidate) continue;
+      let phoneJid = candidate;
+      if (phoneJid.endsWith("@lid") || phoneJid.endsWith("@hosted.lid"))
+        phoneJid = (await lidMapping?.getPNForLID?.(phoneJid)) ?? "";
+      else if (!phoneJid.includes("@")) phoneJid = `${phoneJid}@s.whatsapp.net`;
+      if (!phoneJid.endsWith("@s.whatsapp.net")) continue;
+      resolved.add(phoneJid);
     }
-  ).signalRepository?.lidMapping;
-  const resolved: string[] = [];
-  for (const participant of result.participants ?? []) {
-    const candidate =
-      participant.phoneNumber ?? participant.pn ?? participant.id;
-    if (!candidate) continue;
-    let phoneJid = candidate;
-    if (phoneJid.endsWith("@lid") || phoneJid.endsWith("@hosted.lid"))
-      phoneJid = (await lidMapping?.getPNForLID?.(phoneJid)) ?? "";
-    else if (!phoneJid.includes("@")) phoneJid = `${phoneJid}@s.whatsapp.net`;
-    if (!phoneJid.endsWith("@s.whatsapp.net")) continue;
-    if (!resolved.includes(phoneJid)) resolved.push(phoneJid);
+    return [...resolved];
+  })();
+  groupParticipantInflight.set(cacheKey, request);
+  try {
+    const participants = await request;
+    groupParticipantCache.set(cacheKey, {
+      expiresAt: Date.now() + GROUP_PARTICIPANT_CACHE_MS,
+      participants,
+    });
+    return [...participants];
+  } finally {
+    groupParticipantInflight.delete(cacheKey);
   }
-  return resolved;
 }
 
 export async function sendGroupHidetag(

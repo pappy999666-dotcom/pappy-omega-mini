@@ -73,6 +73,9 @@ describe("shared session menu", () => {
     expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .menu`);
     expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .allstatus`);
     expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .stopstag`);
+    expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .join`);
+    expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .targetgs`);
+    expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .iggc`);
     expect(payload.text).not.toContain("┌");
     expect(payload.text).not.toContain("╔");
     expect(payload.text).not.toContain("One command surface, two polished interfaces.");

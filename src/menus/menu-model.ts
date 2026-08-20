@@ -48,6 +48,7 @@ export function buildSessionMenu(
     { id: "health", label: "Health", command: "health", description: "View reconnect and queue health." },
     { id: "support", label: "Support", command: "support", description: "Create a support ticket." },
     { id: "autojoin", label: "Auto-join", command: "autojoin", description: "Toggle Active-bucket automatic joining." },
+    { id: "join", label: "Join Manager", command: "join", description: "Start the Active-bucket Join Manager." },
     { id: "targetgs", label: "Join target", command: "targetgs", description: "Set the number of Active links to join." },
     { id: "setprefix", label: "Set prefix", command: "setprefix", description: "Set the session command prefix." },
     { id: "pfp", label: "PFP", command: "pfp", description: "Get or update the WhatsApp profile picture." },
@@ -104,9 +105,9 @@ export function renderAsciiMenu(model: SessionMenuModel): string {
   const links = rawLinks.replace("links ", "");
   const health = rawHealth.replace("health ", "");
   const commandSet = new Set(["menu", "ping", "profile", "health", "support"]);
-  const sessionSet = new Set(["autojoin", "setprefix", "pfp", "setgpp", "setname", "setbio", "groups", "creategroup"]);
+  const sessionSet = new Set(["autojoin", "join", "targetgs", "setprefix", "pfp", "setgpp", "setname", "setbio", "groups", "creategroup"]);
   const localSet = new Set(["gstatus", "tag", "stag"]);
-  const ownerSet = new Set(["pair", "previewdebug", "broadcastdelay", "allstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "stopstag", "setsudo"]);
+  const ownerSet = new Set(["pair", "previewdebug", "broadcastdelay", "allstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "stopstag", "iggc", "setsudo"]);
   const commandIndent = "︎ ".repeat(15);
   const renderSection = (title: string, icon: string, set: Set<string>): string[] => {
     const commands = model.actions

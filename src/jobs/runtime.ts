@@ -987,11 +987,6 @@ export function startWorkerRuntime(): JobOrchestrator {
             }
           }
           lastPostAt = Date.now();
-          await context.report({
-            currentGroup: jid,
-            currentAction: `posting ${kind}`,
-            nextActionAt: Date.now(),
-          });
           try {
             const delivery =
               kind === "gstatus" || kind === "allstatus"

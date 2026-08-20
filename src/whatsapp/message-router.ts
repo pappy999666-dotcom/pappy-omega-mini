@@ -244,9 +244,13 @@ export async function routeWhatsAppText(
               kind === "allstatus" || kind === "allchat"
                 ? listGroups(message.workspaceId, message.sessionId).catch(() => [])
                 : Promise.resolve([]);
-            const [record, inventory] = await Promise.all([
-              recordPromise,
+            const record = await recordPromise;
+            const inventory = await Promise.race([
               inventoryPromise,
+              new Promise<Awaited<typeof inventoryPromise>>((resolve) => {
+                const timer = setTimeout(() => resolve([]), 750);
+                timer.unref?.();
+              }),
             ]);
             const totalGroups = inventory.length;
             const repeat = Math.max(
