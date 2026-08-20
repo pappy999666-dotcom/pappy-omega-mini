@@ -12,7 +12,10 @@ import {
   requeueValidatorMainLinks,
 } from "../links/validator-operations.js";
 import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
-import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
+import {
+  getWhatsAppSocket,
+  waitForWhatsAppSessionReady,
+} from "../whatsapp/session-manager.js";
 import {
   getSession,
   getSessionJoinSettings,
@@ -801,6 +804,28 @@ export function startWorkerRuntime(): JobOrchestrator {
         delayMs?: number;
         media?: JobMediaReference;
       };
+      if (kind === "allstatus" || kind === "allchat") {
+        const readinessHeartbeat = setInterval(() => {
+          void context
+            .report({
+              currentAction: "waiting for WhatsApp session",
+              lastResult: "The session is reconnecting; this broadcast will resume when transport is ACTIVE.",
+            })
+            .catch(() => undefined);
+        }, 5_000);
+        readinessHeartbeat.unref?.();
+        try {
+          const ready = await waitForWhatsAppSessionReady(
+            context.job.workspaceId,
+            sessionId,
+            90_000,
+          );
+          if (!ready)
+            throw new Error("WhatsApp session is not ready yet; broadcast retry is scheduled.");
+        } finally {
+          clearInterval(readinessHeartbeat);
+        }
+      }
       let baseGroups: string[];
       if (kind === "gstatus") {
         baseGroups = [payload.groups?.[0]].filter(
