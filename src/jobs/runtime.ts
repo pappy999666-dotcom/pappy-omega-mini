@@ -801,6 +801,15 @@ export function startWorkerRuntime(): JobOrchestrator {
           currentAction: "resolving group inventory",
           lastResult: "The worker is fetching the current WhatsApp group list.",
         });
+        const inventoryHeartbeat = setInterval(() => {
+          void context
+            .report({
+              currentAction: "resolving group inventory",
+              lastResult: "Still fetching the current WhatsApp group list…",
+            })
+            .catch(() => undefined);
+        }, 5_000);
+        inventoryHeartbeat.unref?.();
         try {
           baseGroups = (await listGroups(context.job.workspaceId, sessionId))
             .map((group) => group.jid)
@@ -812,6 +821,8 @@ export function startWorkerRuntime(): JobOrchestrator {
             lastResult: message,
           });
           throw error;
+        } finally {
+          clearInterval(inventoryHeartbeat);
         }
       }
       if (!baseGroups.length) {
