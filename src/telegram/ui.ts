@@ -1302,7 +1302,7 @@ export function adminWorkloadWorkerText(worker: { workerId: string; displayKey: 
 export function adminWorkloadWorkerKeyboard(workerId: string, disabled: boolean): InlineKeyboardMarkup {
   return keyboard([
     [btn(disabled ? "▶ Re-enable Worker" : "⏸ Disable Worker", `admin:workload:worker:toggle:${workerId}`, disabled ? "success" : "danger")],
-    [btn("↻ Force Health Check", `admin:workload:worker:check:${workerId}`)],
+    [btn("↻ Refresh Registry", `admin:workload:worker:check:${workerId}`)],
     [btn(ui.back, "admin:workload")],
   ]);
 }

@@ -1,0 +1,43 @@
+# Copy to an Nginx site only after replacing WORKLOAD_DOMAIN and obtaining TLS.
+# The application itself binds to 127.0.0.1:8787; do not expose that port directly.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name WORKLOAD_DOMAIN;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 404;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name WORKLOAD_DOMAIN;
+
+    ssl_certificate /etc/letsencrypt/live/WORKLOAD_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/WORKLOAD_DOMAIN/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 512k;
+
+    location /workload/ {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 45s;
+        proxy_send_timeout 45s;
+        proxy_buffering off;
+    }
+
+    location / {
+        return 404;
+    }
+}
