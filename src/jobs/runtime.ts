@@ -1134,7 +1134,11 @@ async function sweepPendingMainValidation(
           (record.lastCheckedAt === undefined &&
             record.metadata?.needsValidation !== false),
       )
-      .sort((left, right) => left.canonicalUrl.localeCompare(right.canonicalUrl));
+      .sort(
+        (left, right) =>
+          (right.firstSeenAt - left.firstSeenAt) ||
+          left.canonicalUrl.localeCompare(right.canonicalUrl),
+      );
     if (!pending.length) continue;
     const validatorBatchSize = 5;
     const admissionLimit = availableSessions.length * validatorBatchSize;
