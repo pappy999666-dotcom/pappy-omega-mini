@@ -27,6 +27,15 @@ export function effectiveSessionStatus(
   return session.status;
 }
 
+function formatHealthAge(lastHealthyAt?: number, now = Date.now()): string {
+  if (!lastHealthyAt) return "—";
+  const minutes = Math.max(0, Math.floor((now - lastHealthyAt) / 60_000));
+  if (minutes < 1) return "<1m";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
 export function buildSessionMenu(
   session: WhatsAppSession,
   isOwner: boolean,
@@ -69,39 +78,41 @@ export function buildSessionMenu(
   return {
     title: `PAPPY OMEGA MINI · ${session.sessionName}`,
     subtitle: "Compact command surface",
-    statusLine: `${liveStatus} · prefix ${session.prefix || "none"} · join ${session.autoJoinEnabled ? "ON" : "OFF"} · validator AUTO · links ${session.collectedLinkCount ?? 0}/${session.validatedLinkCount ?? 0}`,
+    statusLine: `${liveStatus}|${isOwner ? "SUDO" : "USER"} · prefix ${session.prefix || "none"} · join ${session.autoJoinEnabled ? "ON" : "OFF"} · health ${formatHealthAge(session.lastHealthyAt)} · links ${session.collectedLinkCount ?? 0}/${session.validatedLinkCount ?? 0}`,
     actions: actions.filter((action) => !action.ownerOnly || isOwner),
   };
 }
 
 export function renderAsciiMenu(model: SessionMenuModel): string {
   const sessionName = model.title.split("·").slice(1).join("·").trim() || "Pappy";
-  const [status = "UNKNOWN", prefix = "prefix none", autoJoin = "join OFF", validator = "validator AUTO", links = "links 0/0"] = model.statusLine.split(" · ");
+  const [rawStatus = "UNKNOWN|USER", rawPrefix = "prefix none", rawAutoJoin = "join OFF", rawHealth = "health —", rawLinks = "links 0/0"] = model.statusLine.split(" · ");
+  const [statusValue = "UNKNOWN", role = "USER"] = rawStatus.split("|");
+  const status = statusValue === "ACTIVE" ? `ONLINE [${role}]` : statusValue;
+  const prefix = rawPrefix.replace("prefix ", "");
+  const autoJoin = rawAutoJoin.replace("join ", "");
+  const links = rawLinks.replace("links ", "");
+  const health = rawHealth.replace("health ", "");
   const commandSet = new Set(["menu", "ping", "profile", "health", "support"]);
-  const sessionSet = new Set(["autojoin", "targetgs", "setprefix", "pfp", "setgpp", "setname", "setbio", "groups", "creategroup"]);
-  const localSet = new Set(["gstatus", "tag", "stag", "iggc"]);
-  const ownerSet = new Set(["pair", "previewdebug", "broadcastdelay", "allstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "stopstag", "setsudo", "purge"]);
+  const sessionSet = new Set(["autojoin", "setprefix", "pfp", "setgpp", "setname", "setbio", "groups", "creategroup"]);
+  const localSet = new Set(["gstatus", "tag", "stag"]);
+  const ownerSet = new Set(["pair", "previewdebug", "broadcastdelay", "allstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "setsudo"]);
   const renderSection = (title: string, icon: string, set: Set<string>): string[] => {
     const rows = model.actions.filter((action) => set.has(action.command));
     if (!rows.length) return [];
-    return [
-      `⌬ ⤷ *${title}* ${icon}`,
-      ...rows.map((action) => `⊹ ${action.command}`),
-      "",
-    ];
+    return [`⌬ ⤷ *${title}* ${icon}`, ...rows.map((action) => `⊹ ${action.command}`), ""];
   };
   return [
-    "✦ PAPPY OMEGA MINI",
-    "‎ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
+    "PAPPY OMEGA MINI",
+    "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
     "",
     `˗ˏˋ ☏ ˎˊ˗  *Hello, ${sessionName}*  ✦`,
     "─────────────",
     `⎔ Owner   · ⇆ ${sessionName}`,
     `⎔ Status  · ⇆ ${status}`,
-    `⎔ AutoJ   · ⇆ ${autoJoin.replace("join ", "")}`,
-    `⎔ Prefix  · ⇆ [ ${prefix.replace("prefix ", "")} ]`,
-    `⎔ Health  · ⇆ ${validator}`,
-    `⎔ Links   · ⇆ ${links.replace("links ", "")}`,
+    `⎔ AutoJ   · ⇆ ${autoJoin}`,
+    `⎔ Prefix  · ⇆ [ ${prefix} ]`,
+    `⎔ Health  · ⇆ ${health}`,
+    `⎔ Links   · ⇆ ${links}`,
     "─────────────",
     "",
     ...renderSection("COMMANDS", "⚙️", commandSet),

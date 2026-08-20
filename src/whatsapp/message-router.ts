@@ -326,10 +326,15 @@ export async function routeWhatsAppText(
   const response = await executeCommand(registry, raw, commandContext);
   if (response.startsWith("Unknown command.")) return null;
   const liveCode = response.match(/Live code\s*[·:]\s*([A-Z0-9]{8})/i)?.[1];
-  return liveCode
+  const pairingCode = response.match(/(?:^|\n)\s*Code\s*[·:]\s*([A-Z0-9]{8})/i)?.[1];
+  const copyCode = liveCode ?? pairingCode;
+  return copyCode
     ? {
         text: response,
-        nativeFlow: [{ text: "📋 Copy live code", copy: liveCode }],
+        nativeFlow: [{
+          text: pairingCode ? "📋 Copy pairing code" : "📋 Copy live code",
+          copy: copyCode,
+        }],
       }
     : response;
 }
