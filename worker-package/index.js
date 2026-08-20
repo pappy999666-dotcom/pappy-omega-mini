@@ -1,310 +1,37 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { createInterface } from "node:readline/promises";
-import { dirname, join } from "node:path";
-import makeWASocket, { makeCacheManagerAuthState } from "@crysnovax/baileys";
-import pino from "pino";
-
-const cliArgs = process.argv.slice(2);
-function cliValue(...names) {
-  for (const name of names) {
-    const index = cliArgs.indexOf(name);
-    if (index >= 0 && cliArgs[index + 1]) return cliArgs[index + 1];
-  }
-  return "";
-}
-const CONTROL_URL = String(process.env.PAPPY_WORKLOAD_URL ?? "https://pappy-omega-mini.duckdns.org").replace(/\/$/, "");
-const ENROLLMENT_TOKEN = process.env.PAPPY_WORKLOAD_ENROLLMENT_TOKEN ?? cliValue("--enrollment", "--token");
-const DATA_DIR = process.env.PAPPY_WORKER_DATA_DIR ?? "./pappy-workload-data";
-let STORAGE_SECRET = process.env.PAPPY_WORKLOAD_SESSION_SECRET ?? "";
-let WORKER_NAME = (process.env.PAPPY_WORKLOAD_NAME ?? cliValue("--name")) || "";
-const WORKER_VERSION = process.env.PAPPY_WORKER_VERSION ?? "1.0.0";
-const secretPath = join(DATA_DIR, ".secret");
-const CONTROL_POLL_MS = 2_000;
-const HEARTBEAT_MS = 20_000;
-const workerStatePath = join(DATA_DIR, "worker.json");
-const runtimes = new Map();
-const assignedSessions = new Set();
-let credentialState;
-let stopping = false;
-
-function key() {
-  return createHash("sha256").update(STORAGE_SECRET, "utf8").digest();
-}
-async function ensureWorkerName() {
-  if (WORKER_NAME || !process.stdin.isTTY || !process.stdout.isTTY) {
-    WORKER_NAME = WORKER_NAME || "panel";
-    return;
-  }
-  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const runtimeSource = Buffer.from("bGV0IG1ha2VXQVNvY2tldDsKbGV0IG1ha2VDYWNoZU1hbmFnZXJBdXRoU3RhdGU7CmxldCBwaW5vOwppbXBvcnQgeyBjcmVhdGVDaXBoZXJpdiwgY3JlYXRlRGVjaXBoZXJpdiwgY3JlYXRlSGFzaCwgcmFuZG9tQnl0ZXMsIHJhbmRvbVVVSUQgfSBmcm9tICJub2RlOmNyeXB0byI7CmltcG9ydCB7IG1rZGlyLCByZWFkRmlsZSwgcmVuYW1lLCB1bmxpbmssIHdyaXRlRmlsZSB9IGZyb20gIm5vZGU6ZnMvcHJvbWlzZXMiOwppbXBvcnQgeyBjcmVhdGVJbnRlcmZhY2UgfSBmcm9tICJub2RlOnJlYWRsaW5lL3Byb21pc2VzIjsKaW1wb3J0IHsgZGlybmFtZSwgam9pbiB9IGZyb20gIm5vZGU6cGF0aCI7Cgpjb25zdCBjbGlBcmdzID0gcHJvY2Vzcy5hcmd2LnNsaWNlKDIpOwpmdW5jdGlvbiBjbGlWYWx1ZSguLi5uYW1lcykgewogIGZvciAoY29uc3QgbmFtZSBvZiBuYW1lcykgewogICAgY29uc3QgaW5kZXggPSBjbGlBcmdzLmluZGV4T2YobmFtZSk7CiAgICBpZiAoaW5kZXggPj0gMCAmJiBjbGlBcmdzW2luZGV4ICsgMV0pIHJldHVybiBjbGlBcmdzW2luZGV4ICsgMV07CiAgfQogIHJldHVybiAiIjsKfQpjb25zdCBDT05UUk9MX1VSTCA9IFN0cmluZyhwcm9jZXNzLmVudi5QQVBQWV9XT1JLTE9BRF9VUkwgPz8gImh0dHBzOi8vcGFwcHktb21lZ2EtbWluaS5kdWNrZG5zLm9yZyIpLnJlcGxhY2UoL1wvJC8sICIiKTsKY29uc3QgRU5ST0xMTUVOVF9UT0tFTiA9IHByb2Nlc3MuZW52LlBBUFBZX1dPUktMT0FEX0VOUk9MTE1FTlRfVE9LRU4gPz8gY2xpVmFsdWUoIi0tZW5yb2xsbWVudCIsICItLXRva2VuIik7CmNvbnN0IERBVEFfRElSID0gcHJvY2Vzcy5lbnYuUEFQUFlfV09SS0VSX0RBVEFfRElSID8/ICIuL3BhcHB5LXdvcmtsb2FkLWRhdGEiOwpsZXQgU1RPUkFHRV9TRUNSRVQgPSBwcm9jZXNzLmVudi5QQVBQWV9XT1JLTE9BRF9TRVNTSU9OX1NFQ1JFVCA/PyAiIjsKbGV0IFdPUktFUl9OQU1FID0gKHByb2Nlc3MuZW52LlBBUFBZX1dPUktMT0FEX05BTUUgPz8gY2xpVmFsdWUoIi0tbmFtZSIpKSB8fCAiIjsKY29uc3QgV09SS0VSX1ZFUlNJT04gPSBwcm9jZXNzLmVudi5QQVBQWV9XT1JLRVJfVkVSU0lPTiA/PyAiMS4wLjAiOwpjb25zdCBzZWNyZXRQYXRoID0gam9pbihEQVRBX0RJUiwgIi5zZWNyZXQiKTsKY29uc3QgQ09OVFJPTF9QT0xMX01TID0gMl8wMDA7CmNvbnN0IEhFQVJUQkVBVF9NUyA9IDIwXzAwMDsKY29uc3Qgd29ya2VyU3RhdGVQYXRoID0gam9pbihEQVRBX0RJUiwgIndvcmtlci5qc29uIik7CmNvbnN0IHJ1bnRpbWVzID0gbmV3IE1hcCgpOwpjb25zdCBhc3NpZ25lZFNlc3Npb25zID0gbmV3IFNldCgpOwpsZXQgY3JlZGVudGlhbFN0YXRlOwpsZXQgc3RvcHBpbmcgPSBmYWxzZTsKCmZ1bmN0aW9uIGtleSgpIHsKICByZXR1cm4gY3JlYXRlSGFzaCgic2hhMjU2IikudXBkYXRlKFNUT1JBR0VfU0VDUkVULCAidXRmOCIpLmRpZ2VzdCgpOwp9CmFzeW5jIGZ1bmN0aW9uIGVuc3VyZVdvcmtlck5hbWUoKSB7CiAgaWYgKFdPUktFUl9OQU1FIHx8ICFwcm9jZXNzLnN0ZGluLmlzVFRZIHx8ICFwcm9jZXNzLnN0ZG91dC5pc1RUWSkgewogICAgV09SS0VSX05BTUUgPSBXT1JLRVJfTkFNRSB8fCAicGFuZWwiOwogICAgcmV0dXJuOwogIH0KICBjb25zdCBwcm9tcHQgPSBjcmVhdGVJbnRlcmZhY2UoeyBpbnB1dDogcHJvY2Vzcy5zdGRpbiwgb3V0cHV0OiBwcm9jZXNzLnN0ZG91dCB9KTsKICB0cnkgewogICAgV09SS0VSX05BTUUgPSAoYXdhaXQgcHJvbXB0LnF1ZXN0aW9uKCJDaG9vc2UgYSBuYW1lIGZvciB0aGlzIHdvcmtsb2FkIChleGFtcGxlOiBwYXBweSk6ICIpKS50cmltKCkgfHwgInBhbmVsIjsKICB9IGZpbmFsbHkgewogICAgcHJvbXB0LmNsb3NlKCk7CiAgfQp9CmFzeW5jIGZ1bmN0aW9uIGVuc3VyZVN0b3JhZ2VTZWNyZXQoKSB7CiAgYXdhaXQgbWtkaXIoREFUQV9ESVIsIHsgcmVjdXJzaXZlOiB0cnVlIH0pOwogIGlmICghU1RPUkFHRV9TRUNSRVQpIHsKICAgIHRyeSB7CiAgICAgIFNUT1JBR0VfU0VDUkVUID0gKGF3YWl0IHJlYWRGaWxlKHNlY3JldFBhdGgsICJ1dGY4IikpLnRyaW0oKTsKICAgIH0gY2F0Y2ggewogICAgICBTVE9SQUdFX1NFQ1JFVCA9IHJhbmRvbUJ5dGVzKDMyKS50b1N0cmluZygiYmFzZTY0dXJsIik7CiAgICAgIGF3YWl0IHdyaXRlRmlsZShzZWNyZXRQYXRoLCBTVE9SQUdFX1NFQ1JFVCwgeyBtb2RlOiAwbzYwMCB9KTsKICAgIH0KICB9CiAgaWYgKFNUT1JBR0VfU0VDUkVULmxlbmd0aCA8IDMyKSB0aHJvdyBuZXcgRXJyb3IoIlRoZSBsb2NhbCB3b3JrZXIgc2VjcmV0IG11c3QgYmUgYXQgbGVhc3QgMzIgY2hhcmFjdGVycy4iKTsKfQpmdW5jdGlvbiBlbmNyeXB0KHZhbHVlKSB7CiAgY29uc3QgaXYgPSByYW5kb21CeXRlcygxMik7CiAgY29uc3QgY2lwaGVyID0gY3JlYXRlQ2lwaGVyaXYoImFlcy0yNTYtZ2NtIiwga2V5KCksIGl2KTsKICBjb25zdCBlbmNyeXB0ZWQgPSBCdWZmZXIuY29uY2F0KFtjaXBoZXIudXBkYXRlKEpTT04uc3RyaW5naWZ5KHZhbHVlKSwgInV0ZjgiKSwgY2lwaGVyLmZpbmFsKCldKTsKICByZXR1cm4gQnVmZmVyLmNvbmNhdChbaXYsIGNpcGhlci5nZXRBdXRoVGFnKCksIGVuY3J5cHRlZF0pLnRvU3RyaW5nKCJiYXNlNjR1cmwiKTsKfQpmdW5jdGlvbiBkZWNyeXB0KHZhbHVlKSB7CiAgY29uc3QgcGF5bG9hZCA9IEJ1ZmZlci5mcm9tKHZhbHVlLCAiYmFzZTY0dXJsIik7CiAgY29uc3QgZGVjaXBoZXIgPSBjcmVhdGVEZWNpcGhlcml2KCJhZXMtMjU2LWdjbSIsIGtleSgpLCBwYXlsb2FkLnN1YmFycmF5KDAsIDEyKSk7CiAgZGVjaXBoZXIuc2V0QXV0aFRhZyhwYXlsb2FkLnN1YmFycmF5KDEyLCAyOCkpOwogIHJldHVybiBKU09OLnBhcnNlKEJ1ZmZlci5jb25jYXQoW2RlY2lwaGVyLnVwZGF0ZShwYXlsb2FkLnN1YmFycmF5KDI4KSksIGRlY2lwaGVyLmZpbmFsKCldKS50b1N0cmluZygidXRmOCIpKTsKfQphc3luYyBmdW5jdGlvbiBzYXZlU3RhdGUodmFsdWUpIHsKICBhd2FpdCBta2RpcihkaXJuYW1lKHdvcmtlclN0YXRlUGF0aCksIHsgcmVjdXJzaXZlOiB0cnVlIH0pOwogIGNvbnN0IHRlbXAgPSBgJHt3b3JrZXJTdGF0ZVBhdGh9LnRtcC0ke3Byb2Nlc3MucGlkfS0ke3JhbmRvbVVVSUQoKX1gOwogIGF3YWl0IHdyaXRlRmlsZSh0ZW1wLCBlbmNyeXB0KHZhbHVlKSwgeyBtb2RlOiAwbzYwMCB9KTsKICBhd2FpdCByZW5hbWUodGVtcCwgd29ya2VyU3RhdGVQYXRoKTsKfQphc3luYyBmdW5jdGlvbiBsb2FkU3RhdGUoKSB7CiAgdHJ5IHsKICAgIHJldHVybiBkZWNyeXB0KGF3YWl0IHJlYWRGaWxlKHdvcmtlclN0YXRlUGF0aCwgInV0ZjgiKSk7CiAgfSBjYXRjaCB7CiAgICByZXR1cm4gdW5kZWZpbmVkOwogIH0KfQoKZnVuY3Rpb24gZW5jb2RlKHZhbHVlKSB7CiAgaWYgKEJ1ZmZlci5pc0J1ZmZlcih2YWx1ZSkpIHJldHVybiB7IF9fcGFwcHlCdWZmZXI6IHZhbHVlLnRvU3RyaW5nKCJiYXNlNjQiKSB9OwogIGlmIChBcnJheS5pc0FycmF5KHZhbHVlKSkgcmV0dXJuIHZhbHVlLm1hcChlbmNvZGUpOwogIGlmICh2YWx1ZSAmJiB0eXBlb2YgdmFsdWUgPT09ICJvYmplY3QiKSByZXR1cm4gT2JqZWN0LmZyb21FbnRyaWVzKE9iamVjdC5lbnRyaWVzKHZhbHVlKS5tYXAoKFtrLCB2XSkgPT4gW2ssIGVuY29kZSh2KV0pKTsKICByZXR1cm4gdmFsdWU7Cn0KZnVuY3Rpb24gZGVjb2RlKHZhbHVlKSB7CiAgaWYgKEFycmF5LmlzQXJyYXkodmFsdWUpKSByZXR1cm4gdmFsdWUubWFwKGRlY29kZSk7CiAgaWYgKHZhbHVlICYmIHR5cGVvZiB2YWx1ZSA9PT0gIm9iamVjdCIpIHsKICAgIGNvbnN0IG9iamVjdCA9IHZhbHVlOwogICAgaWYgKHR5cGVvZiBvYmplY3QuX19wYXBweUJ1ZmZlciA9PT0gInN0cmluZyIpIHJldHVybiBCdWZmZXIuZnJvbShvYmplY3QuX19wYXBweUJ1ZmZlciwgImJhc2U2NCIpOwogICAgcmV0dXJuIE9iamVjdC5mcm9tRW50cmllcyhPYmplY3QuZW50cmllcyhvYmplY3QpLm1hcCgoW2ssIHZdKSA9PiBbaywgZGVjb2RlKHYpXSkpOwogIH0KICByZXR1cm4gdmFsdWU7Cn0KZnVuY3Rpb24gYXNzZXJ0Q29uZmlnKCkgewogIGlmICghQ09OVFJPTF9VUkwuc3RhcnRzV2l0aCgiaHR0cHM6Ly8iKSkgdGhyb3cgbmV3IEVycm9yKCJUaGUgd29ya2xvYWQgY29udHJvbCBVUkwgbXVzdCB1c2UgSFRUUFMuIik7Cn0KYXN5bmMgZnVuY3Rpb24gY29udHJvbChwYXRoLCBwYXlsb2FkLCBjcmVkZW50aWFsKSB7CiAgY29uc3QgcmVzcG9uc2UgPSBhd2FpdCBmZXRjaChgJHtDT05UUk9MX1VSTH0ke3BhdGh9YCwgewogICAgbWV0aG9kOiAiUE9TVCIsCiAgICBoZWFkZXJzOiB7ICJjb250ZW50LXR5cGUiOiAiYXBwbGljYXRpb24vanNvbiIsIC4uLihjcmVkZW50aWFsID8geyBhdXRob3JpemF0aW9uOiBgQmVhcmVyICR7Y3JlZGVudGlhbH1gIH0gOiB7fSkgfSwKICAgIGJvZHk6IEpTT04uc3RyaW5naWZ5KHBheWxvYWQgPz8ge30pLAogICAgc2lnbmFsOiBBYm9ydFNpZ25hbC50aW1lb3V0KDM1XzAwMCksCiAgfSk7CiAgY29uc3QgZGF0YSA9IGF3YWl0IHJlc3BvbnNlLmpzb24oKS5jYXRjaCgoKSA9PiAoe30pKTsKICBpZiAoIXJlc3BvbnNlLm9rIHx8IGRhdGEub2sgPT09IGZhbHNlKSB0aHJvdyBuZXcgRXJyb3IoZGF0YS5lcnJvciA/PyBgQ29udHJvbCByZXF1ZXN0IGZhaWxlZCAoJHtyZXNwb25zZS5zdGF0dXN9KS5gKTsKICByZXR1cm4gZGF0YTsKfQoKY2xhc3MgRmlsZUF1dGhTdG9yZSB7CiAgY29uc3RydWN0b3Iocm9vdCkgeyB0aGlzLnJvb3QgPSByb290OyB0aGlzLnBlbmRpbmcgPSBuZXcgTWFwKCk7IH0KICBwYXRoKG5hbWUpIHsgcmV0dXJuIGpvaW4odGhpcy5yb290LCBgJHtlbmNvZGVVUklDb21wb25lbnQobmFtZSl9Lmpzb25gKTsgfQogIGFzeW5jIGdldChuYW1lKSB7IHRyeSB7IHJldHVybiBkZWNyeXB0KGF3YWl0IHJlYWRGaWxlKHRoaXMucGF0aChuYW1lKSwgInV0ZjgiKSk7IH0gY2F0Y2ggeyByZXR1cm4gdW5kZWZpbmVkOyB9IH0KICBhc3luYyBzZXQobmFtZSwgdmFsdWUpIHsKICAgIGNvbnN0IHByZXZpb3VzID0gdGhpcy5wZW5kaW5nLmdldChuYW1lKSA/PyBQcm9taXNlLnJlc29sdmUoKTsKICAgIGNvbnN0IHdyaXRlID0gcHJldmlvdXMuY2F0Y2goKCkgPT4gdW5kZWZpbmVkKS50aGVuKGFzeW5jICgpID0+IHsKICAgICAgYXdhaXQgbWtkaXIodGhpcy5yb290LCB7IHJlY3Vyc2l2ZTogdHJ1ZSB9KTsKICAgICAgY29uc3QgcGF0aCA9IHRoaXMucGF0aChuYW1lKTsKICAgICAgY29uc3QgdGVtcCA9IGAke3BhdGh9LnRtcC0ke3Byb2Nlc3MucGlkfS0ke3JhbmRvbVVVSUQoKX1gOwogICAgICBhd2FpdCB3cml0ZUZpbGUodGVtcCwgZW5jcnlwdCh2YWx1ZSksIHsgbW9kZTogMG82MDAgfSk7CiAgICAgIGF3YWl0IHJlbmFtZSh0ZW1wLCBwYXRoKTsKICAgIH0pOwogICAgdGhpcy5wZW5kaW5nLnNldChuYW1lLCB3cml0ZSk7CiAgICB0cnkgeyBhd2FpdCB3cml0ZTsgcmV0dXJuIHZhbHVlOyB9IGZpbmFsbHkgeyBpZiAodGhpcy5wZW5kaW5nLmdldChuYW1lKSA9PT0gd3JpdGUpIHRoaXMucGVuZGluZy5kZWxldGUobmFtZSk7IH0KICB9CiAgYXN5bmMgZmx1c2goKSB7IGF3YWl0IFByb21pc2UuYWxsU2V0dGxlZCh0aGlzLnBlbmRpbmcudmFsdWVzKCkpOyB9CiAgYXN5bmMgZGVsZXRlKG5hbWUpIHsgYXdhaXQgdW5saW5rKHRoaXMucGF0aChuYW1lKSkuY2F0Y2goKCkgPT4gdW5kZWZpbmVkKTsgcmV0dXJuIHRydWU7IH0KICBhc3luYyBrZXlzKCkgeyByZXR1cm4gW107IH0KfQoKYXN5bmMgZnVuY3Rpb24gcmVwb3J0U2Vzc2lvblN0YXR1cyhydW50aW1lLCBzdGF0dXMsIGF1dGhIZWFsdGgsIHJlYXNvbikgewogIGF3YWl0IGNvbnRyb2woIi93b3JrbG9hZC9zZXNzaW9uLXN0YXR1cyIsIHsKICAgIHdvcmtzcGFjZUlkOiBydW50aW1lLndvcmtzcGFjZUlkLAogICAgc2Vzc2lvbklkOiBydW50aW1lLnNlc3Npb25JZCwKICAgIHN0YXR1cywKICAgIC4uLihhdXRoSGVhbHRoID8geyBhdXRoSGVhbHRoIH0gOiB7fSksCiAgICAuLi4ocnVudGltZS5zb2NrZXQudXNlcj8uaWQgPyB7IHBob25lTnVtYmVyOiBTdHJpbmcocnVudGltZS5zb2NrZXQudXNlci5pZCkuc3BsaXQoIjoiKVswXS5yZXBsYWNlKC9cRC9nLCAiIikgfSA6IHt9KSwKICAgIC4uLihyZWFzb24gPyB7IHJlYXNvbjogU3RyaW5nKHJlYXNvbikuc2xpY2UoMCwgMjQwKSB9IDoge30pLAogIH0sIGNyZWRlbnRpYWxTdGF0ZS5jcmVkZW50aWFsKS5jYXRjaCgoZXJyb3IpID0+IGNvbnNvbGUuZXJyb3IoIltwYXBweS13b3JrbG9hZC13b3JrZXJdIHN0YXR1cyByZXBvcnQgZmFpbGVkIiwgZXJyb3IgaW5zdGFuY2VvZiBFcnJvciA/IGVycm9yLm1lc3NhZ2UgOiBTdHJpbmcoZXJyb3IpKSk7Cn0KYXN5bmMgZnVuY3Rpb24gc3RhcnRTZXNzaW9uKHdvcmtzcGFjZUlkLCBzZXNzaW9uSWQpIHsKICBjb25zdCBleGlzdGluZyA9IHJ1bnRpbWVzLmdldChzZXNzaW9uSWQpOwogIGlmIChleGlzdGluZykgcmV0dXJuIGV4aXN0aW5nOwogIGNvbnN0IGF1dGhSb290ID0gam9pbihEQVRBX0RJUiwgInNlc3Npb25zIiwgd29ya3NwYWNlSWQsIHNlc3Npb25JZCk7CiAgY29uc3Qgc3RvcmUgPSBuZXcgRmlsZUF1dGhTdG9yZShhdXRoUm9vdCk7CiAgY29uc3QgeyBzdGF0ZSwgc2F2ZUNyZWRzIH0gPSBhd2FpdCBtYWtlQ2FjaGVNYW5hZ2VyQXV0aFN0YXRlKHN0b3JlLCBzZXNzaW9uSWQpOwogIGNvbnN0IHNvY2tldCA9IG1ha2VXQVNvY2tldCh7IGF1dGg6IHN0YXRlLCBsb2dnZXI6IHBpbm8oeyBsZXZlbDogIndhcm4iIH0pLCBnZW5lcmF0ZUhpZ2hRdWFsaXR5TGlua1ByZXZpZXc6IHRydWUgfSk7CiAgc29ja2V0LmV2Lm9uKCJjcmVkcy51cGRhdGUiLCBzYXZlQ3JlZHMpOwogIGNvbnN0IHJ1bnRpbWUgPSB7IHdvcmtzcGFjZUlkLCBzZXNzaW9uSWQsIHNvY2tldCwgc3RvcmUsIHJlYWR5OiBmYWxzZSB9OwogIHNvY2tldC5ldi5vbigibWVzc2FnZXMudXBzZXJ0IiwgKGV2ZW50KSA9PiB7CiAgICBmb3IgKGNvbnN0IG1lc3NhZ2Ugb2YgZXZlbnQubWVzc2FnZXMgPz8gW10pIHZvaWQgZW1pdEluYm91bmQocnVudGltZSwgbWVzc2FnZSkuY2F0Y2goKGVycm9yKSA9PiBjb25zb2xlLmVycm9yKCJbcGFwcHktd29ya2xvYWQtd29ya2VyXSBpbmJvdW5kIGV2ZW50IGZhaWxlZCIsIGVycm9yIGluc3RhbmNlb2YgRXJyb3IgPyBlcnJvci5tZXNzYWdlIDogU3RyaW5nKGVycm9yKSkpOwogIH0pOwogIHJ1bnRpbWVzLnNldChzZXNzaW9uSWQsIHJ1bnRpbWUpOwogIHNvY2tldC5ldi5vbigiY29ubmVjdGlvbi51cGRhdGUiLCAodXBkYXRlKSA9PiB7CiAgICBpZiAodXBkYXRlLmNvbm5lY3Rpb24gPT09ICJvcGVuIikgewogICAgICBydW50aW1lLnJlYWR5ID0gdHJ1ZTsKICAgICAgdm9pZCByZXBvcnRTZXNzaW9uU3RhdHVzKHJ1bnRpbWUsICJBQ1RJVkUiLCAiVkFMSUQiKTsKICAgIH0KICAgIGlmICh1cGRhdGUuY29ubmVjdGlvbiA9PT0gImNsb3NlIikgewogICAgICBydW50aW1lLnJlYWR5ID0gZmFsc2U7CiAgICAgIHZvaWQgcmVwb3J0U2Vzc2lvblN0YXR1cyhydW50aW1lLCAiREVHUkFERUQiLCAiREVHUkFERUQiLCAiV2hhdHNBcHAgY29ubmVjdGlvbiBjbG9zZWQuIik7CiAgICAgIHJ1bnRpbWVzLmRlbGV0ZShzZXNzaW9uSWQpOwogICAgfQogIH0pOwogIGNvbnN0IGRlYWRsaW5lID0gRGF0ZS5ub3coKSArIDkwXzAwMDsKICB3aGlsZSAoIXJ1bnRpbWUucmVhZHkgJiYgRGF0ZS5ub3coKSA8IGRlYWRsaW5lKSBhd2FpdCBuZXcgUHJvbWlzZSgocmVzb2x2ZSkgPT4gc2V0VGltZW91dChyZXNvbHZlLCAyNTApKTsKICBpZiAoIXJ1bnRpbWUucmVhZHkpIHRocm93IG5ldyBFcnJvcihgV2hhdHNBcHAgc2Vzc2lvbiAke3Nlc3Npb25JZH0gZGlkIG5vdCBiZWNvbWUgcmVhZHkuYCk7CiAgYXNzaWduZWRTZXNzaW9ucy5hZGQoc2Vzc2lvbklkKTsKICByZXR1cm4gcnVudGltZTsKfQpmdW5jdGlvbiBtZXNzYWdlVGV4dChtZXNzYWdlKSB7CiAgaWYgKCFtZXNzYWdlIHx8IHR5cGVvZiBtZXNzYWdlICE9PSAib2JqZWN0IikgcmV0dXJuICIiOwogIGNvbnN0IHZhbHVlID0gbWVzc2FnZTsKICBpZiAodHlwZW9mIHZhbHVlLmNvbnZlcnNhdGlvbiA9PT0gInN0cmluZyIpIHJldHVybiB2YWx1ZS5jb252ZXJzYXRpb247CiAgaWYgKHR5cGVvZiB2YWx1ZS5leHRlbmRlZFRleHRNZXNzYWdlPy50ZXh0ID09PSAic3RyaW5nIikgcmV0dXJuIHZhbHVlLmV4dGVuZGVkVGV4dE1lc3NhZ2UudGV4dDsKICBpZiAodHlwZW9mIHZhbHVlLmltYWdlTWVzc2FnZT8uY2FwdGlvbiA9PT0gInN0cmluZyIpIHJldHVybiB2YWx1ZS5pbWFnZU1lc3NhZ2UuY2FwdGlvbjsKICBpZiAodHlwZW9mIHZhbHVlLnZpZGVvTWVzc2FnZT8uY2FwdGlvbiA9PT0gInN0cmluZyIpIHJldHVybiB2YWx1ZS52aWRlb01lc3NhZ2UuY2FwdGlvbjsKICBpZiAodHlwZW9mIHZhbHVlLmRvY3VtZW50TWVzc2FnZT8uY2FwdGlvbiA9PT0gInN0cmluZyIpIHJldHVybiB2YWx1ZS5kb2N1bWVudE1lc3NhZ2UuY2FwdGlvbjsKICByZXR1cm4gIiI7Cn0KYXN5bmMgZnVuY3Rpb24gZW1pdEluYm91bmQocnVudGltZSwgbWVzc2FnZSkgewogIGNvbnN0IGtleSA9IG1lc3NhZ2U/LmtleSA/PyB7fTsKICBjb25zdCByZW1vdGVKaWQgPSBrZXkucmVtb3RlSmlkOwogIGlmICh0eXBlb2YgcmVtb3RlSmlkICE9PSAic3RyaW5nIiB8fCAhbWVzc2FnZS5tZXNzYWdlKSByZXR1cm47CiAgY29uc3QgdGV4dCA9IG1lc3NhZ2VUZXh0KG1lc3NhZ2UubWVzc2FnZSk7CiAgY29uc3QgY29udGV4dCA9IG1lc3NhZ2UubWVzc2FnZS5leHRlbmRlZFRleHRNZXNzYWdlPy5jb250ZXh0SW5mbyA/PyBtZXNzYWdlLm1lc3NhZ2UuaW1hZ2VNZXNzYWdlPy5jb250ZXh0SW5mbyA/PyBtZXNzYWdlLm1lc3NhZ2UudmlkZW9NZXNzYWdlPy5jb250ZXh0SW5mbzsKICBjb25zdCBxdW90ZWRUZXh0ID0gbWVzc2FnZVRleHQoY29udGV4dD8ucXVvdGVkTWVzc2FnZSk7CiAgaWYgKCF0ZXh0ICYmICFxdW90ZWRUZXh0KSByZXR1cm47CiAgY29uc3Qgc2VuZGVySmlkID0ga2V5LmZyb21NZSA/IChydW50aW1lLnNvY2tldC51c2VyPy5pZCA/PyByZW1vdGVKaWQpIDogKGtleS5wYXJ0aWNpcGFudEFsdCA/PyBrZXkucmVtb3RlSmlkQWx0ID8/IGtleS5wYXJ0aWNpcGFudCA/PyByZW1vdGVKaWQpOwogIGF3YWl0IGNvbnRyb2woIi93b3JrbG9hZC9ldmVudCIsIHsKICAgIHdvcmtzcGFjZUlkOiBydW50aW1lLndvcmtzcGFjZUlkLAogICAgc2Vzc2lvbklkOiBydW50aW1lLnNlc3Npb25JZCwKICAgIC4uLih0eXBlb2Yga2V5LmlkID09PSAic3RyaW5nIiA/IHsgbWVzc2FnZUlkOiBrZXkuaWQgfSA6IHt9KSwKICAgIHJlbW90ZUppZCwKICAgIHNlbmRlckppZCwKICAgIHRleHQsCiAgICAuLi4ocXVvdGVkVGV4dCA/IHsgcXVvdGVkVGV4dCB9IDoge30pLAogICAgLi4uKHR5cGVvZiBjb250ZXh0Py5wYXJ0aWNpcGFudCA9PT0gInN0cmluZyIgPyB7IHF1b3RlZFNlbmRlckppZDogY29udGV4dC5wYXJ0aWNpcGFudCB9IDoge30pLAogICAgLi4uKEFycmF5LmlzQXJyYXkoY29udGV4dD8ubWVudGlvbmVkSmlkKSA/IHsgbWVudGlvbmVkSmlkczogY29udGV4dC5tZW50aW9uZWRKaWQgfSA6IHt9KSwKICAgIC4uLihrZXkuZnJvbU1lID8geyBmcm9tTWU6IHRydWUgfSA6IHt9KSwKICB9LCBjcmVkZW50aWFsU3RhdGUuY3JlZGVudGlhbCk7Cn0KCmFzeW5jIGZ1bmN0aW9uIHN0b3BTZXNzaW9uKHNlc3Npb25JZCkgewogIGNvbnN0IHJ1bnRpbWUgPSBydW50aW1lcy5nZXQoc2Vzc2lvbklkKTsKICBpZiAoIXJ1bnRpbWUpIHJldHVybjsKICBhd2FpdCBydW50aW1lLnN0b3JlLmZsdXNoKCkuY2F0Y2goKCkgPT4gdW5kZWZpbmVkKTsKICBydW50aW1lLnNvY2tldC5lbmQ/LihuZXcgRXJyb3IoIldvcmtsb2FkIGNvbW1hbmQgcmVxdWVzdGVkIHNlc3Npb24gc3RvcC4iKSk7CiAgcnVudGltZXMuZGVsZXRlKHNlc3Npb25JZCk7CiAgYXNzaWduZWRTZXNzaW9ucy5kZWxldGUoc2Vzc2lvbklkKTsKfQpmdW5jdGlvbiBvd25KaWQocnVudGltZSkgeyByZXR1cm4gcnVudGltZS5zb2NrZXQudXNlcj8uaWQgPz8gIm1lIjsgfQpmdW5jdGlvbiBub3JtYWxpemVBcmdzKHJ1bnRpbWUsIG1ldGhvZCwgYXJncykgewogIGNvbnN0IG5leHQgPSBkZWNvZGUoYXJncyk7CiAgaWYgKG1ldGhvZCA9PT0gInByb2ZpbGVQaWN0dXJlVXJsIiAmJiBuZXh0WzBdID09PSAibWUiKSBuZXh0WzBdID0gb3duSmlkKHJ1bnRpbWUpOwogIGlmIChtZXRob2QgPT09ICJncm91cENyZWF0ZSIgJiYgQXJyYXkuaXNBcnJheShuZXh0WzFdKSkgbmV4dFsxXSA9IG5leHRbMV0ubWFwKChpdGVtKSA9PiBpdGVtID09PSAibWUiID8gb3duSmlkKHJ1bnRpbWUpIDogaXRlbSk7CiAgcmV0dXJuIG5leHQ7Cn0KYXN5bmMgZnVuY3Rpb24gZXhlY3V0ZVRyYW5zcG9ydChydW50aW1lLCBtZXRob2QsIGVuY29kZWRBcmdzKSB7CiAgY29uc3QgYWxsb3dlZCA9IG5ldyBTZXQoWwogICAgInNlbmRNZXNzYWdlIiwgInNlbmRHcm91cFN0YXR1cyIsICJ1cGRhdGVQcm9maWxlTmFtZSIsICJ1cGRhdGVQcm9maWxlU3RhdHVzIiwgInVwZGF0ZVByb2ZpbGVQaWN0dXJlIiwgInJlbW92ZVByb2ZpbGVQaWN0dXJlIiwgInByb2ZpbGVQaWN0dXJlVXJsIiwKICAgICJncm91cENyZWF0ZSIsICJncm91cEZldGNoQWxsUGFydGljaXBhdGluZyIsICJncm91cEludml0ZUNvZGUiLCAiZ3JvdXBVcGRhdGVEZXNjcmlwdGlvbiIsICJncm91cFVwZGF0ZVN1YmplY3QiLCAiZ3JvdXBMZWF2ZSIsICJncm91cE1ldGFkYXRhIiwKICAgICJncm91cEdldEludml0ZUluZm8iLCAiZ3JvdXBBY2NlcHRJbnZpdGUiLCAicmVxdWVzdFBhaXJpbmdDb2RlIiwKICBdKTsKICBpZiAoIWFsbG93ZWQuaGFzKG1ldGhvZCkpIHRocm93IG5ldyBFcnJvcihgVW5zdXBwb3J0ZWQgd29ya2xvYWQgdHJhbnNwb3J0IG1ldGhvZDogJHttZXRob2R9YCk7CiAgY29uc3QgZm4gPSBydW50aW1lLnNvY2tldFttZXRob2RdOwogIGlmICh0eXBlb2YgZm4gIT09ICJmdW5jdGlvbiIpIHRocm93IG5ldyBFcnJvcihgVHJhbnNwb3J0IG1ldGhvZCBpcyB1bmF2YWlsYWJsZTogJHttZXRob2R9YCk7CiAgcmV0dXJuIGZuLmFwcGx5KHJ1bnRpbWUuc29ja2V0LCBub3JtYWxpemVBcmdzKHJ1bnRpbWUsIG1ldGhvZCwgZW5jb2RlZEFyZ3MpKTsKfQphc3luYyBmdW5jdGlvbiBleGVjdXRlKGNvbW1hbmQpIHsKICBpZiAoY29tbWFuZC5raW5kID09PSAic2Vzc2lvbi5zdGFydCIpIHsKICAgIGNvbnN0IHJ1bnRpbWUgPSBhd2FpdCBzdGFydFNlc3Npb24oY29tbWFuZC53b3Jrc3BhY2VJZCwgY29tbWFuZC5zZXNzaW9uSWQpOwogICAgcmV0dXJuIHsgc3RhdHVzOiAiQUNUSVZFIiwgdXNlcklkOiBydW50aW1lLnNvY2tldC51c2VyPy5pZCA/PyBudWxsIH07CiAgfQogIGlmIChjb21tYW5kLmtpbmQgPT09ICJzZXNzaW9uLnN0b3AiKSB7CiAgICBhd2FpdCBzdG9wU2Vzc2lvbihjb21tYW5kLnNlc3Npb25JZCk7CiAgICByZXR1cm4geyBzdGF0dXM6ICJPRkZMSU5FIiB9OwogIH0KICBpZiAoY29tbWFuZC5raW5kID09PSAic2Vzc2lvbi5wYWlyLnJlcXVlc3QiKSB7CiAgICBjb25zdCBydW50aW1lID0gYXdhaXQgc3RhcnRTZXNzaW9uKGNvbW1hbmQud29ya3NwYWNlSWQsIGNvbW1hbmQuc2Vzc2lvbklkKTsKICAgIGF3YWl0IHJlcG9ydFNlc3Npb25TdGF0dXMocnVudGltZSwgIlBBSVJJTkciLCAiVU5LTk9XTiIpOwogICAgY29uc3QgcGhvbmVOdW1iZXIgPSBTdHJpbmcoY29tbWFuZC5wYXlsb2FkLnBob25lTnVtYmVyID8/ICIiKS5yZXBsYWNlKC9cRC9nLCAiIik7CiAgICBjb25zdCBjdXN0b21Db2RlID0gU3RyaW5nKGNvbW1hbmQucGF5bG9hZC5jdXN0b21Db2RlID8/ICJQQVBQWUJPVCIpLnJlcGxhY2UoL1teYS16QS1aMC05XS9nLCAiIikudG9VcHBlckNhc2UoKTsKICAgIGlmICh0eXBlb2YgcnVudGltZS5zb2NrZXQucmVxdWVzdFBhaXJpbmdDb2RlICE9PSAiZnVuY3Rpb24iKSB0aHJvdyBuZXcgRXJyb3IoIlBhaXJpbmcgY29kZXMgYXJlIG5vdCBzdXBwb3J0ZWQgYnkgdGhpcyB0cmFuc3BvcnQuIik7CiAgICByZXR1cm4geyBjb2RlOiBhd2FpdCBydW50aW1lLnNvY2tldC5yZXF1ZXN0UGFpcmluZ0NvZGUocGhvbmVOdW1iZXIsIGN1c3RvbUNvZGUpIH07CiAgfQogIGlmIChjb21tYW5kLmtpbmQgPT09ICJicmlkZ2UuY29tbWFuZCIpIHsKICAgIGNvbnN0IHJ1bnRpbWUgPSBhd2FpdCBzdGFydFNlc3Npb24oY29tbWFuZC53b3Jrc3BhY2VJZCwgY29tbWFuZC5zZXNzaW9uSWQpOwogICAgcmV0dXJuIGF3YWl0IGV4ZWN1dGVUcmFuc3BvcnQocnVudGltZSwgU3RyaW5nKGNvbW1hbmQucGF5bG9hZC5tZXRob2QgPz8gIiIpLCBjb21tYW5kLnBheWxvYWQuYXJncyA/PyBbXSk7CiAgfQogIHRocm93IG5ldyBFcnJvcihgVW5zdXBwb3J0ZWQgd29ya2xvYWQgY29tbWFuZDogJHtjb21tYW5kLmtpbmR9YCk7Cn0KYXN5bmMgZnVuY3Rpb24gcmVnaXN0ZXIoKSB7CiAgY29uc3QgZXhpc3RpbmcgPSBhd2FpdCBsb2FkU3RhdGUoKTsKICBpZiAoZXhpc3Rpbmc/LmNyZWRlbnRpYWwgJiYgZXhpc3Rpbmcud29ya2VySWQpIHsgY3JlZGVudGlhbFN0YXRlID0gZXhpc3Rpbmc7IHJldHVybjsgfQogIGlmICghRU5ST0xMTUVOVF9UT0tFTikgdGhyb3cgbmV3IEVycm9yKCJQYXN0ZSB0aGUgb25lLXRpbWUgZW5yb2xsbWVudCBjb21tYW5kIGZyb20gVGVsZWdyYW0gZm9yIHRoZSBmaXJzdCBzdGFydC4iKTsKICBjb25zdCByZWdpc3RyYXRpb24gPSBhd2FpdCBjb250cm9sKCIvd29ya2xvYWQvcmVnaXN0ZXIiLCB7CiAgICBlbnJvbGxtZW50VG9rZW46IEVOUk9MTE1FTlRfVE9LRU4sCiAgICB3b3JrZXJOYW1lOiBXT1JLRVJfTkFNRSwKICAgIHdvcmtlclZlcnNpb246IFdPUktFUl9WRVJTSU9OLAogICAgY2FwYWJpbGl0aWVzOiBbImJhaWxleXMiLCAiZ3JvdXAtdHJhbnNwb3J0IiwgIm1lZGlhIiwgInBhaXJpbmciXSwKICB9KTsKICBjcmVkZW50aWFsU3RhdGUgPSB7IHdvcmtlcklkOiByZWdpc3RyYXRpb24ud29ya2VySWQsIHdvcmtlck5hbWU6IHJlZ2lzdHJhdGlvbi53b3JrZXJOYW1lLCB3b3JrbG9hZENvZGU6IHJlZ2lzdHJhdGlvbi53b3JrbG9hZENvZGUsIGRpc3BsYXlLZXk6IHJlZ2lzdHJhdGlvbi5kaXNwbGF5S2V5LCBjcmVkZW50aWFsOiByZWdpc3RyYXRpb24uY3JlZGVudGlhbCB9OwogIGF3YWl0IHNhdmVTdGF0ZShjcmVkZW50aWFsU3RhdGUpOwogIGNvbnNvbGUubG9nKGBbcGFwcHktd29ya2xvYWQtd29ya2VyXSByZWFkeSBuYW1lPSR7cmVnaXN0cmF0aW9uLndvcmtlck5hbWV9IGNvZGU9JHtyZWdpc3RyYXRpb24ud29ya2xvYWRDb2RlfSAoc2F2ZSB0aGlzIGNvZGUgaW4gVGVsZWdyYW0pYCk7Cn0KYXN5bmMgZnVuY3Rpb24gaGVhcnRiZWF0KCkgewogIHJldHVybiBjb250cm9sKCIvd29ya2xvYWQvaGVhcnRiZWF0IiwgewogICAgd29ya2VyVmVyc2lvbjogV09SS0VSX1ZFUlNJT04sCiAgICBjYXBhYmlsaXRpZXM6IFsiYmFpbGV5cyIsICJncm91cC10cmFuc3BvcnQiLCAibWVkaWEiLCAicGFpcmluZyJdLAogICAgc3RhdHVzOiAiQUNUSVZFIiwKICAgIGFzc2lnbmVkU2Vzc2lvbklkczogWy4uLmFzc2lnbmVkU2Vzc2lvbnNdLAogIH0sIGNyZWRlbnRpYWxTdGF0ZS5jcmVkZW50aWFsKTsKfQphc3luYyBmdW5jdGlvbiBwb2xsKCkgewogIGNvbnN0IGRhdGEgPSBhd2FpdCBjb250cm9sKCIvd29ya2xvYWQvcG9sbCIsIHsgbGltaXQ6IDUgfSwgY3JlZGVudGlhbFN0YXRlLmNyZWRlbnRpYWwpOwogIGZvciAoY29uc3QgY29tbWFuZCBvZiBkYXRhLmNvbW1hbmRzID8/IFtdKSB7CiAgICB0cnkgewogICAgICBjb25zdCByZXN1bHQgPSBhd2FpdCBleGVjdXRlKGNvbW1hbmQpOwogICAgICBhd2FpdCBjb250cm9sKCIvd29ya2xvYWQvcmVzdWx0IiwgeyBjb21tYW5kSWQ6IGNvbW1hbmQuY29tbWFuZElkLCByZXF1ZXN0SWQ6IGNvbW1hbmQucmVxdWVzdElkLCBvazogdHJ1ZSwgcmVzdWx0OiBlbmNvZGUocmVzdWx0KSB9LCBjcmVkZW50aWFsU3RhdGUuY3JlZGVudGlhbCk7CiAgICB9IGNhdGNoIChlcnJvcikgewogICAgICBhd2FpdCBjb250cm9sKCIvd29ya2xvYWQvcmVzdWx0IiwgeyBjb21tYW5kSWQ6IGNvbW1hbmQuY29tbWFuZElkLCByZXF1ZXN0SWQ6IGNvbW1hbmQucmVxdWVzdElkLCBvazogZmFsc2UsIGVycm9yOiBlcnJvciBpbnN0YW5jZW9mIEVycm9yID8gZXJyb3IubWVzc2FnZSA6IFN0cmluZyhlcnJvcikgfSwgY3JlZGVudGlhbFN0YXRlLmNyZWRlbnRpYWwpLmNhdGNoKCgpID0+IHVuZGVmaW5lZCk7CiAgICB9CiAgfQp9CmFzeW5jIGZ1bmN0aW9uIHJ1bigpIHsKICBjb25zdCBiYWlsZXlzID0gYXdhaXQgaW1wb3J0KCJAY3J5c25vdmF4L2JhaWxleXMiKTsKICBtYWtlV0FTb2NrZXQgPSBiYWlsZXlzLmRlZmF1bHQ7CiAgbWFrZUNhY2hlTWFuYWdlckF1dGhTdGF0ZSA9IGJhaWxleXMubWFrZUNhY2hlTWFuYWdlckF1dGhTdGF0ZTsKICBjb25zdCBsb2dnZXIgPSBhd2FpdCBpbXBvcnQoInBpbm8iKTsKICBwaW5vID0gbG9nZ2VyLmRlZmF1bHQ7CiAgYXdhaXQgZW5zdXJlV29ya2VyTmFtZSgpOwogIGF3YWl0IGVuc3VyZVN0b3JhZ2VTZWNyZXQoKTsKICBhc3NlcnRDb25maWcoKTsKICBhd2FpdCBta2RpcihEQVRBX0RJUiwgeyByZWN1cnNpdmU6IHRydWUgfSk7CiAgYXdhaXQgcmVnaXN0ZXIoKTsKICBsZXQgbmV4dEhlYXJ0YmVhdCA9IDA7CiAgd2hpbGUgKCFzdG9wcGluZykgewogICAgdHJ5IHsKICAgICAgaWYgKERhdGUubm93KCkgPj0gbmV4dEhlYXJ0YmVhdCkgeyBhd2FpdCBoZWFydGJlYXQoKTsgbmV4dEhlYXJ0YmVhdCA9IERhdGUubm93KCkgKyBIRUFSVEJFQVRfTVM7IH0KICAgICAgYXdhaXQgcG9sbCgpOwogICAgfSBjYXRjaCAoZXJyb3IpIHsKICAgICAgY29uc29sZS5lcnJvcigiW3BhcHB5LXdvcmtsb2FkLXdvcmtlcl0gY29udHJvbCBsb29wIGVycm9yIiwgZXJyb3IgaW5zdGFuY2VvZiBFcnJvciA/IGVycm9yLm1lc3NhZ2UgOiBTdHJpbmcoZXJyb3IpKTsKICAgICAgYXdhaXQgbmV3IFByb21pc2UoKHJlc29sdmUpID0+IHNldFRpbWVvdXQocmVzb2x2ZSwgTWF0aC5taW4oMTVfMDAwLCBDT05UUk9MX1BPTExfTVMgKiAzKSkpOwogICAgfQogICAgYXdhaXQgbmV3IFByb21pc2UoKHJlc29sdmUpID0+IHNldFRpbWVvdXQocmVzb2x2ZSwgQ09OVFJPTF9QT0xMX01TKSk7CiAgfQp9CnByb2Nlc3Mub25jZSgiU0lHSU5UIiwgKCkgPT4geyBzdG9wcGluZyA9IHRydWU7IH0pOwpwcm9jZXNzLm9uY2UoIlNJR1RFUk0iLCAoKSA9PiB7IHN0b3BwaW5nID0gdHJ1ZTsgfSk7CnJ1bigpLmNhdGNoKChlcnJvcikgPT4geyBjb25zb2xlLmVycm9yKCJbcGFwcHktd29ya2xvYWQtd29ya2VyXSBmYXRhbCIsIGVycm9yIGluc3RhbmNlb2YgRXJyb3IgPyBlcnJvci5tZXNzYWdlIDogU3RyaW5nKGVycm9yKSk7IHByb2Nlc3MuZXhpdENvZGUgPSAxOyB9KTsK", "base64").toString("utf8");
+const root = process.cwd();
+const packagePath = path.join(root, "package.json");
+const runtimePath = path.join(root, ".pappy-workload-runtime.mjs");
+const manifest = {
+  name: "pappy-omega-mini-workload-worker",
+  version: "1.1.0",
+  private: true,
+  main: "index.js",
+  engines: { node: ">=20" },
+  dependencies: { "@crysnovax/baileys": "2.7.10", pino: "9.9.0" }
+};
+let existing = {};
+try { existing = JSON.parse(fs.readFileSync(packagePath, "utf8")); } catch {}
+const merged = { ...existing, ...manifest, dependencies: { ...(existing.dependencies || {}), ...manifest.dependencies } };
+delete merged.type;
+fs.writeFileSync(packagePath, JSON.stringify(merged, null, 2) + "\n", { mode: 0o600 });
+function dependencyExists() {
   try {
-    WORKER_NAME = (await prompt.question("Choose a name for this workload (example: pappy): ")).trim() || "panel";
-  } finally {
-    prompt.close();
-  }
+    fs.accessSync(path.join(root, "node_modules", "@crysnovax", "baileys", "package.json"));
+    fs.accessSync(path.join(root, "node_modules", "pino", "package.json"));
+    return true;
+  } catch { return false; }
 }
-async function ensureStorageSecret() {
-  await mkdir(DATA_DIR, { recursive: true });
-  if (!STORAGE_SECRET) {
-    try {
-      STORAGE_SECRET = (await readFile(secretPath, "utf8")).trim();
-    } catch {
-      STORAGE_SECRET = randomBytes(32).toString("base64url");
-      await writeFile(secretPath, STORAGE_SECRET, { mode: 0o600 });
-    }
-  }
-  if (STORAGE_SECRET.length < 32) throw new Error("The local worker secret must be at least 32 characters.");
+if (!dependencyExists()) {
+  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  const install = spawnSync(npm, ["install", "--omit=dev", "--no-audit", "--no-fund"], { cwd: root, stdio: "inherit" });
+  if (install.status !== 0) process.exit(install.status || 1);
 }
-function encrypt(value) {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key(), iv);
-  const encrypted = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
-  return Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString("base64url");
-}
-function decrypt(value) {
-  const payload = Buffer.from(value, "base64url");
-  const decipher = createDecipheriv("aes-256-gcm", key(), payload.subarray(0, 12));
-  decipher.setAuthTag(payload.subarray(12, 28));
-  return JSON.parse(Buffer.concat([decipher.update(payload.subarray(28)), decipher.final()]).toString("utf8"));
-}
-async function saveState(value) {
-  await mkdir(dirname(workerStatePath), { recursive: true });
-  const temp = `${workerStatePath}.tmp-${process.pid}-${randomUUID()}`;
-  await writeFile(temp, encrypt(value), { mode: 0o600 });
-  await rename(temp, workerStatePath);
-}
-async function loadState() {
-  try {
-    return decrypt(await readFile(workerStatePath, "utf8"));
-  } catch {
-    return undefined;
-  }
-}
-
-function encode(value) {
-  if (Buffer.isBuffer(value)) return { __pappyBuffer: value.toString("base64") };
-  if (Array.isArray(value)) return value.map(encode);
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, encode(v)]));
-  return value;
-}
-function decode(value) {
-  if (Array.isArray(value)) return value.map(decode);
-  if (value && typeof value === "object") {
-    const object = value;
-    if (typeof object.__pappyBuffer === "string") return Buffer.from(object.__pappyBuffer, "base64");
-    return Object.fromEntries(Object.entries(object).map(([k, v]) => [k, decode(v)]));
-  }
-  return value;
-}
-function assertConfig() {
-  if (!CONTROL_URL.startsWith("https://")) throw new Error("The workload control URL must use HTTPS.");
-}
-async function control(path, payload, credential) {
-  const response = await fetch(`${CONTROL_URL}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...(credential ? { authorization: `Bearer ${credential}` } : {}) },
-    body: JSON.stringify(payload ?? {}),
-    signal: AbortSignal.timeout(35_000),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.ok === false) throw new Error(data.error ?? `Control request failed (${response.status}).`);
-  return data;
-}
-
-class FileAuthStore {
-  constructor(root) { this.root = root; this.pending = new Map(); }
-  path(name) { return join(this.root, `${encodeURIComponent(name)}.json`); }
-  async get(name) { try { return decrypt(await readFile(this.path(name), "utf8")); } catch { return undefined; } }
-  async set(name, value) {
-    const previous = this.pending.get(name) ?? Promise.resolve();
-    const write = previous.catch(() => undefined).then(async () => {
-      await mkdir(this.root, { recursive: true });
-      const path = this.path(name);
-      const temp = `${path}.tmp-${process.pid}-${randomUUID()}`;
-      await writeFile(temp, encrypt(value), { mode: 0o600 });
-      await rename(temp, path);
-    });
-    this.pending.set(name, write);
-    try { await write; return value; } finally { if (this.pending.get(name) === write) this.pending.delete(name); }
-  }
-  async flush() { await Promise.allSettled(this.pending.values()); }
-  async delete(name) { await unlink(this.path(name)).catch(() => undefined); return true; }
-  async keys() { return []; }
-}
-
-async function reportSessionStatus(runtime, status, authHealth, reason) {
-  await control("/workload/session-status", {
-    workspaceId: runtime.workspaceId,
-    sessionId: runtime.sessionId,
-    status,
-    ...(authHealth ? { authHealth } : {}),
-    ...(runtime.socket.user?.id ? { phoneNumber: String(runtime.socket.user.id).split(":")[0].replace(/\D/g, "") } : {}),
-    ...(reason ? { reason: String(reason).slice(0, 240) } : {}),
-  }, credentialState.credential).catch((error) => console.error("[pappy-workload-worker] status report failed", error instanceof Error ? error.message : String(error)));
-}
-async function startSession(workspaceId, sessionId) {
-  const existing = runtimes.get(sessionId);
-  if (existing) return existing;
-  const authRoot = join(DATA_DIR, "sessions", workspaceId, sessionId);
-  const store = new FileAuthStore(authRoot);
-  const { state, saveCreds } = await makeCacheManagerAuthState(store, sessionId);
-  const socket = makeWASocket({ auth: state, logger: pino({ level: "warn" }), generateHighQualityLinkPreview: true });
-  socket.ev.on("creds.update", saveCreds);
-  const runtime = { workspaceId, sessionId, socket, store, ready: false };
-  socket.ev.on("messages.upsert", (event) => {
-    for (const message of event.messages ?? []) void emitInbound(runtime, message).catch((error) => console.error("[pappy-workload-worker] inbound event failed", error instanceof Error ? error.message : String(error)));
-  });
-  runtimes.set(sessionId, runtime);
-  socket.ev.on("connection.update", (update) => {
-    if (update.connection === "open") {
-      runtime.ready = true;
-      void reportSessionStatus(runtime, "ACTIVE", "VALID");
-    }
-    if (update.connection === "close") {
-      runtime.ready = false;
-      void reportSessionStatus(runtime, "DEGRADED", "DEGRADED", "WhatsApp connection closed.");
-      runtimes.delete(sessionId);
-    }
-  });
-  const deadline = Date.now() + 90_000;
-  while (!runtime.ready && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 250));
-  if (!runtime.ready) throw new Error(`WhatsApp session ${sessionId} did not become ready.`);
-  assignedSessions.add(sessionId);
-  return runtime;
-}
-function messageText(message) {
-  if (!message || typeof message !== "object") return "";
-  const value = message;
-  if (typeof value.conversation === "string") return value.conversation;
-  if (typeof value.extendedTextMessage?.text === "string") return value.extendedTextMessage.text;
-  if (typeof value.imageMessage?.caption === "string") return value.imageMessage.caption;
-  if (typeof value.videoMessage?.caption === "string") return value.videoMessage.caption;
-  if (typeof value.documentMessage?.caption === "string") return value.documentMessage.caption;
-  return "";
-}
-async function emitInbound(runtime, message) {
-  const key = message?.key ?? {};
-  const remoteJid = key.remoteJid;
-  if (typeof remoteJid !== "string" || !message.message) return;
-  const text = messageText(message.message);
-  const context = message.message.extendedTextMessage?.contextInfo ?? message.message.imageMessage?.contextInfo ?? message.message.videoMessage?.contextInfo;
-  const quotedText = messageText(context?.quotedMessage);
-  if (!text && !quotedText) return;
-  const senderJid = key.fromMe ? (runtime.socket.user?.id ?? remoteJid) : (key.participantAlt ?? key.remoteJidAlt ?? key.participant ?? remoteJid);
-  await control("/workload/event", {
-    workspaceId: runtime.workspaceId,
-    sessionId: runtime.sessionId,
-    ...(typeof key.id === "string" ? { messageId: key.id } : {}),
-    remoteJid,
-    senderJid,
-    text,
-    ...(quotedText ? { quotedText } : {}),
-    ...(typeof context?.participant === "string" ? { quotedSenderJid: context.participant } : {}),
-    ...(Array.isArray(context?.mentionedJid) ? { mentionedJids: context.mentionedJid } : {}),
-    ...(key.fromMe ? { fromMe: true } : {}),
-  }, credentialState.credential);
-}
-
-async function stopSession(sessionId) {
-  const runtime = runtimes.get(sessionId);
-  if (!runtime) return;
-  await runtime.store.flush().catch(() => undefined);
-  runtime.socket.end?.(new Error("Workload command requested session stop."));
-  runtimes.delete(sessionId);
-  assignedSessions.delete(sessionId);
-}
-function ownJid(runtime) { return runtime.socket.user?.id ?? "me"; }
-function normalizeArgs(runtime, method, args) {
-  const next = decode(args);
-  if (method === "profilePictureUrl" && next[0] === "me") next[0] = ownJid(runtime);
-  if (method === "groupCreate" && Array.isArray(next[1])) next[1] = next[1].map((item) => item === "me" ? ownJid(runtime) : item);
-  return next;
-}
-async function executeTransport(runtime, method, encodedArgs) {
-  const allowed = new Set([
-    "sendMessage", "sendGroupStatus", "updateProfileName", "updateProfileStatus", "updateProfilePicture", "removeProfilePicture", "profilePictureUrl",
-    "groupCreate", "groupFetchAllParticipating", "groupInviteCode", "groupUpdateDescription", "groupUpdateSubject", "groupLeave", "groupMetadata",
-    "groupGetInviteInfo", "groupAcceptInvite", "requestPairingCode",
-  ]);
-  if (!allowed.has(method)) throw new Error(`Unsupported workload transport method: ${method}`);
-  const fn = runtime.socket[method];
-  if (typeof fn !== "function") throw new Error(`Transport method is unavailable: ${method}`);
-  return fn.apply(runtime.socket, normalizeArgs(runtime, method, encodedArgs));
-}
-async function execute(command) {
-  if (command.kind === "session.start") {
-    const runtime = await startSession(command.workspaceId, command.sessionId);
-    return { status: "ACTIVE", userId: runtime.socket.user?.id ?? null };
-  }
-  if (command.kind === "session.stop") {
-    await stopSession(command.sessionId);
-    return { status: "OFFLINE" };
-  }
-  if (command.kind === "session.pair.request") {
-    const runtime = await startSession(command.workspaceId, command.sessionId);
-    await reportSessionStatus(runtime, "PAIRING", "UNKNOWN");
-    const phoneNumber = String(command.payload.phoneNumber ?? "").replace(/\D/g, "");
-    const customCode = String(command.payload.customCode ?? "PAPPYBOT").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
-    if (typeof runtime.socket.requestPairingCode !== "function") throw new Error("Pairing codes are not supported by this transport.");
-    return { code: await runtime.socket.requestPairingCode(phoneNumber, customCode) };
-  }
-  if (command.kind === "bridge.command") {
-    const runtime = await startSession(command.workspaceId, command.sessionId);
-    return await executeTransport(runtime, String(command.payload.method ?? ""), command.payload.args ?? []);
-  }
-  throw new Error(`Unsupported workload command: ${command.kind}`);
-}
-async function register() {
-  const existing = await loadState();
-  if (existing?.credential && existing.workerId) { credentialState = existing; return; }
-  if (!ENROLLMENT_TOKEN) throw new Error("Paste the one-time enrollment command from Telegram for the first start.");
-  const registration = await control("/workload/register", {
-    enrollmentToken: ENROLLMENT_TOKEN,
-    workerName: WORKER_NAME,
-    workerVersion: WORKER_VERSION,
-    capabilities: ["baileys", "group-transport", "media", "pairing"],
-  });
-  credentialState = { workerId: registration.workerId, workerName: registration.workerName, workloadCode: registration.workloadCode, displayKey: registration.displayKey, credential: registration.credential };
-  await saveState(credentialState);
-  console.log(`[pappy-workload-worker] ready name=${registration.workerName} code=${registration.workloadCode} (save this code in Telegram)`);
-}
-async function heartbeat() {
-  return control("/workload/heartbeat", {
-    workerVersion: WORKER_VERSION,
-    capabilities: ["baileys", "group-transport", "media", "pairing"],
-    status: "ACTIVE",
-    assignedSessionIds: [...assignedSessions],
-  }, credentialState.credential);
-}
-async function poll() {
-  const data = await control("/workload/poll", { limit: 5 }, credentialState.credential);
-  for (const command of data.commands ?? []) {
-    try {
-      const result = await execute(command);
-      await control("/workload/result", { commandId: command.commandId, requestId: command.requestId, ok: true, result: encode(result) }, credentialState.credential);
-    } catch (error) {
-      await control("/workload/result", { commandId: command.commandId, requestId: command.requestId, ok: false, error: error instanceof Error ? error.message : String(error) }, credentialState.credential).catch(() => undefined);
-    }
-  }
-}
-async function run() {
-  await ensureWorkerName();
-  await ensureStorageSecret();
-  assertConfig();
-  await mkdir(DATA_DIR, { recursive: true });
-  await register();
-  let nextHeartbeat = 0;
-  while (!stopping) {
-    try {
-      if (Date.now() >= nextHeartbeat) { await heartbeat(); nextHeartbeat = Date.now() + HEARTBEAT_MS; }
-      await poll();
-    } catch (error) {
-      console.error("[pappy-workload-worker] control loop error", error instanceof Error ? error.message : String(error));
-      await new Promise((resolve) => setTimeout(resolve, Math.min(15_000, CONTROL_POLL_MS * 3)));
-    }
-    await new Promise((resolve) => setTimeout(resolve, CONTROL_POLL_MS));
-  }
-}
-process.once("SIGINT", () => { stopping = true; });
-process.once("SIGTERM", () => { stopping = true; });
-run().catch((error) => { console.error("[pappy-workload-worker] fatal", error instanceof Error ? error.message : String(error)); process.exitCode = 1; });
+fs.writeFileSync(runtimePath, runtimeSource, { mode: 0o600 });
+const child = spawnSync(process.execPath, [runtimePath, "--worker-runtime", ...process.argv.slice(2)], { cwd: root, env: process.env, stdio: "inherit" });
+try { fs.unlinkSync(runtimePath); } catch {}
+process.exit(child.status || 0);

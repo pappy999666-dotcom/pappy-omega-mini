@@ -8,8 +8,8 @@
 | One central Telegram bot | Complete | No second Telegram process is introduced |
 | Owner workload ON/OFF | Complete | Workspace field, persistence, Telegram user/admin controls |
 | Owner-managed VPS worker compatibility | Complete | Existing `PROCESS_ROLE=worker` and Redis bridge remain intact |
-| Restricted panel worker package | Complete | `worker-package/index.js`, `package.json`, and `README.md` |
-| Download flow | Complete | Telegram Workload menu delivers the official three-file package |
+| Restricted panel worker package | Complete | Telegram delivers a self-bootstrapping `index.js` plus the novice guide; the index creates its own private `package.json` |
+| Download flow | Complete | Telegram Workload menu delivers the single-file worker and guide; no `.env` or user-created manifest is required |
 | Secure worker registration | Complete | One-time enrollment token, hashed credential, HTTPS-only package URL contract |
 | Five-digit display key | Complete | Key identifies a worker; it is never used as authentication |
 | Heartbeat and status | Complete | Authenticated heartbeat, compatibility check, stale-worker sweep, session-status reporting |
@@ -31,4 +31,4 @@ Existing-session migration from an owner VPS to a panel worker is not triggered 
 
 ## Current artifacts
 
-The restricted worker archive is `/home/ubuntu/pappy-omega-mini-worker-package-v1.0.0.tar.gz` with SHA-256 `71744c9e9ef399cda21e6c489ab38539725a7f3fe0f9a01ca754508abef12469`. The implementation branch currently contains commits `d2bb3ce` and `6dcd2b1` after the audited baseline.
+The current novice distribution is the two-file Telegram download consisting of `index.js` and `README.md`. The standalone archive is `/home/ubuntu/pappy-omega-mini-tester-single-index-v1.2.0.tar.gz` with SHA-256 `0582b66f9a4323e6c72671c027f2baa6fbea9919807a8fd2623bb4b0378a9ff1`. The index creates `package.json`, installs only `@crysnovax/baileys` and `pino`, generates local encrypted state, and prints the permanent named workload code.

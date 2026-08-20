@@ -1,50 +1,37 @@
 # PAPPY OMEGA-MINI Workload Worker
 
-This small package runs only the WhatsApp session workload assigned to it by the central PAPPY OMEGA-MINI control plane. It does not contain Telegram, MongoDB, Redis, admin credentials, or another user’s data.
+This distribution is intentionally **one file**. It contains only `index.js`, which creates the small private `package.json`, installs the restricted WhatsApp dependencies, creates local encrypted worker storage, and starts the panel runtime.
 
-## What the user needs
+The user does not need to create an `.env` file, write a `package.json`, configure MongoDB, configure Redis, add a Telegram token, or create a session secret.
 
-The user needs Node.js 20 or newer, a panel that can keep a Node.js process running, and outbound HTTPS access. The user does not need to create a secret, configure MongoDB, configure Redis, or add a Telegram token.
+## Setup
 
-## One-command setup
-
-In PAPPY OMEGA-MINI, open **Workload → Create Panel Code** and copy the setup command. Download this package, open its folder, and paste the copied command into the panel terminal:
+In Telegram, open **PAPPY OMEGA-MINI → Workload → Create Panel Code** and copy the one-time enrollment token or setup command. Upload `index.js` to a Node.js 20+ panel, open the terminal in that folder, and run:
 
 ```bash
-npm install --omit=dev && node index.js --enrollment PASTE_THE_ONE_TIME_TOKEN_HERE
+node index.js --enrollment ONE_TIME_TOKEN
 ```
 
-The command uses the official HTTPS control endpoint by default. On the first start, the worker asks:
+The first run creates `package.json`, installs only `@crysnovax/baileys` and `pino`, then asks for a friendly name:
 
 ```text
 Choose a name for this workload (example: pappy):
 ```
 
-Enter a short name such as `pappy`, `business`, or `tester-1`. The worker creates and stores its own local secret, registers securely, and prints a permanent code similar to:
+Enter `pappy`, `business`, or another short name. The worker registers securely and prints a permanent workload code such as:
 
 ```text
-pappy-AB12CD
+pappy-ab12cd
 ```
 
-Keep that code safe. Return to Telegram and open **Workload → Add My Workload Code**, then paste the code. The code is workspace-scoped and cannot be reused or attached to another workspace. It remains reserved even if the worker is later disconnected or revoked.
+Keep that code safe. In Telegram, open **Workload → Add My Workload Code** and paste it. When the user taps **Pair Number**, Telegram shows the user’s ACTIVE workloads. Selecting `pappy-ab12cd` makes the next WhatsApp pairing run on that panel.
 
-When the user taps **Pair Number**, PAPPY OMEGA-MINI shows the user’s ACTIVE workloads. Selecting `pappy-AB12CD` makes the next WhatsApp pairing run on that worker. Existing sessions are not moved automatically.
+## Restarting the panel
 
-## Persistent storage
+Run the same command again or use the panel’s normal start command. The generated `package.json`, `node_modules`, and `pappy-workload-data` directory remain on the panel, so dependencies are not installed again and the worker credential/session state is reused. The one-time enrollment token is only needed on the first registration.
 
-Keep the `pappy-workload-data` directory persistent across restarts. It contains the encrypted worker credential and the encrypted WhatsApp session files. If the directory is deleted, the panel must be enrolled again and the worker will not retain its local WhatsApp sessions.
+Keep `pappy-workload-data` persistent. It contains the encrypted worker credential and WhatsApp session files. Do not delete it unless you intentionally want to enroll a new worker.
 
-## Optional environment overrides
+The workload code is workspace-scoped, permanently reserved, and cannot be reused for another workspace. Revoking a worker does not delete central user sessions or accounts.
 
-The copied command is enough. Advanced operators may override these values:
-
-```text
-PAPPY_WORKLOAD_URL=https://pappy-omega-mini.duckdns.org
-PAPPY_WORKLOAD_NAME=pappy
-PAPPY_WORKLOAD_ENROLLMENT_TOKEN=<one-time token>
-PAPPY_WORKER_DATA_DIR=./pappy-workload-data
-PAPPY_WORKLOAD_SESSION_SECRET=<optional private 32+ character value>
-PAPPY_WORKER_VERSION=1.0.0
-```
-
-If `PAPPY_WORKLOAD_SESSION_SECRET` is omitted, the worker generates a private local secret automatically. Never add the Telegram bot token, MongoDB URI, Redis URI, owner secrets, or admin credentials to this package.
+Never add Telegram, MongoDB, Redis, owner, or admin credentials to this file or panel directory.
