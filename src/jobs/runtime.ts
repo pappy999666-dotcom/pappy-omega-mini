@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
+import type { JobProgress, WorkerContext } from "./job-contracts.js";
 import {
   LinkBucketStore,
   type LinkRecord,
@@ -968,7 +969,11 @@ export function startWorkerRuntime(): JobOrchestrator {
                 nextActionAt: Date.now() + wait,
                 lastResult: `Next group post in ${Math.ceil(wait / 1000)}s.`,
               });
-              await new Promise((resolve) => setTimeout(resolve, wait));
+              await waitWithHeartbeat(context, wait, {
+                currentGroup: jid,
+                currentAction: `waiting for next ${kind} post`,
+                nextActionAt: Date.now() + wait,
+              });
             }
           }
           lastPostAt = Date.now();
@@ -1188,6 +1193,27 @@ async function sweepPendingMainValidation(
       );
     }
     await Promise.all(jobs);
+  }
+}
+
+async function waitWithHeartbeat(
+  context: WorkerContext,
+  waitMs: number,
+  progress: Pick<JobProgress, "currentGroup" | "currentAction" | "nextActionAt">,
+): Promise<void> {
+  const nextActionAt = progress.nextActionAt ?? Date.now() + waitMs;
+  let remaining = Math.max(0, nextActionAt - Date.now());
+  while (remaining > 0 && !context.isCancellationRequested()) {
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(15_000, remaining)),
+    );
+    remaining = Math.max(0, nextActionAt - Date.now());
+    if (remaining > 0)
+      await context.report({
+        ...progress,
+        nextActionAt,
+        lastResult: `Next group post in ${Math.ceil(remaining / 1000)}s.`,
+      });
   }
 }
 

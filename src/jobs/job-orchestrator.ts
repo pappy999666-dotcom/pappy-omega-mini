@@ -452,12 +452,25 @@ export class JobOrchestrator {
     this.reaperBusy = true;
     try {
       const cutoff = Date.now() - 2 * 60_000;
+      const recoveryJobs = await this.queue.getJobs(
+        ["active", "waiting", "delayed"],
+        0,
+        2000,
+        true,
+      );
+      const recoveryParents = new Set(
+        recoveryJobs
+          .map((job) => String(job.id))
+          .filter((jobId) => jobId.includes(":startup:"))
+          .map((jobId) => jobId.split(":startup:", 1)[0]),
+      );
       for (const record of await this.store.listAll()) {
         const heartbeatAge =
           Date.now() - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
         const retryableFailed = isRetryableBroadcastFailure(record, heartbeatAge);
         if (!["RUNNING", "RETRYING"].includes(record.state) && !retryableFailed)
           continue;
+        if (recoveryParents.has(record.jobId)) continue;
         if (!retryableFailed &&
           (record.heartbeatAt ?? record.startedAt ?? record.createdAt) > cutoff
         )
