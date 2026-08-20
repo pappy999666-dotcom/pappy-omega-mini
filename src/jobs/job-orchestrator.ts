@@ -81,6 +81,15 @@ export class RedisJobStore {
     await this.redis.del(`${STORE_PREFIX}${jobId}`);
   }
 
+  async clearError(jobId: string): Promise<boolean> {
+    const current = await this.get(jobId);
+    if (!current || current.error === undefined) return false;
+    const next = { ...current };
+    delete next.error;
+    await this.set(next);
+    return true;
+  }
+
   async update(
     jobId: string,
     patch: Partial<JobRecord>,
@@ -381,6 +390,7 @@ export class JobOrchestrator {
       startedAt: Date.now(),
       heartbeatAt: Date.now(),
     });
+    await this.store.clearError(record.jobId);
     const controller = new AbortController();
     const context: WorkerContext = {
       job: (await this.store.get(record.jobId)) ?? record,
@@ -429,6 +439,7 @@ export class JobOrchestrator {
         heartbeatAt: Date.now(),
         cancellationRequested: context.isCancellationRequested(),
       });
+      if (finalState === "COMPLETED") await this.store.clearError(record.jobId);
       const completedRecord = await this.store.get(record.jobId);
       if (completedRecord) {
         for (const hook of this.completionHooks)
