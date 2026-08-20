@@ -1,0 +1,132 @@
+=== TYPECHECK ===
+TYPECHECK_EXIT=0
+=== TESTS ===
+
+ RUN  v3.2.7 /home/ubuntu/pappy-omega-mini
+
+ ✓ tests/telegram-ui.test.ts (21 tests) 6ms
+stderr | tests/menu-and-media.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/preview-manager.test.ts > canonical Baileys-native preview pipeline > resolves parameterized group invites through the bare invite code
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/menu-and-media.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/preview-manager.test.ts > canonical Baileys-native preview pipeline > uses the exact native linkPreview contract for a URL text message
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/menu-and-media.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/preview-manager.test.ts > canonical Baileys-native preview pipeline > preserves hidden mentions while using the native linkPreview path
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+(node:226286) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+ ✓ tests/live-settings.test.ts (1 test) 57ms
+stderr | tests/preview-manager.test.ts > canonical Baileys-native preview pipeline > normalizes a tall source without upscaling or cropping
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/menu-and-media.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+ ✓ tests/workers.test.ts (2 tests) 9ms
+stderr | tests/v2-hardening.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/v2-hardening.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/menu-and-media.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/v2-hardening.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/menu-and-media.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/menu-and-media.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/preview-manager.test.ts > canonical Baileys-native preview pipeline > uses a socket uploader once for repeated native preview sends
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+ ✓ tests/join-and-live-show.test.ts (8 tests) 6ms
+stderr | tests/v2-hardening.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stdout | tests/menu-and-media.test.ts > WhatsApp command privacy > silences public and unknown WhatsApp commands
+[pappy-omega-mini] WhatsApp command unauthorized session=9a7308e0-0e59-4f40-89b9-1cc5fd537b5b sender=2348099999999@s.whatsapp.net command=unknown
+
+ ✓ tests/v2-hardening.test.ts (12 tests) 59ms
+stderr | EventEmitter.silentEmit (/home/ubuntu/pappy-omega-mini/node_modules/.pnpm/ioredis@5.11.1/node_modules/ioredis/built/Redis.js:553:21)
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/menu-and-media.test.ts > admin menu media > accepts an image and attaches it to the WhatsApp menu
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+ ✓ tests/menu-and-media.test.ts (21 tests) 125ms
+stderr | tests/autopromote.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/autopromote.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+ ✓ tests/broadcast-format.test.ts (2 tests) 2ms
+stderr | tests/autopromote.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/preview-manager.test.ts > canonical Baileys-native preview pipeline > coalesces concurrent sends of one URL into one resolver pass
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+stderr | tests/autopromote.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+ ✓ tests/transport-media.test.ts (15 tests) 6ms
+stderr | tests/autopromote.test.ts
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+ ✓ tests/autopromote.test.ts (5 tests) 13ms
+stderr | EventEmitter.silentEmit (/home/ubuntu/pappy-omega-mini/node_modules/.pnpm/ioredis@5.11.1/node_modules/ioredis/built/Redis.js:553:21)
+[ioredis] Unhandled error event: Error: connect ECONNREFUSED 127.0.0.1:6379
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1634:16)
+
+ ✓ tests/preview-manager.test.ts (15 tests) 958ms
+   ✓ canonical Baileys-native preview pipeline > uses a socket uploader once for repeated native preview sends  394ms
+ ✓ tests/inceptor.test.ts (1 test) 2ms
+
+ Test Files  11 passed (11)
+      Tests  103 passed (103)
+   Start at  11:59:16
+   Duration  1.53s (transform 922ms, setup 0ms, collect 3.87s, tests 1.24s, environment 2ms, prepare 592ms)
+
+TEST_EXIT=0
+=== BUILD ===
+BUILD_EXIT=0

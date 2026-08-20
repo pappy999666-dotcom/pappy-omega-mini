@@ -1,0 +1,246 @@
+=== WORKLOAD SYMBOLS ===
+src/whatsapp/session-manager.ts:55:  startHeartbeat,
+src/whatsapp/session-manager.ts:680:        startHeartbeat({
+src/whatsapp/session-manager.ts:696:                throw new Error("WhatsApp websocket closed during heartbeat.");
+src/whatsapp/session-manager.ts:705:            noteError(key, `heartbeat: ${reason}`);
+src/whatsapp/session-manager.ts:708:              lastError: `heartbeat: ${reason}`,
+src/whatsapp/session-lifecycle.ts:21:  heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+src/whatsapp/session-lifecycle.ts:46:    heartbeatTimer: undefined,
+src/whatsapp/session-lifecycle.ts:119:  if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
+src/whatsapp/session-lifecycle.ts:121:  state.heartbeatTimer = undefined;
+src/whatsapp/session-lifecycle.ts:128:  if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
+src/whatsapp/session-lifecycle.ts:129:  state.heartbeatTimer = undefined;
+src/whatsapp/session-lifecycle.ts:167:export function startHeartbeat(input: {
+src/whatsapp/session-lifecycle.ts:176:  if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
+src/whatsapp/session-lifecycle.ts:177:  state.heartbeatTimer = setInterval(() => {
+src/whatsapp/session-lifecycle.ts:210:  ageSinceHeartbeatMs: number;
+src/whatsapp/session-lifecycle.ts:228:    ageSinceHeartbeatMs: Math.max(0, now - state.lastTransitionAt),
+src/jobs/job-contracts.ts:76:  heartbeatAt?: number;
+src/jobs/job-orchestrator.ts:162:          heartbeatAt: Date.now(),
+src/jobs/job-orchestrator.ts:207:      const heartbeatAge = now - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
+src/jobs/job-orchestrator.ts:215:        (!bullActive || heartbeatAge > STALE_ACTIVE_JOB_GRACE_MS) &&
+src/jobs/job-orchestrator.ts:216:        heartbeatAge > 10_000;
+src/jobs/job-orchestrator.ts:219:        (forceRunningRecovery && record.state === "RUNNING" && heartbeatAge > 0) ||
+src/jobs/job-orchestrator.ts:222:        isRetryableBroadcastFailure(record, heartbeatAge);
+src/jobs/job-orchestrator.ts:231:        heartbeatAt: now,
+src/jobs/job-orchestrator.ts:343:    reason = "Inceptor recovered a stale worker heartbeat.",
+src/jobs/job-orchestrator.ts:351:    const heartbeatAge = now - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
+src/jobs/job-orchestrator.ts:352:    if (heartbeatAge < STALE_ACTIVE_JOB_GRACE_MS) return "ignored";
+src/jobs/job-orchestrator.ts:360:        heartbeatAt: now,
+src/jobs/job-orchestrator.ts:369:      heartbeatAt: now,
+src/jobs/job-orchestrator.ts:573:      heartbeatAt: Date.now(),
+src/jobs/job-orchestrator.ts:590:          await this.store.update(record.jobId, { heartbeatAt: Date.now() });
+src/jobs/job-orchestrator.ts:605:          heartbeatAt: Date.now(),
+src/jobs/job-orchestrator.ts:622:        heartbeatAt: Date.now(),
+src/jobs/job-orchestrator.ts:633:        heartbeatAt: Date.now(),
+src/jobs/job-orchestrator.ts:659:        const heartbeatAge =
+src/jobs/job-orchestrator.ts:660:          Date.now() - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
+src/jobs/job-orchestrator.ts:661:        const retryableFailed = isRetryableBroadcastFailure(record, heartbeatAge);
+src/jobs/job-orchestrator.ts:666:          (record.heartbeatAt ?? record.startedAt ?? record.createdAt) > cutoff
+src/jobs/job-orchestrator.ts:671:          record.state === "RUNNING" && heartbeatAge > STALE_ACTIVE_JOB_GRACE_MS;
+src/jobs/job-orchestrator.ts:676:            heartbeatAt: Date.now(),
+src/jobs/job-orchestrator.ts:684:            error: "Worker heartbeat expired; job recovery scheduled.",
+src/jobs/job-orchestrator.ts:685:            heartbeatAt: Date.now(),
+src/jobs/job-orchestrator.ts:700:            error: "Worker heartbeat expired after the configured retry limit.",
+src/jobs/job-orchestrator.ts:701:            heartbeatAt: Date.now(),
+src/jobs/job-orchestrator.ts:720:  heartbeatAge: number,
+src/jobs/job-orchestrator.ts:725:  if (heartbeatAge > 24 * 60 * 60_000) return false;
+src/jobs/runtime.ts:861:        const readinessHeartbeat = setInterval(() => {
+src/jobs/runtime.ts:869:        readinessHeartbeat.unref?.();
+src/jobs/runtime.ts:879:          clearInterval(readinessHeartbeat);
+src/jobs/runtime.ts:894:        const inventoryHeartbeat = setInterval(() => {
+src/jobs/runtime.ts:902:        inventoryHeartbeat.unref?.();
+src/jobs/runtime.ts:916:          clearInterval(inventoryHeartbeat);
+src/jobs/runtime.ts:1044:              await waitWithHeartbeat(context, wait, {
+src/jobs/runtime.ts:1283:async function waitWithHeartbeat(
+src/jobs/inceptor.ts:35:  const heartbeat = record.heartbeatAt ?? record.startedAt ?? record.createdAt;
+src/jobs/inceptor.ts:36:  return now - heartbeat >= STUCK_JOB_GRACE_MS;
+=== API/SERVER SURFACE ===
+src/telegram/bot.ts:1:import { Telegraf } from "telegraf";
+src/telegram/bot.ts:410:  bot: Telegraf<Context>,
+src/telegram/bot.ts:442:export function createTelegramBot(): Telegraf<Context> {
+src/telegram/bot.ts:445:  const bot = new Telegraf<Context>(env.TELEGRAM_BOT_TOKEN);
+src/telegram/bot.ts:576:  bot.action("group:start:refresh", async (ctx) => {
+src/telegram/bot.ts:602:  bot.action("group:start:rules", async (ctx) => {
+src/telegram/bot.ts:633:  bot.action("group:start:moderation", async (ctx) => {
+src/telegram/bot.ts:646:  bot.command("help", async (ctx) =>
+src/telegram/bot.ts:652:  bot.command("menu", async (ctx) => {
+src/telegram/bot.ts:659:  bot.command("pair", async (ctx) =>
+src/telegram/bot.ts:662:  bot.command("sessions", async (ctx) => sendSessions(ctx, 0));
+src/telegram/bot.ts:663:  bot.command("adminmedia", async (ctx) => {
+src/telegram/bot.ts:667:  bot.command("autopromote", async (ctx) => {
+src/telegram/bot.ts:680:  bot.on("text", async (ctx) => {
+src/telegram/bot.ts:1677:  bot.on("document", async (ctx) => {
+src/telegram/bot.ts:1819:  bot.on("photo", async (ctx) => {
+src/telegram/bot.ts:1917:  bot.on("video", async (ctx) => {
+src/telegram/bot.ts:1962:  bot.on("audio", async (ctx) => {
+src/telegram/bot.ts:1983:  bot.action("menu:main", async (ctx) => {
+src/telegram/bot.ts:1991:  bot.action("home", async (ctx) => {
+src/telegram/bot.ts:1999:  bot.action("help:main", async (ctx) => {
+src/telegram/bot.ts:2003:  bot.action("ui:help", async (ctx) => {
+src/telegram/bot.ts:2008:  bot.action("session:new", async (ctx) => {
+src/telegram/bot.ts:2012:  bot.action(/^pair:number:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:2034:  bot.action(/^sessions:list(?::(\d+))?$/, async (ctx) => {
+src/telegram/bot.ts:2038:  bot.action(/^sessions:page:(\d+)$/, async (ctx) => {
+src/telegram/bot.ts:2043:  bot.action(/^session:([^:]+):groups(?::(\d+))?$/, async (ctx) => {
+src/telegram/bot.ts:2050:  bot.action(/^session:([^:]+):menu$/, async (ctx) => {
+src/telegram/bot.ts:2060:  bot.action(
+src/telegram/bot.ts:2131:  bot.action(/^session:view:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:2141:  bot.action(/^session:([^:]+):purge:confirm$/, async (ctx) => {
+src/telegram/bot.ts:2199:  bot.action(/^session:([^:]+):pfp:(get|remove|change)$/, async (ctx) => {
+src/telegram/bot.ts:2274:  bot.action(/^session:([^:]+):group:view:(\d+)$/, async (ctx) => {
+src/telegram/bot.ts:2328:  bot.action(/^session:([^:]+):group:invite:(\d+)$/, async (ctx) => {
+src/telegram/bot.ts:2377:  bot.action(/^session:([^:]+):group:picture:(\d+)$/, async (ctx) => {
+src/telegram/bot.ts:2405:  bot.action(/^session:([^:]+):group:leave:(\d+)$/, async (ctx) => {
+src/telegram/bot.ts:2440:  bot.action(/^session:([^:]+):group:leave:confirm$/, async (ctx) => {
+src/telegram/bot.ts:2488:  bot.action(/^session:([^:]+):group:leave$/, async (ctx) => {
+src/telegram/bot.ts:2508:  bot.action(/^session:([^:]+):sudo:(list|add|remove)$/, async (ctx) => {
+src/telegram/bot.ts:2566:  bot.action(/^session:([^:]+):auto:(collect|validate)$/, async (ctx) => {
+src/telegram/bot.ts:2582:  bot.action(/^session:([^:]+):action:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:2841:  bot.action("bridge:global", async (ctx) => {
+src/telegram/bot.ts:2845:  bot.action("ui:bridge", async (ctx) => {
+src/telegram/bot.ts:2849:  bot.action("bridge:global:select", async (ctx) => {
+src/telegram/bot.ts:2862:  bot.action("bridge:global:select:all", async (ctx) => {
+src/telegram/bot.ts:2873:  bot.action(/^bridge:global:toggle:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:2891:  bot.action("bridge:global:clear", async (ctx) => {
+src/telegram/bot.ts:2896:  bot.action("bridge:global:command", async (ctx) => {
+src/telegram/bot.ts:2921:    bot.action(action, async (ctx) => {
+src/telegram/bot.ts:2932:  bot.action("bucket:status", async (ctx) => {
+src/telegram/bot.ts:2936:  bot.action("bucket:validate", async (ctx) => {
+src/telegram/bot.ts:2990:  bot.action("ui:validator", async (ctx) => {
+src/telegram/bot.ts:2994:  bot.action("bucket:live", async (ctx) => {
+src/telegram/bot.ts:2998:  bot.action("bucket:live:on", async (ctx) => {
+src/telegram/bot.ts:3002:  bot.action("bucket:live:off", async (ctx) => {
+src/telegram/bot.ts:3006:  bot.action("bucket:live:refresh", async (ctx) => {
+src/telegram/bot.ts:3010:  bot.action("bucket:downloads", async (ctx) => {
+src/telegram/bot.ts:3050:  bot.action(
+src/telegram/bot.ts:3095:  bot.action(/^bucket:view:(main|validating|active|dead|error|master)$/, async (ctx) => {
+src/telegram/bot.ts:3141:  bot.action("bucket:merge:main", async (ctx) => {
+src/telegram/bot.ts:3178:  bot.action(/^bucket:purge:(dead|error|master)$/, async (ctx) => {
+src/telegram/bot.ts:3196:  bot.action(/^bucket:purge:confirm:(dead|error|master)$/, async (ctx) => {
+src/telegram/bot.ts:3235:  bot.action(/^session:([^:]+):collect$/, async (ctx) => {
+src/telegram/bot.ts:3252:  bot.action(/^session:([^:]+):collect:live$/, async (ctx) => {
+src/telegram/bot.ts:3259:  bot.action("jobs:live:open", async (ctx) => {
+src/telegram/bot.ts:3287:  bot.action(/^job:live:([A-Z0-9]+)$/i, async (ctx) => {
+src/telegram/bot.ts:3302:  bot.action("jobs:list", async (ctx) => {
+src/telegram/bot.ts:3306:  bot.action("schedule:new:validation", async (ctx) => {
+src/telegram/bot.ts:3324:  bot.action(/^schedule:disable:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:3336:  bot.action("settings:menu", async (ctx) => {
+src/telegram/bot.ts:3345:  bot.action("settings:autojoin:toggle", async (ctx) => {
+src/telegram/bot.ts:3358:  bot.action("settings:broadcastdelay:set", async (ctx) => {
+src/telegram/bot.ts:3371:  bot.action("settings:broadcastdelay:cycle", async (ctx) => {
+src/telegram/bot.ts:3388:  bot.action("settings:prefix:cycle", async (ctx) => {
+src/telegram/bot.ts:3405:  bot.action("settings:delay:cycle", async (ctx) => {
+src/telegram/bot.ts:3420:  bot.action("settings:joinmode:cycle", async (ctx) => {
+src/telegram/bot.ts:3435:  bot.action("support:menu", async (ctx) => {
+src/telegram/bot.ts:3453:  bot.action("admin:support", async (ctx) => {
+src/telegram/bot.ts:3458:  bot.action(/^admin:support:reply:([a-f0-9-]+)$/, async (ctx) => {
+src/telegram/bot.ts:3476:  bot.action(/^admin:support:close:([a-f0-9-]+)$/, async (ctx) => {
+src/telegram/bot.ts:3482:  bot.action("ui:schedule", async (ctx) => {
+src/telegram/bot.ts:3486:  bot.action("ui:settings", async (ctx) => {
+src/telegram/bot.ts:3495:  bot.action("ui:support", async (ctx) => {
+src/telegram/bot.ts:3513:  bot.action("ui:join", async (ctx) => {
+src/telegram/bot.ts:3518:  bot.action(/^session:([^:]+):bridge:command$/, async (ctx) => {
+src/telegram/bot.ts:3549:  bot.action(/^session:([^:]+):bridge:(start|stop)$/, async (ctx) => {
+src/telegram/bot.ts:3583:  bot.action(/^session:([^:]+):joinmgr$/, async (ctx) => {
+src/telegram/bot.ts:3587:  bot.action(
+src/telegram/bot.ts:3634:  bot.action(
+src/telegram/bot.ts:4003:  bot.action("autopromote:user", async (ctx) => {
+src/telegram/bot.ts:4008:  bot.action(/^session:([^:]+):autopromote$/, async (ctx) => {
+src/telegram/bot.ts:4026:  bot.action("admin:autopromote", async (ctx) => {
+src/telegram/bot.ts:4031:  bot.action("admin:autopromote:new", async (ctx) => {
+src/telegram/bot.ts:4057:  bot.action("admin:autopromote:targets:refresh", async (ctx) => {
+src/telegram/bot.ts:4075:  bot.action(/^autopromote:global:toggle:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4088:  bot.action("autopromote:global:all", async (ctx) => {
+src/telegram/bot.ts:4099:  bot.action("autopromote:global:ready", async (ctx) => {
+src/telegram/bot.ts:4128:  bot.action(/^autopromote:scope:SESSION:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4137:  bot.action("autopromote:scope:USER", async (ctx) => {
+src/telegram/bot.ts:4144:  bot.action(/^autopromote:command:(allstatus|allchat|allstatusx)$/, async (ctx) => {
+src/telegram/bot.ts:4169:  bot.action(/^autopromote:days:(\d+)$/, async (ctx) => {
+src/telegram/bot.ts:4178:  bot.action(/^autopromote:times:([1-5])$/, async (ctx) => {
+src/telegram/bot.ts:4188:  bot.action(/^autopromote:posts:(\d+)$/, async (ctx) => {
+src/telegram/bot.ts:4197:  bot.action("autopromote:confirm", async (ctx) => {
+src/telegram/bot.ts:4223:  bot.action("autopromote:edit", async (ctx) => {
+src/telegram/bot.ts:4231:  bot.action("autopromote:cancel", async (ctx) => {
+src/telegram/bot.ts:4236:  bot.action("autopromote:new", async (ctx) => {
+src/telegram/bot.ts:4256:  bot.action(/^autopromote:view:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4269:  bot.action(/^autopromote:(pause|resume):([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4286:  bot.action(/^autopromote:disable:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4298:  bot.action(/^autopromote:delete:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4320:  bot.action(/^autopromote:delete:confirm:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4337:  bot.action("admin:panel", async (ctx) => {
+src/telegram/bot.ts:4352:  bot.action("admin:inceptor", async (ctx) => {
+src/telegram/bot.ts:4357:  bot.action("admin:inceptor:run", async (ctx) => {
+src/telegram/bot.ts:4373:  bot.action("admin:home", async (ctx) => {
+src/telegram/bot.ts:4388:  bot.action(/^admin:users(?::(\d+))?$/, async (ctx) => {
+src/telegram/bot.ts:4393:  bot.action(/^admin:user:(ban|unban):(.+)$/, async (ctx) => {
+src/telegram/bot.ts:4410:  bot.action("admin:bucket", async (ctx) => {
+src/telegram/bot.ts:4418:  bot.action("admin:bridge", async (ctx) => {
+src/telegram/bot.ts:4428:  bot.action("admin:bridge:clear", async (ctx) => {
+src/telegram/bot.ts:4439:  bot.action("admin:bridge:all", async (ctx) => {
+src/telegram/bot.ts:4452:  bot.action(/^admin:bridge:toggle:([A-Z0-9]+)$/, async (ctx) => {
+src/telegram/bot.ts:4474:  bot.action("admin:bridge:command", async (ctx) => {
+src/telegram/bot.ts:4510:  bot.action(/^admin:bridge:open:([A-Z0-9]+)$/, async (ctx) => {
+src/telegram/bot.ts:4533:  bot.action(/^admin:bridge:send:([A-Z0-9]+)$/, async (ctx) => {
+src/telegram/bot.ts:4563:  bot.action(/^admin:bridge:command:([^:]+):([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4598:  bot.action(/^admin:bridge:session:([^:]+):([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4636:  bot.action("admin:audit", async (ctx) => {
+src/telegram/bot.ts:4642:  bot.action("admin:forcejoin", async (ctx) => {
+src/telegram/bot.ts:4650:  bot.action("admin:forcejoin:add", async (ctx) => {
+src/telegram/bot.ts:4670:  bot.action(/^admin:forcejoin:toggle:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4689:  bot.action(/^admin:forcejoin:remove:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4703:  bot.action(/^forcejoin:open:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4721:  bot.action("forcejoin:status", async (ctx) => {
+src/telegram/bot.ts:4735:  bot.action("forcejoin:check", async (ctx) => {
+src/telegram/bot.ts:4746:  bot.action("admin:media", async (ctx) => {
+src/telegram/bot.ts:4751:  bot.action("admin:jobs", async (ctx) => {
+src/telegram/bot.ts:4756:  bot.action("admin:jobs:refresh", async (ctx) => {
+src/telegram/bot.ts:4761:  bot.action("admin:jobs:clear", async (ctx) => {
+src/telegram/bot.ts:4779:  bot.action("admin:jobs:clear:confirm", async (ctx) => {
+src/telegram/bot.ts:4815:  bot.action(/^admin:jobs:cancel:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4830:  bot.action(/^admin:media:add:(image|video)$/, async (ctx) => {
+src/telegram/bot.ts:4849:  bot.action("admin:safe", async (ctx) => {
+src/telegram/bot.ts:4895:  bot.action("admin:media:select", async (ctx) => {
+src/telegram/bot.ts:4915:  bot.action(/^admin:media:pick:([^:]+)$/, async (ctx) => {
+src/telegram/bot.ts:4936:  bot.action("admin:media:clear", async (ctx) => {
+src/telegram/bot.ts:4942:  bot.action("admin:media:caption", async (ctx) => {
+src/telegram/bot.ts:4959:  bot.action("admin:broadcast", async (ctx) => {
+src/telegram/bot.ts:4975:  bot.action("admin:broadcast:cancel", async (ctx) => {
+src/telegram/bot.ts:4982:  bot.action("admin:broadcast:confirm", async (ctx) => {
+src/telegram/moderator.ts:3:import type { Context, Telegraf } from "telegraf";
+src/telegram/moderator.ts:215:  bot: Telegraf<Context>,
+src/telegram/moderator.ts:276:export function startModeratorReconciliation(bot: Telegraf<Context>): void {
+src/telegram/moderator.ts:291:export function installModeratorProtection(bot: Telegraf<Context>): void {
+src/telegram/moderator.ts:292:  bot.on("new_chat_members", async (ctx, next) => {
+src/telegram/moderator.ts:351:  bot.on("message", async (ctx, next) => {
+src/telegram/moderator.ts:619:export function installModeratorCommands(bot: Telegraf<Context>): void {
+src/telegram/moderator.ts:620:  bot.command("moderation", async (ctx) => {
+src/telegram/moderator.ts:634:  bot.action("mod:refresh", async (ctx) => {
+=== DOWNLOAD/PACKAGE SURFACE ===
+src/telegram/bot.ts:1732:            `Telegram file download failed with ${response.status}.`,
+src/telegram/bot.ts:1735:          throw new Error("Telegram file download returned no readable body.");
+src/telegram/bot.ts:1856:            `Telegram image download failed (${response.status}).`,
+src/telegram/bot.ts:3010:  bot.action("bucket:downloads", async (ctx) => {
+src/telegram/bot.ts:3023:          btn("Main · TXT", "bucket:download:main:txt"),
+src/telegram/bot.ts:3024:          btn("Main · HTML", "bucket:download:main:html"),
+src/telegram/bot.ts:3027:          btn("Validating · TXT", "bucket:download:validating:txt"),
+src/telegram/bot.ts:3028:          btn("Validating · HTML", "bucket:download:validating:html"),
+src/telegram/bot.ts:3031:          btn("Active · TXT", "bucket:download:active:txt"),
+src/telegram/bot.ts:3032:          btn("Active · HTML", "bucket:download:active:html"),
+src/telegram/bot.ts:3035:          btn("Dead · TXT", "bucket:download:dead:txt"),
+src/telegram/bot.ts:3036:          btn("Dead · HTML", "bucket:download:dead:html"),
+src/telegram/bot.ts:3039:          btn("Error · TXT", "bucket:download:error:txt"),
+src/telegram/bot.ts:3040:          btn("Error · HTML", "bucket:download:error:html"),
+src/telegram/bot.ts:3043:          btn("Master · TXT", "bucket:download:master:txt"),
+src/telegram/bot.ts:3044:          btn("Master · HTML", "bucket:download:master:html"),
+src/telegram/bot.ts:3051:    /^bucket:download:(main|validating|active|dead|error|master):(txt|html)$/,
+src/telegram/bot.ts:3120:            btn("⬇ TXT", `bucket:download:${bucket}:txt`),
+src/telegram/bot.ts:3121:            btn("⬇ HTML", `bucket:download:${bucket}:html`),
+src/telegram/ui.ts:405:    [btn("⬇️ Downloads", "bucket:downloads")],
+src/whatsapp/quoted-payload-resolver.ts:1:import { downloadMediaMessage } from "@crysnovax/baileys/lib/Utils/messages.js";
+src/whatsapp/quoted-payload-resolver.ts:62:    const downloadEnvelope =
+src/whatsapp/quoted-payload-resolver.ts:66:    const bytes = await downloadMediaMessage(
+src/whatsapp/quoted-payload-resolver.ts:67:      downloadEnvelope as never,
+src/whatsapp/quoted-payload-resolver.ts:91:      `[pappy-omega-mini] inbound media download failed kind=${media.kind} message=${String(envelope.key?.id ?? "unknown")}: ${error instanceof Error ? error.message : String(error)}`,
+src/types/baileys-internal.d.ts:2:  export function downloadMediaMessage(
+package.json:10:    "start": "node dist/index.js",

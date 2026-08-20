@@ -1,0 +1,195 @@
+=== GIT ===
+## [32mmain[m...[31morigin/main[m [ahead [32m2[m]
+[31m??[m OMEGA_V1_RESTORE_FEATURE_MATRIX.md
+[31m??[m PAPPY_CACHE_V3_SHARP_BENCHMARK.md
+[31m??[m PAPPY_CODY_PREVIEW_COMPARISON.md
+[31m??[m PAPPY_OMEGA_V1_GROUP_PREVIEW_FINDINGS.md
+[31m??[m PAPPY_PREVIEW_SOURCE_DIMENSION_FINDINGS.md
+[31m??[m PAPPY_SHARED_LINK_PREVIEW_PROMPT.md
+[31m??[m PAPPY_SHARED_PROMPT_IMPLEMENTATION_AUDIT.md
+[31m??[m TEST_REPORT_85_COMMAND_CONFLICT_20260819.md
+[31m??[m artifacts/
+[31m??[m callback_contract_audit.txt
+[31m??[m callback_contract_audit_after.txt
+[31m??[m callback_contract_audit_groups_validator_join_after.txt
+[31m??[m feature_inventory.txt
+[31m??[m omega-v1-reference/
+[31m??[m scripts/extract_shared_prompt.py
+[31m??[m shared_prompt_findings.md
+[31m??[m shared_prompt_full.txt
+[31m??[m shared_prompt_latest_findings.md
+[31m??[m tools/
+* [32mmain[m
+  [31mremotes/origin/HEAD[m -> origin/main
+  [31mremotes/origin/main[m
+[33m830de7b[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m feat: route worker-owned bridge commands over redis rpc
+[33m4981365[m feat: add fenced multi-vps worker role
+[33m0b97e45[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m feat: add inceptor maintenance engine
+[33ma4bcb47[m feat: improve bridge and dynamic auto promote
+[33mac31c2a[m fix: dispatch broadcasts with runtime ready totals
+[33mccd305a[m feat: add admin clear all jobs control
+[33mc350fdd[m fix: report broadcast completion back to whatsapp
+[33mb1a3497[m perf: reduce broadcast CPU and complete whatsapp menu
+[33m8faeac3[m fix: match exact crysnova whatsapp menu layout
+[33m27dbfb1[m fix: route crysnova menu, delete auto promote jobs, forward bridge quotes
+[33mab5ebdc[m feat: add pairing copy button and crysnova menu
+[33m97280e5[m fix: isolate broadcast logs and purge logged out sessions
+=== TREE ===
+src/admin/media-actions.ts
+src/autopromote/service.ts
+src/autopromote/types.ts
+src/config/env.ts
+src/core/control-plane.ts
+src/core/encrypted-store.ts
+src/core/errors.ts
+src/core/session-lock.ts
+src/core/session-registry.ts
+src/core/workspace-settings.ts
+src/doctor.ts
+src/index.ts
+src/jobs/bounded-batch.ts
+src/jobs/broadcast-format.ts
+src/jobs/inceptor.ts
+src/jobs/job-contracts.ts
+src/jobs/job-orchestrator.ts
+src/jobs/join-operation.ts
+src/jobs/join-result-store.ts
+src/jobs/runtime.ts
+src/jobs/scheduler.ts
+src/links/link-bucket-store.ts
+src/links/link-collector.ts
+src/links/link-export.ts
+src/links/url-canonicalization.ts
+src/links/validator-operations.ts
+src/links/validator-snapshot.ts
+src/media/menu-media-store.ts
+src/menus/menu-model.ts
+src/menus/renderers.ts
+src/menus/whatsapp-menu.ts
+src/persistence/mongo.ts
+src/telegram/bot.ts
+src/telegram/moderator.ts
+src/telegram/renderer.ts
+src/telegram/ui.ts
+src/types/baileys-internal.d.ts
+src/types/domain.ts
+src/types/v2.ts
+src/whatsapp/baileys-native-preview.ts
+src/whatsapp/command-registry.ts
+src/whatsapp/job-media-store.ts
+src/whatsapp/media-payload.ts
+src/whatsapp/message-router.ts
+src/whatsapp/quoted-payload-resolver.ts
+src/whatsapp/remote-bridge.ts
+src/whatsapp/session-allocator.ts
+src/whatsapp/session-lifecycle.ts
+src/whatsapp/session-manager.ts
+src/whatsapp/transport-adapter.ts
+=== COUNTS ===
+50
+tests/autopromote.test.ts
+tests/broadcast-format.test.ts
+tests/inceptor.test.ts
+tests/join-and-live-show.test.ts
+tests/live-settings.test.ts
+tests/menu-and-media.test.ts
+tests/preview-manager.test.ts
+tests/telegram-ui.test.ts
+tests/transport-media.test.ts
+tests/v2-hardening.test.ts
+tests/workers.test.ts
+=== PACKAGE SCRIPTS ===
+{
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "prettier --check package.json tsconfig.json src tests README.md",
+    "doctor": "tsx src/doctor.ts",
+    "doctor:ci": "tsx src/doctor.ts",
+    "format": "prettier --write ."
+  },
+  "dependencies": [
+    "@crysnovax/baileys",
+    "bullmq",
+    "dotenv",
+    "ioredis",
+    "link-preview-js",
+    "mongoose",
+    "pino",
+    "sharp",
+    "telegraf",
+    "zod"
+  ],
+  "devDependencies": [
+    "@types/node",
+    "prettier",
+    "tsx",
+    "typescript",
+    "vitest"
+  ]
+}
+=== DEPLOYMENT FILES ===
+./AUDIT_GROUPS_VALIDATOR_JOIN_20260819.md
+./AUDIT_PREVIEW_BRIDGE_COMMAND_STATE_20260819.md
+./AUDIT_SESSION_BRIDGE_RESTART_20260819.md
+./AUTHORITATIVE_PLAN_STATUS.md
+./AUTOPROMOTE_REQUIREMENTS_MATRIX.md
+./BAILEYS_PREVIEW_SOURCE_AUDIT_20260819.md
+./Dockerfile
+./OMEGA_MASTER_CORRECTION_AUDIT.md
+./OMEGA_MASTER_CORRECTION_RELEASE_REPORT.md
+./OMEGA_V1_RESTORE_FEATURE_MATRIX.md
+./PAPPY_BROADCAST_TRANSPORT_FIX_REPORT_20260819.md
+./PAPPY_CACHE_V3_SHARP_BENCHMARK.md
+./PAPPY_CHAT_STATUS_PREVIEW_RELEASE_REPORT.md
+./PAPPY_CODY_PREVIEW_COMPARISON.md
+./PAPPY_CURRENT_AUDIT_FINDINGS.md
+./PAPPY_DEEP_AUDIT_MATRIX.md
+./PAPPY_DEEP_AUDIT_RELEASE_REPORT.md
+./PAPPY_GROUP_PREVIEW_CONSISTENCY_REPORT_20260819.md
+./PAPPY_GROUP_PREVIEW_REGRESSION_FIX_REPORT_20260819.md
+./PAPPY_LIVE_PREVIEW_ACCEPTANCE_20260819.md
+./PAPPY_MASTER_BUILD_COMPLIANCE_AUDIT.md
+./PAPPY_MASTER_BUILD_RELEASE_REPORT.md
+./PAPPY_NATIVE_PREVIEW_ACCEPTANCE_20260819.json
+./PAPPY_OMEGA_MINI_ADVANCED_IMPLEMENTATION_PLAN.md
+./PAPPY_OMEGA_MINI_AUDIT_PRESENTATION_SCRIPT.md
+./PAPPY_OMEGA_MINI_COMPLETION_STATUS.md
+./PAPPY_OMEGA_MINI_E2E_ACCEPTANCE_REPORT.md
+./PAPPY_OMEGA_MINI_FINAL_IMPLEMENTATION_AUDIT.md
+./PAPPY_OMEGA_MINI_FULL_PROMPT_AUDIT_CHECKLIST.md
+./PAPPY_OMEGA_MINI_MASTER_IMPLEMENTATION_MAP.md
+./PAPPY_OMEGA_MINI_MODERATION_UX_SPEC.md
+./PAPPY_OMEGA_MINI_REMAINING_REQUIREMENTS_REVIEW.md
+./PAPPY_OMEGA_MINI_REQUIREMENTS_AUDIT.md
+./PAPPY_OMEGA_MINI_STABILITY_MODERATOR_AUDIT_CHECKLIST.md
+./PAPPY_OMEGA_V1_GROUP_PREVIEW_FINDINGS.md
+./PAPPY_PREVIEW_RESET_DESIGN.md
+./PAPPY_PREVIEW_RESET_FINAL_REPORT_20260819.md
+./PAPPY_PREVIEW_SOURCE_DIMENSION_FINDINGS.md
+./PAPPY_PREVIEW_VALIDATOR_RELEASE_REPORT.md
+./PAPPY_QUEUE_PREVIEW_FIX_REPORT_20260819.md
+./PAPPY_SECOND_AUDIT_JOIN_FINDINGS.md
+./PAPPY_SESSION_RECOVERY_INCIDENT_20260819.md
+./PAPPY_SESSION_RESTART_SURVIVAL_REPORT.md
+./PAPPY_SHARED_LINK_PREVIEW_PROMPT.md
+./PAPPY_SHARED_PROMPT_IMPLEMENTATION_AUDIT.md
+./PAPPY_SHARPENING_ARTIFACT_FINDINGS.md
+./README.md
+./REAL_PLAN_NORMALIZED.md
+./SECOND_AUDIT_COMPARISON_20260819.md
+./TEST_REPORT_85_COMMAND_CONFLICT_20260819.md
+./docker-compose.yml
+./node_modules/.modules.yaml
+./node_modules/.package-map.json
+./node_modules/.pnpm-workspace-state-v1.json
+./package.json
+./pnpm-lock.yaml
+./pnpm-workspace.yaml
+./shared_prompt_findings.md
+./shared_prompt_latest_findings.md
+./storage/workspace-settings.json
+./tsconfig.json
