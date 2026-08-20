@@ -15,6 +15,7 @@ import { JoinResultStore } from "./join-result-store.js";
 const QUEUE_NAME = "pappy-omega-mini-jobs";
 const STORE_PREFIX = "pappy-omega-mini:job:";
 const CODE_PREFIX = "pappy-omega-mini:job-code:";
+const STALE_ACTIVE_JOB_GRACE_MS = 60_000;
 
 export class RedisJobStore {
   constructor(private readonly redis: Redis) {}
@@ -161,7 +162,11 @@ export class JobOrchestrator {
       const bullDelayed = bullJob ? await bullJob.isDelayed() : false;
       const shouldRecover =
         !bullJob ||
-        (record.state === "RUNNING" && !bullWaiting && !bullActive && !bullDelayed && heartbeatAge > 10_000) ||
+        (record.state === "RUNNING" &&
+          !bullWaiting &&
+          !bullDelayed &&
+          (!bullActive || heartbeatAge > STALE_ACTIVE_JOB_GRACE_MS) &&
+          heartbeatAge > 10_000) ||
         (record.state === "RETRYING" && !bullWaiting && !bullActive && !bullDelayed);
       if (!shouldRecover) continue;
       const claimKey = `pappy-omega-mini:recovery:${record.jobId}:${record.heartbeatAt ?? record.createdAt}`;
@@ -429,7 +434,11 @@ export class JobOrchestrator {
         )
           continue;
         const bullJob = await this.queue.getJob(record.jobId);
-        if (bullJob && (await bullJob.isActive())) continue;
+        const heartbeatAge =
+          Date.now() - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
+        const staleActive =
+          record.state === "RUNNING" && heartbeatAge > STALE_ACTIVE_JOB_GRACE_MS;
+        if (bullJob && (await bullJob.isActive()) && !staleActive) continue;
         if (record.cancellationRequested) {
           await this.store.update(record.jobId, {
             state: "CANCELLED",
