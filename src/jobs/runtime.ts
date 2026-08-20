@@ -983,29 +983,25 @@ export function startWorkerRuntime(): JobOrchestrator {
             nextActionAt: Date.now(),
           });
           try {
-            if (kind === "gstatus" || kind === "allstatus")
-              await sendGroupStatus(context.job.workspaceId, sessionId, jid, {
-                text,
-                ...(media ? { media } : {}),
-              });
-            else if (kind === "allchat")
-              await sendGroupMentions(
-                context.job.workspaceId,
-                sessionId,
-                jid,
-                text,
-                undefined,
-                media,
-              );
-            else
-              await sendGroupMentions(
-                context.job.workspaceId,
-                sessionId,
-                jid,
-                text,
-                undefined,
-                media,
-              );
+            const delivery =
+              kind === "gstatus" || kind === "allstatus"
+                ? sendGroupStatus(context.job.workspaceId, sessionId, jid, {
+                    text,
+                    ...(media ? { media } : {}),
+                  })
+                : sendGroupMentions(
+                    context.job.workspaceId,
+                    sessionId,
+                    jid,
+                    text,
+                    undefined,
+                    media,
+                  );
+            await withTimeout(
+              delivery,
+              90_000,
+              `${kind} delivery timed out for ${jid}`,
+            );
             await recordBroadcastDelivered(
               context.job.jobId,
               kind,
@@ -1193,6 +1189,25 @@ async function sweepPendingMainValidation(
       );
     }
     await Promise.all(jobs);
+  }
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
