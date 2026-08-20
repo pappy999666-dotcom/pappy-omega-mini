@@ -31,4 +31,4 @@ Existing-session migration from an owner VPS to a panel worker is not triggered 
 
 ## Current artifacts
 
-The restricted worker archive is `/home/ubuntu/pappy-omega-mini-worker-package-v1.0.0.tar.gz` with SHA-256 `fea15e0cb39c6d761681f6df39b4e7db38b24e66910791efc11b6524f1e61662`. The implementation branch currently contains commits `d2bb3ce` and `6dcd2b1` after the audited baseline.
+The restricted worker archive is `/home/ubuntu/pappy-omega-mini-worker-package-v1.0.0.tar.gz` with SHA-256 `71744c9e9ef399cda21e6c489ab38539725a7f3fe0f9a01ca754508abef12469`. The implementation branch currently contains commits `d2bb3ce` and `6dcd2b1` after the audited baseline.
