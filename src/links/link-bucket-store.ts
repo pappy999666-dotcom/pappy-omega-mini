@@ -102,6 +102,21 @@ export class LinkBucketStore {
     return next;
   }
 
+  async clearValidationError(
+    workspaceId: string,
+    canonicalUrl: string,
+  ): Promise<boolean> {
+    const existing = await this.get(workspaceId, canonicalUrl);
+    if (!existing || existing.validationError === undefined) return false;
+    const next = { ...existing };
+    delete next.validationError;
+    await this.redis.set(
+      this.recordKey(workspaceId, canonicalUrl),
+      JSON.stringify(next),
+    );
+    return true;
+  }
+
   async remove(workspaceId: string, canonicalUrl: string): Promise<boolean> {
     const existing = await this.get(workspaceId, canonicalUrl);
     if (!existing) return false;
@@ -153,16 +168,17 @@ export class LinkBucketStore {
     try {
       const current = await this.get(workspaceId, canonicalUrl);
       if (!current || current.bucket !== "main") return false;
-      return Boolean(
-        await this.move(workspaceId, canonicalUrl, "active", {
-          ...(sourceSessionId ? { sourceSessionId } : {}),
-          metadata: {
-            ...(current.metadata ?? {}),
-            needsValidation: false,
-            validationState: "validating",
-          },
-        }),
-      );
+      const moved = await this.move(workspaceId, canonicalUrl, "active", {
+        ...(sourceSessionId ? { sourceSessionId } : {}),
+        metadata: {
+          ...(current.metadata ?? {}),
+          needsValidation: false,
+          validationState: "validating",
+        },
+      });
+      if (!moved) return false;
+      await this.clearValidationError(workspaceId, canonicalUrl);
+      return true;
     } finally {
       await this.redis
         .eval(

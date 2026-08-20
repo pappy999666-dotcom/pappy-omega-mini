@@ -275,6 +275,10 @@ export function startWorkerRuntime(): JobOrchestrator {
               validationState: "active",
             },
           });
+          await buckets.clearValidationError(
+            context.job.workspaceId,
+            canonicalUrl,
+          );
           const currentSession = getSession(
             context.job.workspaceId,
             sourceSessionId,
