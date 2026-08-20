@@ -1,5 +1,11 @@
 import { mkdir } from "node:fs/promises";
-import { env, assertProductionSecrets } from "./config/env.js";
+import {
+  env,
+  assertProductionSecrets,
+  excludedSessionIds,
+  isWorkerProcess,
+  workerSessionIds,
+} from "./config/env.js";
 import { createTelegramBot } from "./telegram/bot.js";
 import {
   startModeratorReconciliation,
@@ -38,7 +44,7 @@ async function main(): Promise<void> {
   await mkdir(env.SESSION_ROOT, { recursive: true });
   await mkdir(env.MEDIA_ROOT, { recursive: true });
 
-  if (!env.TELEGRAM_BOT_TOKEN) {
+  if (!env.TELEGRAM_BOT_TOKEN && !isWorkerProcess) {
     console.log(
       "[pappy-omega-mini] Scaffold ready. Set TELEGRAM_BOT_TOKEN to start the Telegram gateway.",
     );
@@ -56,23 +62,29 @@ async function main(): Promise<void> {
   let scheduler: DurableScheduler | undefined;
   let autoPromoteScheduler: AutoPromoteScheduler | undefined;
   let pairingCleanupTimer: NodeJS.Timeout | undefined;
-  if (env.TELEGRAM_BOT_TOKEN) {
-    workers = startWorkerRuntime();
+  workers = startWorkerRuntime();
+  if (!isWorkerProcess) {
     scheduler = new DurableScheduler(workers);
     scheduler.start();
     autoPromoteScheduler = new AutoPromoteScheduler(workers);
     autoPromoteScheduler.start();
   }
-  await cleanupExpiredPairingSessions();
-  await cleanupLoggedOutSessions();
-  pairingCleanupTimer = setInterval(() => {
-    void cleanupExpiredPairingSessions();
-    void cleanupLoggedOutSessions();
-  }, 5 * 60 * 1000);
-  pairingCleanupTimer.unref?.();
+  if (!isWorkerProcess) {
+    await cleanupExpiredPairingSessions();
+    await cleanupLoggedOutSessions();
+    pairingCleanupTimer = setInterval(() => {
+      void cleanupExpiredPairingSessions();
+      void cleanupLoggedOutSessions();
+    }, 5 * 60 * 1000);
+    pairingCleanupTimer.unref?.();
+  }
   const persistedSessions = listAllSessions();
+  const ownedSessions = persistedSessions.filter((session) => {
+    if (isWorkerProcess) return workerSessionIds.has(session.sessionId);
+    return !excludedSessionIds.has(session.sessionId);
+  });
   const recoverableSessions = [];
-  for (const session of persistedSessions) {
+  for (const session of ownedSessions) {
     if (session.status === "LOGGED_OUT" || session.authHealth === "INVALID")
       continue;
     if (
@@ -90,21 +102,26 @@ async function main(): Promise<void> {
   }
   await startRecoverableSessions(recoverableSessions, 6);
   console.log(
-    `[pappy-omega-mini] WhatsApp recovery completed for ${recoverableSessions.length} persisted paired session(s); ${persistedSessions.length - recoverableSessions.length} session(s) await pairing or recovery.`,
+    `[pappy-omega-mini] ${isWorkerProcess ? "Worker" : "Main"} WhatsApp recovery completed for ${recoverableSessions.length} persisted paired session(s); ${ownedSessions.length - recoverableSessions.length} owned session(s) await pairing or recovery.`,
   );
-  const bot = createTelegramBot();
-  startModeratorReconciliation(bot);
-  await bot.launch();
-  console.log("[pappy-omega-mini] Telegram gateway online.");
+  let bot: ReturnType<typeof createTelegramBot> | undefined;
+  if (!isWorkerProcess) {
+    bot = createTelegramBot();
+    startModeratorReconciliation(bot);
+    await bot.launch();
+    console.log("[pappy-omega-mini] Telegram gateway online.");
+  } else {
+    console.log(`[pappy-omega-mini] Worker role online; owned sessions=${[...workerSessionIds].join(",") || "none"}. Telegram gateway disabled.`);
+  }
 
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[pappy-omega-mini] ${signal} received; stopping new work.`);
-    bot.stop(signal);
+    bot?.stop(signal);
     if (pairingCleanupTimer) clearInterval(pairingCleanupTimer);
-    stopModeratorReconciliation();
+    if (bot) stopModeratorReconciliation();
     await scheduler?.close();
     await autoPromoteScheduler?.close();
     await workers?.close();
@@ -122,8 +139,9 @@ async function main(): Promise<void> {
 async function cleanupLoggedOutSessions(): Promise<void> {
   const terminal = listAllSessions().filter(
     (session) =>
-      session.status === "LOGGED_OUT" ||
-      (session.authHealth === "INVALID" && session.status !== "ACTIVE"),
+      (isWorkerProcess ? workerSessionIds.has(session.sessionId) : !excludedSessionIds.has(session.sessionId)) &&
+      (session.status === "LOGGED_OUT" ||
+        (session.authHealth === "INVALID" && session.status !== "ACTIVE")),
   );
   for (const session of terminal) {
     await purgeWhatsAppSession(session.workspaceId, session.sessionId).catch(
@@ -151,6 +169,7 @@ async function cleanupExpiredPairingSessions(): Promise<void> {
   );
   const candidates = listAllSessions().filter(
     (session) =>
+      (isWorkerProcess ? workerSessionIds.has(session.sessionId) : !excludedSessionIds.has(session.sessionId)) &&
       session.status === "PAIRING" &&
       typeof session.createdAt === "number" &&
       session.createdAt < cutoffAt,

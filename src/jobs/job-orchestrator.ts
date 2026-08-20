@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Queue, Worker, type Job as BullJob } from "bullmq";
 import { Redis } from "ioredis";
-import { env } from "../config/env.js";
+import {
+  env,
+  excludedSessionIds,
+  isWorkerProcess,
+  workerSessionIds,
+} from "../config/env.js";
 import { assertOperationAllowed } from "../core/control-plane.js";
 import type {
   JobKind,
@@ -166,6 +171,15 @@ export class JobOrchestrator {
     this.reaperTimer.unref?.();
   }
 
+  ownsSession(sessionId?: string): boolean {
+    if (isWorkerProcess) return Boolean(sessionId && workerSessionIds.has(sessionId));
+    return !sessionId || !excludedSessionIds.has(sessionId);
+  }
+
+  private ownsRecord(record: JobRecord): boolean {
+    return this.ownsSession(record.sessionId);
+  }
+
   async recoverStaleJobsNow(): Promise<void> {
     await this.recoverOutstandingJobs(true);
     await this.reapStaleJobs();
@@ -186,6 +200,7 @@ export class JobOrchestrator {
         .map((jobId) => jobId.split(":", 1)[0]),
     );
     for (const record of await this.store.listAll()) {
+      if (!this.ownsRecord(record)) continue;
       if (!["QUEUED", "RUNNING", "RETRYING", "FAILED"].includes(record.state)) continue;
       if (record.cancellationRequested) continue;
       const bullJob = await this.queue.getJob(record.jobId);
@@ -329,6 +344,7 @@ export class JobOrchestrator {
   ): Promise<"recovered" | "failed" | "ignored" | "missing"> {
     const record = await this.store.get(jobId);
     if (!record) return "missing";
+    if (!this.ownsRecord(record)) return "ignored";
     if (["COMPLETED", "PARTIAL", "CANCELLED", "FAILED"].includes(record.state))
       return "ignored";
     const now = Date.now();
@@ -406,6 +422,7 @@ export class JobOrchestrator {
   ): Promise<number> {
     const cutoff = Date.now() - olderThanMs;
     const records = (await this.store.listAll())
+      .filter((record) => this.ownsRecord(record))
       .filter((record) =>
         ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(record.state) &&
         (record.completedAt ?? record.createdAt) < cutoff,
@@ -540,6 +557,12 @@ export class JobOrchestrator {
 
   private async process(bullJob: BullJob<JobRecord>): Promise<void> {
     const record = bullJob.data;
+    if (!this.ownsRecord(record)) {
+      await bullJob.moveToWait(bullJob.token);
+      const released = new Error(`Job ${record.jobId} belongs to another worker owner.`);
+      released.name = "WaitingError";
+      throw released;
+    }
     assertOperationAllowed(operationFor(record.kind));
     const handler = this.handlers.get(record.kind);
     if (!handler) throw new Error(`No worker registered for ${record.kind}.`);
@@ -632,6 +655,7 @@ export class JobOrchestrator {
           .map((jobId) => jobId.split(":", 1)[0]),
       );
       for (const record of await this.store.listAll()) {
+        if (!this.ownsRecord(record)) continue;
         const heartbeatAge =
           Date.now() - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
         const retryableFailed = isRetryableBroadcastFailure(record, heartbeatAge);

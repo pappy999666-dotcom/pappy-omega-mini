@@ -148,7 +148,9 @@ export async function purgeRuntimeSessionData(
 
 export function startWorkerRuntime(): JobOrchestrator {
   if (activeRuntime) return activeRuntime;
-  const orchestrator = new JobOrchestrator(env.QUEUE_CONCURRENCY);
+  const orchestrator = new JobOrchestrator(
+    env.PROCESS_ROLE === "worker" ? env.WORKER_CONCURRENCY : env.QUEUE_CONCURRENCY,
+  );
   activeRuntime = orchestrator;
   orchestrator.addCompletionHook(async (job) => {
     await recordAutoPromoteChildCompletion(job).catch((error) => {

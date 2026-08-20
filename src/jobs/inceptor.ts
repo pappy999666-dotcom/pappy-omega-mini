@@ -78,6 +78,7 @@ export class Inceptor {
       );
       const records = await this.orchestrator.listAllJobs();
       for (const record of records) {
+        if (!this.orchestrator.ownsSession(record.sessionId)) continue;
         if (record.sessionId && deadSessionKeys.has(`${record.workspaceId}:${record.sessionId}`)) {
           if (flushedDeadSessionJobs >= MAX_FLUSHES_PER_SWEEP) break;
           if (await this.orchestrator.flushJob(record.jobId)) {

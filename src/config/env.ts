@@ -3,6 +3,10 @@ import { z } from "zod";
 
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1).optional(),
+  PROCESS_ROLE: z.enum(["full", "worker"]).default("full"),
+  WORKER_SESSIONS: z.string().default(""),
+  EXCLUDED_SESSIONS: z.string().default(""),
+  WORKER_CONCURRENCY: z.coerce.number().int().positive().max(32).default(8),
   OWNER_TELEGRAM_IDS: z.string().default(""),
   ENCRYPTION_SECRET: z.string().min(32).optional(),
   OPTIONAL_DOMAIN: z.string().optional(),
@@ -39,6 +43,16 @@ const envSchema = z.object({
 
 export const env = envSchema.parse(process.env);
 
+export const workerSessionIds = new Set(
+  env.WORKER_SESSIONS.split(",").map((value) => value.trim()).filter(Boolean),
+);
+
+export const excludedSessionIds = new Set(
+  env.EXCLUDED_SESSIONS.split(",").map((value) => value.trim()).filter(Boolean),
+);
+
+export const isWorkerProcess = env.PROCESS_ROLE === "worker";
+
 export const ownerTelegramIds = new Set(
   env.OWNER_TELEGRAM_IDS.split(",")
     .map((value) => value.trim())
@@ -46,7 +60,7 @@ export const ownerTelegramIds = new Set(
 );
 
 export function assertProductionSecrets(): void {
-  if (env.NODE_ENV === "production" && !env.TELEGRAM_BOT_TOKEN) {
+  if (env.NODE_ENV === "production" && !env.TELEGRAM_BOT_TOKEN && !isWorkerProcess) {
     throw new Error("TELEGRAM_BOT_TOKEN is required in production.");
   }
   if (env.NODE_ENV === "production" && !env.ENCRYPTION_SECRET) {
