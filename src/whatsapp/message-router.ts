@@ -157,7 +157,7 @@ export async function routeWhatsAppText(
                 ? message.chatJid
                   ? [{ jid: message.chatJid }]
                   : []
-                : await listGroups(message.workspaceId, message.sessionId);
+                : [];
             const mediaReference = message.media
               ? await persistJobMedia({
                   workspaceId: message.workspaceId,
@@ -208,8 +208,8 @@ export async function routeWhatsAppText(
             const delayMs = Number(enrichedPayload.delayMs ?? 20000);
             return {
               jobCode: record.jobCode ?? record.jobId.slice(0, 8),
-              totalGroups,
-              totalPosts: totalGroups * repeat,
+              ...(totalGroups > 0 ? { totalGroups } : {}),
+              ...(totalGroups > 0 ? { totalPosts: totalGroups * repeat } : {}),
               delayMs,
               expectedTimeMs: Math.max(0, totalGroups * repeat - 1) * delayMs,
             } satisfies EnqueueJobResult;

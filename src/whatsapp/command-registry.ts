@@ -488,7 +488,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
     },
     {
       name: "allstatus",
-      aliases: ["allstatusx"],
+      aliases: [],
       description: "Queue bounded delivery to all eligible groups.",
       ownerOnly: true,
       run: async (ctx) => {
@@ -507,8 +507,25 @@ export function createCommandRegistry(): RegisteredCommand[] {
       },
     },
     {
+      name: "allstatusx",
+      aliases: [],
+      description: "Queue repeated status delivery to all eligible groups.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
+        const { repeat, text } = repeatAndPayload(ctx, true);
+        if (!text && !ctx.media)
+          return "Usage: .allstatusx [repeat] <text or media>.";
+        const queued = await ctx.enqueueJob({
+          kind: "allstatus",
+          payload: { text, count: repeat },
+        });
+        return queuedJobAcknowledgement("allstatus", queued);
+      },
+    },
+    {
       name: "gstatus",
-      aliases: ["gstatusx"],
+      aliases: [],
       description:
         "Send one status payload directly to the current WhatsApp group.",
       ownerOnly: true,
@@ -530,6 +547,23 @@ export function createCommandRegistry(): RegisteredCommand[] {
       },
     },
     {
+      name: "gstatusx",
+      aliases: [],
+      description: "Repeat status payload in the current WhatsApp group.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.chatJid || !ctx.chatJid.endsWith("@g.us"))
+          return "This command must be used inside a WhatsApp group.";
+        if (!ctx.sendCurrentGroupStatus)
+          return "WhatsApp transport is unavailable.";
+        const { repeat, text } = repeatAndPayload(ctx, true);
+        if (!text && !ctx.media)
+          return "Usage: .gstatusx <count> <text or media> (or reply to a message).";
+        await ctx.sendCurrentGroupStatus({ text, repeat });
+        return "";
+      },
+    },
+    {
       name: "stopstatus",
       aliases: [],
       description: "Cancel active all-status work.",
@@ -541,7 +575,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
     },
     {
       name: "allchat",
-      aliases: ["allchatx"],
+      aliases: [],
       description: "Queue bounded delivery to all eligible group chats.",
       ownerOnly: true,
       run: async (ctx) => {
@@ -552,6 +586,23 @@ export function createCommandRegistry(): RegisteredCommand[] {
         );
         if (!text && !ctx.media)
           return "Usage: .allchat [repeat] <text or media>.";
+        const queued = await ctx.enqueueJob({
+          kind: "allchat",
+          payload: { text, count: repeat },
+        });
+        return queuedJobAcknowledgement("allchat", queued);
+      },
+    },
+    {
+      name: "allchatx",
+      aliases: [],
+      description: "Queue repeated delivery to all eligible group chats.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
+        const { repeat, text } = repeatAndPayload(ctx, true);
+        if (!text && !ctx.media)
+          return "Usage: .allchatx [repeat] <text or media>.";
         const queued = await ctx.enqueueJob({
           kind: "allchat",
           payload: { text, count: repeat },

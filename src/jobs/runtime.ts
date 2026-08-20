@@ -20,6 +20,7 @@ import {
   updateSession,
 } from "../core/session-registry.js";
 import {
+  listGroups,
   sendGroupMentions,
   sendGroupStatus,
   sendGroupText,
@@ -791,7 +792,19 @@ export function startWorkerRuntime(): JobOrchestrator {
       const baseGroups =
         kind === "gstatus"
           ? [payload.groups?.[0]].filter((jid): jid is string => Boolean(jid))
-          : (payload.groups ?? []);
+          : payload.groups?.length
+            ? payload.groups
+            : (await listGroups(context.job.workspaceId, sessionId))
+                .map((group) => group.jid)
+                .filter(Boolean);
+      if (!baseGroups.length) {
+        await context.report({
+          total: 0,
+          currentAction: "waiting for group inventory",
+          lastResult: "No WhatsApp groups were returned for this session.",
+        });
+        throw new Error("No WhatsApp groups were returned for this session.");
+      }
       const repeat =
         kind === "gstatus" || kind === "allstatus" || kind === "allchat"
           ? Math.max(1, Math.min(20, Number(payload.count ?? 1)))

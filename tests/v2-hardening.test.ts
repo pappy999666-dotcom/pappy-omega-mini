@@ -164,6 +164,37 @@ describe("WhatsApp command smoke paths", () => {
     expect(response).toContain("job-smoke");
     expect(captured).toMatchObject({ text: "hello", count: 3 });
   });
+
+  it("keeps plain allstatus at one post while allstatusx repeats", async () => {
+    const session = createSession({
+      workspaceId: `smoke-${Date.now()}`,
+      sessionName: "status-separation",
+      phoneNumber: "15551234569",
+    });
+    const captured: Array<Record<string, unknown>> = [];
+    const enqueueJob = async ({ payload }: { payload: Record<string, unknown> }) => {
+      captured.push(payload);
+      return "job-smoke";
+    };
+    await executeCommand(createCommandRegistry(), "allstatus hello", {
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      args: [],
+      enqueueJob,
+    });
+    await executeCommand(createCommandRegistry(), "allstatusx 3 hello", {
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      args: [],
+      enqueueJob,
+    });
+    expect(captured).toEqual([
+      { text: "hello", count: 1 },
+      { text: "hello", count: 3 },
+    ]);
+  });
 });
 
 describe("Session-scoped Join Manager settings", () => {
