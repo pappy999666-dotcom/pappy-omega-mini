@@ -28,6 +28,8 @@ export interface IncomingTextMessage {
   workspaceId: string;
   sessionId: string;
   senderJid: string;
+  quotedSenderJid?: string;
+  mentionedJids?: string[];
   chatJid?: string;
   text: string;
   quotedText?: string;
@@ -117,6 +119,8 @@ export async function routeWhatsAppText(
     sessionId: message.sessionId,
     isOwner,
     senderJid: message.senderJid,
+    ...(message.quotedSenderJid ? { quotedSenderJid: message.quotedSenderJid } : {}),
+    ...(message.mentionedJids?.length ? { mentionedJids: message.mentionedJids } : {}),
     ...(message.chatJid ? { chatJid: message.chatJid } : {}),
     ...(message.media ? { media: message.media } : {}),
     args: [],

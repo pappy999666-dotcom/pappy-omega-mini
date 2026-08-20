@@ -61,8 +61,10 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
       defaultJoinRetryBaseMs: existing.defaultJoinRetryBaseMs ?? 5000,
       defaultJoinSessionCooldownMs:
         existing.defaultJoinSessionCooldownMs ?? 30000,
-      defaultJoinRestrictionThreshold:
-        existing.defaultJoinRestrictionThreshold ?? 5,
+      defaultJoinRestrictionThreshold: Math.max(
+        1,
+        Math.min(5, existing.defaultJoinRestrictionThreshold ?? 5),
+      ),
       defaultJoinMode: existing.defaultJoinMode ?? "auto",
       defaultBroadcastDelayMs: Math.max(
         1000,
@@ -160,7 +162,7 @@ export function updateWorkspaceSettings(
     defaultJoinRestrictionThreshold: Math.max(
       1,
       Math.min(
-        20,
+        5,
         Number(
           patch.defaultJoinRestrictionThreshold ??
             current.defaultJoinRestrictionThreshold ??

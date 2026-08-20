@@ -216,7 +216,7 @@ describe("Session-scoped Join Manager settings", () => {
       retryLimit: 4,
       retryBaseMs: 7000,
       sessionCooldownMs: 45000,
-      restrictionThreshold: 7,
+      restrictionThreshold: 5,
     });
     expect(getSessionJoinSettings(workspaceId, first.sessionId)).toMatchObject({
       targetCount: 1000,
@@ -229,7 +229,7 @@ describe("Session-scoped Join Manager settings", () => {
       retryLimit: 4,
       retryBaseMs: 7000,
       sessionCooldownMs: 45000,
-      restrictionThreshold: 7,
+      restrictionThreshold: 5,
     });
     expect(getSessionJoinSettings(workspaceId, second.sessionId)).toEqual(
       beforeSecond,

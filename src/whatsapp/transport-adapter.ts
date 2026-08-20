@@ -539,7 +539,7 @@ export async function validateInviteLink(
   workspaceId: string,
   sessionId: string,
   inviteCode: string,
-): Promise<{ subject?: string; participantCount?: number }> {
+ ): Promise<{ jid?: string; subject?: string; participantCount?: number }> {
   const inspect = method(
     socketFor(workspaceId, sessionId),
     "groupGetInviteInfo",
@@ -549,11 +549,13 @@ export async function validateInviteLink(
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const result = (await inspect(inviteCode)) as {
+        id?: string;
         subject?: string;
         size?: number;
         participantsCount?: number;
       };
       return {
+        ...(result.id ? { jid: result.id } : {}),
         ...(result.subject ? { subject: result.subject } : {}),
         ...((result.participantsCount ?? result.size) !== undefined
           ? { participantCount: result.participantsCount ?? result.size }

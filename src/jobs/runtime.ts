@@ -15,7 +15,7 @@ import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
 import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
 import {
   getSession,
-  getWorkspaceDefaults,
+  getSessionJoinSettings,
   listAllSessions,
   listSessions,
   updateSession,
@@ -91,7 +91,7 @@ function classifyJoinFailure(error: unknown): {
     lower.includes("unauthorized")
   )
     return { classification: "forbidden", retryable: false, message };
-  if (lower.includes("rate") || lower.includes("429"))
+  if (/rate.?limit|too many requests|\b429\b|flood|throttl|temporarily banned|try again later|spam.?limit/i.test(lower))
     return { classification: "rate-limit", retryable: true, message };
   if (
     lower.includes("timeout") ||
@@ -293,7 +293,10 @@ export function startWorkerRuntime(): JobOrchestrator {
             lastResult: `Active: ${metadata.subject ?? canonicalUrl}`,
           });
           if (currentSession.autoJoinEnabled && activeRuntime) {
-            const defaults = getWorkspaceDefaults(context.job.workspaceId);
+            const defaults = getSessionJoinSettings(
+              context.job.workspaceId,
+              sourceSessionId,
+            );
             const autoJoinHash = createHash("sha256")
               .update(
                 `${context.job.workspaceId}:${sourceSessionId}:${canonicalUrl}`,
@@ -305,14 +308,14 @@ export function startWorkerRuntime(): JobOrchestrator {
               kind: "join-manager",
               payload: {
                 targetCount: 1,
-                delayMs: defaults.defaultJoinDelayMs,
-                minDelayMs: defaults.defaultJoinMinDelayMs,
-                maxDelayMs: defaults.defaultJoinMaxDelayMs,
-                retryLimit: defaults.defaultJoinRetryLimit,
-                retryBaseMs: defaults.defaultJoinRetryBaseMs,
-                sessionCooldownMs: defaults.defaultJoinSessionCooldownMs,
-                restrictionThreshold: defaults.defaultJoinRestrictionThreshold,
-                requestMode: defaults.defaultJoinMode ?? "auto",
+                delayMs: defaults.delayMs,
+                minDelayMs: defaults.minDelayMs,
+                maxDelayMs: defaults.maxDelayMs,
+                retryLimit: defaults.retryLimit,
+                retryBaseMs: defaults.retryBaseMs,
+                sessionCooldownMs: defaults.sessionCooldownMs,
+                restrictionThreshold: defaults.restrictionThreshold,
+                requestMode: defaults.mode,
                 sourceSessionId,
                 selectedLinks: [canonicalUrl],
               },
@@ -848,20 +851,38 @@ export function startWorkerRuntime(): JobOrchestrator {
           ? Math.max(1, Math.min(20, Number(payload.count ?? 1)))
           : 1;
       const uniqueGroups = [...new Set(baseGroups)];
+      const ignoredLinks = getSession(
+        context.job.workspaceId,
+        sessionId,
+      ).ignoredGroupLinks ?? [];
+      const ignoredJids = new Set<string>();
+      await Promise.all(
+        ignoredLinks.map(async (link) => {
+          const code = link.split("/").pop()?.split("?")[0];
+          if (!code || !/^[A-Za-z0-9_-]+$/.test(code)) return;
+          const resolved = await validateInviteLink(
+            context.job.workspaceId,
+            sessionId,
+            code,
+          ).catch(() => undefined);
+          if (resolved?.jid) ignoredJids.add(resolved.jid);
+        }),
+      );
+      const deliverableGroups = uniqueGroups.filter((jid) => !ignoredJids.has(jid));
       const resolvedPayload = {
         ...payload,
-        groups: uniqueGroups,
+        groups: deliverableGroups,
       };
       await context.report(
         {
-          total: uniqueGroups.length,
+          total: deliverableGroups.length,
           currentAction: `${kind} inventory resolved`,
           nextActionAt: Date.now(),
-          lastResult: `Resolved ${uniqueGroups.length} WhatsApp group(s); delivery is starting.`,
+          lastResult: `Resolved ${uniqueGroups.length} WhatsApp group(s); ${ignoredJids.size} ignored; ${deliverableGroups.length} delivery target(s) remain.`,
         },
         { payload: resolvedPayload },
       );
-      const deliveries = uniqueGroups.flatMap((jid) =>
+      const deliveries = deliverableGroups.flatMap((jid) =>
         Array.from({ length: repeat }, (_, repeatIndex) => ({
           jid,
           repeatIndex: repeatIndex + 1,

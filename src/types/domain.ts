@@ -50,6 +50,7 @@ export interface WhatsAppSession {
   status: SessionStatus;
   prefix: string;
   sudoList: string[];
+  ignoredGroupLinks?: string[];
   autoJoinEnabled: boolean;
   joinSettings?: SessionJoinSettings;
   autoCollectLinks?: boolean;

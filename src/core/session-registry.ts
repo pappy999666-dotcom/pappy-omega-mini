@@ -108,7 +108,7 @@ function normalizedSessionJoinSettings(
     retryLimit: clamp(next.retryLimit, 0, 5),
     retryBaseMs: clamp(next.retryBaseMs, 1000, 600000),
     sessionCooldownMs: clamp(next.sessionCooldownMs, 0, 3600000),
-    restrictionThreshold: clamp(next.restrictionThreshold, 1, 20),
+    restrictionThreshold: clamp(next.restrictionThreshold, 1, 5),
     mode:
       next.mode === "immediate" || next.mode === "request"
         ? next.mode
@@ -152,6 +152,7 @@ export function createSession(input: {
     status: "PAIRING",
     prefix: workspaceSettings.defaultPrefix,
     sudoList: [],
+    ignoredGroupLinks: [],
     autoJoinEnabled: workspaceSettings.defaultAutoJoinEnabled,
     joinSettings: joinSettingsFromWorkspace(input.workspaceId),
     autoCollectLinks: true,
@@ -281,6 +282,7 @@ export async function hydrateSessionRegistry(): Promise<void> {
       ...session,
       prefix: session.prefix ?? getWorkspaceSettings(session.workspaceId).defaultPrefix,
       sudoList: session.sudoList ?? [],
+      ignoredGroupLinks: session.ignoredGroupLinks ?? [],
       autoJoinEnabled:
         session.autoJoinEnabled ??
         getWorkspaceSettings(session.workspaceId).defaultAutoJoinEnabled,

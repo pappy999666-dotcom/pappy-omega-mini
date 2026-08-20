@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { WhatsAppSession } from "../types/domain.js";
 import {
   getSession,
+  getSessionJoinSettings,
   getWorkspaceDefaults,
   getWorkspaceSudo,
   updateSession,
+  updateSessionJoinSettings,
   updateWorkspaceDefaults,
   updateWorkspaceSudo,
 } from "../core/session-registry.js";
@@ -19,6 +21,7 @@ import {
   prepareCanonicalPreviewContent,
 } from "./baileys-native-preview.js";
 import { createSupportTicket } from "../persistence/mongo.js";
+import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
 import {
   createWhatsAppGroup,
   getProfilePictureUrl,
@@ -45,6 +48,8 @@ export interface CommandContext {
   sessionId: string;
   isOwner: boolean;
   senderJid?: string;
+  quotedSenderJid?: string;
+  mentionedJids?: string[];
   chatJid?: string;
   media?: WhatsAppMediaPayload;
   args: string[];
@@ -287,6 +292,48 @@ export function createCommandRegistry(): RegisteredCommand[] {
           autoJoinEnabled: enabled,
         });
         return `Auto-join is now ${next.autoJoinEnabled ? "ON" : "OFF"} for ${next.sessionName}.\nUse ${next.prefix}autojoin on|off to set it explicitly.`;
+      },
+    },
+    {
+      name: "targetgs",
+      aliases: ["jointarget", "jointargets"],
+      description: "Set or inspect the Active-bucket Join Manager target.",
+      run: async (ctx) => {
+        const current = getSessionJoinSettings(ctx.workspaceId, ctx.sessionId);
+        const raw = mediaCommandPayload(ctx).trim();
+        if (!raw)
+          return `Join target: ${current.targetCount} Active link(s).\nUsage: ${session(ctx).prefix}targetgs <1-10000>.`;
+        if (!/^\d+$/.test(raw))
+          return `Usage: ${session(ctx).prefix}targetgs <1-10000>.`;
+        const targetCount = Number(raw);
+        if (targetCount < 1 || targetCount > 10000)
+          return "Join target must be between 1 and 10000 links.";
+        const next = updateSessionJoinSettings(ctx.workspaceId, ctx.sessionId, { targetCount });
+        return `Join target updated: ${next.joinSettings?.targetCount ?? targetCount} Active link(s).`;
+      },
+    },
+    {
+      name: "iggc",
+      aliases: ["ignoregc", "ignoregroup"],
+      description: "Ignore or list WhatsApp groups excluded from broadcasts.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const current = session(ctx);
+        const raw = mediaCommandPayload(ctx).trim();
+        if (!raw || raw.toLowerCase() === "list")
+          return current.ignoredGroupLinks?.length
+            ? `Ignored groups (${current.ignoredGroupLinks.length}):\n${current.ignoredGroupLinks.join("\n")}`
+            : "No ignored WhatsApp groups configured.";
+        if (raw.toLowerCase() === "clear") {
+          updateSession(ctx.workspaceId, ctx.sessionId, { ignoredGroupLinks: [] });
+          return "Ignored WhatsApp group list cleared.";
+        }
+        const canonical = canonicalizeHttpUrl(raw);
+        if (!canonical.toLowerCase().startsWith("https://chat.whatsapp.com/") || !/[A-Za-z0-9_-]+$/.test(canonical))
+          return `Usage: ${current.prefix}iggc <WhatsApp group invite link>, ${current.prefix}iggc list, or ${current.prefix}iggc clear.`;
+        const ignored = [...new Set([...(current.ignoredGroupLinks ?? []), canonical])];
+        updateSession(ctx.workspaceId, ctx.sessionId, { ignoredGroupLinks: ignored });
+        return `Group ignored for this session's broadcasts:\n${canonical}`;
       },
     },
     {
@@ -713,12 +760,18 @@ export function createCommandRegistry(): RegisteredCommand[] {
           return session(ctx).sudoList.length
             ? `Session sudo identities:\n${session(ctx).sudoList.join("\n")}`
             : "No session sudo identities configured.";
-        const identity = ctx.args[offset + 1]?.replace(
-          /[^0-9A-Za-z:_.@-]/g,
-          "",
-        );
+        const suppliedIdentity =
+          ctx.mentionedJids?.[0] ?? ctx.quotedSenderJid ?? ctx.args[offset + 1];
+        const identityValue = suppliedIdentity
+          ?.replace(/[^0-9A-Za-z:_.@-]/g, "")
+          .trim();
+        const identity = identityValue && /^\d+$/.test(identityValue)
+          ? `${identityValue}@s.whatsapp.net`
+          : identityValue;
         if (!identity || !["add", "remove"].includes(action ?? ""))
-          return "Usage: .setsudo add|remove|list <WhatsApp identity> or .setsudo global add|remove|list <WhatsApp identity>.";
+          return "Usage: reply to a WhatsApp user or mention them with .setsudo add|remove, or use .setsudo global add|remove <phone number>.";
+        if (identity.endsWith("@lid") || identity.endsWith("@hosted.lid"))
+          return "That WhatsApp identity is still a LID and could not be mapped to a phone JID. Reply to the user again after the session refreshes its identity map.";
         if (global) {
           const next = updateWorkspaceSudo(
             ctx.workspaceId,

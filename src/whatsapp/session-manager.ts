@@ -386,7 +386,11 @@ async function openWhatsAppSession(
           conversation?: string;
           extendedTextMessage?: {
             text?: string;
-            contextInfo?: { quotedMessage?: Record<string, unknown> };
+            contextInfo?: {
+              quotedMessage?: Record<string, unknown>;
+              participant?: string;
+              mentionedJid?: string[];
+            };
           };
           imageMessage?: { caption?: string; mimetype?: string };
           videoMessage?: { caption?: string; mimetype?: string };
@@ -438,6 +442,25 @@ async function openWhatsAppSession(
             message.key.remoteJidAlt ??
             message.key.participant ??
             message.key.remoteJid);
+        const contextInfo = message.message?.extendedTextMessage?.contextInfo;
+        const lidMapping = (
+          socket as unknown as {
+            signalRepository?: {
+              lidMapping?: { getPNForLID?: (lid: string) => Promise<string | null> };
+            };
+          }
+        ).signalRepository?.lidMapping;
+        const resolvePhoneJid = async (candidate?: string): Promise<string | undefined> => {
+          if (!candidate) return undefined;
+          if (candidate.endsWith("@lid") || candidate.endsWith("@hosted.lid"))
+            return (await lidMapping?.getPNForLID?.(candidate)) ?? candidate;
+          if (!candidate.includes("@")) return `${candidate.replace(/\D/g, "")}@s.whatsapp.net`;
+          return candidate;
+        };
+        const quotedSenderJid = await resolvePhoneJid(contextInfo?.participant);
+        const mentionedJids = await Promise.all(
+          (contextInfo?.mentionedJid ?? []).map((candidate) => resolvePhoneJid(candidate)),
+        );
 
         void saveWhatsAppMessageTrace({
           traceId: randomUUID(),
@@ -523,6 +546,10 @@ async function openWhatsAppSession(
           sessionId,
           chatJid: message.key.remoteJid,
           senderJid,
+          ...(quotedSenderJid ? { quotedSenderJid } : {}),
+          ...(mentionedJids.filter((value): value is string => Boolean(value)).length
+            ? { mentionedJids: mentionedJids.filter((value): value is string => Boolean(value)) }
+            : {}),
           text,
           ...(message.key.fromMe ? { fromMe: true } : {}),
           ...(quotedText ? { quotedText } : {}),

@@ -7,6 +7,7 @@ export interface JoinAttemptResult {
   error?: string;
   alreadyMember?: boolean;
   requestRequired?: boolean;
+  rateLimited?: boolean;
 }
 
 interface JoinSocket {
@@ -35,10 +36,8 @@ function isRequestRequired(error: string): boolean {
   );
 }
 
-function isDead(error: string): boolean {
-  return /revoked|expired|invalid|not found|does not exist|no longer|bad invite|gone/i.test(
-    error,
-  );
+function isRateLimited(error: string): boolean {
+  return /rate.?limit|too many requests|\b429\b|flood|throttl|temporarily banned|try again later|spam.?limit/i.test(error);
 }
 
 export async function joinWhatsAppInvite(
@@ -104,6 +103,7 @@ export async function joinWhatsAppInvite(
     return {
       success: false,
       requestRequired: isRequestRequired(message),
+      rateLimited: isRateLimited(message),
       error: message,
     };
   }
