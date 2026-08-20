@@ -21,7 +21,7 @@ const envSchema = z.object({
     .int()
     .positive()
     .default(50 * 1024 * 1024),
-  QUEUE_CONCURRENCY: z.coerce.number().int().positive().max(32).default(4),
+  QUEUE_CONCURRENCY: z.coerce.number().int().positive().max(32).default(16),
   PAIRING_CUSTOM_CODE: z.string().default("PAPPYBOT"),
   PAIRING_REQUEST_TTL_MS: z.coerce
     .number()

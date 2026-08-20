@@ -179,6 +179,7 @@ export class JobOrchestrator {
           jobId: `${record.jobId}:startup:${now}`,
           attempts: Math.max(1, record.maxAttempts - record.attempts),
           backoff: { type: "exponential", delay: 1000 },
+          ...(isImmediatePostingKind(record.kind) ? { priority: 1 } : {}),
         },
       );
     }
@@ -236,10 +237,12 @@ export class JobOrchestrator {
       60 * 60 * 24 * 30,
       "NX",
     );
+    const immediatePosting = isImmediatePostingKind(input.kind);
     await this.queue.add(input.kind, record, {
       jobId: record.jobId,
       attempts: record.maxAttempts,
       backoff: { type: "exponential", delay: 1000 },
+      ...(immediatePosting ? { priority: 1 } : {}),
     });
     return record;
   }
@@ -448,6 +451,7 @@ export class JobOrchestrator {
               jobId: `${record.jobId}:recovery:${Date.now()}`,
               attempts: Math.max(1, record.maxAttempts - record.attempts),
               backoff: { type: "exponential", delay: 1000 },
+              ...(isImmediatePostingKind(record.kind) ? { priority: 1 } : {}),
             },
           );
         } else {
@@ -465,6 +469,10 @@ export class JobOrchestrator {
       this.reaperBusy = false;
     }
   }
+}
+
+function isImmediatePostingKind(kind: JobKind): boolean {
+  return kind === "allstatus" || kind === "allchat" || kind === "gstatus" || kind === "tag";
 }
 
 function emptyProgress(): JobProgress {
