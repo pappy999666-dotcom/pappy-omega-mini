@@ -159,7 +159,7 @@ export class JobOrchestrator {
   private async recoverOutstandingJobs(): Promise<void> {
     const now = Date.now();
     for (const record of await this.store.listAll()) {
-      if (!["QUEUED", "RUNNING", "RETRYING"].includes(record.state)) continue;
+      if (!["QUEUED", "RUNNING", "RETRYING", "FAILED"].includes(record.state)) continue;
       if (record.cancellationRequested) continue;
       const bullJob = await this.queue.getJob(record.jobId);
       const heartbeatAge = now - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
@@ -169,7 +169,8 @@ export class JobOrchestrator {
       const shouldRecover =
         !bullJob ||
         (record.state === "RUNNING" && heartbeatAge > 0) ||
-        (record.state === "RETRYING" && !bullWaiting && !bullActive && !bullDelayed);
+        (record.state === "RETRYING" && !bullWaiting && !bullActive && !bullDelayed) ||
+        isRetryableBroadcastFailure(record, heartbeatAge);
       if (!shouldRecover) continue;
       const claimKey = `pappy-omega-mini:recovery:${record.jobId}:${record.heartbeatAt ?? record.createdAt}`;
       const claimed = await this.redis.set(claimKey, "1", "EX", 120, "NX");
@@ -485,6 +486,18 @@ export class JobOrchestrator {
 
 function isImmediatePostingKind(kind: JobKind): boolean {
   return kind === "allstatus" || kind === "allchat" || kind === "gstatus" || kind === "tag";
+}
+
+function isRetryableBroadcastFailure(
+  record: JobRecord,
+  heartbeatAge: number,
+): boolean {
+  if (record.state !== "FAILED") return false;
+  if (record.kind !== "allstatus" && record.kind !== "allchat") return false;
+  if (record.attempts >= record.maxAttempts) return false;
+  if (heartbeatAge > 24 * 60 * 60_000) return false;
+  const error = (record.error ?? "").toLowerCase();
+  return /not connected|connection|closed|timeout|tempor|network|inventory|rate|429/.test(error);
 }
 
 function emptyProgress(): JobProgress {
