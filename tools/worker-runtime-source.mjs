@@ -177,7 +177,7 @@ async function reportSessionStatus(runtime, status, authHealth, reason) {
     ...(reason ? { reason: String(reason).slice(0, 240) } : {}),
   }, credentialState.credential).catch((error) => noteError(error, "session status failed"));
 }
-async function startSession(workspaceId, sessionId) {
+async function startSession(workspaceId, sessionId, waitForReady = true) {
   const existing = runtimes.get(sessionId);
   if (existing) return existing;
   const authRoot = join(DATA_DIR, "sessions", workspaceId, sessionId);
@@ -208,6 +208,12 @@ async function startSession(workspaceId, sessionId) {
       renderMatrix(true);
     }
   });
+  if (!waitForReady) {
+    assignedSessions.add(sessionId);
+    matrix.lastAction = `session ${sessionId} initialized for pairing`;
+    renderMatrix(true);
+    return runtime;
+  }
   const deadline = Date.now() + 90_000;
   while (!runtime.ready && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 250));
   if (!runtime.ready) throw new Error(`WhatsApp session ${sessionId} did not become ready.`);
@@ -283,7 +289,7 @@ async function execute(command) {
     return { status: "OFFLINE" };
   }
   if (command.kind === "session.pair.request") {
-    const runtime = await startSession(command.workspaceId, command.sessionId);
+    const runtime = await startSession(command.workspaceId, command.sessionId, false);
     await reportSessionStatus(runtime, "PAIRING", "UNKNOWN");
     const phoneNumber = String(command.payload.phoneNumber ?? "").replace(/\D/g, "");
     const customCode = String(command.payload.customCode ?? "PAPPYBOT").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
@@ -291,8 +297,9 @@ async function execute(command) {
     return { code: await runtime.socket.requestPairingCode(phoneNumber, customCode) };
   }
   if (command.kind === "bridge.command") {
-    const runtime = await startSession(command.workspaceId, command.sessionId);
-    return await executeTransport(runtime, String(command.payload.method ?? ""), command.payload.args ?? []);
+    const method = String(command.payload.method ?? "");
+    const runtime = await startSession(command.workspaceId, command.sessionId, method !== "requestPairingCode");
+    return await executeTransport(runtime, method, command.payload.args ?? []);
   }
   throw new Error(`Unsupported workload command: ${command.kind}`);
 }
