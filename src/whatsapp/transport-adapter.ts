@@ -227,7 +227,10 @@ async function loadGroupJids(socket: WASocket): Promise<string[]> {
       {
         tag: "participating",
         attrs: {},
-        content: [{ tag: "participants", attrs: {} }],
+        content: [
+          { tag: "participants", attrs: {} },
+          { tag: "description", attrs: {} },
+        ],
       },
     ],
   })) as RawBinaryNode;
