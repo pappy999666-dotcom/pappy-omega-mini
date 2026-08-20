@@ -38,6 +38,11 @@ import { hydrateMenuMedia } from "./media/menu-media-store.js";
 import { closeValidatorSnapshot } from "./links/validator-snapshot.js";
 import { closeCanonicalPreview } from "./whatsapp/baileys-native-preview.js";
 import { closeSessionLockRedis } from "./core/session-lock.js";
+import { routeWhatsAppText } from "./whatsapp/message-router.js";
+import {
+  startRemoteBridgeResponder,
+  stopRemoteBridgeResponder,
+} from "./whatsapp/remote-bridge.js";
 
 async function main(): Promise<void> {
   assertProductionSecrets();
@@ -63,6 +68,7 @@ async function main(): Promise<void> {
   let autoPromoteScheduler: AutoPromoteScheduler | undefined;
   let pairingCleanupTimer: NodeJS.Timeout | undefined;
   workers = startWorkerRuntime();
+  if (isWorkerProcess) await startRemoteBridgeResponder(routeWhatsAppText);
   if (!isWorkerProcess) {
     scheduler = new DurableScheduler(workers);
     scheduler.start();
@@ -130,6 +136,7 @@ async function main(): Promise<void> {
     await closeMongo();
     await closeCanonicalPreview();
     await closeSessionLockRedis();
+    await stopRemoteBridgeResponder();
     console.log("[pappy-omega-mini] transports closed; shutdown complete.");
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));

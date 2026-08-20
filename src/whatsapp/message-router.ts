@@ -25,6 +25,10 @@ import {
   sendGroupStatus,
 } from "./transport-adapter.js";
 import { buildWhatsappMenuPayload } from "../menus/whatsapp-menu.js";
+import {
+  routeViaRemoteBridge,
+  shouldProxyWhatsAppSession,
+} from "./remote-bridge.js";
 
 const registry = createCommandRegistry();
 
@@ -87,6 +91,8 @@ export function mergeQuotedPayload(text: string, quotedText?: string): string {
 export async function routeWhatsAppText(
   message: IncomingTextMessage,
 ): Promise<string | WhatsAppReply | null> {
+  if (shouldProxyWhatsAppSession(message.sessionId))
+    return routeViaRemoteBridge(message);
   const session = getSession(message.workspaceId, message.sessionId);
   const commandInput = mergeQuotedPayload(message.text, message.quotedText);
   const trimmed = commandInput.trim();
