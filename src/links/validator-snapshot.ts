@@ -27,7 +27,15 @@ export async function getValidatorSnapshot(
   const counts = {} as Record<LinkBucket, number>;
   for (const bucket of buckets)
     counts[bucket] = await store.count(workspaceId, bucket);
-  const recent = (await store.list(workspaceId, "master", 0, 12)).records;
+  const recentRecords = [
+    ...(await store.list(workspaceId, "active", 0, 40)).records,
+    ...(await store.list(workspaceId, "main", 0, 20)).records,
+    ...(await store.list(workspaceId, "dead", 0, 8)).records,
+    ...(await store.list(workspaceId, "error", 0, 8)).records,
+  ];
+  const recent = [...new Map(recentRecords.map((record) => [record.canonicalUrl, record])).values()]
+    .sort((left, right) => (right.lastCheckedAt ?? right.firstSeenAt) - (left.lastCheckedAt ?? left.firstSeenAt))
+    .slice(0, 24);
   return { counts, recent, capturedAt: Date.now() };
 }
 

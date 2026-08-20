@@ -336,6 +336,12 @@ export function startWorkerRuntime(): JobOrchestrator {
             "gone",
           ].some((marker) => lower.includes(marker));
           const existing = await buckets.get(context.job.workspaceId, parsed);
+          if (
+            existing &&
+            (existing.bucket !== "active" ||
+              existing.metadata?.validationState !== "validating")
+          )
+            return { status: "skipped" as const };
           await buckets
             .move(
               context.job.workspaceId,

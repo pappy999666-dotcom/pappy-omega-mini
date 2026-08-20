@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
 
 export type LinkBucket = "main" | "active" | "dead" | "error" | "master";
@@ -139,6 +139,40 @@ export class LinkBucketStore {
 
   async count(workspaceId: string, bucket: LinkBucket): Promise<number> {
     return this.redis.scard(this.bucketKey(workspaceId, bucket));
+  }
+
+  async claimMainForValidation(
+    workspaceId: string,
+    canonicalUrl: string,
+    sourceSessionId?: string,
+  ): Promise<boolean> {
+    const lockKey = `pappy-omega-mini:validator-claim:${workspaceId}:${createHash("sha256").update(canonicalUrl).digest("hex")}`;
+    const token = randomUUID();
+    const acquired = await this.redis.set(lockKey, token, "EX", 60, "NX");
+    if (acquired !== "OK") return false;
+    try {
+      const current = await this.get(workspaceId, canonicalUrl);
+      if (!current || current.bucket !== "main") return false;
+      return Boolean(
+        await this.move(workspaceId, canonicalUrl, "active", {
+          ...(sourceSessionId ? { sourceSessionId } : {}),
+          metadata: {
+            ...(current.metadata ?? {}),
+            needsValidation: false,
+            validationState: "validating",
+          },
+        }),
+      );
+    } finally {
+      await this.redis
+        .eval(
+          "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+          1,
+          lockKey,
+          token,
+        )
+        .catch(() => undefined);
+    }
   }
 
   async listAll(workspaceId: string): Promise<LinkRecord[]> {

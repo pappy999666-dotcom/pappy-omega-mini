@@ -133,17 +133,8 @@ export async function claimValidatorMainLinks(
       } catch {
         continue;
       }
-      const record = await store.get(workspaceId, canonicalUrl);
-      if (!record || record.bucket !== "main") continue;
-      const next = await store.move(workspaceId, canonicalUrl, "active", {
-        ...(sourceSessionId ? { sourceSessionId } : {}),
-        metadata: {
-          ...record.metadata,
-          needsValidation: false,
-          validationState: "validating",
-        },
-      });
-      if (next) claimed += 1;
+      if (await store.claimMainForValidation(workspaceId, canonicalUrl, sourceSessionId))
+        claimed += 1;
     }
     return claimed;
   });
