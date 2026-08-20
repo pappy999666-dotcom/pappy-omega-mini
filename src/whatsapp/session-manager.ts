@@ -760,6 +760,20 @@ async function openWhatsAppSession(
         lastError: `transport:${code ?? "unknown"} · ${classification.label}`,
         disconnectReason: `transport:${code ?? "unknown"} · ${classification.label}. ${classification.recovery}`,
       });
+      if (terminal) {
+        void purgeWhatsAppSession(workspaceId, sessionId)
+          .then((purged) => {
+            console.warn(
+              `[pappy-omega-mini] terminal session purged session=${sessionId} jobs=${purged.jobs} links=${purged.links} traces=${purged.traces}`,
+            );
+          })
+          .catch((error) => {
+            console.error(
+              `[pappy-omega-mini] terminal session purge failed session=${sessionId}:`,
+              error instanceof Error ? error.message : String(error),
+            );
+          });
+      }
       if (!terminal && !getLifecycleState(key).stopping) {
         scheduleReconnect({
           key,

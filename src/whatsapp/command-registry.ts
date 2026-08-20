@@ -150,14 +150,13 @@ function queuedJobAcknowledgement(
         })();
   return [
     `✦ PAPPY OMEGA MINI · ${kind === "allstatus" ? "ALL-STATUS" : "ALL-CHAT"}`,
-    "──────────────────────────────",
+    "─────────────────────",
     `Total groups  · ${totalGroups}`,
     `Expected posts · ${totalPosts}`,
     `Delay         · ${delay}s`,
     `Expected time · ${expectedTime}`,
     `Live code     · ${result.jobCode}`,
     "",
-    "Live Show opens only when you paste this code in Telegram.",
   ].join("\n");
 }
 
@@ -217,7 +216,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           const paired = await ctx.pairSession({ label, phoneNumber });
           return [
             "✦ PAPPY OMEGA MINI · PAIRING",
-            "──────────────────────────────",
+            "─────────────────────",
             `Session · ${paired.sessionName}`,
             `Phone   · ${paired.phoneNumber}`,
             `Code    · ${paired.code}`,
@@ -330,7 +329,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           });
           if (typeof started === "string") return `${started}`;
           const expected = formatDuration(started.expectedTimeMs);
-          return `Auto-join is ON for ${next.sessionName}.\nTarget       · ${started.targetCount} Active link(s)\nDelay        · ${formatSeconds(started.delayMs)}\nExpected time · ${expected}\nLive code    · ${started.jobCode}\nUse Telegram Live Show or paste this code to monitor the worker.`;
+          return `Auto-join is ON for ${next.sessionName}.\nTarget       · ${started.targetCount} Active link(s)\nDelay        · ${formatSeconds(started.delayMs)}\nExpected time · ${expected}\nLive code    · ${started.jobCode}`;
         }
         return `Auto-join is now ${next.autoJoinEnabled ? "ON" : "OFF"} for ${next.sessionName}.\nUse ${next.prefix}autojoin on|off to set it explicitly.`;
       },
@@ -357,7 +356,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           },
         });
         if (typeof started === "string") return started;
-        return `Join Manager started.\nTarget       · ${started.targetCount} Active link(s)\nDelay        · ${formatSeconds(started.delayMs)}\nExpected time · ${formatDuration(started.expectedTimeMs)}\nLive code    · ${started.jobCode}\nUse Telegram Live Show or paste this code to monitor the worker.`;
+        return `Join Manager started.\nTarget       · ${started.targetCount} Active link(s)\nDelay        · ${formatSeconds(started.delayMs)}\nExpected time · ${formatDuration(started.expectedTimeMs)}\nLive code    · ${started.jobCode}`;
       },
     },
     {
@@ -416,7 +415,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const next = updateSession(ctx.workspaceId, ctx.sessionId, {
           prefix: value,
         });
-        return `Prefix updated to ${next.prefix || "none"}.`;
+        return `Your prefix is now ${next.prefix || "none"}.`;
       },
     },
     {

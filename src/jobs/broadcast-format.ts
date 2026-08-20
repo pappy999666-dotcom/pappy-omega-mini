@@ -18,7 +18,7 @@ export function formatBroadcastReadyMessage(
       : "Hidden-member mention delivery is now posting to every resolved group.";
   return [
     `✦ PAPPY OMEGA MINI · ${label} READY`,
-    "──────────────────────────────",
+    "─────────────────────",
     `Total groups  · ${input.totalGroups}`,
     `Expected posts · ${input.expectedPosts}`,
     `Delay         · ${input.delaySeconds}s`,
