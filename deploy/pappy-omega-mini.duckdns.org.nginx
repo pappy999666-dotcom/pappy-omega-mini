@@ -1,32 +1,30 @@
-# Copy to an Nginx site only after replacing WORKLOAD_DOMAIN, WORKLOAD_PORT, and obtaining TLS.
-# The application itself binds to 127.0.0.1:WORKLOAD_PORT; do not expose that port directly.
-
 server {
     listen 80;
     listen [::]:80;
-    server_name WORKLOAD_DOMAIN;
+    server_name pappy-omega-mini.duckdns.org;
 
     location /.well-known/acme-challenge/ {
         root /var/www/html;
     }
 
     location / {
-        return 404;
+        return 301 https://$host$request_uri;
     }
 }
 
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name WORKLOAD_DOMAIN;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name pappy-omega-mini.duckdns.org;
 
-    ssl_certificate /etc/letsencrypt/live/WORKLOAD_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/WORKLOAD_DOMAIN/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/pappy-omega-mini.duckdns.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/pappy-omega-mini.duckdns.org/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
+    add_header Strict-Transport-Security "max-age=31536000" always;
     client_max_body_size 512k;
 
     location /workload/ {
-        proxy_pass http://127.0.0.1:WORKLOAD_PORT;
+        proxy_pass http://127.0.0.1:8788;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

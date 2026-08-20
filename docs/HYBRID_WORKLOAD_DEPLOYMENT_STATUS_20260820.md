@@ -8,9 +8,15 @@ The protected processes were verified unchanged: `omega-core` remained online at
 
 ## Workload endpoint safety state
 
-The workload control endpoint is **not activated** in production. `WORKLOAD_CONTROL_ENABLED` and `WORKLOAD_CONTROL_URL` are absent from the application `.env`, so the application default keeps the new control server disabled. Port `8787` is already owned by the pre-existing `omega-core` process; it was not changed or reused by PAPPY OMEGA-MINI.
+The workload control endpoint is now active at `https://pappy-omega-mini.duckdns.org/workload/*`. DNS resolves to `13.50.108.217`. A dedicated Let’s Encrypt certificate was issued for the hostname, and Certbot installed its automatic renewal task. Nginx exposes only `/workload/*` and returns 404 for the root path and other paths.
 
-A real subdomain with TLS must be supplied before enabling the workload server. The Nginx template and environment contract are in `deploy/workload-control.nginx.conf.example` and `docs/HYBRID_WORKLOAD_ARCHITECTURE_20260820.md`.
+The application binds privately to `127.0.0.1:8788`. Port `8787` remains owned by the pre-existing `omega-core` process and was not changed or reused by PAPPY OMEGA-MINI. The concrete production vhost is `deploy/pappy-omega-mini.duckdns.org.nginx`; the reusable template is `deploy/workload-control.nginx.conf.example`.
+
+## Panel-style smoke test
+
+The official restricted `index.js` was run from an isolated temporary panel directory against the live HTTPS endpoint with a real one-time owner enrollment token. It registered successfully, printed display key `01253`, and the central registry recorded the worker as `ACTIVE` with worker version `1.0.0` and a fresh heartbeat. The temporary worker was then revoked cleanly; no session was assigned and no persistent user data was changed.
+
+The tester-ready archive is `/home/ubuntu/pappy-omega-mini-worker-tester-v1.0.0.tar.gz` with SHA-256 `44d22e2bfd107caa2f990bb7e6a3aade4e4e9178c1bbca9f7480d3b9e41e7caa`.
 
 ## Second VPS verification
 

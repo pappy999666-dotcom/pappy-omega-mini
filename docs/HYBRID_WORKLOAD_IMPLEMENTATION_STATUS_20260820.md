@@ -21,11 +21,11 @@
 | Security boundary | Complete for implemented protocol | No Telegram/Mongo/Redis credentials in worker package; workspace/worker/assignment checks are enforced |
 | Regression gates | Complete | Strict TypeScript and **107/107 tests passing** |
 
-## Activation items requiring the user’s domain
+## Activation status
 
-The control server is intentionally disabled by default and binds to localhost when enabled. A domain with TLS must be supplied before exposing `/workload/*`. The provided Nginx template exposes only that path and returns 404 for all other paths. Redis and MongoDB remain private.
+The control server is enabled in production at `https://pappy-omega-mini.duckdns.org/workload/*`. Nginx exposes only that path and returns 404 for all other paths. The application binds privately to `127.0.0.1:8788` because the pre-existing `omega-core` service owns port 8787. Redis and MongoDB remain private.
 
-## Deliberately deferred until the public endpoint is available
+## Deliberately deferred after initial endpoint activation
 
 Existing-session migration from an owner VPS to a panel worker is not triggered implicitly. The code preserves an explicit migration policy: workload mode affects new sessions, while existing sessions continue safely until an audited migration operation is implemented and verified. External inbound text, quoted text, identity, and mentions are supported; full binary media-download forwarding from panel to control plane requires the public endpoint and a live acceptance test before being enabled for user workers.
 
