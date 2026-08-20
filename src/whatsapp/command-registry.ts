@@ -43,6 +43,13 @@ export interface EnqueueJobResult {
   expectedTimeMs?: number;
 }
 
+export interface EnqueueJoinJobResult {
+  jobCode: string;
+  targetCount: number;
+  delayMs: number;
+  expectedTimeMs: number;
+}
+
 export interface CommandContext {
   workspaceId: string;
   sessionId: string;
@@ -63,6 +70,9 @@ export interface CommandContext {
     kind: "gstatus" | "allstatus" | "allchat" | "tag";
     payload: Record<string, unknown>;
   }) => Promise<string | EnqueueJobResult>;
+  enqueueJoinJob?: (input: {
+    payload: Record<string, unknown>;
+  }) => Promise<string | EnqueueJoinJobResult>;
   sendCurrentGroupStatus?: (input: {
     text: string;
     repeat: number;
@@ -104,6 +114,17 @@ function mediaCommandPayload(ctx: CommandContext): string {
   )
     return caption.slice(commandToken.length).trim();
   return caption;
+}
+
+function formatSeconds(milliseconds: number): string {
+  return `${Math.max(0, Math.round(milliseconds / 1000))}s`;
+}
+
+function formatDuration(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds}s`;
 }
 
 function queuedJobAcknowledgement(
@@ -291,7 +312,52 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const next = updateSession(ctx.workspaceId, ctx.sessionId, {
           autoJoinEnabled: enabled,
         });
+        if (enabled && ctx.enqueueJoinJob) {
+          const settings = getSessionJoinSettings(ctx.workspaceId, ctx.sessionId);
+          const started = await ctx.enqueueJoinJob({
+            payload: {
+              targetCount: settings.targetCount,
+              delayMs: settings.delayMs,
+              minDelayMs: settings.minDelayMs,
+              maxDelayMs: settings.maxDelayMs,
+              retryLimit: settings.retryLimit,
+              retryBaseMs: settings.retryBaseMs,
+              sessionCooldownMs: settings.sessionCooldownMs,
+              restrictionThreshold: settings.restrictionThreshold,
+              requestMode: settings.mode,
+              sourceBucket: "active",
+            },
+          });
+          if (typeof started === "string") return `${started}`;
+          const expected = formatDuration(started.expectedTimeMs);
+          return `Auto-join is ON for ${next.sessionName}.\nTarget       · ${started.targetCount} Active link(s)\nDelay        · ${formatSeconds(started.delayMs)}\nExpected time · ${expected}\nLive code    · ${started.jobCode}\nUse Telegram Live Show or paste this code to monitor the worker.`;
+        }
         return `Auto-join is now ${next.autoJoinEnabled ? "ON" : "OFF"} for ${next.sessionName}.\nUse ${next.prefix}autojoin on|off to set it explicitly.`;
+      },
+    },
+    {
+      name: "join",
+      aliases: ["joinmanager", "joinstart"],
+      description: "Start a real Active-bucket Join Manager worker.",
+      run: async (ctx) => {
+        if (!ctx.enqueueJoinJob) return "Join Manager is unavailable until the worker runtime is ready.";
+        const current = getSessionJoinSettings(ctx.workspaceId, ctx.sessionId);
+        const started = await ctx.enqueueJoinJob({
+          payload: {
+            targetCount: current.targetCount,
+            delayMs: current.delayMs,
+            minDelayMs: current.minDelayMs,
+            maxDelayMs: current.maxDelayMs,
+            retryLimit: current.retryLimit,
+            retryBaseMs: current.retryBaseMs,
+            sessionCooldownMs: current.sessionCooldownMs,
+            restrictionThreshold: current.restrictionThreshold,
+            requestMode: current.mode,
+            sourceBucket: "active",
+          },
+        });
+        if (typeof started === "string") return started;
+        return `Join Manager started.\nTarget       · ${started.targetCount} Active link(s)\nDelay        · ${formatSeconds(started.delayMs)}\nExpected time · ${formatDuration(started.expectedTimeMs)}\nLive code    · ${started.jobCode}\nUse Telegram Live Show or paste this code to monitor the worker.`;
       },
     },
     {

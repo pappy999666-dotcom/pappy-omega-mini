@@ -2,10 +2,12 @@ import {
   executeCommand,
   createCommandRegistry,
   type EnqueueJobResult,
+  type EnqueueJoinJobResult,
 } from "./command-registry.js";
 import {
   createSession,
   getSession,
+  getSessionJoinSettings,
   getWorkspaceDefaults,
   getWorkspaceOwnerTelegramUserId,
   getWorkspaceSudo,
@@ -149,6 +151,38 @@ export async function routeWhatsAppText(
     },
     ...(runtime
       ? {
+          enqueueJoinJob: async ({ payload }: { payload: Record<string, unknown> }) => {
+            if (session.status !== "ACTIVE")
+              return `\u26d4 Join Manager not started: WhatsApp session is ${session.status.toLowerCase()}, not ACTIVE.`;
+            const settings = getSessionJoinSettings(message.workspaceId, message.sessionId);
+            const targetCount = Math.max(1, Math.min(10000, Number(payload.targetCount ?? settings.targetCount)));
+            const delayMs = Math.max(0, Math.min(600000, Number(payload.delayMs ?? settings.delayMs)));
+            const record = await runtime.enqueue({
+              workspaceId: message.workspaceId,
+              sessionId: message.sessionId,
+              kind: "join-manager",
+              payload: {
+                ...payload,
+                targetCount,
+                delayMs,
+                minDelayMs: payload.minDelayMs ?? settings.minDelayMs,
+                maxDelayMs: payload.maxDelayMs ?? settings.maxDelayMs,
+                retryLimit: payload.retryLimit ?? settings.retryLimit,
+                retryBaseMs: payload.retryBaseMs ?? settings.retryBaseMs,
+                sessionCooldownMs: payload.sessionCooldownMs ?? settings.sessionCooldownMs,
+                restrictionThreshold: Math.min(5, Number(payload.restrictionThreshold ?? settings.restrictionThreshold)),
+                requestMode: payload.requestMode ?? settings.mode,
+                sourceBucket: "active",
+              },
+              idempotencyKey: `${message.workspaceId}:${message.sessionId}:join-manager:${Date.now()}:${createHash("sha1").update(JSON.stringify(payload)).digest("hex")}`,
+            });
+            return {
+              jobCode: record.jobCode ?? record.jobId.slice(0, 8),
+              targetCount,
+              delayMs,
+              expectedTimeMs: Math.max(0, targetCount - 1) * delayMs,
+            } satisfies EnqueueJoinJobResult;
+          },
           enqueueJob: async ({
             kind,
             payload,
