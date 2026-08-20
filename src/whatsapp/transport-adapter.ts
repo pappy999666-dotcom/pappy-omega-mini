@@ -199,6 +199,73 @@ const GROUP_INVENTORY_TIMEOUT_MS = 15_000;
 const GROUP_INVENTORY_CACHE_MS = 10_000;
 const GROUP_INVENTORY_INFLIGHT_TIMEOUT_MS = 20_000;
 type GroupInventoryRecord = { subject?: string; participants?: unknown[] };
+type RawBinaryNode = {
+  tag?: string;
+  attrs?: Record<string, string | undefined>;
+  content?: unknown;
+};
+const groupJidCache = new Map<string, { expiresAt: number; jids: string[] }>();
+const groupJidInflight = new Map<string, Promise<string[]>>();
+
+function rawChildren(node: RawBinaryNode | undefined, tag: string): RawBinaryNode[] {
+  if (!node || !Array.isArray(node.content)) return [];
+  return node.content.filter(
+    (child): child is RawBinaryNode =>
+      typeof child === "object" &&
+      child !== null &&
+      (child as RawBinaryNode).tag === tag,
+  );
+}
+
+async function loadGroupJids(socket: WASocket): Promise<string[]> {
+  const query = method(socket, "query");
+  if (!query) throw new Error("Unsupported capability: groupMetadata");
+  const result = (await query({
+    tag: "iq",
+    attrs: { to: "@g.us", xmlns: "w:g2", type: "get" },
+    content: [
+      {
+        tag: "participating",
+        attrs: {},
+        content: [
+          { tag: "participants", attrs: {} },
+          { tag: "description", attrs: {} },
+        ],
+      },
+    ],
+  })) as RawBinaryNode;
+  const groups = rawChildren(rawChildren(result, "groups")[0], "group");
+  return [...new Set(
+    groups
+      .map((group) => group.attrs?.id ?? group.attrs?.jid)
+      .filter(
+        (jid): jid is string =>
+          typeof jid === "string" && jid.endsWith("@g.us"),
+      ),
+  )];
+}
+
+export async function listGroupJids(
+  workspaceId: string,
+  sessionId: string,
+): Promise<string[]> {
+  const cacheKey = `${workspaceId}:${sessionId}`;
+  const cached = groupJidCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return [...cached.jids];
+  const inflight = groupJidInflight.get(cacheKey);
+  if (inflight) return [...(await inflight)];
+  const request = loadGroupJids(socketFor(workspaceId, sessionId))
+    .then((jids) => {
+      groupJidCache.set(cacheKey, {
+        expiresAt: Date.now() + GROUP_INVENTORY_CACHE_MS,
+        jids,
+      });
+      return jids;
+    })
+    .finally(() => groupJidInflight.delete(cacheKey));
+  groupJidInflight.set(cacheKey, request);
+  return [...(await request)];
+}
 const groupInventoryCache = new Map<
   string,
   { expiresAt: number; groups: GroupSummary[] }

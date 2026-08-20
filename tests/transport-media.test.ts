@@ -8,16 +8,30 @@ const mocks = vi.hoisted(() => ({
       { id: "2348022222222@s.whatsapp.net" },
     ],
   })),
+  query: vi.fn(async () => ({
+    content: [
+      {
+        tag: "groups",
+        content: [
+          { tag: "group", attrs: { id: "120363000000000001@g.us" } },
+          { tag: "group", attrs: { jid: "120363000000000002@g.us" } },
+          { tag: "group", attrs: { id: "user@s.whatsapp.net" } },
+        ],
+      },
+    ],
+  })),
 }));
 
 vi.mock("../src/whatsapp/session-manager.js", () => ({
   getWhatsAppSocket: () => ({
     sendMessage: mocks.send,
     groupMetadata: mocks.groupMetadata,
+    query: mocks.query,
   }),
 }));
 
 import {
+  listGroupJids,
   sendGroupMentions,
   sendGroupStatus,
   sendGroupText,
@@ -101,4 +115,14 @@ describe("WhatsApp media transport coverage", () => {
       ]);
     },
   );
+
+  it("resolves group JIDs through the lightweight raw inventory path", async () => {
+    mocks.query.mockClear();
+    const jids = await listGroupJids("raw-groups", "session");
+    expect(jids).toEqual([
+      "120363000000000001@g.us",
+      "120363000000000002@g.us",
+    ]);
+    expect(mocks.query).toHaveBeenCalledOnce();
+  });
 });
