@@ -41,6 +41,7 @@ export interface EnqueueJobResult {
   totalPosts?: number;
   delayMs?: number;
   expectedTimeMs?: number;
+  inventoryPending?: boolean;
 }
 
 export interface EnqueueJoinJobResult {
@@ -134,12 +135,15 @@ function queuedJobAcknowledgement(
   if (typeof result === "string")
     return `${kind === "allstatus" ? "All-status" : "All-chat"} job queued: ${result}`;
   const delay = Math.max(1, Math.round((result.delayMs ?? 20000) / 1000));
-  const totalGroups = result.totalGroups ?? "—";
-  const totalPosts = result.totalPosts ?? "—";
+  const inventoryPending = result.inventoryPending === true;
+  const totalGroups = inventoryPending ? "resolving…" : result.totalGroups ?? "0";
+  const totalPosts = inventoryPending ? "calculating…" : result.totalPosts ?? "0";
   const expectedTime =
-    result.expectedTimeMs === undefined
-      ? "—"
-      : (() => {
+    inventoryPending
+      ? "calculating…"
+      : result.expectedTimeMs === undefined
+        ? "0m 0s"
+        : (() => {
           const expectedSeconds = Math.max(
             0,
             Math.ceil(result.expectedTimeMs / 1000),

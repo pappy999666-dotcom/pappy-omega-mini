@@ -174,6 +174,49 @@ export function startWorkerRuntime(): JobOrchestrator {
     const key = `pappy-omega-mini:broadcast-done:${jobId}:${kind}:${encodeURIComponent(jid)}:${repeatIndex}`;
     await redis.set(key, "done", "EX", 60 * 60 * 24 * 30).catch(() => undefined);
   };
+  const notifyBroadcastReady = async (
+    context: WorkerContext,
+    kind: "allstatus" | "allchat",
+    totalGroups: number,
+    repeat: number,
+    delayMs: number,
+  ): Promise<void> => {
+    const payload = context.job.payload as { sourceChatJid?: unknown };
+    const sourceChatJid = typeof payload.sourceChatJid === "string" ? payload.sourceChatJid : "";
+    const code = context.job.jobCode;
+    if (!sourceChatJid || !code || !context.job.sessionId) return;
+    const marker = `pappy-omega-mini:broadcast-ready:${context.job.jobId}`;
+    const claimed = await redis.set(marker, "1", "EX", 60 * 60 * 24 * 30, "NX").catch(() => null);
+    if (claimed !== "OK") return;
+    const expectedPosts = totalGroups * repeat;
+    const expectedSeconds = Math.max(0, Math.ceil(Math.max(0, expectedPosts - 1) * delayMs / 1000));
+    const minutes = Math.floor(expectedSeconds / 60);
+    const seconds = expectedSeconds % 60;
+    const label = kind === "allstatus" ? "ALL-STATUS" : "ALL-CHAT";
+    const action = kind === "allstatus"
+      ? "Status delivery is now posting to every resolved group."
+      : "Hidden-member mention delivery is now posting to every resolved group.";
+    void sendDirectText(
+      context.job.workspaceId,
+      context.job.sessionId,
+      sourceChatJid,
+      [
+        `✦ PAPPY OMEGA MINI · ${label} READY`,
+        "─────────────────────",
+        `Total groups  · ${totalGroups}`,
+        `Expected posts · ${expectedPosts}`,
+        `Delay         · ${Math.max(1, Math.round(delayMs / 1000))}s`,
+        `Expected time · ${minutes}m ${seconds}s`,
+        `Live code     · ${code}`,
+        `Action        · ${action}`,
+      ].join("\n"),
+    ).catch((error) =>
+      console.error(
+        `[pappy-omega-mini] WhatsApp READY report failed job=${code}:`,
+        error instanceof Error ? error.message : String(error),
+      ),
+    );
+  };
   const joinResults = new JoinResultStore(redis);
   activeBuckets = buckets;
   activeJoinResults = joinResults;
@@ -893,6 +936,10 @@ export function startWorkerRuntime(): JobOrchestrator {
         }),
       );
       const deliverableGroups = uniqueGroups.filter((jid) => !ignoredJids.has(jid));
+      const delayMs = Math.max(
+        1500,
+        Math.min(120000, Number(payload.delayMs ?? 2500)),
+      );
       const resolvedPayload = {
         ...payload,
         groups: deliverableGroups,
@@ -906,6 +953,14 @@ export function startWorkerRuntime(): JobOrchestrator {
         },
         { payload: resolvedPayload },
       );
+      if (kind === "allstatus" || kind === "allchat")
+        await notifyBroadcastReady(
+          context,
+          kind,
+          deliverableGroups.length,
+          repeat,
+          delayMs,
+        );
       const deliveries = deliverableGroups.flatMap((jid) =>
         Array.from({ length: repeat }, (_, repeatIndex) => ({
           jid,
@@ -915,10 +970,6 @@ export function startWorkerRuntime(): JobOrchestrator {
       const text = typeof payload.text === "string" ? payload.text : "";
       if (!text.trim() && !payload.media)
         throw new Error(`${kind} requires text or media payload.`);
-      const delayMs = Math.max(
-        1500,
-        Math.min(120000, Number(payload.delayMs ?? 2500)),
-      );
       let media: GroupMediaPayload | undefined;
       if (payload.media) {
         media = {

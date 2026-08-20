@@ -250,11 +250,15 @@ export async function routeWhatsAppText(
               kind === "allstatus" || kind === "allchat"
                 ? listGroups(message.workspaceId, message.sessionId).catch(() => [])
                 : Promise.resolve([]);
+            let inventoryPending = false;
             const record = await recordPromise;
             const inventory = await Promise.race([
               inventoryPromise,
               new Promise<Awaited<typeof inventoryPromise>>((resolve) => {
-                const timer = setTimeout(() => resolve([]), 750);
+                const timer = setTimeout(() => {
+                  inventoryPending = true;
+                  resolve([]);
+                }, 750);
                 timer.unref?.();
               }),
             ]);
@@ -272,6 +276,7 @@ export async function routeWhatsAppText(
               ...(totalGroups > 0
                 ? { expectedTimeMs: Math.max(0, totalGroups * repeat - 1) * delayMs }
                 : {}),
+              ...(inventoryPending ? { inventoryPending: true } : {}),
             } satisfies EnqueueJobResult;
           },
         }
