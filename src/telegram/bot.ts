@@ -4461,7 +4461,7 @@ export function createTelegramBot(): Telegraf<Context> {
     try {
       const enrollment = await createWorkloadEnrollmentToken(user.workspaceId, user.telegramUserId);
       recordAudit({ workspaceId: user.workspaceId, actorTelegramUserId: user.telegramUserId, action: "workload.enrollment.create", success: true, metadata: { enrollmentId: enrollment.enrollmentId, expiresAt: enrollment.expiresAt } });
-      const setupCommand = `npm install --omit=dev && node index.js --enrollment ${enrollment.token}`;
+      const setupCommand = `node index.js --enrollment ${enrollment.token}`;
       await edit(
         ctx,
         pageText("Workload · Setup", successResponse("Copy one setup command", `Download the worker package first, open its folder, then paste the command below. It installs the small runtime, asks for a friendly name, and prints the permanent code to save.\n\n<b>Expires:</b> <code>${escapeHtml(new Date(enrollment.expiresAt).toISOString())}</code>`)),
