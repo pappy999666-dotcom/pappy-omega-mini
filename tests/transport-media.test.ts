@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   query: vi.fn(async () => ({
     content: [
       {
-        tag: "groups",
+        tag: "participating",
         content: [
           { tag: "group", attrs: { id: "120363000000000001@g.us" } },
           { tag: "group", attrs: { jid: "120363000000000002@g.us" } },

@@ -217,6 +217,20 @@ function rawChildren(node: RawBinaryNode | undefined, tag: string): RawBinaryNod
   );
 }
 
+function rawGroupNodes(
+  node: RawBinaryNode | undefined,
+  depth = 0,
+): RawBinaryNode[] {
+  if (!node || depth > 6) return [];
+  if (node.tag === "group") return [node];
+  if (!Array.isArray(node.content)) return [];
+  return node.content.flatMap((child) =>
+    typeof child === "object" && child !== null
+      ? rawGroupNodes(child as RawBinaryNode, depth + 1)
+      : [],
+  );
+}
+
 async function loadGroupJids(socket: WASocket): Promise<string[]> {
   const query = method(socket, "query");
   if (!query) throw new Error("Unsupported capability: groupMetadata");
@@ -234,20 +248,8 @@ async function loadGroupJids(socket: WASocket): Promise<string[]> {
       },
     ],
   })) as RawBinaryNode;
-  const groupsNode = rawChildren(result, "groups")[0];
-  const groups = rawChildren(groupsNode, "group");
-  if (!groups.length) {
-    const rootTags = Array.isArray(result.content)
-      ? result.content
-          .filter((child): child is RawBinaryNode => typeof child === "object" && child !== null)
-          .map((child) => child.tag ?? "?")
-          .slice(0, 12)
-      : [];
-    console.warn(
-      `[pappy-omega-mini] raw group roster empty root=${result.tag ?? "?"} groupsNode=${Boolean(groupsNode)} rootChildren=${rootTags.join("|")}`,
-    );
-  }
-  return [...new Set(
+  const groups = rawGroupNodes(result);
+  const jids = [...new Set(
     groups
       .map((group) => group.attrs?.id ?? group.attrs?.jid)
       .filter(
@@ -255,6 +257,18 @@ async function loadGroupJids(socket: WASocket): Promise<string[]> {
           typeof jid === "string" && jid.endsWith("@g.us"),
       ),
   )];
+  if (!jids.length) {
+    const rootTags = Array.isArray(result.content)
+      ? result.content
+          .filter((child): child is RawBinaryNode => typeof child === "object" && child !== null)
+          .map((child) => child.tag ?? "?")
+          .slice(0, 12)
+      : [];
+    console.warn(
+      `[pappy-omega-mini] raw group roster empty root=${result.tag ?? "?"} groupNodes=${groups.length} rootChildren=${rootTags.join("|")}`,
+    );
+  }
+  return jids;
 }
 
 export async function listGroupJids(
