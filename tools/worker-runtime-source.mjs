@@ -185,13 +185,25 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
   const { state, saveCreds } = await makeCacheManagerAuthState(store, sessionId);
   const socket = makeWASocket({ auth: state, logger: pino({ level: "warn" }), generateHighQualityLinkPreview: true });
   socket.ev.on("creds.update", saveCreds);
-  const runtime = { workspaceId, sessionId, socket, store, ready: false };
+  let pairingReadyResolve;
+  let pairingReadyReject;
+  const pairingReady = new Promise((resolve, reject) => {
+    pairingReadyResolve = resolve;
+    pairingReadyReject = reject;
+    setTimeout(() => reject(new Error("WhatsApp did not reach the pairing state.")), 15_000);
+  });
+  pairingReady.catch(() => undefined);
+  const runtime = { workspaceId, sessionId, socket, store, ready: false, pairingReady };
   socket.ev.on("messages.upsert", (event) => {
     for (const message of event.messages ?? []) void emitInbound(runtime, message).catch((error) => noteError(error, "inbound event failed"));
   });
   runtimes.set(sessionId, runtime);
   socket.ev.on("connection.update", (update) => {
+    if (update.connection === "connecting" && !state.creds.registered) {
+      setTimeout(() => pairingReadyResolve?.(), 1_500);
+    }
     if (update.connection === "open") {
+      pairingReadyResolve?.();
       runtime.ready = true;
       matrix.state = "ACTIVE";
       matrix.lastAction = `session ${sessionId} connected`;
@@ -200,6 +212,7 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
       void reportSessionStatus(runtime, "ACTIVE", "VALID");
     }
     if (update.connection === "close") {
+      pairingReadyReject?.(new Error("WhatsApp connection closed before pairing."));
       runtime.ready = false;
       matrix.state = "DEGRADED";
       matrix.lastAction = `session ${sessionId} closed`;
@@ -290,6 +303,7 @@ async function execute(command) {
   }
   if (command.kind === "session.pair.request") {
     const runtime = await startSession(command.workspaceId, command.sessionId, false);
+    await runtime.pairingReady;
     await reportSessionStatus(runtime, "PAIRING", "UNKNOWN");
     const phoneNumber = String(command.payload.phoneNumber ?? "").replace(/\D/g, "");
     const customCode = String(command.payload.customCode ?? "PAPPYBOT").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
@@ -299,6 +313,7 @@ async function execute(command) {
   if (command.kind === "bridge.command") {
     const method = String(command.payload.method ?? "");
     const runtime = await startSession(command.workspaceId, command.sessionId, method !== "requestPairingCode");
+    if (method === "requestPairingCode") await runtime.pairingReady;
     return await executeTransport(runtime, method, command.payload.args ?? []);
   }
   throw new Error(`Unsupported workload command: ${command.kind}`);
