@@ -146,18 +146,18 @@ export class JobOrchestrator {
         });
     });
     this.reaperTimer = setInterval(() => {
-      void this.recoverOutstandingJobs().catch(() => undefined);
+      void this.recoverOutstandingJobs(false).catch(() => undefined);
       void this.reapStaleJobs();
     }, 30_000);
     this.reaperTimer.unref?.();
   }
 
   async recoverStaleJobsNow(): Promise<void> {
-    await this.recoverOutstandingJobs();
+    await this.recoverOutstandingJobs(true);
     await this.reapStaleJobs();
   }
 
-  private async recoverOutstandingJobs(): Promise<void> {
+  private async recoverOutstandingJobs(forceRunningRecovery: boolean): Promise<void> {
     const now = Date.now();
     for (const record of await this.store.listAll()) {
       if (!["QUEUED", "RUNNING", "RETRYING", "FAILED"].includes(record.state)) continue;
@@ -167,13 +167,20 @@ export class JobOrchestrator {
       const bullWaiting = bullJob ? await bullJob.isWaiting() : false;
       const bullActive = bullJob ? await bullJob.isActive() : false;
       const bullDelayed = bullJob ? await bullJob.isDelayed() : false;
+      const staleRunningRecovery =
+        record.state === "RUNNING" &&
+        !bullWaiting &&
+        !bullDelayed &&
+        (!bullActive || heartbeatAge > STALE_ACTIVE_JOB_GRACE_MS) &&
+        heartbeatAge > 10_000;
       const shouldRecover =
         !bullJob ||
-        (record.state === "RUNNING" && heartbeatAge > 0) ||
+        (forceRunningRecovery && record.state === "RUNNING" && heartbeatAge > 0) ||
+        staleRunningRecovery ||
         (record.state === "RETRYING" && !bullWaiting && !bullActive && !bullDelayed) ||
         isRetryableBroadcastFailure(record, heartbeatAge);
       if (!shouldRecover) continue;
-      const claimKey = `pappy-omega-mini:recovery:${record.jobId}:${record.heartbeatAt ?? record.createdAt}`;
+      const claimKey = `pappy-omega-mini:recovery:${record.jobId}`;
       const claimed = await this.redis.set(claimKey, "1", "EX", 120, "NX");
       if (claimed !== "OK") continue;
       await this.store.update(record.jobId, {
