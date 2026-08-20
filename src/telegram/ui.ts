@@ -138,6 +138,7 @@ export function globalBridgeKeyboard(
     ...(sessionCount > 0
       ? [
           [btn("1️⃣ Choose ACTIVE Sessions", "bridge:global:select")],
+          [btn("☑ Select All ACTIVE", "bridge:global:select:all", "primary")],
           [btn("✉️ Send Command", "bridge:global:command", "success")],
         ]
       : []),
@@ -185,9 +186,10 @@ export function bridgeSessionPicker(
     ),
   ]);
   rows.push([
-    btn("✉️ Send Command", "bridge:global:command", "success"),
+    btn("☑ Select All ACTIVE", "bridge:global:select:all", "primary"),
     btn("↻ Clear Selection", "bridge:global:clear"),
   ]);
+  rows.push([btn("✉️ Send Command", "bridge:global:command", "success")]);
   rows.push([btn(ui.back, "bridge:global")]);
   return keyboard(rows);
 }
@@ -701,8 +703,10 @@ export function adminBridgeKeyboard(
   });
   if (!sessions.length)
     rows.push([btn("＋ Pair Session", "session:new", "success")]);
-  if (sessions.length)
+  if (sessions.length) {
+    rows.push([btn("☑ Select All ACTIVE", "admin:bridge:all", "primary")]);
     rows.push([btn("✉ Send Command", "admin:bridge:command", "success")]);
+  }
   rows.push([btn("↻ Refresh", "admin:bridge", "primary")]);
   rows.push([btn(ui.back, "admin:panel")]);
   return keyboard(rows);
@@ -1103,11 +1107,28 @@ export function autoPromoteText(
   const configRows = configs.length
     ? configs
         .slice(0, 12)
-        .map(
-          (config) =>
-            `${config.enabled ? "🟢" : "⚪"} <b>${escapeHtml(config.command.toUpperCase())}</b> · ${escapeHtml(config.scope)}\n` +
-            `<code>${escapeHtml(config.id.slice(0, 8))}</code> · ${config.days}d · ${config.timesPerDay}x/day · ${escapeHtml(config.timezone)} · ${escapeHtml(config.state)}`,
-        )
+        .map((config) => {
+          const scope = config.scope === "GLOBAL"
+            ? "ALL ACTIVE + FUTURE SESSIONS"
+            : config.scope === "USER"
+              ? "ALL SESSIONS OWNED BY USER"
+              : `SESSION ${config.sessionId?.slice(0, 8) ?? "—"}`;
+          const slotTimes = Object.values(config.slotTimes).filter(Boolean).join(", ");
+          const payloadText = typeof config.payload.text === "string"
+            ? config.payload.text
+            : typeof config.payload.caption === "string"
+              ? config.payload.caption
+              : config.payload.media
+                ? `[${config.payload.media.kind} attachment]`
+                : "[empty payload]";
+          const postsPerGroup = config.command === "allstatusx"
+            ? config.allstatusxPostsPerGroup ?? 1
+            : 1;
+          return `${config.enabled ? "🟢" : "⚪"} <b>${escapeHtml(config.command.toUpperCase())}</b> · ${escapeHtml(config.state)}\n` +
+            `<code>${escapeHtml(config.id.slice(0, 8))}</code> · <b>Scope:</b> ${escapeHtml(scope)}\n` +
+            `<b>Schedule:</b> ${escapeHtml(config.startDate)} → ${escapeHtml(config.endDate)} · ${config.timesPerDay}x/day · ${escapeHtml(slotTimes)} · ${escapeHtml(config.timezone)}\n` +
+            `<b>Posts/group:</b> ${postsPerGroup} · <b>Payload:</b> <code>${escapeHtml(payloadText.slice(0, 180))}</code>`;
+        })
         .join("\n\n")
     : "No Auto Promote configurations have been created.";
   const runRows = runs
@@ -1139,7 +1160,7 @@ export function autoPromoteGlobalTargetsKeyboard(
     ),
   ]);
   rows.push([btn("✅ Use Selected Sessions", "autopromote:global:ready", "success")]);
-  rows.push([btn("✚ Select All Active", "autopromote:global:all", "primary")]);
+  rows.push([btn("🌐 All ACTIVE + Future Sessions", "autopromote:global:all", "primary")]);
   rows.push([btn("↻ Refresh ACTIVE Sessions", "admin:autopromote:targets:refresh", "primary")]);
   rows.push([btn("Cancel", "autopromote:cancel", "danger")]);
   return keyboard(rows);

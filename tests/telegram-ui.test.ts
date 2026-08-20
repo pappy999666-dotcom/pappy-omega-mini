@@ -13,6 +13,7 @@ import {
   forceJoinKeyboard,
   forceJoinText,
   globalBridgeKeyboard,
+  autoPromoteText,
   joinManagerKeyboard,
   menuMediaPickerKeyboard,
   pageText,
@@ -150,9 +151,37 @@ describe("Telegram UI authorization", () => {
   it("keeps Support Inbox inside the Admin Control Plane", () => {
     const admin = JSON.stringify(adminKeyboard());
     expect(admin).toContain("admin:support");
+    expect(admin).toContain("admin:jobs:clear");
     expect(JSON.stringify(dashboardKeyboard(false))).not.toContain(
       "admin:support",
     );
+  });
+
+  it("renders the dynamic Auto Promote schedule details", () => {
+    const text = autoPromoteText([
+      {
+        id: "config-12345678",
+        scope: "GLOBAL",
+        ownerTelegramUserId: "7624193882",
+        command: "allstatusx",
+        payload: { text: "hello" },
+        days: 7,
+        timesPerDay: 2,
+        allstatusxPostsPerGroup: 3,
+        timezone: "Africa/Lagos",
+        slotTimes: { morning: "09:00", afternoon: "14:00", evening: "19:00", lateNight: "23:00" },
+        startDate: "2026-08-20",
+        endDate: "2026-08-26",
+        enabled: true,
+        state: "SCHEDULED",
+        createdAt: 1,
+        updatedAt: 1,
+      } as never,
+    ]);
+    expect(text).toContain("ALL ACTIVE + FUTURE SESSIONS");
+    expect(text).toContain("2026-08-20");
+    expect(text).toContain("Posts/group:");
+    expect(text).toContain("hello");
   });
 
   it("renders a real Admin Users directory", () => {
@@ -258,6 +287,7 @@ describe("Telegram UI authorization", () => {
   it("removes the old Global Bridge fan-out protocol", () => {
     const global = JSON.stringify(globalBridgeKeyboard(1));
     expect(global).toContain("bridge:global:select");
+    expect(global).toContain("bridge:global:select:all");
     expect(global).toContain("bridge:global:command");
     expect(global).not.toContain("bridge:global:start");
     expect(global).not.toContain("bridge:global:stop");

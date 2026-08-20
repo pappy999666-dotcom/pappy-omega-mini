@@ -223,6 +223,7 @@ type AutoPromoteWizard = {
   scope: AutoPromoteScope;
   sessionId?: string | undefined;
   targetSessionIds?: string[] | undefined;
+  allFutureSessions?: boolean;
   command?: AutoPromoteCommand;
   days?: number;
   timesPerDay?: number;
@@ -466,6 +467,7 @@ export function createTelegramBot(): Telegraf<Context> {
       count?: number;
       delayMs?: number;
       sourceChatJid?: string;
+      sourceTransport?: "whatsapp";
     };
     const totalGroups = job.progress.total ?? new Set(payload.groups ?? []).size;
     const repeat = Math.max(1, Math.min(20, Number(payload.count ?? 1)));
@@ -483,35 +485,7 @@ export function createTelegramBot(): Telegraf<Context> {
         : job.state === "PARTIAL"
           ? "PARTIAL"
           : "FAILED";
-    const telegramOwnerId = getWorkspaceOwnerTelegramUserId(job.workspaceId);
-    const telegramChatId = telegramOwnerId ? Number(telegramOwnerId) : NaN;
-    if (Number.isFinite(telegramChatId))
-      await bot.telegram.sendMessage(
-        telegramChatId,
-        [
-          `✦ <b>PAPPY OMEGA MINI · ${kindLabel} ${terminalLabel}</b>`,
-          "──────────────────────────────",
-          `<b>State</b> · ${escapeHtml(job.state)}`,
-          `<b>Total groups</b> · ${totalGroups}`,
-          `<b>Expected posts</b> · ${expectedPosts}`,
-          `<b>Posted</b> · ${progress.success}`,
-          `<b>Failed</b> · ${progress.failed}`,
-          `<b>Skipped</b> · ${progress.skipped}`,
-          `<b>Delay</b> · ${delay}s`,
-          `<b>Total time</b> · ${minutes}m ${seconds}s`,
-          `<b>Live code</b> · <code>${escapeHtml(code)}</code>`,
-          "",
-          "<i>One terminal report was emitted. Refresh Live Show for the durable ledger.</i>",
-        ].join("\n"),
-        {
-          parse_mode: "HTML",
-          reply_markup: keyboard([
-            [copyBtn("📋 Copy live code", code, "success")],
-            [btn("📺 Live Show", `job:live:${code}`)],
-          ]),
-        },
-      );
-    if (job.sessionId && payload.sourceChatJid) {
+    if (job.sessionId && payload.sourceTransport === "whatsapp" && payload.sourceChatJid) {
       const whatsappReport = [
         `✦ PAPPY OMEGA MINI · ${kindLabel} ${terminalLabel}`,
         "─────────────────────",
@@ -1224,10 +1198,7 @@ export function createTelegramBot(): Telegraf<Context> {
       const results: Array<{ sessionName: string; ok: boolean; output: string }> = [];
       for (const session of targets) {
         try {
-          const command =
-            session.prefix && !input.startsWith(session.prefix)
-              ? `${session.prefix}${input}`
-              : input;
+          const command = normalizeBridgeCommand(input, session.prefix);
           const routed = await routeWhatsAppText({
             workspaceId: session.workspaceId,
             sessionId: session.sessionId,
@@ -1298,10 +1269,7 @@ export function createTelegramBot(): Telegraf<Context> {
             ? quoted.caption
             : undefined
         : undefined;
-      const command =
-        session.prefix && !input.startsWith(session.prefix)
-          ? `${session.prefix}${input}`
-          : input;
+      const command = normalizeBridgeCommand(input, session.prefix);
       try {
         const result = await routeWhatsAppText({
           workspaceId: session.workspaceId,
@@ -1417,10 +1385,7 @@ export function createTelegramBot(): Telegraf<Context> {
           .catch(() => undefined);
         return;
       }
-      const command =
-        session.prefix && !input.startsWith(session.prefix)
-          ? `${session.prefix}${input}`
-          : input;
+      const command = normalizeBridgeCommand(input, session.prefix);
       try {
         const result = await routeWhatsAppText({
           workspaceId: session.workspaceId,
@@ -1663,11 +1628,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const results = await Promise.all(
       sessions.map(async (session) => {
         try {
-          const command =
-            session.prefix &&
-            !ctx.message.text.trim().startsWith(session.prefix)
-              ? `${session.prefix}${ctx.message.text.trim()}`
-              : ctx.message.text.trim();
+          const command = normalizeBridgeCommand(ctx.message.text, session.prefix);
           const routed = await routeWhatsAppText({
             workspaceId: user.workspaceId,
             sessionId: session.sessionId,
@@ -2894,6 +2855,17 @@ export function createTelegramBot(): Telegraf<Context> {
       bridgeSessionPicker(activeWorkspaceSessions(user.workspaceId), selected),
     );
   });
+  bot.action("bridge:global:select:all", async (ctx) => {
+    await ctx.answerCbQuery("All ACTIVE sessions selected");
+    const user = resolveTelegramUser(ctx);
+    const active = activeWorkspaceSessions(user.workspaceId);
+    globalBridgeSelections.set(user.workspaceId, new Set(active.map((session) => session.sessionId)));
+    await edit(
+      ctx,
+      pageText("Global Bridge · Choose Sessions", infoResponse("All ACTIVE Sessions Selected", `${active.length} ACTIVE session${active.length === 1 ? "" : "s"} selected.`)),
+      bridgeSessionPicker(active, new Set(active.map((session) => session.sessionId))),
+    );
+  });
   bot.action(/^bridge:global:toggle:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
@@ -4061,7 +4033,7 @@ export function createTelegramBot(): Telegraf<Context> {
     pendingAutoPromote.set(String(ctx.from?.id ?? ""), {
       workspaceId: user.workspaceId,
       scope: "GLOBAL",
-      targetSessionIds: targets,
+      allFutureSessions: true,
       stage: "command",
       chatId: ctx.chat?.id,
       messageId: ctx.callbackQuery?.message && "message_id" in ctx.callbackQuery.message ? ctx.callbackQuery.message.message_id : undefined,
@@ -4086,8 +4058,10 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!current || current.scope !== "GLOBAL") return;
     const activeSessions = activeAllSessions();
     const activeIds = new Set(activeSessions.map((session) => session.sessionId));
-    const selected = new Set((current.targetSessionIds ?? []).filter((id) => activeIds.has(id)));
-    pendingAutoPromote.set(userId, { ...current, targetSessionIds: [...selected] });
+    const selected = current.allFutureSessions
+      ? new Set(activeSessions.map((session) => session.sessionId))
+      : new Set((current.targetSessionIds ?? []).filter((id) => activeIds.has(id)));
+    pendingAutoPromote.set(userId, { ...current, targetSessionIds: current.allFutureSessions ? undefined : [...selected] });
     await edit(
       ctx,
       pageText("Global Auto Promote", infoResponse("Choose Target Sessions", `<b>Selected:</b> ${selected.size} active session(s)\n<b>Available:</b> ${activeSessions.length} ACTIVE session(s)`)),
@@ -4103,7 +4077,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const selected = new Set(current.targetSessionIds ?? []);
     const sessionId = ctx.match[1] ?? "";
     if (selected.has(sessionId)) selected.delete(sessionId); else selected.add(sessionId);
-    pendingAutoPromote.set(userId, { ...current, targetSessionIds: [...selected] });
+    pendingAutoPromote.set(userId, { ...current, targetSessionIds: [...selected], allFutureSessions: false });
     const activeSessions = activeAllSessions();
     await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Target Sessions", `<b>Selected:</b> ${selected.size} active session(s)`)), autoPromoteGlobalTargetsKeyboard(activeSessions, selected));
   });
@@ -4115,15 +4089,15 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!current || current.scope !== "GLOBAL") return;
     const activeSessions = activeAllSessions();
     const selected = activeSessions.map((session) => session.sessionId);
-    pendingAutoPromote.set(userId, { ...current, targetSessionIds: selected });
-    await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Target Sessions", `<b>Selected:</b> ${selected.length} active session(s)`)), autoPromoteGlobalTargetsKeyboard(activeSessions, new Set(selected)));
+    pendingAutoPromote.set(userId, { ...current, targetSessionIds: undefined, allFutureSessions: true });
+    await edit(ctx, pageText("Global Auto Promote", infoResponse("All ACTIVE + Future Sessions", "Newly paired ACTIVE sessions will be added automatically on the next scheduled occurrence.")), autoPromoteGlobalTargetsKeyboard(activeSessions, new Set(selected)));
   });
   bot.action("autopromote:global:ready", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
     const userId = String(ctx.from?.id ?? "");
     const current = pendingAutoPromote.get(userId);
-    if (!current || current.scope !== "GLOBAL" || !(current.targetSessionIds?.length)) {
+    if (!current || current.scope !== "GLOBAL" || (!current.allFutureSessions && !(current.targetSessionIds?.length))) {
       await edit(
         ctx,
         pageText(
@@ -4141,7 +4115,7 @@ export function createTelegramBot(): Telegraf<Context> {
         "Global Auto Promote",
         infoResponse(
           "Choose Duration",
-          `<b>Targets:</b> ${current.targetSessionIds.length} selected ACTIVE session(s)\n\nChoose how many days this Global Auto Promote should run.`,
+          `<b>Targets:</b> ${current.allFutureSessions ? "ALL ACTIVE + FUTURE sessions" : `${current.targetSessionIds?.length ?? 0} selected ACTIVE session(s)`}\n\nChoose how many days this Global Auto Promote should run.`,
         ),
       ),
       autoPromoteDaysKeyboard(),
@@ -4179,7 +4153,7 @@ export function createTelegramBot(): Telegraf<Context> {
           "Global Auto Promote",
           infoResponse(
             "Review Target Sessions",
-            `<b>Command:</b> <code>${escapeHtml(command)}</code>\n<b>Selected:</b> ${selected.size} ACTIVE session(s)\n\nAdjust the selection if needed, then press Continue to Duration.`,
+            `<b>Command:</b> <code>${escapeHtml(command)}</code>\n<b>Selected:</b> ${current.allFutureSessions ? "ALL ACTIVE + FUTURE sessions" : `${selected.size} ACTIVE session(s)`}\n\nAdjust the selection if needed, then press Continue to Duration.`,
           ),
         ),
         autoPromoteGlobalTargetsKeyboard(activeSessions, selected),
@@ -4435,6 +4409,19 @@ export function createTelegramBot(): Telegraf<Context> {
       ctx,
       adminBridgeText(activeAllSessions()),
       adminBridgeKeyboard(activeAllSessions()),
+    );
+  });
+  bot.action("admin:bridge:all", async (ctx) => {
+    await ctx.answerCbQuery("All ACTIVE sessions selected");
+    if (!requireAdmin(ctx)) return;
+    const userId = String(ctx.from?.id ?? "");
+    const active = activeAllSessions();
+    const selected = new Set(active.map((session) => adminBridgeTargetToken(session.workspaceId, session.sessionId)));
+    adminBridgeSelections.set(userId, selected);
+    await edit(
+      ctx,
+      adminBridgeText(active),
+      adminBridgeKeyboard(active, selected),
     );
   });
   bot.action(/^admin:bridge:toggle:([A-Z0-9]+)$/, async (ctx) => {
@@ -6235,6 +6222,17 @@ function ownedSession(ctx: Context, sessionId: string) {
 
 function isBridgeReadySession(session: ReturnType<typeof listAllSessions>[number]): boolean {
   return session.status === "ACTIVE";
+}
+
+function normalizeBridgeCommand(input: string, sessionPrefix: string): string {
+  const trimmed = input.trim();
+  const prefix = sessionPrefix || ".";
+  const body = trimmed.startsWith(prefix)
+    ? trimmed.slice(prefix.length)
+    : trimmed.startsWith(".")
+      ? trimmed.slice(1)
+      : trimmed;
+  return `${prefix}${body}`;
 }
 
 function activeWorkspaceSessions(workspaceId: string) {
