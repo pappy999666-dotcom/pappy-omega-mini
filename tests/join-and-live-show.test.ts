@@ -181,4 +181,16 @@ describe("Live Show renderer", () => {
     expect(rendered).toContain("Already member");
     expect(rendered).toContain("Joined Alpha");
   });
+
+  it("renders the live cadence, remaining count, and next-post countdown", () => {
+    const running = job();
+    running.kind = "allstatus";
+    running.payload = { delayMs: 20_000 };
+    running.progress.nextActionAt = Date.now() + 5_000;
+    const rendered = jobLiveText(running);
+    expect(rendered).toContain("Next post");
+    expect(rendered).toContain("Cadence");
+    expect(rendered).toContain("20s/group");
+    expect(rendered).toContain("remaining");
+  });
 });
