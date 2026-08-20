@@ -35,3 +35,22 @@ Keep `pappy-workload-data` persistent. It contains the encrypted worker credenti
 The workload code is workspace-scoped, permanently reserved, and cannot be reused for another workspace. Revoking a worker does not delete central user sessions or accounts.
 
 Never add Telegram, MongoDB, Redis, owner, or admin credentials to this file or panel directory.
+
+## Matrix logger
+
+The worker prints a compact ASCII matrix instead of a raw or garbled event stream. It contains only safe operational fields:
+
+```text
++---------------- PAPPY WORKLOAD MATRIX ----------------+
+| NAME       | pappy                                     |
+| CODE       | pappy-ab12cd                              |
+| STATE      | ACTIVE                                    |
+| SESSIONS   | 0                                         |
+| HEARTBEAT  | 3s                                        |
+| CONTROL    | 1s                                        |
+| ACTION     | heartbeat; 0 assigned                    |
+| ERROR      | none                                      |
++--------------------------------------------------------+
+```
+
+`ACTIVE` means the worker is registered and sending heartbeats. `DEGRADED` means the worker has reported a recoverable transport or control error; the last safe error is shown in the matrix. The matrix never prints enrollment tokens, worker credentials, Telegram tokens, MongoDB URLs, Redis URLs, message payloads, or another user’s data.

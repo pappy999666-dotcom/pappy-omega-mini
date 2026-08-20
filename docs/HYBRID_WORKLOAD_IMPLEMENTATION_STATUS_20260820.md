@@ -31,4 +31,4 @@ Existing-session migration from an owner VPS to a panel worker is not triggered 
 
 ## Current artifacts
 
-The current novice distribution is the two-file Telegram download consisting of `index.js` and `README.md`. The standalone archive is `/home/ubuntu/pappy-omega-mini-tester-single-index-v1.2.0.tar.gz` with SHA-256 `0582b66f9a4323e6c72671c027f2baa6fbea9919807a8fd2623bb4b0378a9ff1`. The index creates `package.json`, installs only `@crysnovax/baileys` and `pino`, generates local encrypted state, and prints the permanent named workload code.
+The current novice distribution is the two-file Telegram download consisting of `index.js` and `README.md`. The matrix-enabled standalone archive is `/home/ubuntu/pappy-omega-mini-tester-single-index-v1.2.0.tar.gz` with SHA-256 `06aa189b20836310b2630ccd37b1ff9fb11388f399df745574f9921cca8c0768`. The index creates `package.json`, installs only `@crysnovax/baileys` and `pino`, generates local encrypted state, and prints the permanent named workload code. Its runtime prints a redacted ASCII matrix with worker identity, state, heartbeat age, assignments, action, and last error.

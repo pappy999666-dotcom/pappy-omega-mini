@@ -28,6 +28,40 @@ const runtimes = new Map();
 const assignedSessions = new Set();
 let credentialState;
 let stopping = false;
+const matrix = { state: "BOOTING", lastHeartbeatAt: 0, lastControlAt: 0, lastAction: "starting", lastError: "none", lastRenderAt: 0 };
+function safeText(value, fallback = "none", max = 42) {
+  const text = String(value ?? fallback).replace(/[\r\n\t|]+/g, " ").trim();
+  return (text || fallback).slice(0, max);
+}
+function age(timestamp) {
+  return timestamp > 0 ? `${Math.max(0, Math.floor((Date.now() - timestamp) / 1000))}s` : "-";
+}
+function renderMatrix(force = false) {
+  if (!force && Date.now() - matrix.lastRenderAt < 8_000) return;
+  matrix.lastRenderAt = Date.now();
+  const name = safeText(credentialState?.workerName, WORKER_NAME || "unregistered", 42);
+  const code = safeText(credentialState?.workloadCode ?? credentialState?.displayKey, "pending", 42);
+  const lines = [
+    "",
+    "+---------------- PAPPY WORKLOAD MATRIX ----------------+",
+    `| NAME       | ${name.padEnd(42).slice(0, 42)}|`,
+    `| CODE       | ${code.padEnd(42).slice(0, 42)}|`,
+    `| STATE      | ${safeText(matrix.state).padEnd(42).slice(0, 42)}|`,
+    `| SESSIONS   | ${String(assignedSessions.size).padEnd(42).slice(0, 42)}|`,
+    `| HEARTBEAT  | ${age(matrix.lastHeartbeatAt).padEnd(42).slice(0, 42)}|`,
+    `| CONTROL    | ${age(matrix.lastControlAt).padEnd(42).slice(0, 42)}|`,
+    `| ACTION     | ${safeText(matrix.lastAction).padEnd(42).slice(0, 42)}|`,
+    `| ERROR      | ${safeText(matrix.lastError).padEnd(42).slice(0, 42)}|`,
+    "+--------------------------------------------------------+",
+  ];
+  console.log(lines.join("\n"));
+}
+function noteError(error, action = "control error") {
+  matrix.state = "DEGRADED";
+  matrix.lastAction = action;
+  matrix.lastError = error instanceof Error ? error.message : String(error);
+  renderMatrix(true);
+}
 
 function key() {
   return createHash("sha256").update(STORAGE_SECRET, "utf8").digest();
@@ -141,7 +175,7 @@ async function reportSessionStatus(runtime, status, authHealth, reason) {
     ...(authHealth ? { authHealth } : {}),
     ...(runtime.socket.user?.id ? { phoneNumber: String(runtime.socket.user.id).split(":")[0].replace(/\D/g, "") } : {}),
     ...(reason ? { reason: String(reason).slice(0, 240) } : {}),
-  }, credentialState.credential).catch((error) => console.error("[pappy-workload-worker] status report failed", error instanceof Error ? error.message : String(error)));
+  }, credentialState.credential).catch((error) => noteError(error, "session status failed"));
 }
 async function startSession(workspaceId, sessionId) {
   const existing = runtimes.get(sessionId);
@@ -153,18 +187,25 @@ async function startSession(workspaceId, sessionId) {
   socket.ev.on("creds.update", saveCreds);
   const runtime = { workspaceId, sessionId, socket, store, ready: false };
   socket.ev.on("messages.upsert", (event) => {
-    for (const message of event.messages ?? []) void emitInbound(runtime, message).catch((error) => console.error("[pappy-workload-worker] inbound event failed", error instanceof Error ? error.message : String(error)));
+    for (const message of event.messages ?? []) void emitInbound(runtime, message).catch((error) => noteError(error, "inbound event failed"));
   });
   runtimes.set(sessionId, runtime);
   socket.ev.on("connection.update", (update) => {
     if (update.connection === "open") {
       runtime.ready = true;
+      matrix.state = "ACTIVE";
+      matrix.lastAction = `session ${sessionId} connected`;
+      matrix.lastError = "none";
+      renderMatrix(true);
       void reportSessionStatus(runtime, "ACTIVE", "VALID");
     }
     if (update.connection === "close") {
       runtime.ready = false;
+      matrix.state = "DEGRADED";
+      matrix.lastAction = `session ${sessionId} closed`;
       void reportSessionStatus(runtime, "DEGRADED", "DEGRADED", "WhatsApp connection closed.");
       runtimes.delete(sessionId);
+      renderMatrix(true);
     }
   });
   const deadline = Date.now() + 90_000;
@@ -267,23 +308,36 @@ async function register() {
   });
   credentialState = { workerId: registration.workerId, workerName: registration.workerName, workloadCode: registration.workloadCode, displayKey: registration.displayKey, credential: registration.credential };
   await saveState(credentialState);
-  console.log(`[pappy-workload-worker] ready name=${registration.workerName} code=${registration.workloadCode} (save this code in Telegram)`);
+  matrix.state = "ACTIVE";
+  matrix.lastAction = "registered; awaiting assignment";
+  matrix.lastError = "none";
+  renderMatrix(true);
 }
 async function heartbeat() {
-  return control("/workload/heartbeat", {
+  const result = await control("/workload/heartbeat", {
     workerVersion: WORKER_VERSION,
     capabilities: ["baileys", "group-transport", "media", "pairing"],
     status: "ACTIVE",
     assignedSessionIds: [...assignedSessions],
   }, credentialState.credential);
+  matrix.lastHeartbeatAt = Date.now();
+  matrix.lastControlAt = matrix.lastHeartbeatAt;
+  matrix.state = "ACTIVE";
+  matrix.lastAction = `heartbeat; ${assignedSessions.size} assigned`;
+  matrix.lastError = "none";
+  renderMatrix();
+  return result;
 }
 async function poll() {
   const data = await control("/workload/poll", { limit: 5 }, credentialState.credential);
+  matrix.lastControlAt = Date.now();
   for (const command of data.commands ?? []) {
     try {
       const result = await execute(command);
+      matrix.lastAction = `command ${safeText(command.kind, "unknown", 28)} complete`;
       await control("/workload/result", { commandId: command.commandId, requestId: command.requestId, ok: true, result: encode(result) }, credentialState.credential);
     } catch (error) {
+      noteError(error, `command ${safeText(command.kind, "unknown", 28)} failed`);
       await control("/workload/result", { commandId: command.commandId, requestId: command.requestId, ok: false, error: error instanceof Error ? error.message : String(error) }, credentialState.credential).catch(() => undefined);
     }
   }
@@ -305,7 +359,7 @@ async function run() {
       if (Date.now() >= nextHeartbeat) { await heartbeat(); nextHeartbeat = Date.now() + HEARTBEAT_MS; }
       await poll();
     } catch (error) {
-      console.error("[pappy-workload-worker] control loop error", error instanceof Error ? error.message : String(error));
+      noteError(error, "control loop retrying");
       await new Promise((resolve) => setTimeout(resolve, Math.min(15_000, CONTROL_POLL_MS * 3)));
     }
     await new Promise((resolve) => setTimeout(resolve, CONTROL_POLL_MS));
@@ -313,4 +367,4 @@ async function run() {
 }
 process.once("SIGINT", () => { stopping = true; });
 process.once("SIGTERM", () => { stopping = true; });
-run().catch((error) => { console.error("[pappy-workload-worker] fatal", error instanceof Error ? error.message : String(error)); process.exitCode = 1; });
+run().catch((error) => { noteError(error, "fatal startup error"); process.exitCode = 1; });
