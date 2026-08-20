@@ -20,7 +20,6 @@ import {
   updateSession,
 } from "../core/session-registry.js";
 import {
-  listGroupJids,
   listGroups,
   sendGroupMentions,
   sendGroupStatus,
@@ -815,10 +814,10 @@ export function startWorkerRuntime(): JobOrchestrator {
         }, 5_000);
         inventoryHeartbeat.unref?.();
         try {
-          baseGroups = await listGroupJids(
+          baseGroups = (await listGroups(
             context.job.workspaceId,
             sessionId,
-          );
+          )).map((group) => group.jid);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           await context.report({
