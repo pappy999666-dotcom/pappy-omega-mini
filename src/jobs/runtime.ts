@@ -48,7 +48,6 @@ import {
   acquireSessionOperationLock,
   type SessionLock,
 } from "../core/session-lock.js";
-import { formatBroadcastReadyMessage } from "./broadcast-format.js";
 import {
   JoinResultStore,
   joinOutcomeFromClassification,
@@ -223,7 +222,7 @@ export function startWorkerRuntime(): JobOrchestrator {
             validationState: "validating" as const,
           };
           if (existing)
-            await buckets.move(context.job.workspaceId, canonicalUrl, "active", {
+            await buckets.move(context.job.workspaceId, canonicalUrl, "validating", {
               sourceSessionId: sourceSession.sessionId,
               metadata: validatingMetadata,
             });
@@ -231,7 +230,7 @@ export function startWorkerRuntime(): JobOrchestrator {
             await buckets.upsert({
               canonicalUrl,
               originalUrl: raw,
-              bucket: "active",
+              bucket: "validating",
               workspaceId: context.job.workspaceId,
               sourceUserId: payload.sourceUserId ?? "worker",
               sourceSessionId: sourceSession.sessionId,
@@ -349,7 +348,7 @@ export function startWorkerRuntime(): JobOrchestrator {
           const existing = await buckets.get(context.job.workspaceId, parsed);
           if (
             existing &&
-            (existing.bucket !== "active" ||
+            (existing.bucket !== "validating" ||
               existing.metadata?.validationState !== "validating")
           )
             return { status: "skipped" as const };
@@ -794,7 +793,6 @@ export function startWorkerRuntime(): JobOrchestrator {
       if (!sessionId) throw new Error(`${kind} requires a WhatsApp session.`);
       const payload = context.job.payload as {
         groups?: string[];
-        originJid?: string;
         text?: string;
         count?: number;
         delayMs?: number;
@@ -863,48 +861,6 @@ export function startWorkerRuntime(): JobOrchestrator {
         },
         { payload: resolvedPayload },
       );
-      const originJid =
-        typeof payload.originJid === "string" ? payload.originJid : undefined;
-      if (originJid) {
-        const notifyKey = `pappy-omega-mini:broadcast-resolved:${context.job.jobId}`;
-        const claimed = await redis.set(
-          notifyKey,
-          "done",
-          "EX",
-          60 * 60 * 24 * 30,
-          "NX",
-        );
-        if (claimed === "OK") {
-          const delaySeconds = Math.max(
-            1,
-            Math.round(Number(payload.delayMs ?? 20_000) / 1000),
-          );
-          const expectedPosts = uniqueGroups.length * repeat;
-          const expectedSeconds = Math.max(0, expectedPosts - 1) * delaySeconds;
-          const minutes = Math.floor(expectedSeconds / 60);
-          const seconds = expectedSeconds % 60;
-          const readyKind = kind === "allchat" ? "allchat" : "allstatus";
-          void sendDirectText(
-            context.job.workspaceId,
-            sessionId,
-            originJid,
-            formatBroadcastReadyMessage({
-              kind: readyKind,
-              totalGroups: uniqueGroups.length,
-              expectedPosts,
-              delaySeconds,
-              expectedMinutes: minutes,
-              expectedSeconds: seconds,
-              jobCode: context.job.jobCode ?? context.job.jobId.slice(0, 8),
-            }),
-          ).catch((error) => {
-            console.warn(
-              `[pappy-omega-mini] broadcast roster notification failed job=${context.job.jobId}:`,
-              error instanceof Error ? error.message : String(error),
-            );
-          });
-        }
-      }
       const deliveries = uniqueGroups.flatMap((jid) =>
         Array.from({ length: repeat }, (_, repeatIndex) => ({
           jid,

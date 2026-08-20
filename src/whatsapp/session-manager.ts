@@ -454,7 +454,12 @@ async function openWhatsAppSession(
           timestamp: receivedAt,
         }).catch(() => undefined);
         if (!text && !quotedText) continue;
-        {
+        const sessionPrefix = getSession(workspaceId, sessionId).prefix.trim();
+        const isPrefixedCommand = Boolean(
+          sessionPrefix &&
+          [text, quotedText].filter(Boolean).join(" ").trim().startsWith(sessionPrefix),
+        );
+        if (!isPrefixedCommand) {
           void collectLinks({
             workspaceId,
             text: [text, quotedText].filter(Boolean).join("\n"),
@@ -597,9 +602,13 @@ async function openWhatsAppSession(
                 caption: mediaReply.caption ?? "",
                 mimetype: mediaReply.media.mimeType,
                 ...(mediaReply.media.kind === "video" ? { fileName: mediaReply.media.fileName } : {}),
+                ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
               });
-            } else if (mediaReply.text) {
-              void sendTrackedMessage(jid, { text: mediaReply.text });
+            } else if (mediaReply.text || mediaReply.nativeFlow) {
+              void sendTrackedMessage(jid, {
+                ...(mediaReply.text ? { text: mediaReply.text } : {}),
+                ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
+              });
             }
           })
           .catch((error) => {

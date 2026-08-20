@@ -313,7 +313,7 @@ export function validatorDashboardText(snapshot: {
     "Validator Hub",
     infoResponse(
       "Live Workspace Buckets",
-      `<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Active:</b> ${snapshot.counts.active ?? 0}\n<b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Retryable:</b> ${snapshot.counts.error ?? 0}\n<b>Master:</b> ${snapshot.counts.master ?? 0}\n\n<b>Recent records</b>\n${recent}\n\n<i>Updated ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+      `<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating:</b> ${snapshot.counts.validating ?? 0}\n<b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}\n<b>Retryable:</b> ${snapshot.counts.error ?? 0}  <b>Master:</b> ${snapshot.counts.master ?? 0}\n\n<b>Recent records</b>\n${recent}\n\n<i>Updated ${new Date(snapshot.capturedAt).toISOString()}</i>`,
     ),
   );
 }
@@ -365,7 +365,7 @@ export function validatorLiveText(
     "Validator Hub · Live",
     infoResponse(
       active ? "Live feed is ON" : "Live feed is PAUSED",
-      `<b>Live validation workers · state matrix</b> · refreshed in place\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating/Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}  <b>Retryable:</b> ${snapshot.counts.error ?? 0}\n<b>Master total:</b> ${snapshot.counts.master ?? 0}\n\n<b>Validator intake</b> · automatic collection ON · admission every 5s · bounded batches per ACTIVE socket\n\n<b>Validation sockets</b>\n${sessionFeed}\n\n<b>Current validation</b>\n${activeFeed}\n\n<b>Group matrix</b>\n${matrix}\n\n<i>Links leave Main when validation begins. Dead means the invite is revoked, expired, invalid, or the group no longer exists. Temporary session/transport failures return to Main for retry and do not contaminate the Error bucket.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+      `<b>Live validation workers · state matrix</b> · refreshed in place\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating:</b> ${snapshot.counts.validating ?? 0}\n<b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}\n<b>Retryable:</b> ${snapshot.counts.error ?? 0}  <b>Master total:</b> ${snapshot.counts.master ?? 0}\n\n<b>Validator intake</b> · automatic collection ON · admission every 5s · bounded batches per ACTIVE socket\n\n<b>Validation sockets</b>\n${sessionFeed}\n\n<b>Current validation</b>\n${activeFeed}\n\n<b>Group matrix</b>\n${matrix}\n\n<i>Links leave Main into Validating while the distributor checks them. Only confirmed invite metadata enters Active. Dead means revoked, expired, invalid, or missing groups. Temporary transport failures return to Main and never contaminate Retryable/Error.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
     ),
   );
 }
@@ -393,6 +393,7 @@ export function bucketKeyboard(): InlineKeyboardMarkup {
     ],
     [
       btn("📦 Main / Master", "bucket:view:main"),
+      btn("◌ Validating", "bucket:view:validating"),
       btn("✅ Active", "bucket:view:active"),
     ],
     [btn("💀 Dead", "bucket:view:dead"), btn("↻ Retryable", "bucket:view:error")],

@@ -2977,6 +2977,10 @@ export function createTelegramBot(): Telegraf<Context> {
           btn("Main · HTML", "bucket:download:main:html"),
         ],
         [
+          btn("Validating · TXT", "bucket:download:validating:txt"),
+          btn("Validating · HTML", "bucket:download:validating:html"),
+        ],
+        [
           btn("Active · TXT", "bucket:download:active:txt"),
           btn("Active · HTML", "bucket:download:active:html"),
         ],
@@ -2997,7 +3001,7 @@ export function createTelegramBot(): Telegraf<Context> {
     );
   });
   bot.action(
-    /^bucket:download:(main|active|dead|error|master):(txt|html)$/,
+    /^bucket:download:(main|validating|active|dead|error|master):(txt|html)$/,
     async (ctx) => {
       await ctx.answerCbQuery("Preparing export…");
       const user = resolveTelegramUser(ctx);
@@ -3041,7 +3045,7 @@ export function createTelegramBot(): Telegraf<Context> {
       }
     },
   );
-  bot.action(/^bucket:view:(main|active|dead|error|master)$/, async (ctx) => {
+  bot.action(/^bucket:view:(main|validating|active|dead|error|master)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
     const bucket = (ctx.match[1] ?? "master") as ValidatorBucket;

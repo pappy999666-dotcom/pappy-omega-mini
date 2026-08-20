@@ -1,7 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
 
-export type LinkBucket = "main" | "active" | "dead" | "error" | "master";
+export type LinkBucket =
+  | "main"
+  | "validating"
+  | "active"
+  | "dead"
+  | "error"
+  | "master";
 
 export interface LinkRecord {
   canonicalUrl: string;
@@ -92,7 +98,7 @@ export class LinkBucketStore {
       this.recordKey(workspaceId, canonicalUrl),
       JSON.stringify(next),
     );
-    for (const oldBucket of ["main", "active", "dead", "error"] as LinkBucket[])
+    for (const oldBucket of ["main", "validating", "active", "dead", "error"] as LinkBucket[])
       await this.redis.srem(
         this.bucketKey(workspaceId, oldBucket),
         canonicalUrl,
@@ -123,6 +129,7 @@ export class LinkBucketStore {
     await this.redis.del(this.recordKey(workspaceId, canonicalUrl));
     for (const bucket of [
       "main",
+      "validating",
       "active",
       "dead",
       "error",
@@ -168,7 +175,7 @@ export class LinkBucketStore {
     try {
       const current = await this.get(workspaceId, canonicalUrl);
       if (!current || current.bucket !== "main") return false;
-      const moved = await this.move(workspaceId, canonicalUrl, "active", {
+      const moved = await this.move(workspaceId, canonicalUrl, "validating", {
         ...(sourceSessionId ? { sourceSessionId } : {}),
         metadata: {
           ...(current.metadata ?? {}),
@@ -228,7 +235,7 @@ export class LinkBucketStore {
 
   async reconcileMaster(workspaceId: string): Promise<number> {
     let added = 0;
-    for (const bucket of ["main", "active", "dead", "error"] as LinkBucket[]) {
+    for (const bucket of ["main", "validating", "active", "dead", "error"] as LinkBucket[]) {
       let cursor = 0;
       do {
         const [nextCursor, urls] = await this.redis.sscan(

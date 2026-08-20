@@ -89,6 +89,7 @@ export async function mergeValidatorBuckets(
 ): Promise<number> {
   return withStore(async (store) => {
     const records = [
+      ...(await listFromStore(store, workspaceId, "validating")),
       ...(await listFromStore(store, workspaceId, "active")),
       ...(await listFromStore(store, workspaceId, "error")),
     ];
@@ -154,7 +155,7 @@ export async function requeueValidatorMainLinks(
         continue;
       }
       const current = await store.get(workspaceId, canonicalUrl);
-      if (current?.bucket !== "active") continue;
+      if (current?.bucket !== "validating") continue;
       const next = await store.move(workspaceId, canonicalUrl, "main", {
         metadata: {
           ...current.metadata,

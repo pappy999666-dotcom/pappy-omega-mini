@@ -23,11 +23,19 @@ export async function getValidatorSnapshot(
   workspaceId: string,
 ): Promise<ValidatorSnapshot> {
   await store.reconcileMaster(workspaceId);
-  const buckets: LinkBucket[] = ["main", "active", "dead", "error", "master"];
+  const buckets: LinkBucket[] = [
+    "main",
+    "validating",
+    "active",
+    "dead",
+    "error",
+    "master",
+  ];
   const counts = {} as Record<LinkBucket, number>;
   for (const bucket of buckets)
     counts[bucket] = await store.count(workspaceId, bucket);
   const recentRecords = [
+    ...(await store.list(workspaceId, "validating", 0, 40)).records,
     ...(await store.list(workspaceId, "active", 0, 40)).records,
     ...(await store.list(workspaceId, "main", 0, 20)).records,
     ...(await store.list(workspaceId, "dead", 0, 8)).records,

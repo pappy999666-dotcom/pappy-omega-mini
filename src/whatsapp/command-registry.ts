@@ -108,11 +108,11 @@ function queuedJobAcknowledgement(
   if (typeof result === "string")
     return `${kind === "allstatus" ? "All-status" : "All-chat"} job queued: ${result}`;
   const delay = Math.max(1, Math.round((result.delayMs ?? 20000) / 1000));
-  const totalGroups = result.totalGroups ?? "resolving…";
-  const totalPosts = result.totalPosts ?? "calculating…";
+  const totalGroups = result.totalGroups ?? "—";
+  const totalPosts = result.totalPosts ?? "—";
   const expectedTime =
     result.expectedTimeMs === undefined
-      ? "calculating…"
+      ? "—"
       : (() => {
           const expectedSeconds = Math.max(
             0,
@@ -131,7 +131,7 @@ function queuedJobAcknowledgement(
     `Expected time · ${expectedTime}`,
     `Live code     · ${result.jobCode}`,
     "",
-    "Open Telegram → Live Show and paste the live code for durable progress.",
+    "Live Show opens only when you paste this code in Telegram.",
   ].join("\n");
 }
 

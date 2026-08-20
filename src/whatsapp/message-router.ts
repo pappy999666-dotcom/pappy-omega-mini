@@ -37,6 +37,7 @@ export interface IncomingTextMessage {
 }
 export interface WhatsAppReply {
   text?: string;
+  nativeFlow?: Array<{ text: string; copy?: string; id?: string; url?: string }>;
   media?: {
     kind: "image" | "video";
     bytes: Buffer;
@@ -188,24 +189,27 @@ export async function routeWhatsAppText(
                   }
                 : {}),
               groups: payload.groups ?? groups.map((group) => group.jid),
-              ...(kind === "allstatus" || kind === "allchat"
-                ? message.chatJid
-                  ? { originJid: message.chatJid }
-                  : {}
-                : {}),
               ...(mediaReference ? { media: mediaReference } : {}),
             };
             const payloadHash = createHash("sha256")
               .update(JSON.stringify(enrichedPayload))
               .digest("hex");
-            const record = await runtime.enqueue({
+            const recordPromise = runtime.enqueue({
               workspaceId: message.workspaceId,
               sessionId: message.sessionId,
               kind,
               payload: enrichedPayload,
               idempotencyKey: `${message.workspaceId}:${message.sessionId}:${kind}:${payloadHash}`,
             });
-            const totalGroups = groups.length;
+            const inventoryPromise =
+              kind === "allstatus" || kind === "allchat"
+                ? listGroups(message.workspaceId, message.sessionId).catch(() => [])
+                : Promise.resolve([]);
+            const [record, inventory] = await Promise.all([
+              recordPromise,
+              inventoryPromise,
+            ]);
+            const totalGroups = inventory.length;
             const repeat = Math.max(
               1,
               Math.min(20, Number((payload as { count?: unknown }).count ?? 1)),
@@ -281,5 +285,12 @@ export async function routeWhatsAppText(
       : {}),
   };
   const response = await executeCommand(registry, raw, commandContext);
-  return response.startsWith("Unknown command.") ? null : response;
+  if (response.startsWith("Unknown command.")) return null;
+  const liveCode = response.match(/Live code\s*[·:]\s*([A-Z0-9]{8})/i)?.[1];
+  return liveCode
+    ? {
+        text: response,
+        nativeFlow: [{ text: "📋 Copy live code", copy: liveCode }],
+      }
+    : response;
 }
