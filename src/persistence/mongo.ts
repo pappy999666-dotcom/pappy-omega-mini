@@ -1171,6 +1171,13 @@ export async function disableAutoPromoteConfig(id: string): Promise<void> {
     .exec();
 }
 
+/** Permanently remove an Auto Promote configuration and every run it created. */
+export async function deleteAutoPromoteConfig(id: string): Promise<void> {
+  await connectMongo();
+  await autoPromoteRunModel().deleteMany({ configId: id }).exec();
+  await autoPromoteConfigModel().deleteOne({ id }).exec();
+}
+
 export async function saveAutoPromoteRun(run: AutoPromoteRun): Promise<void> {
   await connectMongo();
   await autoPromoteRunModel().replaceOne(

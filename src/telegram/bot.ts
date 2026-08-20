@@ -35,6 +35,7 @@ import type { JobRecord } from "../jobs/job-contracts.js";
 import {
   cancelAutoPromoteConfig,
   createAutoPromoteConfig,
+  deleteAutoPromoteConfig,
   pauseAutoPromoteConfig,
   resumeAutoPromoteConfig,
 } from "../autopromote/service.js";
@@ -1166,6 +1167,14 @@ export function createTelegramBot(): Telegraf<Context> {
         return;
       }
       const selected = adminBridgeSelections.get(userId) ?? new Set<string>();
+      const quoted = ctx.message.reply_to_message;
+      const quotedText = quoted
+        ? "text" in quoted
+          ? quoted.text
+          : "caption" in quoted
+            ? quoted.caption
+            : undefined
+        : undefined;
       const targets = activeAllSessions().filter((item) =>
         selected.has(adminBridgeTargetToken(item.workspaceId, item.sessionId)),
       );
@@ -1181,6 +1190,7 @@ export function createTelegramBot(): Telegraf<Context> {
             sessionId: session.sessionId,
             senderJid: session.phoneNumber ?? "admin-global-bridge",
             text: command,
+            ...(quotedText ? { quotedText } : {}),
             bridgeAuthorized: true,
           });
           const accepted = routed !== null;
@@ -1206,7 +1216,7 @@ export function createTelegramBot(): Telegraf<Context> {
           adminGlobalBridge.chatId,
           adminGlobalBridge.messageId,
           undefined,
-          globalBridgeResultText(input, results),
+          globalBridgeResultText(input, results, userId),
           {
             parse_mode: "HTML",
             reply_markup: keyboard([
@@ -1216,7 +1226,7 @@ export function createTelegramBot(): Telegraf<Context> {
           },
         )
         .catch(async () => {
-          await ctx.reply(globalBridgeResultText(input, results), {
+          await ctx.reply(globalBridgeResultText(input, results, userId), {
             parse_mode: "HTML",
             reply_markup: keyboard([
               [btn("↻ Run Another Command", "admin:bridge:command", "primary")],
@@ -1237,6 +1247,14 @@ export function createTelegramBot(): Telegraf<Context> {
       );
       if (!session) return;
       const input = ctx.message.text.trim();
+      const quoted = ctx.message.reply_to_message;
+      const quotedText = quoted
+        ? "text" in quoted
+          ? quoted.text
+          : "caption" in quoted
+            ? quoted.caption
+            : undefined
+        : undefined;
       const command =
         session.prefix && !input.startsWith(session.prefix)
           ? `${session.prefix}${input}`
@@ -1247,6 +1265,7 @@ export function createTelegramBot(): Telegraf<Context> {
           sessionId: session.sessionId,
           senderJid: session.phoneNumber ?? "admin-bridge",
           text: command,
+          ...(quotedText ? { quotedText } : {}),
           bridgeAuthorized: true,
         });
         const output =
@@ -1274,7 +1293,7 @@ export function createTelegramBot(): Telegraf<Context> {
               "Admin Bridge",
               successResponse(
                 "Command Completed",
-                `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<pre>${escapeHtml(output.slice(0, 3500))}</pre>`,
+                `<b>Telegram user:</b> <code>${escapeHtml(userId)}</code>\n<b>Session:</b> ${escapeHtml(session.sessionName)}\n<pre>${escapeHtml(output.slice(0, 3500))}</pre>`,
               ),
             ),
             {
@@ -1327,6 +1346,14 @@ export function createTelegramBot(): Telegraf<Context> {
       const session = ownedSession(ctx, sessionBridge.sessionId);
       if (!session || session.workspaceId !== sessionBridge.workspaceId) return;
       const input = ctx.message.text.trim();
+      const quoted = ctx.message.reply_to_message;
+      const quotedText = quoted
+        ? "text" in quoted
+          ? quoted.text
+          : "caption" in quoted
+            ? quoted.caption
+            : undefined
+        : undefined;
       if (input.toLowerCase() === "cancel") {
         await ctx.telegram
           .editMessageText(
@@ -1357,6 +1384,7 @@ export function createTelegramBot(): Telegraf<Context> {
           sessionId: session.sessionId,
           senderJid: session.phoneNumber ?? "telegram-bridge",
           text: command,
+          ...(quotedText ? { quotedText } : {}),
           bridgeAuthorized: true,
         });
         const output =
@@ -1384,7 +1412,7 @@ export function createTelegramBot(): Telegraf<Context> {
               "Per-Session Bridge",
               successResponse(
                 "Command Completed",
-                `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<pre>${escapeHtml(output.slice(0, 3500))}</pre>`,
+                `<b>Telegram user:</b> <code>${escapeHtml(userId)}</code>\n<b>Session:</b> ${escapeHtml(session.sessionName)}\n<pre>${escapeHtml(output.slice(0, 3500))}</pre>`,
               ),
             ),
             {
@@ -4213,6 +4241,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await edit(ctx, autoPromoteText([config], runs), keyboard([
       [btn(config.state === "PAUSED" ? "▶ Resume" : "Ⅱ Pause", `autopromote:${config.state === "PAUSED" ? "resume" : "pause"}:${config.id}`, config.state === "PAUSED" ? "success" : "primary")],
       [btn(config.enabled ? "■ Cancel Job" : "□ Disabled", `autopromote:disable:${config.id}`, "danger")],
+      [btn("🗑 Delete Job", `autopromote:delete:${config.id}`, "danger")],
       [btn(ui.back, "autopromote:user")],
     ]));
   });
@@ -4243,6 +4272,44 @@ export function createTelegramBot(): Telegraf<Context> {
     const runtime = getWorkerRuntime();
     const runs = await listAutoPromoteRuns({ configId, limit: 100 });
     for (const run of runs) if (run.jobId) await runtime?.cancel(run.jobId).catch(() => undefined);
+    await showAutoPromoteDashboard(ctx, user.telegramUserId, user.workspaceId);
+  });
+  bot.action(/^autopromote:delete:([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const configId = ctx.match[1] ?? "";
+    const config = await getAutoPromoteConfig(configId);
+    const user = resolveTelegramUser(ctx);
+    if (!config || (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))) return deny(ctx);
+    const runs = await listAutoPromoteRuns({ configId, limit: 100 });
+    await edit(
+      ctx,
+      pageText(
+        "Auto Promote · Delete",
+        warningResponse(
+          "Permanent deletion",
+          `<b>Job:</b> <code>${escapeHtml(config.id.slice(0, 12))}</code>\n<b>Runs:</b> ${runs.length}\n\nThis removes the schedule and all stored runs. Active child jobs will be cancelled first. This cannot be undone.`,
+        ),
+      ),
+      keyboard([
+        [btn("🗑 Confirm Delete", `autopromote:delete:confirm:${config.id}`, "danger")],
+        [btn("‹ Keep Job", `autopromote:view:${config.id}`)],
+      ]),
+    );
+  });
+  bot.action(/^autopromote:delete:confirm:([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Deleting…");
+    const configId = ctx.match[1] ?? "";
+    const config = await getAutoPromoteConfig(configId);
+    const user = resolveTelegramUser(ctx);
+    if (!config || (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))) return deny(ctx);
+    await deleteAutoPromoteConfig(configId, getWorkerRuntime());
+    recordAudit({
+      workspaceId: user.workspaceId,
+      actorTelegramUserId: user.telegramUserId,
+      action: "autopromote.delete",
+      success: true,
+      metadata: { configId: config.id, scope: config.scope, command: config.command },
+    });
     await showAutoPromoteDashboard(ctx, user.telegramUserId, user.workspaceId);
   });
 

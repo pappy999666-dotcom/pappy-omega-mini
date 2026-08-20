@@ -157,6 +157,7 @@ export function globalBridgeText(selected = 0, active = false): string {
 export function globalBridgeResultText(
   command: string,
   results: Array<{ sessionName: string; ok: boolean; output: string }>,
+  actorTelegramUserId?: string,
 ): string {
   const lines = results
     .map(
@@ -168,7 +169,7 @@ export function globalBridgeResultText(
     "Global Bridge Result",
     infoResponse(
       `Command completed: ${escapeHtml(command)}`,
-      lines || "No session returned a result.",
+      `${actorTelegramUserId ? `<b>Telegram user:</b> <code>${escapeHtml(actorTelegramUserId)}</code>\n\n` : ""}${lines || "No session returned a result."}`,
     ),
   );
 }

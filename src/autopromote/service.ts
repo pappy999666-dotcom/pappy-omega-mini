@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   claimAutoPromoteOccurrence,
+  deleteAutoPromoteConfig as deleteAutoPromoteConfigPersistence,
   disableAutoPromoteConfig,
   getAutoPromoteConfig,
   getAutoPromoteRun,
@@ -138,6 +139,17 @@ export async function createAutoPromoteConfig(input: {
 
 export async function cancelAutoPromoteConfig(configId: string): Promise<void> {
   await disableAutoPromoteConfig(configId);
+}
+
+export async function deleteAutoPromoteConfig(
+  configId: string,
+  runtime?: Pick<JobOrchestrator, "cancel">,
+): Promise<void> {
+  const runs = await listAutoPromoteRuns({ configId, limit: 5_000 }).catch(() => []);
+  for (const run of runs) {
+    if (run.jobId) await runtime?.cancel(run.jobId).catch(() => undefined);
+  }
+  await deleteAutoPromoteConfigPersistence(configId);
 }
 
 export async function pauseAutoPromoteConfig(configId: string): Promise<void> {

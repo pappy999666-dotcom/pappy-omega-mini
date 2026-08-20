@@ -97,24 +97,22 @@ export function renderAsciiMenu(model: SessionMenuModel): string {
   const localSet = new Set(["gstatus", "tag", "stag"]);
   const ownerSet = new Set(["pair", "previewdebug", "broadcastdelay", "allstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "setsudo"]);
   const renderSection = (title: string, icon: string, set: Set<string>): string[] => {
-    const rows = model.actions.filter((action) => set.has(action.command));
-    if (!rows.length) return [];
-    return [`⌬ ⤷ *${title}* ${icon}`, ...rows.map((action) => `⊹ ${action.command}`), ""];
+    const commands = model.actions
+      .filter((action) => set.has(action.command))
+      .map((action) => `.${action.command}`);
+    if (!commands.length) return [];
+    const rows: string[] = [];
+    for (let index = 0; index < commands.length; index += 5)
+      rows.push(`⊹ ${commands.slice(index, index + 5).join("  ")}`);
+    return [`⌬ ⤷ *${title}* ${icon}`, ...rows];
   };
   return [
-    "PAPPY OMEGA MINI",
-    "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
-    "",
-    `˗ˏˋ ☏ ˎˊ˗  *Hello, ${sessionName}*  ✦`,
+    "⚫︎ PAPPY OMEGA MINI ⚫︎",
+    `˗ˏˋ ☏ ˎˊ˗ *Hello, ${sessionName}* ✦`,
     "─────────────",
-    `⎔ Owner   · ⇆ ${sessionName}`,
-    `⎔ Status  · ⇆ ${status}`,
-    `⎔ AutoJ   · ⇆ ${autoJoin}`,
-    `⎔ Prefix  · ⇆ [ ${prefix} ]`,
-    `⎔ Health  · ⇆ ${health}`,
-    `⎔ Links   · ⇆ ${links}`,
+    `⎔ ${sessionName} · ${status} · AJ ${autoJoin}`,
+    `⎔ PFX [${prefix}] · H ${health} · L ${links}`,
     "─────────────",
-    "",
     ...renderSection("COMMANDS", "⚙️", commandSet),
     ...renderSection("SESSION", "🗝", sessionSet),
     ...renderSection("LOCAL", "⎔", localSet),
