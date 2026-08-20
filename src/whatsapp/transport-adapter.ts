@@ -223,7 +223,13 @@ async function loadGroupJids(socket: WASocket): Promise<string[]> {
   const result = (await query({
     tag: "iq",
     attrs: { to: "@g.us", xmlns: "w:g2", type: "get" },
-    content: [{ tag: "participating", attrs: {}, content: [] }],
+    content: [
+      {
+        tag: "participating",
+        attrs: {},
+        content: [{ tag: "participants", attrs: {} }],
+      },
+    ],
   })) as RawBinaryNode;
   const groups = rawChildren(rawChildren(result, "groups")[0], "group");
   return [...new Set(
