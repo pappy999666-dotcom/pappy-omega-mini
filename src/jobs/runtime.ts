@@ -819,18 +819,18 @@ export function startWorkerRuntime(): JobOrchestrator {
         if (classified.classification === "invalid-invite") {
           deadLinks += 1;
           await buckets.move(
-            context.job.workspaceId,
+            GLOBAL_VALIDATOR_SCOPE,
             record.canonicalUrl,
-            "dead",
+            "main",
             {
-              validationError: "Dead or revoked invite moved to the shared Dead bucket.",
+              validationError: "Join Manager returned the link to shared Main for Guard revalidation.",
               lastCheckedAt: Date.now(),
               metadata: {
                 ...metadata,
                 joinClassification: "dead-link",
-                joinRetryable: false,
-                needsValidation: false,
-                validationState: "dead",
+                joinRetryable: true,
+                needsValidation: true,
+                validationState: "pending",
               },
             },
           );
@@ -841,8 +841,8 @@ export function startWorkerRuntime(): JobOrchestrator {
           });
           await context.report({
             deadLinks,
-            lastResult: `Dead link moved to shared Dead: ${record.canonicalUrl}`,
-            currentAction: "moved to dead",
+            lastResult: `Dead-looking link returned to shared Main: ${record.canonicalUrl}`,
+            currentAction: "returned to main for revalidation",
           });
         } else {
           const retryable = classified.retryable || classified.classification === "rate-limit";
@@ -1242,12 +1242,25 @@ async function runValidatorGuard(
   validatorGuardBusy = true;
   try {
     const now = Date.now();
+    const activeValidationJobs = (await orchestrator.listRecent(1000)).filter(
+      (job) =>
+        job.kind === "link-validation" &&
+        ["QUEUED", "RUNNING", "RETRYING"].includes(job.state),
+    );
+    const leasedUrls = new Set(
+      activeValidationJobs.flatMap((job) => {
+        const payload = job.payload as { urls?: unknown };
+        return Array.isArray(payload.urls)
+          ? payload.urls.filter((url): url is string => typeof url === "string")
+          : [];
+      }),
+    );
     let cursor = 0;
     do {
       const page = await buckets.list(GLOBAL_VALIDATOR_SCOPE, "validating", cursor, 500);
       for (const record of page.records) {
         const checkedAt = record.lastCheckedAt ?? record.firstSeenAt;
-        if (now - checkedAt <= VALIDATING_STALE_MS) continue;
+        if (leasedUrls.has(record.canonicalUrl) || now - checkedAt <= VALIDATING_STALE_MS) continue;
         await buckets.move(GLOBAL_VALIDATOR_SCOPE, record.canonicalUrl, "main", {
           validationError: "Validator Guard recycled a stale validation claim.",
           metadata: {
@@ -1369,8 +1382,8 @@ async function sweepPendingMainValidation(
           left.canonicalUrl.localeCompare(right.canonicalUrl),
       );
     if (!pending.length) return;
-    const validatorBatchSize = 5;
-    const admitted = pending.slice(0, availableSessions.length * validatorBatchSize);
+    const validatorBatchSize = 1;
+    const admitted = pending.slice(0, availableSessions.length);
     const chunks = availableSessions.map(() => [] as string[]);
     admitted.forEach((record, index) => {
       chunks[index % chunks.length]?.push(record.canonicalUrl);

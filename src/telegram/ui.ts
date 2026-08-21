@@ -325,7 +325,7 @@ export function validatorDashboardText(snapshot: {
 export function validatorLiveText(
   snapshot: {
     counts: Record<string, number>;
-    recent: Array<{ canonicalUrl: string; bucket: string; metadata?: { title?: string; validationState?: string; memberCount?: number } }>;
+    recent: Array<{ canonicalUrl: string; bucket: string; sourceSessionId?: string; metadata?: { title?: string; validationState?: string; memberCount?: number } }>;
     capturedAt: number;
   },
   active = false,
@@ -345,6 +345,12 @@ export function validatorLiveText(
     };
   }> = [],
   sessions: Array<{ sessionId: string; sessionName: string; status: string; authHealth?: string }> = [],
+  summary?: {
+    totalSessions: number;
+    eligibleSessions: number;
+    leasedSessions: number;
+    retiredSessions: number;
+  },
 ): string {
   const matrix = snapshot.recent
     .slice(0, 10)
@@ -357,19 +363,24 @@ export function validatorLiveText(
     })
     .join("\n") || "Waiting for link activity.";
   const work = jobs.filter((job) => ["RUNNING", "RETRYING"].includes(job.state)).slice(0, 6);
+  const leases = snapshot.recent.filter((record) => record.bucket === "validating").slice(0, 6);
   const activeFeed = work.length
     ? work.map((job) => `◌ <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code> · ${escapeHtml(job.sessionId?.slice(0, 8) ?? "socket—")} · ${escapeHtml(job.progress.currentAction ?? "validating")} · <code>${escapeHtml(job.progress.currentLink ?? job.progress.lastResult ?? "waiting")}</code>`).join("\n")
-    : (snapshot.counts.main ?? 0) > 0
-      ? "Main links are waiting for the next automatic admission sweep or a healthy validation socket."
-      : "No Main links are waiting; collection is active and the Validator is idle.";
-  const sessionFeed = sessions.length
-    ? sessions.map((session) => `${session.status === "ACTIVE" ? "●" : "○"} <b>${escapeHtml(session.sessionName)}</b> · ${escapeHtml(session.status)}${session.authHealth ? ` · ${escapeHtml(session.authHealth)}` : ""} · <code>${escapeHtml(session.sessionId.slice(0, 8))}</code>`).join("\n")
-    : "No session is currently available for validation.";
+    : leases.length
+      ? leases.map((record) => `◌ <code>${escapeHtml(record.sourceSessionId?.slice(0, 8) ?? "broker—")}</code> · leased · <code>${escapeHtml(record.canonicalUrl)}</code>`).join("\n")
+      : (snapshot.counts.main ?? 0) > 0
+        ? "Main links are waiting for the next automatic admission sweep or a healthy validation socket."
+        : "No Main links are waiting; collection is active and the Validator is idle.";
+  const sessionFeed = summary
+    ? `<b>Total sessions:</b> ${summary.totalSessions} · <b>Eligible:</b> ${summary.eligibleSessions} · <b>Leased:</b> ${summary.leasedSessions} · <b>Retired:</b> ${summary.retiredSessions}${sessions.length ? `\n\n<b>Lease sample</b>\n${sessions.slice(0, 12).map((session) => `${session.status === "ACTIVE" ? "●" : "○"} <b>${escapeHtml(session.sessionName)}</b> · ${escapeHtml(session.status)}${session.authHealth ? ` · ${escapeHtml(session.authHealth)}` : ""} · <code>${escapeHtml(session.sessionId.slice(0, 8))}</code>`).join("\n")}` : ""}`
+    : sessions.length
+      ? sessions.map((session) => `${session.status === "ACTIVE" ? "●" : "○"} <b>${escapeHtml(session.sessionName)}</b> · ${escapeHtml(session.status)}${session.authHealth ? ` · ${escapeHtml(session.authHealth)}` : ""} · <code>${escapeHtml(session.sessionId.slice(0, 8))}</code>`).join("\n")
+      : "No session is currently available for validation.";
   return pageText(
     "Validator Hub · Live",
     infoResponse(
       active ? "Live feed is ON" : "Live feed is PAUSED",
-      `<b>Live validation workers · state matrix</b> · refreshed in place\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating:</b> ${snapshot.counts.validating ?? 0}\n<b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}\n<b>Retryable:</b> ${snapshot.counts.error ?? 0}\n\n<b>Validator intake</b> · automatic collection ON · admission every 5s · bounded batches per ACTIVE socket\n\n<b>Validation sockets</b>\n${sessionFeed}\n\n<b>Current validation</b>\n${activeFeed}\n\n<b>Group matrix</b>\n${matrix}\n\n<i>Links leave Main into Validating while the distributor checks them. Only confirmed invite metadata enters Active. Dead means revoked, expired, invalid, or missing groups. Temporary transport failures return to Main and never contaminate Retryable/Error.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+      `<b>Live validation workers · state matrix</b> · refreshed in place\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating:</b> ${snapshot.counts.validating ?? 0}\n<b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}\n<b>Retryable:</b> ${snapshot.counts.error ?? 0}\n\n<b>Validator intake</b> · automatic collection ON · one-link lease per eligible session · admission every 5s\n\n<b>Validation sockets</b>\n${sessionFeed}\n\n<b>Current validation</b>\n${activeFeed}\n\n<b>Group matrix</b>\n${matrix}\n\n<i>Links leave Main into Validating while the distributor checks them. Only confirmed invite metadata enters Active. Dead means revoked, expired, invalid, or missing groups. Temporary transport failures return to Main and never contaminate Retryable/Error.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
     ),
   );
 }

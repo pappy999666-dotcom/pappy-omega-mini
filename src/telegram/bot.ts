@@ -6233,6 +6233,70 @@ async function showValidatorHub(ctx: Context): Promise<void> {
   await edit(ctx, validatorDashboardText(snapshot), bucketKeyboard());
 }
 
+type ValidatorSessionSummaryBase = {
+  capturedAt: number;
+  sample: Array<{ sessionId: string; sessionName: string; status: string; authHealth?: string }>;
+  totalSessions: number;
+  eligibleSessions: number;
+  retiredSessions: number;
+};
+
+const validatorSessionSummaryCache = new Map<string, ValidatorSessionSummaryBase>();
+
+function validatorSessionView(
+  ctx: Context,
+  jobs: Array<{ sessionId?: string }>,
+): {
+  sample: Array<{ sessionId: string; sessionName: string; status: string; authHealth?: string }>;
+  summary: {
+    totalSessions: number;
+    eligibleSessions: number;
+    leasedSessions: number;
+    retiredSessions: number;
+  };
+} {
+  const scope = isAdmin(ctx) ? "__admin__" : resolveTelegramUser(ctx).workspaceId;
+  const now = Date.now();
+  let base = validatorSessionSummaryCache.get(scope);
+  if (!base || now - base.capturedAt > 5_000) {
+    const sessions = isAdmin(ctx) ? listAllSessions() : listSessions(scope);
+    base = {
+      capturedAt: now,
+      sample: sessions.slice(0, 12).map((session) => ({
+        sessionId: session.sessionId,
+        sessionName: session.sessionName,
+        status: effectiveSessionStatus(session),
+        ...(session.authHealth ? { authHealth: session.authHealth } : {}),
+      })),
+      totalSessions: sessions.length,
+      eligibleSessions: sessions.filter(
+        (session) =>
+          session.status === "ACTIVE" &&
+          session.authHealth !== "INVALID" &&
+          (session.validatorRetiredUntil ?? 0) <= now,
+      ).length,
+      retiredSessions: sessions.filter(
+        (session) => (session.validatorRetiredUntil ?? 0) > now,
+      ).length,
+    };
+    validatorSessionSummaryCache.set(scope, base);
+  }
+  const leasedSessions = new Set(
+    jobs
+      .map((job) => job.sessionId)
+      .filter((sessionId): sessionId is string => Boolean(sessionId)),
+  ).size;
+  return {
+    sample: base.sample,
+    summary: {
+      totalSessions: base.totalSessions,
+      eligibleSessions: base.eligibleSessions,
+      leasedSessions,
+      retiredSessions: base.retiredSessions,
+    },
+  };
+}
+
 async function showValidatorLiveLog(
   ctx: Context,
   active: boolean,
@@ -6246,15 +6310,10 @@ async function showValidatorLiveLog(
       job.kind === "link-validation" &&
       ["QUEUED", "RUNNING", "RETRYING"].includes(job.state),
   );
-  const validationSessions = (isAdmin(ctx) ? listAllSessions() : listSessions(user.workspaceId)).map((session) => ({
-    sessionId: session.sessionId,
-    sessionName: session.sessionName,
-    status: effectiveSessionStatus(session),
-    ...(session.authHealth ? { authHealth: session.authHealth } : {}),
-  }));
+  const validationSessionView = validatorSessionView(ctx, jobs);
   await edit(
     ctx,
-    validatorLiveText(snapshot, active, jobs, validationSessions),
+    validatorLiveText(snapshot, active, jobs, validationSessionView.sample, validationSessionView.summary),
     validatorLiveKeyboard(active),
   );
   const message = ctx.callbackQuery?.message;
@@ -6285,18 +6344,13 @@ async function showValidatorLiveLog(
         ) ?? Promise.resolve([]),
     ])
       .then(([nextSnapshot, nextJobs]) => {
-        const nextValidationSessions = (isAdmin(ctx) ? listAllSessions() : listSessions(user.workspaceId)).map((session) => ({
-          sessionId: session.sessionId,
-          sessionName: session.sessionName,
-          status: effectiveSessionStatus(session),
-          ...(session.authHealth ? { authHealth: session.authHealth } : {}),
-        }));
+        const nextValidationSessionView = validatorSessionView(ctx, nextJobs);
         void ctx.telegram
           .editMessageText(
             chatId,
             messageId,
             undefined,
-            validatorLiveText(nextSnapshot, true, nextJobs, nextValidationSessions),
+            validatorLiveText(nextSnapshot, true, nextJobs, nextValidationSessionView.sample, nextValidationSessionView.summary),
             { parse_mode: "HTML", reply_markup: validatorLiveKeyboard(true) },
           )
           .catch(() => {
