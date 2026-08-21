@@ -16,6 +16,7 @@ import type {
   WorkerHandler,
 } from "./job-contracts.js";
 import { JoinResultStore } from "./join-result-store.js";
+import { getBroadcastProgress } from "../workload/broadcast-progress.js";
 
 const QUEUE_NAME = "pappy-omega-mini-jobs";
 const BROADCAST_QUEUE_NAME = "pappy-omega-mini-broadcasts";
@@ -701,6 +702,41 @@ export class JobOrchestrator {
     }
   }
 
+  private async reconcileWorkerLocalBroadcast(record: JobRecord): Promise<JobRecord | undefined> {
+    if ((record.kind !== "allstatus" && record.kind !== "allchat") || record.payload.workerLocal !== true || !record.sessionId)
+      return undefined;
+    const progress = await getBroadcastProgress(record.workspaceId, record.jobId);
+    if (!progress) return undefined;
+    const repeat = Math.max(1, Math.min(20, Number(record.payload.count ?? 1)));
+    const nextProgress: JobProgress = {
+      ...record.progress,
+      total: progress.totalGroups * repeat,
+      completed: progress.completed,
+      success: progress.completed,
+      failed: progress.failed,
+      skipped: progress.skipped,
+      elapsedMs: Math.max(0, Date.now() - (record.startedAt ?? record.createdAt)),
+      currentAction: progress.state.toLowerCase(),
+      ...(progress.currentGroup ? { currentGroup: progress.currentGroup } : {}),
+      ...(progress.nextActionAt ? { nextActionAt: progress.nextActionAt } : {}),
+      ...(progress.error ? { lastResult: progress.error } : { lastResult: `Worker-local ${record.kind} progress: ${progress.completed}/${progress.totalGroups * repeat}.` }),
+    };
+    const terminal = ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(progress.state);
+    const nextState: JobRecord["state"] = terminal
+      ? progress.state
+      : "RUNNING";
+    const updated = await this.store.update(record.jobId, {
+      state: nextState,
+      progress: nextProgress,
+      heartbeatAt: progress.updatedAt,
+      ...(terminal ? { completedAt: progress.updatedAt } : {}),
+      ...(progress.error ? { error: progress.error } : {}),
+    });
+    if (terminal && !["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(record.state))
+      await this.emitCompletionHooks(record.jobId);
+    return updated;
+  }
+
   private async reapStaleJobs(): Promise<void> {
     if (this.reaperBusy) return;
     this.reaperBusy = true;
@@ -721,6 +757,8 @@ export class JobOrchestrator {
       );
       for (const record of await this.store.listAll()) {
         if (!this.ownsRecord(record)) continue;
+        const reconciled = await this.reconcileWorkerLocalBroadcast(record).catch(() => undefined);
+        if (reconciled?.state === "COMPLETED" || reconciled?.state === "PARTIAL" || reconciled?.state === "FAILED" || reconciled?.state === "CANCELLED") continue;
         const heartbeatAge =
           Date.now() - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
         const retryableFailed = isRetryableBroadcastFailure(record, heartbeatAge);
