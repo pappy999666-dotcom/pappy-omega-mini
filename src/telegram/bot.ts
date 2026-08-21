@@ -235,6 +235,7 @@ const pendingAdminInput = new Map<
   | "forcejoin:button"
   | "broadcast:compose"
   | "menu:caption"
+  | "workload:name"
 >();
 const pendingForceJoin = new Map<
   string,
@@ -1622,6 +1623,17 @@ export function createTelegramBot(): Telegraf<Context> {
       return;
     }
     const adminInput = pendingAdminInput.get(userId);
+    if (adminInput === "workload:name" && !ctx.message.text.startsWith("/")) {
+      pendingAdminInput.delete(userId);
+      const workerName = ctx.message.text.trim();
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9 _-]{1,31}$/.test(workerName)) {
+        await ctx.reply(pageText("Workload · Name Panel", dangerResponse("Invalid workload name", "Use 2–32 letters, numbers, spaces, hyphens, or underscores. Send the name again or use /cancel.")), { parse_mode: "HTML" });
+        pendingAdminInput.set(userId, "workload:name");
+        return;
+      }
+      await deliverWorkloadPairingCode(ctx, workerName);
+      return;
+    }
     if (adminInput === "forcejoin:target" && !ctx.message.text.startsWith("/")) {
       await handleForceJoinTargetInput(ctx, ctx.message.text.trim());
       return;
@@ -4482,32 +4494,17 @@ export function createTelegramBot(): Telegraf<Context> {
     );
   });
   bot.action("workload:add", async (ctx) => {
-    await ctx.answerCbQuery("Creating panel pairing code…");
-    const user = resolveTelegramUser(ctx);
-    try {
-      const pairing = await createWorkloadPairingCode(user.workspaceId, user.telegramUserId);
-      recordAudit({ workspaceId: user.workspaceId, actorTelegramUserId: user.telegramUserId, action: "workload.pairing.create", success: true, metadata: { enrollmentId: pairing.enrollmentId, expiresAt: pairing.expiresAt } });
-      const pairingCode = pairing.pairingCode;
-      await edit(
-        ctx,
-        pageText(
-          "Workload · Add Workload",
-          successResponse(
-            "Pairing code ready",
-            `<blockquote><b>1.</b> Tap the copy button below and save this code.\n<b>2.</b> Save the <code>index.js</code> file Telegram sends next.\n<b>3.</b> Upload it to your Node.js panel. Rename it to exactly <code>index.js</code> if necessary.\n<b>4.</b> Click <b>Start</b>. The panel will ask for this code. Paste it in the panel console.\n<b>5.</b> Return here and tap <b>Refresh Status</b>.\n\nThis code expires after ${Math.round((pairing.expiresAt - Date.now()) / 60_000)} minutes and can be used once.</blockquote>`,
-          ),
-        ),
-        keyboard([
-          [copyBtn("📋 Copy Pairing Code", pairingCode, "success")],
-          [btn("↻ Refresh Registration", "workload:status")],
-          [btn(ui.back, "workload:menu")],
-        ]),
-      );
-      const { readWorkloadPackageDocuments } = await import("../workload/package.js");
-      for (const document of await readWorkloadPackageDocuments()) await ctx.replyWithDocument(document);
-    } catch (error) {
-      await edit(ctx, pageText("Workload · Add Workload", dangerResponse("Could not create pairing code", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn(ui.back, "workload:menu")]]));
-    }
+    await ctx.answerCbQuery("Choose a panel name first…");
+    const userId = String(ctx.from?.id ?? "");
+    pendingAdminInput.set(userId, "workload:name");
+    await edit(
+      ctx,
+      pageText(
+        "Workload · Name Panel",
+        infoResponse("Choose a permanent panel name", "Send a short name for this panel, for example <code>paddy</code>, <code>marketing-01</code>, or <code>home-panel</code>. Telegram will then create a code in the form <code>name-random</code>.\n\nUse /cancel to close this request."),
+      ),
+      keyboard([[btn(ui.close, "workload:menu", "danger")]]),
+    );
   });
   bot.action("workload:enroll", async (ctx) => {
     await ctx.answerCbQuery("Opening Add Workload…");
@@ -6537,6 +6534,34 @@ async function showFeature(
     featureText(title, body),
     keyboard([[btn(ui.back, "menu:main")]]),
   );
+}
+
+async function deliverWorkloadPairingCode(ctx: Context, workerName: string): Promise<void> {
+  const user = resolveTelegramUser(ctx);
+  try {
+    const pairing = await createWorkloadPairingCode(user.workspaceId, user.telegramUserId, workerName);
+    recordAudit({ workspaceId: user.workspaceId, actorTelegramUserId: user.telegramUserId, action: "workload.pairing.create", success: true, metadata: { enrollmentId: pairing.enrollmentId, expiresAt: pairing.expiresAt, workerName } });
+    const pairingCode = pairing.pairingCode;
+    await edit(
+      ctx,
+      pageText(
+        "Workload · Add Workload",
+        successResponse(
+          "Pairing code ready",
+          `<blockquote><b>Name:</b> <code>${escapeHtml(workerName.trim())}</code>\n<b>1.</b> Tap the copy button below and save this code.\n<b>2.</b> Save the <code>index.js</code> file Telegram sends next.\n<b>3.</b> Upload it to your Node.js panel. Rename it to exactly <code>index.js</code> if necessary.\n<b>4.</b> Click <b>Start</b>. The panel will ask for this code. Paste it in the panel console.\n<b>5.</b> Return here and tap <b>Refresh Status</b>.\n\nThe final workload code will be <code>${escapeHtml(workerName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "panel")}-&lt;random&gt;</code>. This pairing code expires after ${Math.round((pairing.expiresAt - Date.now()) / 60_000)} minutes and can be used once.</blockquote>`,
+        ),
+      ),
+      keyboard([
+        [copyBtn("📋 Copy Pairing Code", pairingCode, "success")],
+        [btn("↻ Refresh Registration", "workload:status")],
+        [btn(ui.back, "workload:menu")],
+      ]),
+    );
+    const { readWorkloadPackageDocuments } = await import("../workload/package.js");
+    for (const document of await readWorkloadPackageDocuments()) await ctx.replyWithDocument(document);
+  } catch (error) {
+    await edit(ctx, pageText("Workload · Add Workload", dangerResponse("Could not create pairing code", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn(ui.back, "workload:menu")]]));
+  }
 }
 
 async function sendOrEdit(

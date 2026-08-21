@@ -95,6 +95,7 @@ const sessionLocks = new Map<string, SessionLock>();
 const pairingNotifications = new Map<string, number>();
 let pairingNotifier:
   ((chatId: number, message: string) => Promise<void>) | undefined;
+const pendingWhatsAppPairingNotice = new Set<string>();
 export function setPairingNotifier(
   notifier: (chatId: number, message: string) => Promise<void>,
 ): void {
@@ -732,6 +733,13 @@ async function openWhatsAppSession(
           workerNodeId: process.env.HOSTNAME ?? `pid-${process.pid}`,
         });
         const chatId = pairingNotifications.get(key);
+        const selfJid = (socket as unknown as { user?: { id?: string } }).user?.id;
+        if (pendingWhatsAppPairingNotice.has(key) && selfJid) {
+          pendingWhatsAppPairingNotice.delete(key);
+          void sendTrackedMessage(selfJid, {
+            text: "✦ PAPPY OMEGA MINI · CONNECTED\\n\\nYour WhatsApp session is now connected and ready.\\n\\nStatus · ACTIVE · VALID\\nTransport · Baileys multi-device\\nAction · Commands are ready.",
+          }).catch(() => undefined);
+        }
         if (chatId && pairingNotifier) {
           pairingNotifications.delete(key);
           void pairingNotifier(
@@ -913,15 +921,13 @@ export async function requestWhatsAppPairingCode(
   }
   // Startup recovery can leave an unpaired socket reconnecting. Replace it
   // before issuing a new code so the code belongs to this pairing attempt.
+  const lifecycle = lifecycleKey(workspaceId, sessionId);
+  pendingWhatsAppPairingNotice.add(lifecycle);
+  if (telegramChatId) pairingNotifications.set(lifecycle, telegramChatId);
   await stopWhatsAppSession(workspaceId, sessionId);
   resetWhatsAppSessionLifecycle(workspaceId, sessionId);
   await new Promise((resolve) => setTimeout(resolve, 500));
   await startWhatsAppSession(workspaceId, sessionId);
-  if (telegramChatId)
-    pairingNotifications.set(
-      lifecycleKey(workspaceId, sessionId),
-      telegramChatId,
-    );
   await new Promise((resolve) => setTimeout(resolve, 1_500));
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {

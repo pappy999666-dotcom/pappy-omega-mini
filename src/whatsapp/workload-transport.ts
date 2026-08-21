@@ -71,5 +71,13 @@ export function createAssignedWorkloadSocket(
     ev: { on: () => undefined },
   };
   for (const method of methods) target[method] = remoteMethod(workspaceId, sessionId, method);
-  return target as unknown as WASocket;
+  return new Proxy(target, {
+    get(current, property, receiver) {
+      if (property === "then") return undefined;
+      if (typeof property !== "string") return Reflect.get(current, property, receiver);
+      if (property in current) return Reflect.get(current, property, receiver);
+      if (!/^[A-Za-z][A-Za-z0-9]*$/.test(property)) return undefined;
+      return remoteMethod(workspaceId, sessionId, property);
+    },
+  }) as unknown as WASocket;
 }

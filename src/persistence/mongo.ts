@@ -279,6 +279,7 @@ const workloadEnrollmentSchema = new mongoose.Schema<WorkloadEnrollmentDocument>
     enrollmentId: { type: String, required: true, unique: true, index: true },
     workspaceId: { type: String, required: true, index: true },
     ownerTelegramUserId: { type: String, required: true, index: true },
+    workerName: { type: String, index: true },
     tokenHash: { type: String, required: true, unique: true },
     expiresAt: { type: Number, required: true, index: true },
     consumedAt: Number,

@@ -59,6 +59,7 @@ export interface WorkloadEnrollmentRecord {
   enrollmentId: string;
   workspaceId: string;
   ownerTelegramUserId: string;
+  workerName?: string;
   tokenHash: string;
   expiresAt: number;
   consumedAt?: number;

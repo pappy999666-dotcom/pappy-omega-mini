@@ -163,13 +163,16 @@ function createHumanPairingCode(): string {
 export async function createWorkloadPairingCode(
   workspaceId: string,
   ownerTelegramUserId: string,
+  workerName?: string,
 ): Promise<WorkloadPairingCodeResult> {
   const pairingCode = createHumanPairingCode();
   const now = Date.now();
+  const normalizedName = workerName ? normalizeWorkerName(workerName) : undefined;
   const record: WorkloadEnrollmentRecord = {
     enrollmentId: crypto.randomUUID(),
     workspaceId,
     ownerTelegramUserId,
+    ...(normalizedName ? { workerName: normalizedName } : {}),
     tokenHash: hashCredential(pairingCode),
     expiresAt: now + WORKLOAD_ENROLLMENT_TTL_MS,
     createdAt: now,
@@ -208,7 +211,7 @@ export async function registerWorkloadWorker(
 
   const now = Date.now();
   const credential = createOpaqueToken(48);
-  const workerName = normalizeWorkerName(input.workerName);
+  const workerName = normalizeWorkerName(enrollment.workerName ?? input.workerName);
   let workloadCode: string | undefined;
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const candidate = createWorkloadCode(workerName);

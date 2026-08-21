@@ -365,7 +365,7 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
     setTimeout(() => reject(new Error("WhatsApp did not reach the pairing state.")), 15_000);
   });
   pairingReady.catch(() => undefined);
-  const runtime = { workspaceId, sessionId, socket, store, ready: false, pairingReady };
+  const runtime = { workspaceId, sessionId, socket, store, ready: false, pairingReady, pairingNoticePending: false };
   socket.ev.on("messages.upsert", (event) => {
     for (const message of event.messages ?? []) void emitInbound(runtime, message).catch((error) => noteError(error, "inbound event failed"));
   });
@@ -381,6 +381,12 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
       reconnectTimers.delete(sessionId);
       pairingReadyResolve?.();
       runtime.ready = true;
+      if (runtime.pairingNoticePending && runtime.socket.user?.id) {
+        runtime.pairingNoticePending = false;
+        void runtime.socket.sendMessage(runtime.socket.user.id, {
+          text: "✦ PAPPY OMEGA MINI · CONNECTED\\n\\nYour WhatsApp session is now connected and ready.\\n\\nStatus · ACTIVE · VALID\\nTransport · Baileys multi-device\\nAction · Commands are ready.",
+        }).catch((error) => noteError(error, "connected notice failed"));
+      }
       matrix.state = "ACTIVE";
       matrix.lastAction = `session ${sessionId} connected`;
       matrix.lastError = "none";
@@ -476,15 +482,26 @@ function normalizeArgs(runtime, method, args) {
   return next;
 }
 async function executeTransport(runtime, method, encodedArgs) {
-  const allowed = new Set([
-    "sendMessage", "sendGroupStatus", "updateProfileName", "updateProfileStatus", "updateProfilePicture", "removeProfilePicture", "profilePictureUrl",
-    "groupCreate", "groupFetchAllParticipating", "groupInviteCode", "groupUpdateDescription", "groupUpdateSubject", "groupLeave", "groupMetadata",
-    "groupGetInviteInfo", "groupAcceptInvite", "requestPairingCode",
-  ]);
-  if (!allowed.has(method)) throw new Error(`Unsupported workload transport method: ${method}`);
+  if (!/^[A-Za-z][A-Za-z0-9]*$/.test(method) || ["constructor", "end", "ev", "ws", "auth", "authState", "user"].includes(method))
+    throw new Error(`Unsafe workload transport method: ${method}`);
+  const args = normalizeArgs(runtime, method, encodedArgs);
+  if (method === "sendGroup" || method === "sendGroupText") {
+    const [jid, content] = args;
+    return runtime.socket.sendMessage(jid, content);
+  }
+  if (method === "sendGroupStatus") {
+    const [jid, payload] = args;
+    const native = runtime.socket.sendGroupStatus;
+    if (typeof native === "function") return native.apply(runtime.socket, args);
+    return runtime.socket.sendMessage(jid, payload);
+  }
+  if (method === "sendGroupHidetag" || method === "sendGroupMentions") {
+    const [jid, content] = args;
+    return runtime.socket.sendMessage(jid, content);
+  }
   const fn = runtime.socket[method];
   if (typeof fn !== "function") throw new Error(`Transport method is unavailable: ${method}`);
-  return fn.apply(runtime.socket, normalizeArgs(runtime, method, encodedArgs));
+  return fn.apply(runtime.socket, args);
 }
 async function execute(command) {
   if (command.kind === "session.start") {
@@ -503,6 +520,7 @@ async function execute(command) {
   }
   if (command.kind === "session.pair.request") {
     const runtime = await startSession(command.workspaceId, command.sessionId, false);
+    runtime.pairingNoticePending = true;
     await runtime.pairingReady;
     await reportSessionStatus(runtime, "PAIRING", "UNKNOWN");
     const phoneNumber = String(command.payload.phoneNumber ?? "").replace(/\D/g, "");
@@ -513,7 +531,10 @@ async function execute(command) {
   if (command.kind === "bridge.command") {
     const method = String(command.payload.method ?? "");
     const runtime = await startSession(command.workspaceId, command.sessionId, method !== "requestPairingCode");
-    if (method === "requestPairingCode") await runtime.pairingReady;
+    if (method === "requestPairingCode") {
+      runtime.pairingNoticePending = true;
+      await runtime.pairingReady;
+    }
     return await executeTransport(runtime, method, command.payload.args ?? []);
   }
   throw new Error(`Unsupported workload command: ${command.kind}`);
