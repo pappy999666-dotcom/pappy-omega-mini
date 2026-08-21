@@ -48,6 +48,7 @@ import type {
   AutoPromoteScope,
 } from "../autopromote/types.js";
 import type { JobMediaReference } from "../whatsapp/job-media-store.js";
+import type { WhatsAppMediaPayload } from "../whatsapp/media-payload.js";
 import { persistJobMedia } from "../whatsapp/job-media-store.js";
 import {
   getEmergencyState,
@@ -56,6 +57,7 @@ import {
   setEmergencyState,
 } from "../core/control-plane.js";
 import { getValidatorSnapshot } from "../links/validator-snapshot.js";
+import { GLOBAL_VALIDATOR_SCOPE } from "../links/link-bucket-store.js";
 import {
   listValidatorBucket,
   countValidatorBucket,
@@ -1284,6 +1286,7 @@ export function createTelegramBot(): Telegraf<Context> {
             ? quoted.caption
             : undefined
         : undefined;
+      const quotedMedia = await resolveTelegramQuotedMedia(ctx).catch(() => undefined);
       const targets = activeAllSessions().filter((item) =>
         selected.has(adminBridgeTargetToken(item.workspaceId, item.sessionId)),
       );
@@ -1297,6 +1300,7 @@ export function createTelegramBot(): Telegraf<Context> {
             senderJid: session.phoneNumber ?? "admin-global-bridge",
             text: command,
             ...(quotedText ? { quotedText } : {}),
+            ...(quotedMedia ? { media: quotedMedia } : {}),
             bridgeAuthorized: true,
           });
           const accepted = routed !== null;
@@ -1361,6 +1365,7 @@ export function createTelegramBot(): Telegraf<Context> {
             ? quoted.caption
             : undefined
         : undefined;
+      const quotedMedia = await resolveTelegramQuotedMedia(ctx).catch(() => undefined);
       const command = normalizeBridgeCommand(input, session.prefix);
       try {
         const result = await routeWhatsAppText({
@@ -1369,6 +1374,7 @@ export function createTelegramBot(): Telegraf<Context> {
           senderJid: session.phoneNumber ?? "admin-bridge",
           text: command,
           ...(quotedText ? { quotedText } : {}),
+          ...(quotedMedia ? { media: quotedMedia } : {}),
           bridgeAuthorized: true,
         });
         const output =
@@ -1457,6 +1463,7 @@ export function createTelegramBot(): Telegraf<Context> {
             ? quoted.caption
             : undefined
         : undefined;
+      const quotedMedia = await resolveTelegramQuotedMedia(ctx).catch(() => undefined);
       if (input.toLowerCase() === "cancel") {
         await ctx.telegram
           .editMessageText(
@@ -1485,6 +1492,7 @@ export function createTelegramBot(): Telegraf<Context> {
           senderJid: session.phoneNumber ?? "telegram-bridge",
           text: command,
           ...(quotedText ? { quotedText } : {}),
+          ...(quotedMedia ? { media: quotedMedia } : {}),
           bridgeAuthorized: true,
         });
         const output =
@@ -1653,7 +1661,16 @@ export function createTelegramBot(): Telegraf<Context> {
       adminInput === "broadcast:compose" &&
       !ctx.message.text.startsWith("/")
     ) {
-      await handleAdminBroadcastDraft(ctx, ctx.message.text.trim());
+      const quoted = ctx.message.reply_to_message;
+      const quotedText = quoted
+        ? "text" in quoted
+          ? quoted.text
+          : "caption" in quoted
+            ? quoted.caption
+            : undefined
+        : undefined;
+      const draft = [quotedText, ctx.message.text.trim()].filter(Boolean).join("\n");
+      await handleAdminBroadcastDraft(ctx, draft);
       return;
     }
     const scheduleInput = pendingScheduleInput.get(userId);
@@ -1702,7 +1719,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const user = resolveTelegramUser(ctx);
     if (user.workspaceId !== pending.workspaceId) return;
     const selected =
-      globalBridgeSelections.get(user.workspaceId) ?? new Set<string>();
+      globalBridgeSelections.get(String(ctx.from?.id ?? "")) ?? new Set<string>();
     const sessions = activeWorkspaceSessions(user.workspaceId).filter((session) =>
       selected.has(session.sessionId),
     );
@@ -2973,7 +2990,7 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("bridge:global:select", async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
-    const selected = globalBridgeSelections.get(user.workspaceId) ?? new Set<string>();
+    const selected = globalBridgeSelections.get(String(ctx.from?.id ?? "")) ?? new Set<string>();
     await edit(
       ctx,
       pageText(
@@ -2987,7 +3004,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery("All ACTIVE sessions selected");
     const user = resolveTelegramUser(ctx);
     const active = activeWorkspaceSessions(user.workspaceId);
-    globalBridgeSelections.set(user.workspaceId, new Set(active.map((session) => session.sessionId)));
+    globalBridgeSelections.set(String(ctx.from?.id ?? ""), new Set(active.map((session) => session.sessionId)));
     await edit(
       ctx,
       pageText("Global Bridge · Choose Sessions", infoResponse("All ACTIVE Sessions Selected", `${active.length} ACTIVE session${active.length === 1 ? "" : "s"} selected.`)),
@@ -3002,10 +3019,10 @@ export function createTelegramBot(): Telegraf<Context> {
       await ctx.answerCbQuery("Only ACTIVE sessions can be bridged.", { show_alert: true });
       return;
     }
-    const selected = globalBridgeSelections.get(user.workspaceId) ?? new Set<string>();
+    const selected = globalBridgeSelections.get(String(ctx.from?.id ?? "")) ?? new Set<string>();
     if (selected.has(session.sessionId)) selected.delete(session.sessionId);
     else selected.add(session.sessionId);
-    globalBridgeSelections.set(user.workspaceId, selected);
+    globalBridgeSelections.set(String(ctx.from?.id ?? ""), selected);
     await edit(
       ctx,
       pageText("Global Bridge · Choose Sessions", infoResponse("Selection Updated", `${selected.size} ACTIVE session${selected.size === 1 ? "" : "s"} selected.`)),
@@ -3014,14 +3031,14 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.action("bridge:global:clear", async (ctx) => {
     await ctx.answerCbQuery("Selection cleared");
-    globalBridgeSelections.delete(resolveTelegramUser(ctx).workspaceId);
+    globalBridgeSelections.delete(String(ctx.from?.id ?? ""));
     await showGlobalBridge(ctx);
   });
   bot.action("bridge:global:command", async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
     const active = activeWorkspaceSessions(user.workspaceId);
-    const selected = globalBridgeSelections.get(user.workspaceId) ?? new Set<string>();
+    const selected = globalBridgeSelections.get(String(ctx.from?.id ?? "")) ?? new Set<string>();
     for (const id of [...selected])
       if (!active.some((session) => session.sessionId === id)) selected.delete(id);
     if (!selected.size)
@@ -3045,8 +3062,7 @@ export function createTelegramBot(): Telegraf<Context> {
     bot.action(action, async (ctx) => {
       await ctx.answerCbQuery();
       if (action === "bridge:global:stop") {
-        const workspaceId = resolveTelegramUser(ctx).workspaceId;
-        globalBridgeSelections.delete(workspaceId);
+        globalBridgeSelections.delete(String(ctx.from?.id ?? ""));
         pendingGlobalCommand.delete(String(ctx.from?.id ?? ""));
       }
       await showGlobalBridge(ctx);
@@ -3234,7 +3250,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const user = resolveTelegramUser(ctx);
     const bucket = (ctx.match[1] ?? "main") as ValidatorBucket;
     try {
-      const records = await listValidatorBucket(user.workspaceId, bucket, 30);
+      const records = await listValidatorBucket(GLOBAL_VALIDATOR_SCOPE, bucket, 30);
       const body = records.length
         ? records
             .map(
@@ -3798,7 +3814,7 @@ export function createTelegramBot(): Telegraf<Context> {
           user.workspaceId,
           session.sessionId,
         );
-        const activeLinks = await countValidatorBucket(user.workspaceId, "active").catch(() => 0);
+        const activeLinks = await countValidatorBucket(GLOBAL_VALIDATOR_SCOPE, "active").catch(() => 0);
         if (activeLinks === 0) {
           joinStates.set(key, "idle");
           return edit(
@@ -3807,7 +3823,7 @@ export function createTelegramBot(): Telegraf<Context> {
               "Join Manager",
               infoResponse(
                 "No Active Links",
-                "There are currently no links in the Active bucket to join. Add or validate WhatsApp group invite links first, then press Start again.",
+                "The shared Validator Hub Active bucket is empty. Add or validate WhatsApp group invites first, then press Start again.",
               ),
             ),
             joinManagerKeyboard(session.sessionId, "idle"),
@@ -6460,7 +6476,7 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
   let totalGroups: number | undefined;
   let activeLinks: number | undefined;
   const inventoryPromise = Promise.all([
-    countValidatorBucket(session.workspaceId, "active").catch(() => undefined),
+    countValidatorBucket(GLOBAL_VALIDATOR_SCOPE, "active").catch(() => undefined),
     listGroups(session.workspaceId, session.sessionId).catch(() => undefined),
   ]).then(([count, groups]) => {
     activeLinks = count;
@@ -6483,7 +6499,10 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
         ? payload.requestMode.toUpperCase()
         : "AUTO";
     const code = currentJob?.jobCode ?? currentJob?.jobId?.slice(0, 8) ?? "—";
-    const total = progress?.total ?? target;
+    const resolvedTarget = typeof target === "number" ? target : undefined;
+    const total = progress?.total ?? (activeLinks !== undefined
+      ? Math.min(activeLinks, resolvedTarget ?? activeLinks)
+      : target);
     const joined = progress?.joined ?? progress?.success ?? 0;
     const requested = progress?.requested ?? 0;
     const alreadyMember = progress?.alreadyMember ?? 0;
@@ -6495,7 +6514,7 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
       `<b>Active links available:</b> ${activeLinks ?? "loading"}${activeLinks === 0 ? " · <i>No links to join; collect or validate WhatsApp group invites first.</i>" : ""}`,
       `<b>Socket:</b> <code>${escapeHtml(session.sessionId.slice(0, 12))}</code> · generation ${escapeHtml(String(session.socketGeneration ?? "—"))}`,
       `<b>Mode:</b> ${escapeHtml(mode)} · <b>Target:</b> ${escapeHtml(String(target))} · <b>Delay:</b> ${escapeHtml(delayMs)}`,
-      `<b>Selection:</b> shuffled across the full Active bucket`,
+      `<b>Selection:</b> shuffled across the full shared Active bucket`,
       `<b>Cursor:</b> ${progress?.completed ?? 0}/${escapeHtml(String(total))} · <b>Job:</b> <code>${escapeHtml(code)}</code>`,
       `<b>Joined:</b> ${joined} · <b>Requested:</b> ${requested} · <b>Already member:</b> ${alreadyMember}`,
       `<b>Dead returned to Main:</b> ${deadLinks} · <b>Failed:</b> ${progress?.failed ?? 0} · <b>Retrying:</b> ${progress?.retrying ?? 0}`,
@@ -6541,7 +6560,7 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
   const interval = setInterval(() => {
     void Promise.all([
       runtime.get(jobId),
-      countValidatorBucket(session.workspaceId, "active").catch(() => undefined),
+      countValidatorBucket(GLOBAL_VALIDATOR_SCOPE, "active").catch(() => undefined),
       listGroups(session.workspaceId, session.sessionId).catch(() => undefined),
     ]).then(([nextJob, nextActiveLinks, nextGroups]) => {
         activeLinks = nextActiveLinks;
@@ -6666,13 +6685,82 @@ async function edit(
     if (actor)
       stopValidatorLiveLoops(resolveUser(String(actor.id)).workspaceId);
   }
-  await ctx
-    .editMessageText(text, { parse_mode: "HTML", reply_markup: markup })
-    .catch(async () => {
-      await ctx
-        .reply(text, { parse_mode: "HTML", reply_markup: markup })
-        .catch(() => undefined);
+  try {
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      reply_markup: markup,
     });
+  } catch (error) {
+    if (ctx.callbackQuery) {
+      console.warn(
+        `[pappy-omega-mini] Telegram callback view edit failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+    await ctx
+      .reply(text, { parse_mode: "HTML", reply_markup: markup })
+      .catch(() => undefined);
+  }
+}
+
+async function resolveTelegramQuotedMedia(
+  ctx: Context,
+): Promise<WhatsAppMediaPayload | undefined> {
+  const quoted = ctx.message && "reply_to_message" in ctx.message
+    ? ctx.message.reply_to_message
+    : undefined;
+  if (!quoted || typeof quoted !== "object") return undefined;
+  const source = quoted as unknown as Record<string, unknown>;
+  let kind: WhatsAppMediaPayload["kind"] | undefined;
+  let fileId: string | undefined;
+  let fileName: string | undefined;
+  let mimeType: string | undefined;
+  let ptt: boolean | undefined;
+  const photo = Array.isArray(source.photo)
+    ? (source.photo.at(-1) as Record<string, unknown> | undefined)
+    : undefined;
+  const video = source.video as Record<string, unknown> | undefined;
+  const document = source.document as Record<string, unknown> | undefined;
+  const audio = source.audio as Record<string, unknown> | undefined;
+  const sticker = source.sticker as Record<string, unknown> | undefined;
+  if (photo) {
+    kind = "image";
+    fileId = typeof photo.file_id === "string" ? photo.file_id : undefined;
+    mimeType = "image/jpeg";
+  } else if (video) {
+    kind = "video";
+    fileId = typeof video.file_id === "string" ? video.file_id : undefined;
+    mimeType = typeof video.mime_type === "string" ? video.mime_type : "video/mp4";
+  } else if (document) {
+    kind = "document";
+    fileId = typeof document.file_id === "string" ? document.file_id : undefined;
+    fileName = typeof document.file_name === "string" ? document.file_name : undefined;
+    mimeType = typeof document.mime_type === "string" ? document.mime_type : undefined;
+  } else if (audio) {
+    kind = "audio";
+    fileId = typeof audio.file_id === "string" ? audio.file_id : undefined;
+    fileName = typeof audio.file_name === "string" ? audio.file_name : undefined;
+    mimeType = typeof audio.mime_type === "string" ? audio.mime_type : "audio/mpeg";
+    ptt = audio.voice === true;
+  } else if (sticker) {
+    kind = "sticker";
+    fileId = typeof sticker.file_id === "string" ? sticker.file_id : undefined;
+    mimeType = typeof sticker.is_animated === "boolean" && sticker.is_animated ? "application/x-tgsticker" : "image/webp";
+  }
+  if (!kind || !fileId) return undefined;
+  const file = await ctx.telegram.getFileLink(fileId);
+  const response = await fetch(file.href);
+  if (!response.ok) throw new Error(`Telegram quoted media download failed with ${response.status}.`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const caption = typeof source.caption === "string" ? source.caption : undefined;
+  return {
+    kind,
+    bytes,
+    ...(mimeType ? { mimeType } : {}),
+    ...(fileName ? { fileName } : {}),
+    ...(caption ? { caption } : {}),
+    ...(ptt !== undefined ? { ptt } : {}),
+  };
 }
 
 function resolveTelegramUser(ctx: Context) {

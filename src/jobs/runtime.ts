@@ -300,7 +300,7 @@ export function startWorkerRuntime(): JobOrchestrator {
           );
           if (!sourceSession)
             throw new Error("No healthy WhatsApp validation session is available yet.");
-          const existing = await buckets.get(context.job.workspaceId, canonicalUrl);
+          const existing = await buckets.get(GLOBAL_VALIDATOR_SCOPE, canonicalUrl);
           const validatingMetadata = {
             ...(existing?.metadata ?? {}),
             inviteCode,
@@ -308,7 +308,7 @@ export function startWorkerRuntime(): JobOrchestrator {
             validationState: "validating" as const,
           };
           if (existing)
-            await buckets.move(context.job.workspaceId, canonicalUrl, "validating", {
+            await buckets.move(GLOBAL_VALIDATOR_SCOPE, canonicalUrl, "validating", {
               sourceSessionId: sourceSession.sessionId,
               metadata: validatingMetadata,
             });
@@ -362,7 +362,7 @@ export function startWorkerRuntime(): JobOrchestrator {
             },
           });
           await buckets.clearValidationError(
-            context.job.workspaceId,
+            GLOBAL_VALIDATOR_SCOPE,
             canonicalUrl,
           );
           const currentSession = getSession(
@@ -434,7 +434,7 @@ export function startWorkerRuntime(): JobOrchestrator {
             "group not found",
             "gone",
           ].some((marker) => lower.includes(marker));
-          const existing = await buckets.get(context.job.workspaceId, parsed);
+          const existing = await buckets.get(GLOBAL_VALIDATOR_SCOPE, parsed);
           if (
             existing &&
             (existing.bucket !== "validating" ||
@@ -443,7 +443,7 @@ export function startWorkerRuntime(): JobOrchestrator {
             return { status: "skipped" as const };
           await buckets
             .move(
-              context.job.workspaceId,
+              GLOBAL_VALIDATOR_SCOPE,
               parsed,
               isDead ? "dead" : "main",
               {
@@ -537,7 +537,7 @@ export function startWorkerRuntime(): JobOrchestrator {
     const sourceRecords: LinkRecord[] = [];
     if (selectedLinks.size) {
       for (const link of selectedLinks) {
-        const record = await buckets.get(context.job.workspaceId, link);
+        const record = await buckets.get(GLOBAL_VALIDATOR_SCOPE, link);
         if (
           record?.bucket === "active" &&
           !["joined", "already-member", "request-required"].includes(
@@ -550,7 +550,7 @@ export function startWorkerRuntime(): JobOrchestrator {
       let cursor = 0;
       do {
         const page = await buckets.list(
-          context.job.workspaceId,
+          GLOBAL_VALIDATOR_SCOPE,
           "active",
           cursor,
           100,
@@ -661,7 +661,7 @@ export function startWorkerRuntime(): JobOrchestrator {
           });
         if (signal.aborted) return { status: "skipped" as const };
         const currentRecord = await buckets.get(
-          context.job.workspaceId,
+          GLOBAL_VALIDATOR_SCOPE,
           record.canonicalUrl,
         );
         if (!currentRecord || currentRecord.bucket !== "active")
@@ -729,7 +729,7 @@ export function startWorkerRuntime(): JobOrchestrator {
         if (result.success) {
           joined += 1;
           await buckets.move(
-            context.job.workspaceId,
+            GLOBAL_VALIDATOR_SCOPE,
             record.canonicalUrl,
             "active",
             {
@@ -751,7 +751,7 @@ export function startWorkerRuntime(): JobOrchestrator {
         if (result.alreadyMember) {
           alreadyMember += 1;
           await buckets.move(
-            context.job.workspaceId,
+            GLOBAL_VALIDATOR_SCOPE,
             record.canonicalUrl,
             "active",
             {
@@ -774,7 +774,7 @@ export function startWorkerRuntime(): JobOrchestrator {
         if (result.requestRequired) {
           requested += 1;
           await buckets.move(
-            context.job.workspaceId,
+            GLOBAL_VALIDATOR_SCOPE,
             record.canonicalUrl,
             "active",
             {
@@ -847,7 +847,7 @@ export function startWorkerRuntime(): JobOrchestrator {
         } else {
           const retryable = classified.retryable || classified.classification === "rate-limit";
           await buckets.move(
-            context.job.workspaceId,
+            GLOBAL_VALIDATOR_SCOPE,
             record.canonicalUrl,
             retryable ? "main" : "dead",
             {

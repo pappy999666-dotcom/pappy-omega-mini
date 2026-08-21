@@ -26,10 +26,6 @@ import {
 } from "../core/encrypted-store.js";
 import { routeWhatsAppText, type WhatsAppReply } from "./message-router.js";
 import { collectLinks } from "../links/link-collector.js";
-import {
-  claimValidatorMainLinks,
-  requeueValidatorMainLinks,
-} from "../links/validator-operations.js";
 import { prepareCanonicalPreviewContent } from "./baileys-native-preview.js";
 import {
   extractMessageText,
@@ -508,36 +504,8 @@ async function openWhatsAppSession(
               });
               const urls = collection.urls;
               if (!urls.length) return;
-              const { getWorkerRuntime } = await import("../jobs/runtime.js");
-              const runtime = getWorkerRuntime();
-              if (!runtime) return;
-              const batchUrls = urls.slice(0, 5);
-              const claimed = await claimValidatorMainLinks(
-                workspaceId,
-                batchUrls,
-                sessionId,
-              ).catch(() => 0);
-              if (claimed !== batchUrls.length) return;
-              const payload = {
-                urls: batchUrls,
-                sourceUserId: senderJid,
-                sourceSessionId: sessionId,
-              };
-              const payloadHash = createHash("sha256")
-                .update(JSON.stringify(payload))
-                .digest("hex");
-              try {
-                await runtime.enqueue({
-                  workspaceId,
-                  sessionId,
-                  kind: "link-validation",
-                  payload,
-                  idempotencyKey: `${workspaceId}:${sessionId}:auto-validator:${payloadHash}`,
-                });
-              } catch (error) {
-                await requeueValidatorMainLinks(workspaceId, batchUrls).catch(() => undefined);
-                throw error;
-              }
+              const { runValidatorSweepNow } = await import("../jobs/runtime.js");
+              await runValidatorSweepNow();
             })
             .catch((error) => {
               console.error(
