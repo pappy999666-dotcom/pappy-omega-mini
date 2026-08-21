@@ -1,6 +1,7 @@
 let makeWASocket;
 let makeCacheManagerAuthState;
 let pino;
+import { spawnSync } from "node:child_process";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, verify } from "node:crypto";
 import { mkdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
@@ -19,9 +20,10 @@ let PANEL_PAIRING_CODE = process.env.PAPPY_WORKLOAD_PAIRING_CODE ?? cliValue("--
 const DATA_DIR = process.env.PAPPY_WORKER_DATA_DIR ?? "./pappy-workload-data";
 let STORAGE_SECRET = process.env.PAPPY_WORKLOAD_SESSION_SECRET ?? "";
 let WORKER_NAME = (process.env.PAPPY_WORKLOAD_NAME ?? cliValue("--name")) || "panel";
-const WORKER_VERSION = process.env.PAPPY_WORKER_VERSION ?? "1.2.4";
+const WORKER_VERSION = process.env.PAPPY_WORKER_VERSION ?? "1.2.5";
 const AUTO_UPDATE_ENABLED = !["0", "false", "off"].includes(String(process.env.PAPPY_WORKLOAD_AUTO_UPDATE ?? "true").toLowerCase());
-const UPDATE_CHECK_MS = 15 * 60_000;
+const UPDATE_CHECK_MS = 30_000;
+const PENDING_RELEASE_TIMEOUT_MS = 120_000;
 const ENTRYPOINT = process.env.PAPPY_WORKER_ENTRYPOINT ?? "";
 const RELEASE_PUBLIC_KEY_PEM = process.env.PAPPY_WORKLOAD_RELEASE_PUBLIC_KEY ?? `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAe+FnOPhHDo9y8pJ5rqwldSHwXUHKDG9HlTBqStHtRso=
@@ -30,6 +32,7 @@ const secretPath = join(DATA_DIR, ".secret");
 const CONTROL_POLL_MS = 2_000;
 const HEARTBEAT_MS = 20_000;
 const workerStatePath = join(DATA_DIR, "worker.json");
+const pendingReleasePath = join(DATA_DIR, ".pappy-update-state.json");
 const runtimes = new Map();
 const assignedSessions = new Set();
 const reconnectTimers = new Map();
@@ -257,6 +260,33 @@ function scheduleReconnect(workspaceId, sessionId) {
   reconnectTimers.set(sessionId, timer);
 }
 
+function startPendingReleaseWatchdog() {
+  if (!ENTRYPOINT) return;
+  setTimeout(async () => {
+    try {
+      const pending = JSON.parse(await readFile(pendingReleasePath, "utf8"));
+      if (pending?.version === WORKER_VERSION && (!matrix.lastHeartbeatAt || Date.now() - matrix.lastHeartbeatAt > PENDING_RELEASE_TIMEOUT_MS)) {
+        noteError(new Error(`Release ${WORKER_VERSION} did not reach a healthy heartbeat within ${PENDING_RELEASE_TIMEOUT_MS / 1000}s.`), "release watchdog requested rollback");
+        process.exitCode = 76;
+        process.exit(76);
+      }
+    } catch {
+      // No pending release marker means this is a normal startup.
+    }
+  }, PENDING_RELEASE_TIMEOUT_MS).unref?.();
+}
+async function finalizeVerifiedRelease() {
+  try {
+    const pending = JSON.parse(await readFile(pendingReleasePath, "utf8"));
+    if (pending?.version !== WORKER_VERSION) return;
+    await unlink(pendingReleasePath).catch(() => undefined);
+    if (typeof pending.backupPath === "string") await unlink(pending.backupPath).catch(() => undefined);
+    matrix.lastAction = `release ${WORKER_VERSION} healthy; previous release retired`;
+    renderMatrix(true);
+  } catch {
+    // No pending update is normal; an unreadable marker is left for the bootstrap watchdog.
+  }
+}
 async function applyVerifiedUpdate(release) {
   if (!ENTRYPOINT || !release || release.version === WORKER_VERSION) return false;
   const bundle = Buffer.from(String(release.bundle ?? ""), "base64");
@@ -266,10 +296,19 @@ async function applyVerifiedUpdate(release) {
   const signature = Buffer.from(String(release.signature ?? ""), "base64");
   if (!signature.length || !verify(null, bundle, RELEASE_PUBLIC_KEY_PEM, signature)) throw new Error("Worker release signature verification failed.");
   const temp = `${ENTRYPOINT}.update-${process.pid}-${randomUUID()}`;
+  const backupPath = `${ENTRYPOINT}.previous`;
   await writeFile(temp, bundle, { mode: 0o700 });
+  const syntax = spawnSync(process.execPath, ["--check", temp], { stdio: "ignore" });
+  if (syntax.status !== 0) {
+    await unlink(temp).catch(() => undefined);
+    throw new Error("Worker release syntax validation failed; previous release retained.");
+  }
+  const current = await readFile(ENTRYPOINT);
+  await writeFile(backupPath, current, { mode: 0o700 });
   await rename(temp, ENTRYPOINT);
+  await writeFile(pendingReleasePath, JSON.stringify({ version: String(release.version), backupPath, attempts: 0, createdAt: Date.now() }) + "\n", { mode: 0o600 });
   matrix.state = "UPDATING";
-  matrix.lastAction = `verified release ${safeText(release.version, "unknown", 20)}; restarting`;
+  matrix.lastAction = `verified release ${safeText(release.version, "unknown", 20)}; restarting safely`;
   matrix.lastError = "none";
   renderMatrix(true);
   stopping = true;
@@ -285,7 +324,7 @@ async function checkForUpdate() {
   if (!AUTO_UPDATE_ENABLED || !ENTRYPOINT || !credentialState?.credential) return;
   try {
     const release = await control("/workload/release", { workerVersion: WORKER_VERSION }, credentialState.credential);
-    if (release.version && release.version !== WORKER_VERSION) await applyVerifiedUpdate(release);
+    if (release.updateAvailable !== false && release.version && release.version !== WORKER_VERSION) await applyVerifiedUpdate(release);
   } catch (error) {
     noteError(error, "update check failed; current release retained");
   }
@@ -521,6 +560,7 @@ async function heartbeat() {
   matrix.state = "ACTIVE";
   matrix.lastAction = `heartbeat; ${assignedSessions.size} assigned`;
   matrix.lastError = "none";
+  await finalizeVerifiedRelease();
   renderMatrix();
   return result;
 }
@@ -556,6 +596,7 @@ async function run() {
   await ensureStorageSecret();
   assertConfig();
   await mkdir(DATA_DIR, { recursive: true });
+  startPendingReleaseWatchdog();
   await register();
   if (AUTO_UPDATE_ENABLED) setTimeout(() => void checkForUpdate(), 8_000).unref?.();
   let nextHeartbeat = 0;

@@ -42,7 +42,7 @@ const packagePath = path.join(root, "package.json");
 const runtimePath = path.join(root, ".pappy-workload-runtime.mjs");
 const manifest = {
   name: "pappy-omega-mini-workload-worker",
-  version: "1.2.4",
+  version: "1.2.5",
   private: true,
   main: "index.js",
   engines: { node: ">=20" },
@@ -64,21 +64,24 @@ async function main() {
   delete merged.type;
   fs.writeFileSync(packagePath, JSON.stringify(merged, null, 2) + "\\n", { mode: 0o600 });
   if (!dependencyExists()) {
-    log("[STAGE 2/4] Required WhatsApp dependencies are not ready.", ansi.yellow);
-    startPulse("Installing Baileys 2.7.12 and the Pino logger");
-    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-    let install;
-    try {
-      install = await runInstall(npm, ["install", "--omit=dev", "--no-audit", "--no-fund", "--no-progress", "--loglevel=error"]);
-    } finally {
-      stopPulse();
+    for (;;) {
+      log("[STAGE 2/4] Required WhatsApp dependencies are not ready.", ansi.yellow);
+      startPulse("Installing Baileys 2.7.12 and the Pino logger");
+      const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+      let install;
+      try {
+        install = await runInstall(npm, ["install", "--omit=dev", "--no-audit", "--no-fund", "--no-progress", "--loglevel=error"]);
+      } finally {
+        stopPulse();
+      }
+      if (install.status !== 0) {
+        log("[RETRY] Dependency installation returned exit code " + install.status + ". The panel stays online; retrying in 10 seconds.", ansi.yellow);
+        await new Promise((resolve) => setTimeout(resolve, 10_000));
+        continue;
+      }
+      log("[OK] Dependencies installed successfully.", ansi.green);
+      break;
     }
-    if (install.status !== 0) {
-      log("[FAILED] Dependency installation stopped with exit code " + install.status + ".", ansi.red);
-      log("[NEXT] Keep this panel online, then run the same command again. Do not enter a name until installation completes.", ansi.yellow);
-      process.exit(install.status || 1);
-    }
-    log("[OK] Dependencies installed successfully.", ansi.green);
   } else {
     log("[STAGE 2/4] Dependencies already installed · skipping npm install.", ansi.green);
   }
@@ -90,19 +93,47 @@ async function main() {
   log("[OK] Runtime verification passed.", ansi.green);
   log("[STAGE 4/4] Launching the interactive PAPPY setup now…", ansi.cyan);
   fs.writeFileSync(runtimePath, runtimeSource, { mode: 0o600 });
-  const child = spawnSync(process.execPath, [runtimePath, "--worker-runtime", ...process.argv.slice(2)], { cwd: root, env: { ...process.env, PAPPY_WORKER_ENTRYPOINT: path.join(root, "index.js") }, stdio: "inherit" });
-  try { fs.unlinkSync(runtimePath); } catch {}
-  if (child.status === 75) {
-    const restarted = spawnSync(process.execPath, [path.join(root, "index.js"), ...process.argv.slice(2)], { cwd: root, env: process.env, stdio: "inherit" });
-    process.exit(restarted.status || 0);
+  const entrypoint = path.join(root, "index.js");
+  const args = process.argv.slice(2);
+  function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+  function pendingUpdate() {
+    try { return JSON.parse(fs.readFileSync(path.join(root, "pappy-workload-data", ".pappy-update-state.json"), "utf8")); } catch { return undefined; }
   }
-  process.exit(child.status || 0);
+  function rollbackPendingUpdate() {
+    const pending = pendingUpdate();
+    if (!pending?.backupPath || !fs.existsSync(pending.backupPath)) return false;
+    fs.copyFileSync(pending.backupPath, entrypoint);
+    try { fs.unlinkSync(pending.backupPath); } catch {}
+    try { fs.unlinkSync(path.join(root, "pappy-workload-data", ".pappy-update-state.json")); } catch {}
+    log("[ROLLBACK] The new release did not become healthy. Previous index.js restored; sessions and auth data were preserved.", ansi.yellow);
+    return true;
+  }
+  let crashCount = 0;
+  for (;;) {
+    const child = spawnSync(process.execPath, [runtimePath, "--worker-runtime", ...args], { cwd: root, env: { ...process.env, PAPPY_WORKER_ENTRYPOINT: entrypoint }, stdio: "inherit" });
+    try { fs.unlinkSync(runtimePath); } catch {}
+    if (child.status === 75) {
+      const restarted = spawnSync(process.execPath, [entrypoint, ...args], { cwd: root, env: process.env, stdio: "inherit" });
+      if (restarted.status === 0) process.exit(0);
+      if (rollbackPendingUpdate()) { crashCount = 0; continue; }
+      log("[RESTART] Updated worker exited before readiness; retrying in 5 seconds.", ansi.yellow);
+      await sleep(5_000);
+      continue;
+    }
+    if (child.status === 0) process.exit(0);
+    if (rollbackPendingUpdate()) { crashCount = 0; continue; }
+    crashCount += 1;
+    const delay = Math.min(30_000, 2_000 * 2 ** Math.min(crashCount - 1, 4));
+    log("[RESTART] Worker stopped unexpectedly. Panel remains online; restarting in " + Math.ceil(delay / 1000) + " seconds.", ansi.yellow);
+    await sleep(delay);
+  }
 }
-main().catch((error) => {
+main().catch(async (error) => {
   stopPulse();
-  log("[FAILED] Panel bootstrap stopped: " + (error instanceof Error ? error.message : String(error)), ansi.red);
-  log("[NEXT] Confirm the panel is online and run the same command again.", ansi.yellow);
-  process.exitCode = 1;
+  log("[RETRY] Panel bootstrap encountered a recoverable error: " + (error instanceof Error ? error.message : String(error)), ansi.yellow);
+  log("[RETRY] The panel process remains alive and will retry setup in 10 seconds.", ansi.yellow);
+  await new Promise((resolve) => setTimeout(resolve, 10_000));
+  process.exitCode = 75;
 });
 `;
 const sourceForMinify = bootstrap.replace(/^#![^\n]*\n/, "");

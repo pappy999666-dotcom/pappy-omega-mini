@@ -118,7 +118,13 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     }
     if (path === "/workload/release") {
       await authenticateWorkloadWorker(credential);
-      await body(request).catch(() => ({} as Record<string, unknown>));
+      const input = await body(request).catch(() => ({} as Record<string, unknown>));
+      const currentVersion = typeof input.workerVersion === "string" ? input.workerVersion.trim() : "";
+      const updateAvailable = currentVersion !== env.WORKLOAD_RELEASE_VERSION;
+      if (!updateAvailable) {
+        json(response, 200, { ok: true, version: env.WORKLOAD_RELEASE_VERSION, updateAvailable: false });
+        return;
+      }
       const bundle = await readFile(resolve(env.WORKLOAD_RELEASE_PATH));
       const privateKey = await readFile(resolve(env.WORKLOAD_RELEASE_PRIVATE_KEY_PATH), "utf8");
       const sha256 = createHash("sha256").update(bundle).digest("hex");
@@ -126,6 +132,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       json(response, 200, {
         ok: true,
         version: env.WORKLOAD_RELEASE_VERSION,
+        updateAvailable: true,
         sha256,
         signature,
         bundle: bundle.toString("base64"),

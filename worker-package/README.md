@@ -43,11 +43,11 @@ The workload code is workspace-scoped, permanently reserved, and cannot be reuse
 
 ## Signed automatic updates
 
-The worker checks the control plane shortly after startup and periodically thereafter. A release is accepted only when its SHA-256 hash and Ed25519 signature verify against the public key embedded in this file’s release build. The worker writes the new `index.js` atomically, flushes encrypted session state, and restarts through the panel’s existing process supervisor. WhatsApp auth files, the worker credential, and assignment state remain in `pappy-workload-data`.
+The worker checks the control plane shortly after startup and every 30 seconds thereafter. When a newer release is published, the panel fetches it from PAPPY automatically. A release is accepted only when its SHA-256 hash, Ed25519 signature, and Node.js syntax verify against the public key embedded in this file’s release build. The worker flushes encrypted session state, saves a protected previous `index.js`, replaces the file atomically, and restarts through the panel’s existing process supervisor. After restart, the new release must report a healthy heartbeat within two minutes; otherwise the supervisor restores the previous `index.js` automatically. WhatsApp auth files, the worker credential, assignment state, and `pappy-workload-data` remain untouched.
 
 Updates are disabled with `PAPPY_WORKLOAD_AUTO_UPDATE=false` when a panel operator needs a maintenance freeze. No MongoDB URI, Redis URI, Telegram token, Telegram pairing code after registration, or release private key is delivered to the panel.
 
-The downloadable `index.js` is generated in a minified/mangled release form so it can be further protected by the panel operator’s approved obfuscation pipeline. The third-party Baileys dependency itself is not modified or repackaged; its license and attribution requirements remain unchanged.
+The downloadable `index.js` is generated in a minified/mangled release form so it can be further protected by the panel operator’s approved obfuscation pipeline. The third-party Baileys dependency itself is not modified or repackaged; its license and attribution requirements remain unchanged. If the control plane is temporarily unreachable, the current release continues running; it is not replaced and the panel does not shut down because an update check failed.
 
 Never add Telegram, MongoDB, Redis, owner, or admin credentials to this file or panel directory.
 
@@ -68,7 +68,7 @@ The worker prints a compact ASCII matrix instead of a raw or garbled event strea
 +--------------------------------------------------------+
 ```
 
-`ACTIVE` means the worker is registered and sending heartbeats. `DEGRADED` means the worker has reported a recoverable transport or control error; the matrix now prints a readable wrapped detail and a beginner-facing next step. Dependency installation and the interactive question are intentionally separated so a name cannot be typed into an unfinished npm process. The logger uses clean ANSI cyber-console colors when the panel supports color and automatically falls back to readable plain text when it does not. The matrix never prints enrollment tokens, worker credentials, Telegram tokens, MongoDB URLs, Redis URLs, message payloads, or another user’s data.
+`ACTIVE` means the worker is registered and sending heartbeats. `DEGRADED` means the worker has reported a recoverable transport or control error; the matrix now prints a readable wrapped detail and a beginner-facing next step. During an update, the matrix shows `UPDATING`, then `ACTIVE` when the new release is healthy, or `ROLLBACK` when the previous release is restored. Dependency installation and the interactive question are intentionally separated so a pairing code cannot be typed into an unfinished npm process. The logger uses clean ANSI cyber-console colors when the panel supports color and automatically falls back to readable plain text when it does not. The matrix never prints pairing codes, worker credentials, Telegram tokens, MongoDB URLs, Redis URLs, message payloads, or another user’s data.
 
 ## If setup stops with `fatal startup error`
 
