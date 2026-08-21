@@ -212,15 +212,30 @@ function assertConfig() {
   if (!CONTROL_URL.startsWith("https://")) throw new Error("The workload control URL must use HTTPS.");
 }
 async function control(path, payload, credential) {
-  const response = await fetch(`${CONTROL_URL}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...(credential ? { authorization: `Bearer ${credential}` } : {}) },
-    body: JSON.stringify(payload ?? {}),
-    signal: AbortSignal.timeout(35_000),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.ok === false) throw new Error(data.error ?? `Control request failed (${response.status}).`);
-  return data;
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch(`${CONTROL_URL}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(credential ? { authorization: `Bearer ${credential}` } : {}) },
+        body: JSON.stringify(payload ?? {}),
+        signal: AbortSignal.timeout(35_000),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.ok !== false) return data;
+      const message = data.error ?? `Control request failed (${response.status}).`;
+      const retryable = [429, 502, 503, 504].includes(response.status);
+      if (!retryable || attempt >= 2) throw new Error(message);
+      await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 300 : 1_000));
+      lastError = new Error(message);
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (/413|too large|not.?authori[sz]ed|authentication|expired|revoked/i.test(message) || attempt >= 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 300 : 1_000));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 class FileAuthStore {
