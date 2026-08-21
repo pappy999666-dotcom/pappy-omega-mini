@@ -600,19 +600,62 @@ async function openWhatsAppSession(
               return;
             }
             const mediaReply = reply as WhatsAppReply;
-            if (mediaReply.media) {
-              void sendTrackedMessage(jid, {
-                [mediaReply.media.kind]: mediaReply.media.bytes,
-                caption: mediaReply.caption ?? "",
-                mimetype: mediaReply.media.mimeType,
-                ...(mediaReply.media.kind === "video" ? { fileName: mediaReply.media.fileName } : {}),
-                ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
-              });
-            } else if (mediaReply.text || mediaReply.nativeFlow) {
-              void sendTrackedMessage(jid, {
-                ...(mediaReply.text ? { text: mediaReply.text } : {}),
-                ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
-              });
+            const deliverObjectReply = async (): Promise<void> => {
+              const content = mediaReply.media
+                ? {
+                    [mediaReply.media.kind]: mediaReply.media.bytes,
+                    caption: mediaReply.caption ?? "",
+                    mimetype: mediaReply.media.mimeType,
+                    ...(mediaReply.media.kind === "video" ? { fileName: mediaReply.media.fileName } : {}),
+                    ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
+                  }
+                : {
+                    ...(mediaReply.text ? { text: mediaReply.text } : {}),
+                    ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
+                  };
+              try {
+                await sendTrackedMessage(jid, content);
+              } catch (error) {
+                const reason = error instanceof Error ? error.message : String(error);
+                if (!mediaReply.nativeFlow) throw error;
+                // nativeFlow is an optional enhancement; a rejected extension must never suppress the command reply.
+                const { nativeFlow: _nativeFlow, ...plainContent } = content;
+                await sendTrackedMessage(jid, plainContent).catch((fallbackError) => {
+                  throw new Error(`${reason}; plain-text fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
+                });
+              }
+            };
+            if (mediaReply.media || mediaReply.text || mediaReply.nativeFlow) {
+              void deliverObjectReply()
+                .then(() =>
+                  saveWhatsAppMessageTrace({
+                    traceId: randomUUID(),
+                    workspaceId,
+                    sessionId,
+                    ...(messageKey.id ? { messageId: messageKey.id } : {}),
+                    direction: "outbound",
+                    remoteJid: jid,
+                    normalizedText: mediaReply.text ?? mediaReply.caption ?? "",
+                    handler: "routeWhatsAppText",
+                    outcome: "replied",
+                    timestamp: Date.now(),
+                  }).catch(() => undefined),
+                )
+                .catch((error) =>
+                  saveWhatsAppMessageTrace({
+                    traceId: randomUUID(),
+                    workspaceId,
+                    sessionId,
+                    ...(messageKey.id ? { messageId: messageKey.id } : {}),
+                    direction: "outbound",
+                    remoteJid: jid,
+                    normalizedText: mediaReply.text ?? mediaReply.caption ?? "",
+                    handler: "routeWhatsAppText",
+                    outcome: "failed",
+                    failureReason: error instanceof Error ? error.message : String(error),
+                    timestamp: Date.now(),
+                  }).catch(() => undefined),
+                );
             }
           })
           .catch((error) => {
