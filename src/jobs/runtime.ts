@@ -993,19 +993,7 @@ export function startWorkerRuntime(): JobOrchestrator {
       const autoPromoteRunId = typeof (context.job.payload as { autoPromoteRunId?: unknown }).autoPromoteRunId === "string"
         ? (context.job.payload as { autoPromoteRunId: string }).autoPromoteRunId
         : undefined;
-      const sessionLock = await acquireSessionOperationLock(
-        context.job.workspaceId,
-        sessionId,
-      );
-      if (!sessionLock) {
-        await context.report({
-          currentAction: "waiting for session operation lock",
-          lastResult: "Another broadcast is using this WhatsApp session; retry scheduled without occupying a worker.",
-        });
-        throw new Error("Broadcast session operation busy; retry scheduled.");
-      }
-      try {
-        return await runBoundedBatch({
+      return await runBoundedBatch({
         items: deliveries,
         concurrency: 1,
         context,
@@ -1040,6 +1028,28 @@ export function startWorkerRuntime(): JobOrchestrator {
               });
             }
           }
+          let sessionLock: SessionLock | undefined;
+          const lockDeadline = Date.now() + 15_000;
+          while (!sessionLock && Date.now() < lockDeadline) {
+            if (signal.aborted) return { status: "skipped" as const };
+            sessionLock = await acquireSessionOperationLock(
+              context.job.workspaceId,
+              sessionId,
+            );
+            if (!sessionLock) {
+              await context.report({
+                currentGroup: jid,
+                currentAction: "waiting for session operation lock",
+                lastResult: "Another operation is using this WhatsApp session; retrying this group without blocking other jobs.",
+              });
+              await waitWithHeartbeat(context, 500, {
+                currentGroup: jid,
+                currentAction: "waiting for session operation lock",
+              });
+            }
+          }
+          if (!sessionLock)
+            throw new Error("Broadcast session operation busy; retry scheduled.");
           lastPostAt = Date.now();
           try {
             const delivery =
@@ -1111,12 +1121,11 @@ export function startWorkerRuntime(): JobOrchestrator {
                 ),
             });
             return { status: "failed" as const };
+          } finally {
+            await sessionLock.release();
           }
         },
         });
-      } finally {
-        await sessionLock.release();
-      }
     });
   }
 

@@ -18,6 +18,7 @@ import type {
 import { JoinResultStore } from "./join-result-store.js";
 
 const QUEUE_NAME = "pappy-omega-mini-jobs";
+const BROADCAST_QUEUE_NAME = "pappy-omega-mini-broadcasts";
 const STORE_PREFIX = "pappy-omega-mini:job:";
 const CODE_PREFIX = "pappy-omega-mini:job-code:";
 const STALE_ACTIVE_JOB_GRACE_MS = 60_000;
@@ -120,8 +121,10 @@ export class JobOrchestrator {
   private readonly redis: Redis;
   private readonly store: RedisJobStore;
   private readonly queue: Queue<JobRecord>;
+  private readonly broadcastQueue: Queue<JobRecord>;
   private readonly handlers = new Map<JobKind, WorkerHandler>();
   private readonly worker: Worker<JobRecord>;
+  private readonly broadcastWorker: Worker<JobRecord>;
   private readonly joinResults: JoinResultStore;
   private readonly closeHooks: Array<() => Promise<void> | void> = [];
   private readonly completionHooks: Array<(job: JobRecord) => Promise<void> | void> = [];
@@ -136,23 +139,39 @@ export class JobOrchestrator {
     });
     this.store = new RedisJobStore(this.redis);
     this.joinResults = new JoinResultStore(this.redis);
+    const defaultJobOptions = { removeOnComplete: false, removeOnFail: false };
     this.queue = new Queue<JobRecord>(QUEUE_NAME, {
       connection: this.redis,
-      defaultJobOptions: { removeOnComplete: false, removeOnFail: false },
+      defaultJobOptions,
     });
+    this.broadcastQueue = new Queue<JobRecord>(BROADCAST_QUEUE_NAME, {
+      connection: this.redis,
+      defaultJobOptions,
+    });
+    const workerOptions = {
+      connection: this.redis,
+      lockDuration: WORKER_LOCK_DURATION_MS,
+      lockRenewTime: WORKER_LOCK_RENEW_MS,
+      stalledInterval: WORKER_STALLED_INTERVAL_MS,
+      maxStalledCount: 3,
+    } as const;
     this.worker = new Worker<JobRecord>(
       QUEUE_NAME,
       async (job) => this.process(job),
       {
-        connection: this.redis,
+        ...workerOptions,
         concurrency: Math.max(1, Math.min(concurrency, 32)),
-        lockDuration: WORKER_LOCK_DURATION_MS,
-        lockRenewTime: WORKER_LOCK_RENEW_MS,
-        stalledInterval: WORKER_STALLED_INTERVAL_MS,
-        maxStalledCount: 3,
       },
     );
-    this.worker.on("failed", (job, error) => {
+    this.broadcastWorker = new Worker<JobRecord>(
+      BROADCAST_QUEUE_NAME,
+      async (job) => this.process(job),
+      {
+        ...workerOptions,
+        concurrency: Math.max(1, Math.min(env.BROADCAST_CONCURRENCY, 8)),
+      },
+    );
+    const handleFailed = (job: BullJob<JobRecord> | undefined, error: Error): void => {
       if (!job) return;
       void (async () => {
         const retrying = job.attemptsMade + 1 < job.data.maxAttempts;
@@ -164,7 +183,9 @@ export class JobOrchestrator {
         });
         if (!retrying) await this.emitCompletionHooks(job.data.jobId);
       })().catch(() => undefined);
-    });
+    };
+    this.worker.on("failed", handleFailed);
+    this.broadcastWorker.on("failed", handleFailed);
     this.reaperTimer = setInterval(() => {
       void this.reapStaleJobs();
     }, 30_000);
@@ -180,6 +201,24 @@ export class JobOrchestrator {
     return this.ownsSession(record.sessionId);
   }
 
+  private queueForKind(kind: JobKind): Queue<JobRecord> {
+    return isBroadcastKind(kind) ? this.broadcastQueue : this.queue;
+  }
+
+  private allQueues(): Queue<JobRecord>[] {
+    return [this.queue, this.broadcastQueue];
+  }
+
+  private async findBullJob(record: JobRecord): Promise<BullJob<JobRecord> | undefined> {
+    const preferred = this.queueForKind(record.kind);
+    const queues = [preferred, ...this.allQueues().filter((queue) => queue !== preferred)];
+    for (const queue of queues) {
+      const job = await queue.getJob(record.jobId);
+      if (job) return job;
+    }
+    return undefined;
+  }
+
   async recoverStaleJobsNow(): Promise<void> {
     await this.recoverOutstandingJobs(true);
     await this.reapStaleJobs();
@@ -187,12 +226,13 @@ export class JobOrchestrator {
 
   private async recoverOutstandingJobs(forceRunningRecovery: boolean): Promise<void> {
     const now = Date.now();
-    const recoveryJobs = await this.queue.getJobs(
-      ["active", "waiting", "delayed"],
-      0,
-      2000,
-      true,
-    );
+    const recoveryJobs = (
+      await Promise.all(
+        this.allQueues().map((queue) =>
+          queue.getJobs(["active", "waiting", "delayed"], 0, 2000, true),
+        ),
+      )
+    ).flat();
     const recoveryParents = new Set(
       recoveryJobs
         .map((job) => String(job.id))
@@ -203,7 +243,7 @@ export class JobOrchestrator {
       if (!this.ownsRecord(record)) continue;
       if (!["QUEUED", "RUNNING", "RETRYING", "FAILED"].includes(record.state)) continue;
       if (record.cancellationRequested) continue;
-      const bullJob = await this.queue.getJob(record.jobId);
+      const bullJob = await this.findBullJob(record);
       const heartbeatAge = now - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
       const bullWaiting = bullJob ? await bullJob.isWaiting() : false;
       const bullActive = bullJob ? await bullJob.isActive() : false;
@@ -230,7 +270,7 @@ export class JobOrchestrator {
         error: "Worker restart recovery scheduled.",
         heartbeatAt: now,
       });
-      await this.queue.add(
+      await this.queueForKind(record.kind).add(
         `${record.kind}:startup-recovery`,
         { ...record, state: "QUEUED", attempts: Math.min(record.maxAttempts, record.attempts + 1) },
         {
@@ -297,7 +337,7 @@ export class JobOrchestrator {
       "NX",
     );
     const immediatePosting = isImmediatePostingKind(input.kind);
-    await this.queue.add(input.kind, record, {
+    await this.queueForKind(input.kind).add(input.kind, record, {
       jobId: record.jobId,
       attempts: record.maxAttempts,
       backoff: { type: "exponential", delay: 1000 },
@@ -368,7 +408,7 @@ export class JobOrchestrator {
       error: reason,
       heartbeatAt: now,
     });
-    await this.queue.add(
+    await this.queueForKind(record.kind).add(
       `${record.kind}:inceptor-recovery`,
       { ...record, state: "QUEUED", attempts: Math.min(record.maxAttempts, record.attempts + 1) },
       {
@@ -387,7 +427,7 @@ export class JobOrchestrator {
     this.forcedCancellation.add(jobId);
     if (!["COMPLETED", "FAILED", "CANCELLED", "PARTIAL"].includes(record.state))
       await this.cancel(jobId).catch(() => undefined);
-    const bullJob = await this.queue.getJob(jobId);
+    const bullJob = await this.findBullJob(record);
     if (bullJob && !(await bullJob.isActive()))
       await bullJob.remove().catch(() => undefined);
     await this.redis.del(
@@ -444,7 +484,7 @@ export class JobOrchestrator {
         .map((record) => this.cancel(record.jobId).catch(() => undefined)),
     );
     await new Promise((resolve) => setTimeout(resolve, 1_500));
-    await this.queue.obliterate({ force: true }).catch(() => undefined);
+    await Promise.all(this.allQueues().map((queue) => queue.obliterate({ force: true }).catch(() => undefined)));
     const patterns = [
       `${STORE_PREFIX}*`,
       `${CODE_PREFIX}*`,
@@ -549,8 +589,8 @@ export class JobOrchestrator {
 
   async close(): Promise<void> {
     clearInterval(this.reaperTimer);
-    await this.worker.close();
-    await this.queue.close();
+    await Promise.all([this.worker.close(), this.broadcastWorker.close()]);
+    await Promise.all(this.allQueues().map((queue) => queue.close()));
     for (const hook of this.closeHooks) await hook();
     await this.redis.quit();
   }
@@ -642,12 +682,13 @@ export class JobOrchestrator {
     this.reaperBusy = true;
     try {
       const cutoff = Date.now() - 2 * 60_000;
-      const recoveryJobs = await this.queue.getJobs(
-        ["active", "waiting", "delayed"],
-        0,
-        2000,
-        true,
-      );
+      const recoveryJobs = (
+        await Promise.all(
+          this.allQueues().map((queue) =>
+            queue.getJobs(["active", "waiting", "delayed"], 0, 2000, true),
+          ),
+        )
+      ).flat();
       const recoveryParents = new Set(
         recoveryJobs
           .map((job) => String(job.id))
@@ -666,7 +707,7 @@ export class JobOrchestrator {
           (record.heartbeatAt ?? record.startedAt ?? record.createdAt) > cutoff
         )
           continue;
-        const bullJob = await this.queue.getJob(record.jobId);
+        const bullJob = await this.findBullJob(record);
         const staleActive =
           record.state === "RUNNING" && heartbeatAge > STALE_ACTIVE_JOB_GRACE_MS;
         if (bullJob && (await bullJob.isActive()) && !staleActive) continue;
@@ -684,7 +725,7 @@ export class JobOrchestrator {
             error: "Worker heartbeat expired; job recovery scheduled.",
             heartbeatAt: Date.now(),
           });
-          await this.queue.add(
+          await this.queueForKind(record.kind).add(
             `${record.kind}:recovery`,
             { ...record, state: "QUEUED", attempts: Math.min(record.maxAttempts, record.attempts + 1) },
             {
@@ -711,8 +752,12 @@ export class JobOrchestrator {
   }
 }
 
+function isBroadcastKind(kind: JobKind): boolean {
+  return kind === "allstatus" || kind === "allchat";
+}
+
 function isImmediatePostingKind(kind: JobKind): boolean {
-  return kind === "allstatus" || kind === "allchat" || kind === "gstatus" || kind === "tag";
+  return isBroadcastKind(kind) || kind === "gstatus" || kind === "tag";
 }
 
 function isRetryableBroadcastFailure(
