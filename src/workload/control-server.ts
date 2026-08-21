@@ -119,7 +119,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         assignedSessionIds: stringListField(input, "assignedSessionIds"),
         ...(typeof input.lastError === "string" && input.lastError.trim() ? { lastError: input.lastError.trim() } : {}),
       });
-      json(response, 200, { ok: true, workerId: worker.workerId, status: worker.status, assignedSessionIds: worker.assignedSessionIds });
+      json(response, 200, { ok: true, workerId: worker.workerId, workspaceId: worker.workspaceId, status: worker.status, assignedSessionIds: worker.assignedSessionIds });
       return;
     }
     if (path === "/workload/session-status") {

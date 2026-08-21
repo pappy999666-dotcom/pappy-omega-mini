@@ -383,6 +383,19 @@ async function heartbeat() {
     status: "ACTIVE",
     assignedSessionIds: [...assignedSessions],
   }, credentialState.credential);
+  const restoredSessionIds = Array.isArray(result.assignedSessionIds)
+    ? result.assignedSessionIds.filter((value) => typeof value === "string")
+    : [];
+  for (const sessionId of restoredSessionIds) assignedSessions.add(sessionId);
+  if (typeof result.workspaceId === "string" && result.workspaceId) credentialState.workspaceId = result.workspaceId;
+  await saveState(credentialState);
+  if (credentialState.workspaceId) {
+    for (const sessionId of restoredSessionIds) {
+      if (!runtimes.has(sessionId) && !intentionallyStopped.has(sessionId)) {
+        void startSession(credentialState.workspaceId, sessionId, false).catch((error) => noteError(error, `startup recovery failed for ${sessionId}`));
+      }
+    }
+  }
   matrix.lastHeartbeatAt = Date.now();
   matrix.lastControlAt = matrix.lastHeartbeatAt;
   matrix.state = "ACTIVE";
