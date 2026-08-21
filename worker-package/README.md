@@ -12,14 +12,22 @@ In Telegram, open **PAPPY OMEGA-MINI → Workload → Create Panel Code** and co
 node index.js --enrollment ONE_TIME_TOKEN
 ```
 
-The first run has two clear stages. First, the bootstrap installs the exact `@crysnovax/baileys` 2.7.12 and `pino` dependencies. Any npm output before the green readiness message belongs to installation; do not type a panel name while that stage is running. Wait until the console prints:
+The first run has four visible stages. The panel prints a progress line for every stage, and a long installation step prints a heartbeat every five seconds so nobody mistakes it for a freeze. Any npm output before the green readiness message belongs to installation; do not type a panel name while that stage is running. A normal first start looks like this:
 
 ```text
+[PAPPY PANEL] Boot sequence started · Node.js v22.x
+[STAGE 1/4] Reading panel folder and preparing private worker files…
+[STAGE 2/4] Required WhatsApp dependencies are not ready.
+[PROCESSING] Installing Baileys 2.7.12 and the Pino logger · started · please do not type yet
+[PROCESSING] Installing Baileys 2.7.12 and the Pino logger · still working · 5s elapsed · panel is not frozen
+[PROCESSING] Installing Baileys 2.7.12 and the Pino logger · still working · 10s elapsed · panel is not frozen
 [OK] Dependencies installed successfully.
-[2/2] Starting the interactive panel setup question now…
+[STAGE 3/4] Verifying the installed runtime before asking questions…
+[OK] Runtime verification passed.
+[STAGE 4/4] Launching the interactive PAPPY setup now…
 ```
 
-Only after that message will it ask:
+If dependencies are already present, the panel says `[STAGE 2/4] Dependencies already installed · skipping npm install.` and moves on. Only after Stage 4 will it ask:
 
 ```text
 [PAPPY SETUP · STEP 1/2] Choose a short name for this panel.
@@ -74,4 +82,4 @@ The worker prints a compact ASCII matrix instead of a raw or garbled event strea
 
 ## If setup stops with `fatal startup error`
 
-Do not type a panel name into an npm installation screen. Wait for `[OK] Dependencies installed successfully.` and `[2/2] Starting the interactive panel setup question now…`. If the worker says that an enrollment token is missing or expired, return to Telegram, create a new one-time setup command, copy the complete command beginning with `node index.js --enrollment`, and run it again in the panel folder. If the name is rejected, answer with letters, numbers, or hyphens such as `pappy` and never use only `.`.
+Do not type a panel name into an npm installation screen. Wait for `[OK] Dependencies installed successfully.`, `[OK] Runtime verification passed.`, and `[STAGE 4/4] Launching the interactive PAPPY setup now…`. The yellow `[PROCESSING] … still working … Ns elapsed` line means the panel is actively installing and is not frozen. If the worker says that an enrollment token is missing or expired, return to Telegram, create a new one-time setup command, copy the complete command beginning with `node index.js --enrollment`, and run it again in the panel folder. If the name is rejected, answer with letters, numbers, or hyphens such as `pappy` and never use only `.`.
