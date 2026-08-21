@@ -5,6 +5,7 @@ import type { WorkloadBroadcastIntent } from "../src/workload/types.js";
 const workerSourcePath = new URL("../tools/worker-runtime-source.mjs", import.meta.url);
 const messageRouterPath = new URL("../src/whatsapp/message-router.ts", import.meta.url);
 const remoteBridgePath = new URL("../src/whatsapp/remote-bridge.ts", import.meta.url);
+const workloadTransportPath = new URL("../src/whatsapp/workload-transport.ts", import.meta.url);
 
 
 function makeIntent(): WorkloadBroadcastIntent {
@@ -44,14 +45,19 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("isScopedInviteValidationFailure");
     expect(source).toContain("invite validation deferred");
     expect(source).toContain("growth[- ]locked");
+    expect(source).toContain('method === "previewUpload"');
+    expect(source).toContain("Preview thumbnail upload exceeds the 8 MiB safety limit.");
   });
 
   it("keeps external panel sessions out of the internal bridge bypass", async () => {
     const router = await readFile(messageRouterPath, "utf8");
     const bridge = await readFile(remoteBridgePath, "utf8");
+    const workloadTransport = await readFile(workloadTransportPath, "utf8");
     expect(router).toContain("shouldProxyWhatsAppSession(message.workspaceId, message.sessionId)");
     expect(bridge).toContain("getSession(workspaceId, sessionId).workloadWorkerId");
     expect(bridge).toContain("return !Boolean(getSession(workspaceId, sessionId).workloadWorkerId)");
+    expect(workloadTransport).toContain("remotePreviewUpload");
+    expect(workloadTransport).toContain('"previewUpload"');
   });
 
   it("keeps Validator Hub cooldown and permanent-failure rules in the control plane", async () => {

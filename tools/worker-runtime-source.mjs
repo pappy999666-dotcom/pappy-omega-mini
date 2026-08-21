@@ -637,6 +637,22 @@ async function executeTransport(runtime, method, encodedArgs) {
     groupSummaryInflight.set(cacheKey, request);
     return request;
   }
+  if (method === "previewUpload") {
+    const [encodedBytes, options] = args;
+    if (!Buffer.isBuffer(encodedBytes)) throw new Error("Preview upload requires encoded thumbnail bytes.");
+    if (encodedBytes.byteLength > 8 * 1024 * 1024) throw new Error("Preview thumbnail upload exceeds the 8 MiB safety limit.");
+    const previewDir = join(DATA_DIR, "preview-uploads");
+    const filePath = join(previewDir, `${randomUUID()}.enc`);
+    await mkdir(previewDir, { recursive: true });
+    await writeFile(filePath, encodedBytes, { mode: 0o600 });
+    try {
+      const upload = runtime.socket.waUploadToServer;
+      if (typeof upload !== "function") throw new Error("Transport method is unavailable: waUploadToServer");
+      return await upload.call(runtime.socket, filePath, options);
+    } finally {
+      await rm(filePath, { force: true }).catch(() => undefined);
+    }
+  }
   const fn = runtime.socket[method];
   if (typeof fn !== "function") throw new Error(`Transport method is unavailable: ${method}`);
   if (method === "groupGetInviteInfo") {

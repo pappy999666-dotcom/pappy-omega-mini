@@ -1,4 +1,5 @@
 import type { WASocket } from "@crysnovax/baileys";
+import { readFile } from "node:fs/promises";
 import { getSession } from "../core/session-registry.js";
 import { queueWorkloadCommand, waitForWorkloadCommand } from "../workload/service.js";
 
@@ -39,6 +40,15 @@ function remoteMethod(workspaceId: string, sessionId: string, method: string) {
   return async (...args: unknown[]) => callAssignedWorkloadTransport(workspaceId, sessionId, method, args);
 }
 
+function remotePreviewUpload(workspaceId: string, sessionId: string) {
+  return async (filePath: string, options: unknown): Promise<unknown> => {
+    const bytes = await readFile(filePath);
+    if (bytes.byteLength > 8 * 1024 * 1024)
+      throw new Error("Preview thumbnail upload exceeds the 8 MiB safety limit.");
+    return callAssignedWorkloadTransport(workspaceId, sessionId, "previewUpload", [bytes, options]);
+  };
+}
+
 export function isPanelAssignedSession(workspaceId: string, sessionId: string): boolean {
   return Boolean(getSession(workspaceId, sessionId).workloadWorkerId);
 }
@@ -71,6 +81,7 @@ export function createAssignedWorkloadSocket(
     user: { id: "me" },
     ev: { on: () => undefined },
     __pappyAssignedWorkload: true,
+    waUploadToServer: remotePreviewUpload(workspaceId, sessionId),
   };
   for (const method of methods) target[method] = remoteMethod(workspaceId, sessionId, method);
   return new Proxy(target, {
