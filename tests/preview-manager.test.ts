@@ -79,6 +79,27 @@ describe("canonical Baileys-native preview pipeline", () => {
     }
   });
 
+  it("negative-caches failed group invite metadata", async () => {
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => new Response(null, { status: 503 })) as typeof fetch;
+    try {
+      const socket = {
+        groupGetInviteInfo: async () => {
+          calls += 1;
+          throw new Error("growth-locked");
+        },
+      };
+      const text = "https://chat.whatsapp.com/NEGATIVE_CACHE_TEST";
+      const cacheScope = `negative-cache-${Date.now()}`;
+      await prepareCanonicalPreviewContent({ text, content: { text }, socket, cacheScope });
+      await prepareCanonicalPreviewContent({ text, content: { text }, socket, cacheScope });
+      expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("accepts only WhatsApp group invite URLs for Validator Hub", async () => {
     expect(isWhatsAppGroupInviteUrl("https://chat.whatsapp.com/ABC123")).toBe(
       true,

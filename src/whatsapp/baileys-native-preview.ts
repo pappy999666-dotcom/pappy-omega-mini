@@ -599,13 +599,13 @@ async function resolveCached(
   const canonicalUrl = canonicalizePreviewUrl(url);
   const key = cacheKey(scope, canonicalUrl);
   const local = localPreviewCache.get(key);
-  if (local && local.expiresAt > Date.now() && (local.imageData || !groupInviteCode(canonicalUrl))) {
+  if (local && local.expiresAt > Date.now()) {
     rememberLocalPreview(key, local);
     return { record: local, cache: "HIT" };
   }
   if (local) localPreviewCache.delete(key);
   const cached = await readCached(key);
-  if (cached && (cached.imageData || !groupInviteCode(canonicalUrl))) {
+  if (cached) {
     rememberLocalPreview(key, cached);
     return { record: cached, cache: "HIT" };
   }
@@ -617,11 +617,15 @@ async function resolveCached(
   });
   inFlight.set(runningKey, promise);
   const record = await promise;
-  if (record) {
-    rememberLocalPreview(key, record);
-    await writeCached(key, record);
-  }
-  return { record, cache: "MISS" };
+  const cachedRecord: CanonicalPreviewRecord = record ?? {
+    schemaVersion: 4,
+    canonicalUrl,
+    fetchedAt: Date.now(),
+    expiresAt: Date.now() + PREVIEW_FAILURE_TTL_SECONDS * 1000,
+  };
+  rememberLocalPreview(key, cachedRecord);
+  await writeCached(key, cachedRecord);
+  return { record: cachedRecord, cache: "MISS" };
 }
 
 function readText(content: Record<string, unknown>): string | undefined {
