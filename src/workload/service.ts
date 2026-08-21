@@ -17,6 +17,7 @@ import {
   getWorkloadCommand,
   listWorkloadAssignments,
   listWorkloadWorkers,
+  listWorkloadEvents,
   leaseWorkloadCommands,
   requeueStaleWorkloadCommands,
   completeWorkloadCommand as persistWorkloadCommandCompletion,
@@ -47,6 +48,7 @@ import type {
   WorkloadRegistrationRequest,
   WorkloadRegistrationResponse,
   WorkloadWorkerRecord,
+  WorkloadEventRecord,
 } from "./types.js";
 
 export interface WorkloadEnrollmentResult {
@@ -282,6 +284,47 @@ export async function recordWorkloadSessionStatus(
   await appendWorkloadEvent({ workspaceId: input.workspaceId, workerId, sessionId: input.sessionId, kind: "worker.status", metadata: { status: input.status, authHealth: input.authHealth } });
 }
 
+export interface WorkloadLoggerSnapshot {
+  worker: WorkloadWorkerRecord;
+  connectionCount: number;
+  timeoutCount: number;
+  errorCount: number;
+  lastConnectedAt?: number;
+  lastTimeoutAt?: number;
+  events: Array<{ at: number; state: string; detail?: string | undefined }>;
+}
+
+export async function getWorkloadLoggerSnapshot(
+  workspaceId: string,
+  workerId: string,
+): Promise<WorkloadLoggerSnapshot> {
+  const worker = await getWorkloadWorker(workerId);
+  if (!worker || worker.workspaceId !== workspaceId) throw new Error("Workload worker not found.");
+  const records = (await listWorkloadEvents(workspaceId, 300))
+    .filter((event) => event.workerId === workerId);
+  const statusEvents = records.filter((event) => event.kind === "worker.status");
+  const status = (event: WorkloadEventRecord): string => {
+    const value = event.metadata && typeof event.metadata === "object" ? (event.metadata as Record<string, unknown>).status : undefined;
+    return typeof value === "string" ? value : event.kind;
+  };
+  const reason = (event: WorkloadEventRecord): string | undefined => {
+    const value = event.metadata && typeof event.metadata === "object" ? (event.metadata as Record<string, unknown>).reason : undefined;
+    return typeof value === "string" ? value.slice(0, 180) : undefined;
+  };
+  const connected = statusEvents.filter((event) => ["CONNECTED", "RECOVERED"].includes(status(event)));
+  const timeouts = statusEvents.filter((event) => ["UNREACHABLE"].includes(status(event)) || reason(event) === "heartbeat-timeout");
+  const errors = statusEvents.filter((event) => ["ERROR", "DEGRADED", "LOGGED_OUT"].includes(status(event)));
+  return {
+    worker,
+    connectionCount: connected.length,
+    timeoutCount: timeouts.length,
+    errorCount: errors.length,
+    ...(connected[0]?.createdAt ? { lastConnectedAt: connected[0].createdAt } : {}),
+    ...(timeouts[0]?.createdAt ? { lastTimeoutAt: timeouts[0].createdAt } : {}),
+    events: statusEvents.slice(0, 16).map((event) => ({ at: event.createdAt, state: status(event), ...(reason(event) ? { detail: reason(event) } : {}) })),
+  };
+}
+
 export async function recordWorkloadHeartbeat(
   credential: string,
   input: WorkloadHeartbeatRequest,
@@ -309,8 +352,14 @@ export async function recordWorkloadHeartbeat(
     ...(input.lastError ? { lastError: input.lastError.slice(0, 500) } : { lastError: undefined }),
   });
   if (!next) throw new Error("Workload worker no longer exists.");
-  if (next.status === "ACTIVE") notifyWorkloadOwner(next, previousStatus === "UNREACHABLE" || previousStatus === "OFFLINE" ? "RECOVERED" : "CONNECTED");
-  else if (next.status === "ERROR") notifyWorkloadOwner(next, "ERROR", input.lastError);
+  if (next.status === "ACTIVE") {
+    const state = previousStatus === "UNREACHABLE" || previousStatus === "OFFLINE" ? "RECOVERED" : "CONNECTED";
+    notifyWorkloadOwner(next, state);
+    if (previousStatus !== "ACTIVE") await appendWorkloadEvent({ workspaceId: next.workspaceId, workerId: next.workerId, kind: "worker.status", metadata: { status: state, authHealth: "VALID" } });
+  } else if (next.status === "ERROR") {
+    notifyWorkloadOwner(next, "ERROR", input.lastError);
+    if (previousStatus !== "ERROR") await appendWorkloadEvent({ workspaceId: next.workspaceId, workerId: next.workerId, kind: "worker.status", metadata: { status: "ERROR", reason: input.lastError } });
+  }
   for (const sessionId of next.assignedSessionIds) {
     const assignment = await getWorkloadAssignmentBySession(sessionId);
     if (assignment && assignment.workerId === next.workerId && assignment.status === "OFFLINE")

@@ -734,7 +734,7 @@ async function openWhatsAppSession(
           pairingNotifications.delete(key);
           void pairingNotifier(
             chatId,
-            `✅ WhatsApp paired successfully. Session <b>${sessionId.slice(0, 12)}</b> is now online and ready to receive commands.`,
+            `🟢 <b>WhatsApp Session Connected</b>\n\n<blockquote><b>Session:</b> <code>${sessionId.slice(0, 12)}</code>\n<b>Status:</b> ACTIVE · VALID\n<b>Transport:</b> Baileys multi-device\n<b>Action:</b> Ready to receive commands</blockquote>\n\nOpen <b>Workload</b> or <b>Sessions</b> to manage this connection.`,
           ).catch(() => undefined);
         }
         return;

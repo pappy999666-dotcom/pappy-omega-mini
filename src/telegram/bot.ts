@@ -187,6 +187,8 @@ import {
   workloadText,
   workloadPanelText,
   workloadPanelKeyboard,
+  workloadLoggerText,
+  workloadLoggerKeyboard,
   workloadGuideText,
   adminWorkloadText,
   adminWorkloadKeyboard,
@@ -206,6 +208,7 @@ import {
   getWorkloadMode,
   getOwnerWorkloadWorkerByDisplayKey,
   getOwnerWorkloadWorkerByCode,
+  getWorkloadLoggerSnapshot,
   getWorkspaceWorkloadWorkerByDisplayKey,
   getWorkspaceWorkloadWorkerByCode,
   listWorkspaceWorkloadWorkers,
@@ -4528,6 +4531,24 @@ export function createTelegramBot(): Telegraf<Context> {
       return;
     }
     await edit(ctx, workloadPanelText(worker), workloadPanelKeyboard(worker.workloadCode ?? worker.displayKey));
+  });
+  bot.action(/^workload:logger:(refresh:)?(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Refreshing logger…");
+    const user = resolveTelegramUser(ctx);
+    const token = ctx.match[2] ?? "";
+    const worker = /^\d{5}$/.test(token)
+      ? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, token)
+      : await getWorkspaceWorkloadWorkerByCode(user.workspaceId, token);
+    if (!worker) {
+      await edit(ctx, pageText("Workload · Logger", dangerResponse("Panel not found", "Refresh Workload and open Logger again.")), keyboard([[btn(ui.back, "workload:list")] ]));
+      return;
+    }
+    try {
+      const snapshot = await getWorkloadLoggerSnapshot(user.workspaceId, worker.workerId);
+      await edit(ctx, workloadLoggerText(snapshot), workloadLoggerKeyboard(worker.workloadCode ?? worker.displayKey));
+    } catch (error) {
+      await edit(ctx, pageText("Workload · Logger", dangerResponse("Logger unavailable", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn("↻ Retry Logger", `workload:logger:${token}`)], [btn(ui.back, "workload:list")]]));
+    }
   });
   bot.action(/^workload:use:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();

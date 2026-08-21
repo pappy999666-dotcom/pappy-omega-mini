@@ -1248,8 +1248,42 @@ export function workloadPanelText(
 export function workloadPanelKeyboard(workloadCode: string): InlineKeyboardMarkup {
   return keyboard([
     [btn("✓ Use This Workload", `workload:use:${workloadCode}`, "success")],
+    [btn("▣ Logger", `workload:logger:${workloadCode}`, "primary")],
     [btn("↻ Check Again", "workload:status")],
     [btn("🗑 Remove Workload", `workload:remove:${workloadCode}`, "danger")],
+    [btn(ui.back, "workload:list")],
+  ]);
+}
+
+export function workloadLoggerText(snapshot: {
+  worker: { workerName?: string; workloadCode?: string; displayKey: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[] };
+  connectionCount: number;
+  timeoutCount: number;
+  errorCount: number;
+  lastConnectedAt?: number;
+  lastTimeoutAt?: number;
+  events: Array<{ at: number; state: string; detail?: string | undefined }>;
+}): string {
+  const worker = snapshot.worker;
+  const code = worker.workloadCode ?? worker.displayKey;
+  const heartbeat = worker.lastHeartbeatAt ? `${Math.max(0, Math.round((Date.now() - worker.lastHeartbeatAt) / 1000))}s ago` : "never";
+  const state = worker.status === "ACTIVE" ? "🟢 ACTIVE" : worker.status === "UNREACHABLE" ? "🔴 OFFLINE" : `🟡 ${escapeHtml(worker.status)}`;
+  const recent = snapshot.events.length
+    ? snapshot.events.slice(0, 8).map((event) => `• <code>${escapeHtml(new Date(event.at).toISOString().slice(11, 19))}</code> · <b>${escapeHtml(event.state)}</b>${event.detail ? ` · ${escapeHtml(event.detail)}` : ""}`).join("\n")
+    : "No state transitions recorded yet.";
+  return pageText(
+    "Workload · Logger",
+    infoResponse(
+      `${escapeHtml(worker.workerName ?? "Panel")} · <code>${escapeHtml(code)}</code>`,
+      `<b>Panel health:</b> ${state}\n<b>Worker version:</b> <code>${escapeHtml(worker.workerVersion)}</code>\n<b>Heartbeat:</b> ${heartbeat}\n<b>Assigned sessions:</b> ${worker.assignedSessionIds.length}\n\n<b>Connection screen</b>\nConnected / recovered · <code>${snapshot.connectionCount}</code>\nHeartbeat timeouts · <code>${snapshot.timeoutCount}</code>\nErrors / degraded · <code>${snapshot.errorCount}</code>\nLast connected · ${snapshot.lastConnectedAt ? escapeHtml(new Date(snapshot.lastConnectedAt).toISOString()) : "—"}\nLast timeout · ${snapshot.lastTimeoutAt ? escapeHtml(new Date(snapshot.lastTimeoutAt).toISOString()) : "—"}\n\n<b>Live panel log</b>\n${recent}\n\nLogger refreshes this message only. Heartbeats stay silent in chat; alerts are sent only when the panel changes state.`,
+    ),
+  );
+}
+
+export function workloadLoggerKeyboard(workloadCode: string): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("↻ Refresh Logger", `workload:logger:refresh:${workloadCode}`, "primary")],
+    [btn("‹ Panel", `workload:select:${workloadCode}`)],
     [btn(ui.back, "workload:list")],
   ]);
 }
