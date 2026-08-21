@@ -1,7 +1,7 @@
 let makeWASocket;
 let makeCacheManagerAuthState;
 let pino;
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, verify } from "node:crypto";
 import { mkdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
@@ -19,7 +19,13 @@ const ENROLLMENT_TOKEN = process.env.PAPPY_WORKLOAD_ENROLLMENT_TOKEN ?? cliValue
 const DATA_DIR = process.env.PAPPY_WORKER_DATA_DIR ?? "./pappy-workload-data";
 let STORAGE_SECRET = process.env.PAPPY_WORKLOAD_SESSION_SECRET ?? "";
 let WORKER_NAME = (process.env.PAPPY_WORKLOAD_NAME ?? cliValue("--name")) || "";
-const WORKER_VERSION = process.env.PAPPY_WORKER_VERSION ?? "1.0.0";
+const WORKER_VERSION = process.env.PAPPY_WORKER_VERSION ?? "1.2.0";
+const AUTO_UPDATE_ENABLED = !["0", "false", "off"].includes(String(process.env.PAPPY_WORKLOAD_AUTO_UPDATE ?? "true").toLowerCase());
+const UPDATE_CHECK_MS = 15 * 60_000;
+const ENTRYPOINT = process.env.PAPPY_WORKER_ENTRYPOINT ?? "";
+const RELEASE_PUBLIC_KEY_PEM = process.env.PAPPY_WORKLOAD_RELEASE_PUBLIC_KEY ?? `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAe+FnOPhHDo9y8pJ5rqwldSHwXUHKDG9HlTBqStHtRso=
+-----END PUBLIC KEY-----\n`;
 const secretPath = join(DATA_DIR, ".secret");
 const CONTROL_POLL_MS = 2_000;
 const HEARTBEAT_MS = 20_000;
@@ -193,6 +199,39 @@ function scheduleReconnect(workspaceId, sessionId) {
   reconnectTimers.set(sessionId, timer);
 }
 
+async function applyVerifiedUpdate(release) {
+  if (!ENTRYPOINT || !release || release.version === WORKER_VERSION) return false;
+  const bundle = Buffer.from(String(release.bundle ?? ""), "base64");
+  const expectedHash = String(release.sha256 ?? "");
+  const actualHash = createHash("sha256").update(bundle).digest("hex");
+  if (!bundle.length || actualHash !== expectedHash) throw new Error("Worker release hash verification failed.");
+  const signature = Buffer.from(String(release.signature ?? ""), "base64");
+  if (!signature.length || !verify(null, bundle, RELEASE_PUBLIC_KEY_PEM, signature)) throw new Error("Worker release signature verification failed.");
+  const temp = `${ENTRYPOINT}.update-${process.pid}-${randomUUID()}`;
+  await writeFile(temp, bundle, { mode: 0o700 });
+  await rename(temp, ENTRYPOINT);
+  matrix.state = "UPDATING";
+  matrix.lastAction = `verified release ${safeText(release.version, "unknown", 20)}; restarting`;
+  matrix.lastError = "none";
+  renderMatrix(true);
+  stopping = true;
+  for (const runtime of runtimes.values()) {
+    await runtime.store.flush().catch(() => undefined);
+    runtime.socket.end?.(new Error("Verified worker update requested restart."));
+  }
+  process.exitCode = 75;
+  setTimeout(() => process.exit(75), 100);
+  return true;
+}
+async function checkForUpdate() {
+  if (!AUTO_UPDATE_ENABLED || !ENTRYPOINT || !credentialState?.credential) return;
+  try {
+    const release = await control("/workload/release", { workerVersion: WORKER_VERSION }, credentialState.credential);
+    if (release.version && release.version !== WORKER_VERSION) await applyVerifiedUpdate(release);
+  } catch (error) {
+    noteError(error, "update check failed; current release retained");
+  }
+}
 async function reportSessionStatus(runtime, status, authHealth, reason) {
   await control("/workload/session-status", {
     workspaceId: runtime.workspaceId,
@@ -452,10 +491,13 @@ async function run() {
   assertConfig();
   await mkdir(DATA_DIR, { recursive: true });
   await register();
+  if (AUTO_UPDATE_ENABLED) setTimeout(() => void checkForUpdate(), 8_000).unref?.();
   let nextHeartbeat = 0;
+  let nextUpdateCheck = Date.now() + UPDATE_CHECK_MS;
   while (!stopping) {
     try {
       if (Date.now() >= nextHeartbeat) { await heartbeat(); nextHeartbeat = Date.now() + HEARTBEAT_MS; }
+      if (Date.now() >= nextUpdateCheck) { await checkForUpdate(); nextUpdateCheck = Date.now() + UPDATE_CHECK_MS; }
       await poll();
     } catch (error) {
       noteError(error, "control loop retrying");

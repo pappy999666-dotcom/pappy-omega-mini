@@ -12,7 +12,7 @@ In Telegram, open **PAPPY OMEGA-MINI → Workload → Create Panel Code** and co
 node index.js --enrollment ONE_TIME_TOKEN
 ```
 
-The first run creates `package.json`, installs only `@crysnovax/baileys` and `pino`, then asks for a friendly name:
+The first run creates `package.json`, installs only `@crysnovax/baileys` 2.7.12 and `pino`, then asks for a friendly name:
 
 ```text
 Choose a name for this workload (example: pappy):
@@ -33,6 +33,14 @@ Run the same command again or use the panel’s normal start command. The genera
 Keep `pappy-workload-data` persistent. It contains the encrypted worker credential and WhatsApp session files. Do not delete it unless you intentionally want to enroll a new worker.
 
 The workload code is workspace-scoped, permanently reserved, and cannot be reused for another workspace. Revoking a worker does not delete central user sessions or accounts.
+
+## Signed automatic updates
+
+The worker checks the control plane shortly after startup and periodically thereafter. A release is accepted only when its SHA-256 hash and Ed25519 signature verify against the public key embedded in this file’s release build. The worker writes the new `index.js` atomically, flushes encrypted session state, and restarts through the panel’s existing process supervisor. WhatsApp auth files, the worker credential, and assignment state remain in `pappy-workload-data`.
+
+Updates are disabled with `PAPPY_WORKLOAD_AUTO_UPDATE=false` when a panel operator needs a maintenance freeze. No MongoDB URI, Redis URI, Telegram token, enrollment token, or release private key is delivered to the panel.
+
+The downloadable `index.js` is generated in a minified/mangled release form so it can be further protected by the panel operator’s approved obfuscation pipeline. The third-party Baileys dependency itself is not modified or repackaged; its license and attribution requirements remain unchanged.
 
 Never add Telegram, MongoDB, Redis, owner, or admin credentials to this file or panel directory.
 

@@ -1,4 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { readFile } from "node:fs/promises";
+import { createHash, sign } from "node:crypto";
+import { resolve } from "node:path";
 import { env } from "../config/env.js";
 import {
   authenticateWorkloadWorker,
@@ -108,6 +111,22 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     const credential = bearer(request);
     if (!credential) {
       json(response, 401, { ok: false, error: "Bearer workload credential required." });
+      return;
+    }
+    if (path === "/workload/release") {
+      await authenticateWorkloadWorker(credential);
+      await body(request).catch(() => ({} as Record<string, unknown>));
+      const bundle = await readFile(resolve(env.WORKLOAD_RELEASE_PATH));
+      const privateKey = await readFile(resolve(env.WORKLOAD_RELEASE_PRIVATE_KEY_PATH), "utf8");
+      const sha256 = createHash("sha256").update(bundle).digest("hex");
+      const signature = sign(null, bundle, privateKey).toString("base64");
+      json(response, 200, {
+        ok: true,
+        version: env.WORKLOAD_RELEASE_VERSION,
+        sha256,
+        signature,
+        bundle: bundle.toString("base64"),
+      });
       return;
     }
     if (path === "/workload/heartbeat") {

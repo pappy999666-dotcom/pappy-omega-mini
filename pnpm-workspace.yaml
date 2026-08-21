@@ -3,3 +3,5 @@ allowBuilds:
   esbuild: true
   msgpackr-extract: true
   protobufjs: true
+minimumReleaseAgeExclude:
+  - '@crysnovax/baileys@2.7.12'
