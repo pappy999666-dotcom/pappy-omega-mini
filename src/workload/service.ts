@@ -20,8 +20,9 @@ import {
   leaseWorkloadCommands,
   requeueStaleWorkloadCommands,
   completeWorkloadCommand as persistWorkloadCommandCompletion,
-  updateWorkloadAssignment,
   updateWorkloadWorker,
+  updateWorkloadAssignment,
+  persistSession,
 } from "../persistence/mongo.js";
 import { getSession, updateSession, updateWorkspaceWorkloadMode } from "../core/session-registry.js";
 import { env } from "../config/env.js";
@@ -239,7 +240,11 @@ export async function assignWorkloadSession(
   if (!existing || existing.workerId !== workerId) await createWorkloadAssignment(assignment);
   const assignedSessionIds = [...new Set([...worker.assignedSessionIds, sessionId])];
   await updateWorkloadWorker(workerId, { assignedSessionIds });
-  updateSession(workspaceId, sessionId, { workloadWorkerId: workerId, workerNodeId: workerId });
+  const persistedSession = updateSession(workspaceId, sessionId, {
+    workloadWorkerId: workerId,
+    workerNodeId: workerId,
+  });
+  await persistSession(persistedSession);
   await appendWorkloadEvent({
     workspaceId,
     workerId,
