@@ -189,7 +189,11 @@ export async function recordWorkloadHeartbeat(
     throw new Error(`Worker version ${input.workerVersion} is incompatible.`);
   const now = Date.now();
   const durableSessionIds = (await listWorkloadAssignments(worker.workspaceId))
-    .filter((assignment) => assignment.workerId === worker.workerId && ["ASSIGNED", "RUNNING", "DEGRADED"].includes(assignment.status))
+    .filter((assignment) => {
+      if (assignment.workerId !== worker.workerId || !["ASSIGNED", "RUNNING", "DEGRADED", "OFFLINE"].includes(assignment.status)) return false;
+      const session = getSession(worker.workspaceId, assignment.sessionId);
+      return session?.status !== "LOGGED_OUT" && session?.authHealth !== "INVALID";
+    })
     .map((assignment) => assignment.sessionId);
   const assignedSessionIds = [...new Set([...input.assignedSessionIds, ...durableSessionIds])].slice(0, 100);
   const next = await updateWorkloadWorker(worker.workerId, {

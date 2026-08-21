@@ -247,13 +247,21 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
       runtime.ready = false;
       matrix.state = "DEGRADED";
       matrix.lastAction = `session ${sessionId} closed`;
-      const closeReason = update.lastDisconnect?.error?.output?.statusCode
-        ? `WhatsApp connection closed (code ${update.lastDisconnect.error.output.statusCode}).`
+      const statusCode = update.lastDisconnect?.error?.output?.statusCode;
+      const loggedOut = statusCode === 401;
+      const closeReason = statusCode
+        ? `WhatsApp connection closed (code ${statusCode}).`
         : "WhatsApp connection closed.";
-      void reportSessionStatus(runtime, "DEGRADED", "DEGRADED", closeReason);
+      if (loggedOut) {
+        assignedSessions.delete(sessionId);
+        intentionallyStopped.add(sessionId);
+        void reportSessionStatus(runtime, "LOGGED_OUT", "INVALID", closeReason);
+      } else {
+        void reportSessionStatus(runtime, "DEGRADED", "DEGRADED", closeReason);
+      }
       runtimes.delete(sessionId);
       renderMatrix(true);
-      const restartable = Boolean(state.creds.registered || state.creds.me || state.creds.pairingCode);
+      const restartable = !loggedOut && Boolean(state.creds.registered || state.creds.me || state.creds.pairingCode);
       if (restartable && !intentionallyStopped.has(sessionId)) scheduleReconnect(workspaceId, sessionId);
     }
   });
