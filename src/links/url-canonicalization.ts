@@ -1,3 +1,16 @@
+export function isWhatsAppGroupInviteUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.hostname.toLowerCase() === "chat.whatsapp.com" &&
+      parsed.pathname.split("/").filter(Boolean).length === 1
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function canonicalizeHttpUrl(value: string): string {
   const parsed = new URL(value.trim());
   if (!/^https?:$/.test(parsed.protocol))

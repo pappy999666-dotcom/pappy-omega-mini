@@ -7,11 +7,11 @@ import {
   GLOBAL_VALIDATOR_SCOPE,
   type LinkRecord,
 } from "../links/link-bucket-store.js";
+import { claimValidatorMainLinks } from "../links/validator-operations.js";
 import {
-  claimValidatorMainLinks,
-  requeueValidatorMainLinks,
-} from "../links/validator-operations.js";
-import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
+  canonicalizeHttpUrl,
+  isWhatsAppGroupInviteUrl,
+} from "../links/url-canonicalization.js";
 import {
   getWhatsAppSocket,
   waitForWhatsAppSessionReady,
@@ -70,6 +70,25 @@ type JoinFailureClass =
   | "forbidden"
   | "rate-limit"
   | "transport";
+function isConfirmedInaccessibleGroupError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return [
+    "group is locked",
+    "group locked",
+    "group banned",
+    "group was banned",
+    "group does not exist",
+    "group not found",
+    "not a participant",
+    "not in the group",
+    "you were removed",
+    "you were kicked",
+    "kicked from the group",
+    "revoked group",
+    "invalid group",
+  ].some((marker) => lower.includes(marker));
+}
+
 function classifyJoinFailure(error: unknown): {
   classification: JoinFailureClass;
   retryable: boolean;
@@ -113,6 +132,11 @@ let jobCompletionNotifier:
 let activeBuckets: LinkBucketStore | undefined;
 let activeJoinResults: JoinResultStore | undefined;
 let validatorSweepTimer: NodeJS.Timeout | undefined;
+let validatorGuardTimer: NodeJS.Timeout | undefined;
+let validatorGuardBusy = false;
+const VALIDATOR_GUARD_INTERVAL_MS = 15_000;
+const VALIDATOR_RETIRE_MS = 15 * 60_000;
+const VALIDATING_STALE_MS = 10 * 60_000;
 
 export function getWorkerRuntime(): JobOrchestrator | undefined {
   return activeRuntime;
@@ -237,8 +261,10 @@ export function startWorkerRuntime(): JobOrchestrator {
   activeJoinResults = joinResults;
   orchestrator.addCloseHook(async () => {
     if (validatorSweepTimer) clearInterval(validatorSweepTimer);
+    if (validatorGuardTimer) clearInterval(validatorGuardTimer);
     validatorSweepTimer = undefined;
-      await redis.quit();
+    validatorGuardTimer = undefined;
+    await redis.quit();
   });
 
   orchestrator.register("link-validation", async (context) => {
@@ -444,11 +470,13 @@ export function startWorkerRuntime(): JobOrchestrator {
       context,
       processItem: async (url) => {
         try {
-          const parsed = new URL(url.trim());
-          if (!["http:", "https:"].includes(parsed.protocol))
-            return { status: "failed" as const };
+          const raw = url.trim();
+          if (!isWhatsAppGroupInviteUrl(raw))
+            return { status: "skipped" as const };
+          const parsed = new URL(raw);
+          const canonicalUrl = canonicalizeHttpUrl(raw);
           await buckets.upsert({
-            canonicalUrl: parsed.toString(),
+            canonicalUrl,
             originalUrl: url,
             bucket: "main",
             workspaceId: context.job.workspaceId,
@@ -989,6 +1017,38 @@ export function startWorkerRuntime(): JobOrchestrator {
             : {}),
         };
       }
+      const deliverWithRetries = async (
+        targetJid: string,
+        send: () => Promise<unknown>,
+      ): Promise<"sent" | "inaccessible"> => {
+        let lastError: unknown;
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            await withTimeout(
+              send(),
+              90_000,
+              `${kind} delivery timed out for ${targetJid}`,
+            );
+            return "sent";
+          } catch (error) {
+            lastError = error;
+            const message = error instanceof Error ? error.message : String(error);
+            if (isConfirmedInaccessibleGroupError(message)) return "inaccessible";
+            if (attempt < 3) {
+              await context.report({
+                currentGroup: targetJid,
+                currentAction: `retrying ${kind} delivery (${attempt + 1}/3)`,
+                lastResult: `${kind} transient failure: ${message}`.slice(0, 400),
+              });
+              await waitWithHeartbeat(context, Math.min(5000, 1500 * attempt), {
+                currentGroup: targetJid,
+                currentAction: `retrying ${kind} delivery (${attempt + 1}/3)`,
+              });
+            }
+          }
+        }
+        throw lastError instanceof Error ? lastError : new Error(String(lastError));
+      };
       let lastPostAt = 0;
       let completedDeliveries = 0;
       let failedDeliveries = 0;
@@ -1011,8 +1071,9 @@ export function startWorkerRuntime(): JobOrchestrator {
             await context.report({
               currentGroup: jid,
               currentAction: `already posted${repeat > 1 ? ` · repeat ${repeatIndex}/${repeat}` : ""}`,
+              lastResult: `${kind} delivery was already confirmed for ${jid}.`,
             });
-            return { status: "skipped" as const };
+            return { status: "success" as const };
           }
           if (lastPostAt) {
             const wait = Math.max(0, delayMs - (Date.now() - lastPostAt));
@@ -1054,7 +1115,7 @@ export function startWorkerRuntime(): JobOrchestrator {
             throw new Error("Broadcast session operation busy; retry scheduled.");
           lastPostAt = Date.now();
           try {
-            const delivery =
+            const deliveryOutcome = await deliverWithRetries(jid, () =>
               kind === "gstatus" || kind === "allstatus"
                 ? sendGroupStatus(context.job.workspaceId, sessionId, jid, {
                     text,
@@ -1067,12 +1128,16 @@ export function startWorkerRuntime(): JobOrchestrator {
                     text,
                     undefined,
                     media,
-                  );
-            await withTimeout(
-              delivery,
-              90_000,
-              `${kind} delivery timed out for ${jid}`,
+                  ),
             );
+            if (deliveryOutcome === "inaccessible") {
+              await context.report({
+                currentGroup: jid,
+                currentAction: "skipped inaccessible group",
+                lastResult: `${kind} skipped confirmed inaccessible group ${jid}`,
+              });
+              return { status: "skipped" as const };
+            }
             await recordBroadcastDelivered(
               context.job.jobId,
               kind,
@@ -1100,6 +1165,7 @@ export function startWorkerRuntime(): JobOrchestrator {
             });
             return { status: "success" as const };
           } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
             failedDeliveries += 1;
             if (autoPromoteRunId)
               void recordAutoPromoteProgress({
@@ -1117,7 +1183,7 @@ export function startWorkerRuntime(): JobOrchestrator {
               currentGroup: jid,
               currentAction: "soft failure",
               lastResult:
-                `${kind} skipped ${jid}: ${error instanceof Error ? error.message : String(error)}`.slice(
+                `${kind} delivery failed for ${jid}: ${message}`.slice(
                   0,
                   500,
                 ),
@@ -1152,14 +1218,108 @@ export function startWorkerRuntime(): JobOrchestrator {
     );
   });
   void sweepPendingMainValidation(orchestrator, buckets);
+  void runValidatorGuard(orchestrator, buckets, redis);
   validatorSweepTimer = setInterval(
     () => void sweepPendingMainValidation(orchestrator, buckets),
     5_000,
   );
+  validatorGuardTimer = setInterval(
+    () => void runValidatorGuard(orchestrator, buckets, redis),
+    VALIDATOR_GUARD_INTERVAL_MS,
+  );
   validatorSweepTimer.unref?.();
+  validatorGuardTimer.unref?.();
   return orchestrator;
 }
 
+
+async function runValidatorGuard(
+  orchestrator: JobOrchestrator,
+  buckets: LinkBucketStore,
+  redis: Redis,
+): Promise<void> {
+  if (validatorGuardBusy) return;
+  validatorGuardBusy = true;
+  try {
+    const now = Date.now();
+    let cursor = 0;
+    do {
+      const page = await buckets.list(GLOBAL_VALIDATOR_SCOPE, "validating", cursor, 500);
+      for (const record of page.records) {
+        const checkedAt = record.lastCheckedAt ?? record.firstSeenAt;
+        if (now - checkedAt <= VALIDATING_STALE_MS) continue;
+        await buckets.move(GLOBAL_VALIDATOR_SCOPE, record.canonicalUrl, "main", {
+          validationError: "Validator Guard recycled a stale validation claim.",
+          metadata: {
+            ...(record.metadata ?? {}),
+            needsValidation: true,
+            validationState: "pending",
+          },
+        });
+      }
+      cursor = page.nextCursor;
+    } while (cursor !== 0);
+
+    const sessions = listAllSessions();
+    const jobs = (await orchestrator.listRecent(1000)).filter(
+      (job) =>
+        job.kind === "link-validation" &&
+        Boolean(job.sessionId) &&
+        ["COMPLETED", "PARTIAL", "FAILED"].includes(job.state) &&
+        Boolean(job.completedAt) &&
+        now - (job.completedAt ?? now) <= 60 * 60_000,
+    );
+    for (const job of jobs) {
+      const marker = `pappy-omega-mini:validator-guard:${job.jobId}`;
+      if ((await redis.set(marker, "1", "EX", 6 * 60 * 60, "NX")) !== "OK")
+        continue;
+      const session = sessions.find(
+        (candidate) =>
+          candidate.workspaceId === job.workspaceId &&
+          candidate.sessionId === job.sessionId,
+      );
+      if (!session) continue;
+      const progress = job.progress;
+      const resultText = `${job.error ?? ""} ${progress.lastResult ?? ""} ${progress.currentAction ?? ""}`.toLowerCase();
+      const rateLimited = /rate.?limit|429|flood|throttl|spam.?limit|temporarily banned/.test(resultText);
+      const transportFailure = /timeout|network|closed|not connected|decrypt|bad mac|session|no healthy|heartbeat/.test(resultText);
+      const successful = job.state === "COMPLETED" && (progress.success ?? 0) > 0;
+      if (successful) {
+        updateSession(session.workspaceId, session.sessionId, {
+          validatorFailureCount: 0,
+          validatorRateLimitCount: 0,
+          validatorLastSuccessAt: now,
+          validatorRetiredUntil: now - 1,
+          validatorRetireReason: "recovered",
+        });
+        continue;
+      }
+      if (!rateLimited && !transportFailure && job.state !== "FAILED") continue;
+      const failureCount = (session.validatorFailureCount ?? 0) + 1;
+      const rateLimitCount = (session.validatorRateLimitCount ?? 0) + (rateLimited ? 1 : 0);
+      const retire = rateLimited || failureCount >= 3;
+      updateSession(session.workspaceId, session.sessionId, {
+        validatorFailureCount: failureCount,
+        validatorRateLimitCount: rateLimitCount,
+        ...(retire
+          ? {
+              validatorRetiredUntil: now + VALIDATOR_RETIRE_MS,
+              validatorRetireReason: rateLimited
+                ? "rate-limited during validation"
+                : "repeated validation transport failure",
+            }
+          : {}),
+      });
+    }
+  } catch (error) {
+    console.error(
+      "[pappy-omega-mini] Validator Guard failed:",
+      error instanceof Error ? error.message : String(error),
+    );
+  } finally {
+    validatorGuardBusy = false;
+  }
+}
 
 let validatorSweepBusy = false;
 
@@ -1303,5 +1463,7 @@ async function waitWithHeartbeat(
 
 export function stopWorkerRuntimeForTests(): void {
   if (validatorSweepTimer) clearInterval(validatorSweepTimer);
+  if (validatorGuardTimer) clearInterval(validatorGuardTimer);
   validatorSweepTimer = undefined;
+  validatorGuardTimer = undefined;
 }

@@ -59,10 +59,8 @@ import { getValidatorSnapshot } from "../links/validator-snapshot.js";
 import {
   listValidatorBucket,
   countValidatorBucket,
-  claimValidatorMainLinks,
   mergeValidatorBuckets,
   purgeValidatorBucket,
-  requeueValidatorMainLinks,
   type ValidatorBucket,
 } from "../links/validator-operations.js";
 import {
@@ -6768,52 +6766,18 @@ function escapeHtml(value: string): string {
 }
 
 async function enqueueValidatorJobs(
-  runtime: NonNullable<ReturnType<typeof getWorkerRuntime>>,
-  workspaceId: string,
+  _runtime: NonNullable<ReturnType<typeof getWorkerRuntime>>,
+  _workspaceId: string,
   urls: string[],
-  sourceUserId: string,
+  _sourceUserId: string,
 ): Promise<JobRecord[]> {
-  const sessions = listSessions(workspaceId).filter(
-    (session) => session.status === "ACTIVE",
+  if (!urls.length) return [];
+  await runValidatorSweepNow();
+  return (await getWorkerRuntime()?.listRecent(1000) ?? []).filter(
+    (job) =>
+      job.kind === "link-validation" &&
+      ["QUEUED", "RUNNING", "RETRYING"].includes(job.state),
   );
-  if (!sessions.length || !urls.length) return [];
-  const chunks = sessions.map(() => [] as string[]);
-  urls.forEach((url, index) => chunks[index % chunks.length]?.push(url));
-  const jobs: JobRecord[] = [];
-  for (const [index, rawChunk] of chunks.entries()) {
-    const session = sessions[index];
-    if (!session || !rawChunk.length) continue;
-    const chunk = rawChunk.slice(0, 5);
-    const claimed = await claimValidatorMainLinks(
-      workspaceId,
-      chunk,
-      session.sessionId,
-    ).catch(() => 0);
-    if (claimed !== chunk.length) continue;
-    const payload = {
-      urls: chunk,
-      sourceSessionId: session.sessionId,
-      sourceUserId,
-    };
-    const payloadHash = createHash("sha256")
-      .update(JSON.stringify(payload))
-      .digest("hex");
-    try {
-      jobs.push(
-        await runtime.enqueue({
-          workspaceId,
-          sessionId: session.sessionId,
-          kind: "link-validation",
-          payload,
-          idempotencyKey: `${workspaceId}:${session.sessionId}:validator:${payloadHash}`,
-        }),
-      );
-    } catch (error) {
-      await requeueValidatorMainLinks(workspaceId, chunk).catch(() => undefined);
-      throw error;
-    }
-  }
-  return jobs;
 }
 
 

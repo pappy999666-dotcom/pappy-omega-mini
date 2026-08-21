@@ -71,6 +71,11 @@ export interface WhatsAppSession {
   reconnectCount?: number;
   socketGeneration?: number;
   authHealth?: "UNKNOWN" | "VALID" | "INVALID" | "DEGRADED";
+  validatorRetiredUntil?: number;
+  validatorRetireReason?: string;
+  validatorFailureCount?: number;
+  validatorRateLimitCount?: number;
+  validatorLastSuccessAt?: number;
   workerNodeId?: string;
   /** Persisted external/owner worker assignment, if this session is panel-hosted. */
   workloadWorkerId?: string;

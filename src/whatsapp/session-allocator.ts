@@ -10,6 +10,7 @@ export function isHealthyWhatsAppSession(
 ): boolean {
   if (session.status !== "ACTIVE") return false;
   if (session.authHealth === "INVALID") return false;
+  if ((session.validatorRetiredUntil ?? 0) > now) return false;
   const lastHealthy = session.lastHealthyAt ?? session.connectedAt;
   return !lastHealthy || now - lastHealthy <= HEALTH_WINDOW_MS;
 }

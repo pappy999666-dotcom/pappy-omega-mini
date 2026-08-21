@@ -1,7 +1,12 @@
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
 import { LinkBucketStore } from "./link-bucket-store.js";
-import { canonicalizeHttpUrl } from "./url-canonicalization.js";
+import {
+  canonicalizeHttpUrl,
+  isWhatsAppGroupInviteUrl,
+} from "./url-canonicalization.js";
+
+export { isWhatsAppGroupInviteUrl };
 
 const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
 const buckets = new LinkBucketStore(redis);
@@ -9,19 +14,6 @@ const buckets = new LinkBucketStore(redis);
 export function extractUrls(text: string): string[] {
   const matches = text.match(/https?:\/\/[^\s<>"']+/gi) ?? [];
   return [...new Set(matches.map((value) => value.replace(/[),.;!?]+$/, "")))];
-}
-
-export function isWhatsAppGroupInviteUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value);
-    return (
-      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-      parsed.hostname.toLowerCase() === "chat.whatsapp.com" &&
-      parsed.pathname.split("/").filter(Boolean).length === 1
-    );
-  } catch {
-    return false;
-  }
 }
 
 export function extractWhatsAppGroupInviteUrls(text: string): string[] {
@@ -82,10 +74,15 @@ async function collectUrlValues(
   urls: string[],
 ): Promise<{ found: number; added: number; urls: string[] }> {
   let added = 0;
+  const canonicalUrls: string[] = [];
+  const seen = new Set<string>();
   for (const originalUrl of urls) {
     try {
       if (!isWhatsAppGroupInviteUrl(originalUrl)) continue;
       const canonicalUrl = canonicalizeHttpUrl(originalUrl);
+      if (seen.has(canonicalUrl)) continue;
+      seen.add(canonicalUrl);
+      canonicalUrls.push(canonicalUrl);
       const before = await buckets.get(input.workspaceId, canonicalUrl);
       await buckets.upsert({
         canonicalUrl,
@@ -103,13 +100,13 @@ async function collectUrlValues(
       });
       if (!before) added += 1;
     } catch {
-      // Ignore malformed links while preserving valid links from the same payload.
+      // Ignore malformed or non-group links while preserving valid links from the same payload.
     }
   }
   return {
-    found: urls.filter(isWhatsAppGroupInviteUrl).length,
+    found: canonicalUrls.length,
     added,
-    urls: urls.filter(isWhatsAppGroupInviteUrl),
+    urls: canonicalUrls,
   };
 }
 
