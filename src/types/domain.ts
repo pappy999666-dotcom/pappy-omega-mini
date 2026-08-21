@@ -74,8 +74,8 @@ export interface WhatsAppSession {
   workerNodeId?: string;
   /** Persisted external/owner worker assignment, if this session is panel-hosted. */
   workloadWorkerId?: string;
-  lastError?: string;
-  disconnectReason?: string;
+  lastError?: string | undefined;
+  disconnectReason?: string | undefined;
 }
 
 export interface MenuMedia {

@@ -1577,8 +1577,14 @@ export async function updateWorkloadAssignment(
   patch: Partial<WorkloadAssignmentRecord>,
 ): Promise<WorkloadAssignmentRecord | undefined> {
   await connectMongo();
+  const { lastError, ...setPatch } = patch;
+  const update: { $set: Record<string, unknown>; $unset?: Record<string, number> } = {
+    $set: { ...setPatch, updatedAt: Date.now() },
+  };
+  if (lastError === undefined && Object.prototype.hasOwnProperty.call(patch, "lastError")) update.$unset = { lastError: 1 };
+  else if (lastError !== undefined) update.$set.lastError = lastError;
   const updated = await workloadAssignmentModel()
-    .findOneAndUpdate({ assignmentId }, { $set: { ...patch, updatedAt: Date.now() } }, { new: true })
+    .findOneAndUpdate({ assignmentId }, update, { new: true })
     .lean<WorkloadAssignmentRecord>()
     .exec();
   return updated ?? undefined;

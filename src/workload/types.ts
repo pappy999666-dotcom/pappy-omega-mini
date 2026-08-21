@@ -49,7 +49,7 @@ export interface WorkloadWorkerRecord {
   assignedSessionIds: string[];
   lastHeartbeatAt?: number;
   connectedAt?: number;
-  lastError?: string;
+  lastError?: string | undefined;
   disabledAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -73,7 +73,7 @@ export interface WorkloadAssignmentRecord {
   status: WorkloadAssignmentStatus;
   assignedAt: number;
   updatedAt: number;
-  lastError?: string;
+  lastError?: string | undefined;
 }
 
 export interface WorkloadCommandRecord {

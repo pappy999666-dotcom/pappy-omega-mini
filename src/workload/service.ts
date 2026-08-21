@@ -171,11 +171,11 @@ export async function recordWorkloadSessionStatus(
     ...(input.authHealth ? { authHealth: input.authHealth } : {}),
     ...(input.phoneNumber ? { phoneNumber: input.phoneNumber } : {}),
     ...(input.reason ? { disconnectReason: input.reason.slice(0, 240) } : {}),
-    ...(input.status === "ACTIVE" ? { connectedAt: Date.now(), lastHealthyAt: Date.now() } : {}),
+    ...(input.status === "ACTIVE" ? { connectedAt: Date.now(), lastHealthyAt: Date.now(), disconnectReason: undefined } : {}),
   });
   await updateWorkloadAssignment(assignment.assignmentId, {
     status: input.status === "ACTIVE" ? "RUNNING" : input.status === "ERROR" ? "ERROR" : input.status === "LOGGED_OUT" ? "OFFLINE" : "DEGRADED",
-    ...(input.reason ? { lastError: input.reason.slice(0, 500) } : {}),
+    ...(input.reason ? { lastError: input.reason.slice(0, 500) } : input.status === "ACTIVE" ? { lastError: undefined } : {}),
   });
   await appendWorkloadEvent({ workspaceId: input.workspaceId, workerId, sessionId: input.sessionId, kind: "worker.status", metadata: { status: input.status, authHealth: input.authHealth } });
 }

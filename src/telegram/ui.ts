@@ -1290,7 +1290,7 @@ export function adminWorkloadKeyboard(mode: "ON" | "OFF", workers: Array<{ worke
   ]);
 }
 
-export function adminWorkloadWorkerText(worker: { workerId: string; workerName?: string; workloadCode?: string; displayKey: string; status: string; ownerTelegramUserId: string; workerVersion: string; assignedSessionIds: string[]; lastHeartbeatAt?: number; lastError?: string }): string {
+export function adminWorkloadWorkerText(worker: { workerId: string; workerName?: string; workloadCode?: string; displayKey: string; status: string; ownerTelegramUserId: string; workerVersion: string; assignedSessionIds: string[]; lastHeartbeatAt?: number; lastError?: string | undefined }): string {
   return pageText(
     "Admin · Workload Worker",
     infoResponse(

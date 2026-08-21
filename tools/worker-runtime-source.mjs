@@ -206,7 +206,16 @@ async function reportSessionStatus(runtime, status, authHealth, reason) {
 async function startSession(workspaceId, sessionId, waitForReady = true) {
   intentionallyStopped.delete(sessionId);
   const existing = runtimes.get(sessionId);
-  if (existing) return existing;
+  if (existing && !waitForReady) return existing;
+  if (existing && waitForReady) {
+    const deadline = Date.now() + 90_000;
+    while (Date.now() < deadline) {
+      const current = runtimes.get(sessionId);
+      if (current?.ready) return current;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error(`WhatsApp session ${sessionId} did not become ready after reconnect.`);
+  }
   const authRoot = join(DATA_DIR, "sessions", workspaceId, sessionId);
   const store = new FileAuthStore(authRoot);
   const { state, saveCreds } = await makeCacheManagerAuthState(store, sessionId);
