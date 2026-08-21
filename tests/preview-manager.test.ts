@@ -100,6 +100,31 @@ describe("canonical Baileys-native preview pipeline", () => {
     }
   });
 
+  it("uses public metadata without remote invite calls for assigned panel previews", async () => {
+    const originalFetch = globalThis.fetch;
+    let inviteCalls = 0;
+    globalThis.fetch = vi.fn(async () => new Response("<html><head><title>Panel link</title></head></html>", { status: 200, headers: { "content-type": "text/html" } })) as typeof fetch;
+    try {
+      const text = "https://chat.whatsapp.com/PANEL_PREVIEW_TEST";
+      const content = await prepareCanonicalPreviewContent({
+        text,
+        content: { text },
+        socket: {
+          __pappyAssignedWorkload: true,
+          groupGetInviteInfo: async () => {
+            inviteCalls += 1;
+            throw new Error("growth-locked");
+          },
+        } as never,
+        cacheScope: `panel-preview-${Date.now()}`,
+      });
+      expect(inviteCalls).toBe(0);
+      expect(content.text).toBe(text);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("accepts only WhatsApp group invite URLs for Validator Hub", async () => {
     expect(isWhatsAppGroupInviteUrl("https://chat.whatsapp.com/ABC123")).toBe(
       true,

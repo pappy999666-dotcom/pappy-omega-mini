@@ -70,6 +70,7 @@ export function createAssignedWorkloadSocket(
   const target: Record<string, unknown> = {
     user: { id: "me" },
     ev: { on: () => undefined },
+    __pappyAssignedWorkload: true,
   };
   for (const method of methods) target[method] = remoteMethod(workspaceId, sessionId, method);
   return new Proxy(target, {
