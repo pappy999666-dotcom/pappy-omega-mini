@@ -1669,7 +1669,7 @@ export function createTelegramBot(): Telegraf<Context> {
             ? quoted.caption
             : undefined
         : undefined;
-      const draft = [quotedText, ctx.message.text.trim()].filter(Boolean).join("\n");
+      const draft = mergeTelegramQuotedText(ctx.message.text, quotedText);
       await handleAdminBroadcastDraft(ctx, draft);
       return;
     }
@@ -6703,7 +6703,11 @@ async function edit(
   }
 }
 
-async function resolveTelegramQuotedMedia(
+export function mergeTelegramQuotedText(primary: string, quotedText?: string): string {
+  return [quotedText?.trim(), primary.trim()].filter(Boolean).join("\n");
+}
+
+export async function resolveTelegramQuotedMedia(
   ctx: Context,
 ): Promise<WhatsAppMediaPayload | undefined> {
   const quoted = ctx.message && "reply_to_message" in ctx.message
