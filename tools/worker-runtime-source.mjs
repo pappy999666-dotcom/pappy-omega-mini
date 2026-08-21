@@ -15,11 +15,11 @@ function cliValue(...names) {
   return "";
 }
 const CONTROL_URL = String(process.env.PAPPY_WORKLOAD_URL ?? "https://pappy-omega-mini-v1.duckdns.org").replace(/\/$/, "");
-const ENROLLMENT_TOKEN = process.env.PAPPY_WORKLOAD_ENROLLMENT_TOKEN ?? cliValue("--enrollment", "--token");
+let PANEL_PAIRING_CODE = process.env.PAPPY_WORKLOAD_PAIRING_CODE ?? cliValue("--pairing-code", "--code");
 const DATA_DIR = process.env.PAPPY_WORKER_DATA_DIR ?? "./pappy-workload-data";
 let STORAGE_SECRET = process.env.PAPPY_WORKLOAD_SESSION_SECRET ?? "";
-let WORKER_NAME = (process.env.PAPPY_WORKLOAD_NAME ?? cliValue("--name")) || "";
-const WORKER_VERSION = process.env.PAPPY_WORKER_VERSION ?? "1.2.3";
+let WORKER_NAME = (process.env.PAPPY_WORKLOAD_NAME ?? cliValue("--name")) || "panel";
+const WORKER_VERSION = process.env.PAPPY_WORKER_VERSION ?? "1.2.4";
 const AUTO_UPDATE_ENABLED = !["0", "false", "off"].includes(String(process.env.PAPPY_WORKLOAD_AUTO_UPDATE ?? "true").toLowerCase());
 const UPDATE_CHECK_MS = 15 * 60_000;
 const ENTRYPOINT = process.env.PAPPY_WORKER_ENTRYPOINT ?? "";
@@ -111,39 +111,39 @@ function noteError(error, action = "control error") {
 function key() {
   return createHash("sha256").update(STORAGE_SECRET, "utf8").digest();
 }
-async function ensureWorkerName() {
-  if (WORKER_NAME) {
-    const normalized = normalizeWorkerName(WORKER_NAME);
-    if (normalized) { WORKER_NAME = normalized; return; }
-    WORKER_NAME = "";
-  }
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    WORKER_NAME = "panel";
-    return;
-  }
-  const prompt = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    console.log(paint("\n[PAPPY SETUP · STEP 1/2] Choose a short name for this panel.", ANSI.cyan));
-    console.log(paint("Use letters or numbers, for example: pappy, jesus, business-panel.", ANSI.dim));
-    while (true) {
-      const answer = (await prompt.question(paint("› Panel name: ", ANSI.green))).trim();
-      const normalized = normalizeWorkerName(answer);
-      if (normalized) { WORKER_NAME = normalized; break; }
-      console.log(paint("Please enter 2–24 letters/numbers, such as pappy. A dot or blank name is not valid.", ANSI.yellow));
-    }
-  } finally {
-    prompt.close();
-  }
-}
 function normalizeWorkerName(value) {
-  const normalized = String(value ?? "")
+  const normalized = String(value ?? "panel")
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-]/g, "")
     .replace(/^-+|-+$/g, "")
     .slice(0, 24);
-  return /^[a-z0-9][a-z0-9-]{1,23}$/.test(normalized) ? normalized : "";
+  return /^[a-z0-9][a-z0-9-]{1,23}$/.test(normalized) ? normalized : "panel";
+}
+function normalizePairingCode(value) {
+  const normalized = String(value ?? "").trim().toUpperCase().replace(/\s+/g, "");
+  return /^PAPPY-[A-Z0-9]{6,24}$/.test(normalized) ? normalized : "";
+}
+async function ensurePanelPairingCode() {
+  const existing = normalizePairingCode(PANEL_PAIRING_CODE);
+  if (existing) { PANEL_PAIRING_CODE = existing; return; }
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error("No panel pairing code was supplied. In Telegram tap Add Workload, copy the PAPPY code, then paste it into this panel console.");
+  }
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log(paint("\n[PAPPY SETUP · FINAL STEP] Paste the pairing code from Telegram.", ANSI.cyan));
+    console.log(paint("In Telegram open Workload → Add Workload, tap Copy Pairing Code, then paste it here.", ANSI.dim));
+    while (true) {
+      const answer = await prompt.question(paint("› Telegram pairing code: ", ANSI.green));
+      const normalized = normalizePairingCode(answer);
+      if (normalized) { PANEL_PAIRING_CODE = normalized; break; }
+      console.log(paint("That code is not valid. It should look like PAPPY-XXXXXXXX. Copy it again from Telegram and paste it here.", ANSI.yellow));
+    }
+  } finally {
+    prompt.close();
+  }
 }
 async function ensureStorageSecret() {
   await mkdir(DATA_DIR, { recursive: true });
@@ -482,10 +482,10 @@ async function execute(command) {
 async function register() {
   const existing = await loadState();
   if (existing?.credential && existing.workerId) { credentialState = existing; return; }
-  if (!ENROLLMENT_TOKEN) throw new Error("No one-time enrollment token was supplied. In Telegram tap Workload → Create One-Time Setup, copy the full command, and run it exactly as shown.");
+  await ensurePanelPairingCode();
   const registration = await control("/workload/register", {
-    enrollmentToken: ENROLLMENT_TOKEN,
-    workerName: WORKER_NAME,
+    pairingCode: PANEL_PAIRING_CODE,
+    workerName: normalizeWorkerName(WORKER_NAME),
     workerVersion: WORKER_VERSION,
     capabilities: ["baileys", "group-transport", "media", "pairing"],
   });
@@ -552,7 +552,7 @@ async function run() {
   makeCacheManagerAuthState = baileys.makeCacheManagerAuthState;
   const logger = await import("pino");
   pino = logger.default;
-  await ensureWorkerName();
+  WORKER_NAME = normalizeWorkerName(WORKER_NAME);
   await ensureStorageSecret();
   assertConfig();
   await mkdir(DATA_DIR, { recursive: true });
@@ -578,12 +578,10 @@ run().catch((error) => {
   noteError(error, "fatal startup error");
   const message = error instanceof Error ? error.message : String(error);
   console.log(paint("\n[PAPPY SETUP · NOT FINISHED]", ANSI.red));
-  if (/enrollment|token|expired|registered to this workspace/i.test(message)) {
-    console.log(paint("Next step: return to Telegram → Workload → Create One-Time Setup, copy the complete command, and run it in this panel folder.", ANSI.yellow));
-  } else if (/name|panel name/i.test(message)) {
-    console.log(paint("Next step: restart the command and answer the panel-name question with letters/numbers, for example pappy.", ANSI.yellow));
+  if (/pairing code|expired|registered to this workspace/i.test(message)) {
+    console.log(paint("Next step: return to Telegram → Workload → Add Workload, copy the PAPPY pairing code, and paste it into this panel console.", ANSI.yellow));
   } else {
-    console.log(paint("Next step: read README.md, confirm the panel is online, then run the same setup command again.", ANSI.yellow));
+    console.log(paint("Next step: read README.md, confirm the panel is online, then start it again and follow the Telegram pairing-code prompt.", ANSI.yellow));
   }
   console.log(paint(`Detail: ${message}`, ANSI.dim));
   process.exitCode = 1;

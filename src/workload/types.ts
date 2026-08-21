@@ -118,7 +118,8 @@ export interface WorkloadEventRecord {
 }
 
 export interface WorkloadRegistrationRequest {
-  enrollmentToken: string;
+  pairingCode?: string;
+  enrollmentToken?: string;
   workerName?: string;
   workerVersion: string;
   capabilities: string[];

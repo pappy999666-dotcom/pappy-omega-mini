@@ -24,8 +24,9 @@ describe("hybrid workload security primitives", () => {
 
   it("keeps central secrets out of the noob-friendly worker guide", () => {
     const guide = workloadGuideText("https://control.example/workload");
-    expect(guide).toContain("one saved workload code");
-    expect(guide).toContain("pappy-ab12cd");
+    expect(guide).toContain("Add Workload");
+    expect(guide).toContain("pairing code");
+    expect(guide).toContain("index.js");
     expect(guide).toContain("Telegram");
     expect(guide).not.toContain("PAPPY_WORKLOAD_SESSION_SECRET");
     expect(guide).not.toContain("TELEGRAM_BOT_TOKEN=");

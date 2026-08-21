@@ -99,8 +99,11 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     }
     if (path === "/workload/register") {
       const input = await body(request);
+      const pairingCode = typeof input.pairingCode === "string" && input.pairingCode.trim() ? input.pairingCode.trim() : undefined;
+      const enrollmentToken = typeof input.enrollmentToken === "string" && input.enrollmentToken.trim() ? input.enrollmentToken.trim() : undefined;
       const registration = await registerWorkloadWorker({
-        enrollmentToken: stringField(input, "enrollmentToken"),
+        ...(pairingCode ? { pairingCode } : {}),
+        ...(enrollmentToken ? { enrollmentToken } : {}),
         ...(typeof input.workerName === "string" && input.workerName.trim() ? { workerName: input.workerName.trim() } : {}),
         workerVersion: stringField(input, "workerVersion"),
         capabilities: stringListField(input, "capabilities"),

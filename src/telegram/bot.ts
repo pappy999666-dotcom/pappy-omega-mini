@@ -202,7 +202,7 @@ import {
 } from "./renderer.js";
 import {
   assignWorkloadSession,
-  createWorkloadEnrollmentToken,
+  createWorkloadPairingCode,
   getWorkloadMode,
   getOwnerWorkloadWorkerByDisplayKey,
   getOwnerWorkloadWorkerByCode,
@@ -833,7 +833,7 @@ export function createTelegramBot(): Telegraf<Context> {
         return;
       }
       if (!/^[a-z0-9][a-z0-9-]{2,47}$/.test(workloadCode) && !/^\d{5}$/.test(workloadCode)) {
-        await ctx.reply(pageText("Workload", dangerResponse("Invalid permanent code", "Send the permanent code printed after the panel setup finishes, for example <code>pappy-ab12cd</code>, or send <code>cancel</code>. Do not send the one-time enrollment token here.")), { parse_mode: "HTML" });
+        await ctx.reply(pageText("Workload", dangerResponse("Use Add Workload", "Tap <b>Add Workload</b> in Telegram to receive a pairing code and the exact <code>index.js</code> file. This screen no longer accepts a permanent panel code.")), { parse_mode: "HTML" });
         return;
       }
       const ownerTelegramUserId = String(ctx.from.id);
@@ -843,7 +843,7 @@ export function createTelegramBot(): Telegraf<Context> {
         : (await getWorkspaceWorkloadWorkerByCode(workloadInput.workspaceId, workloadCode))
           ?? (await getOwnerWorkloadWorkerByCode(ownerTelegramUserId, workloadCode));
       if (!worker) {
-        await ctx.reply(pageText("Workload", dangerResponse("Panel code not found", "The permanent code has not registered to this Telegram workspace yet. Confirm that the setup command completed, copy the exact code printed by the panel, and try again. If the panel is still starting, wait a few seconds and send the code again.")), { parse_mode: "HTML" });
+        await ctx.reply(pageText("Workload", dangerResponse("Use Add Workload", "Start again from <b>Add Workload</b>. Telegram will create a pairing code, send <code>index.js</code>, and show where to paste the code after you click Start on your panel.")), { parse_mode: "HTML" });
         return;
       }
       if (!isWorkloadWorkerReady(worker)) {
@@ -4445,47 +4445,53 @@ export function createTelegramBot(): Telegraf<Context> {
           const code = worker.workloadCode ?? worker.displayKey;
           return [btn(`▣ ${worker.workerName ?? "Panel"} · ${code} · ${worker.status}`, `workload:select:${code}`)];
         }),
-        [btn("➕ Add My Workload Code", "workload:add")],
+        [btn("➕ Add Workload", "workload:add", "success")],
         [btn(ui.back, "workload:menu")],
       ]),
     );
   });
   bot.action("workload:add", async (ctx) => {
-    await ctx.answerCbQuery();
-    const user = resolveTelegramUser(ctx);
-    pendingWorkloadKey.set(String(ctx.from?.id ?? ""), { workspaceId: user.workspaceId });
-    await edit(
-      ctx,
-      pageText("Workload · Add Workload", infoResponse("Paste the permanent code from your panel", "After you run the one-time setup command, the panel prints a permanent code such as <code>pappy-ab12cd</code>. Send that code here, wait for an ACTIVE heartbeat, or send <code>cancel</code>. This is not the one-time enrollment token.")),
-      keyboard([[btn(ui.close, "workload:menu", "danger")]]),
-    );
-  });
-  bot.action("workload:enroll", async (ctx) => {
-    await ctx.answerCbQuery("Creating one-time token…");
+    await ctx.answerCbQuery("Creating panel pairing code…");
     const user = resolveTelegramUser(ctx);
     try {
-      const enrollment = await createWorkloadEnrollmentToken(user.workspaceId, user.telegramUserId);
-      recordAudit({ workspaceId: user.workspaceId, actorTelegramUserId: user.telegramUserId, action: "workload.enrollment.create", success: true, metadata: { enrollmentId: enrollment.enrollmentId, expiresAt: enrollment.expiresAt } });
-      const setupCommand = `node index.js --enrollment ${enrollment.token}`;
+      const pairing = await createWorkloadPairingCode(user.workspaceId, user.telegramUserId);
+      recordAudit({ workspaceId: user.workspaceId, actorTelegramUserId: user.telegramUserId, action: "workload.pairing.create", success: true, metadata: { enrollmentId: pairing.enrollmentId, expiresAt: pairing.expiresAt } });
+      const pairingCode = pairing.pairingCode;
       await edit(
         ctx,
-        pageText("Workload · Setup", successResponse("One-time setup command ready", `<b>Do this now:</b> tap <b>Download Panel Worker</b> to receive <code>index.js</code>, upload it to the real Node.js panel, open the panel folder terminal, and run the copied command below. When the panel prints the permanent workload code, return here and tap <b>Add My Workload Code</b>.\n\n<b>Expires:</b> <code>${escapeHtml(new Date(enrollment.expiresAt).toISOString())}</code>\n\nThis enrollment command is used once. Do not put it in an <code>.env</code> file or share it publicly.`)),
-        keyboard([[copyBtn("📋 Copy setup command", setupCommand, "success")], [btn("⬇ Download Panel Worker", "workload:download", "success")], [btn("➕ Add My Workload Code", "workload:add")], [btn("📖 Simple Setup Guide", "workload:guide")], [btn(ui.back, "workload:menu")]]),
+        pageText(
+          "Workload · Add Workload",
+          successResponse(
+            "Pairing code ready",
+            `<blockquote><b>1.</b> Tap the copy button below and save this code.\n<b>2.</b> Save the <code>index.js</code> file Telegram sends next.\n<b>3.</b> Upload it to your Node.js panel. Rename it to exactly <code>index.js</code> if necessary.\n<b>4.</b> Click <b>Start</b>. The panel will ask for this code. Paste it in the panel console.\n<b>5.</b> Return here and tap <b>Refresh Status</b>.\n\nThis code expires after ${Math.round((pairing.expiresAt - Date.now()) / 60_000)} minutes and can be used once.</blockquote>`,
+          ),
+        ),
+        keyboard([
+          [copyBtn("📋 Copy Pairing Code", pairingCode, "success")],
+          [btn("↻ Refresh Registration", "workload:status")],
+          [btn(ui.back, "workload:menu")],
+        ]),
       );
+      const { readWorkloadPackageDocuments } = await import("../workload/package.js");
+      for (const document of await readWorkloadPackageDocuments()) await ctx.replyWithDocument(document);
     } catch (error) {
-      await edit(ctx, pageText("Workload · Enrollment", dangerResponse("Could not create token", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn(ui.back, "workload:menu")]]));
+      await edit(ctx, pageText("Workload · Add Workload", dangerResponse("Could not create pairing code", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn(ui.back, "workload:menu")]]));
     }
+  });
+  bot.action("workload:enroll", async (ctx) => {
+    await ctx.answerCbQuery("Opening Add Workload…");
+    await edit(ctx, pageText("Workload · Add Workload", infoResponse("Use the new pairing flow", "Tap <b>Add Workload</b>. Telegram will create a copyable pairing code, send <code>index.js</code>, and show the exact steps for your panel.")), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn(ui.back, "workload:menu")]]));
   });
   bot.action("workload:guide", async (ctx) => {
     await ctx.answerCbQuery();
-      await edit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("⬇ Download index.js", "workload:download", "success")], [btn("🔑 Create One-Time Setup", "workload:enroll", "success")], [btn("➕ Add Permanent Workload Code", "workload:add")], [btn(ui.back, "workload:menu")]]));
+      await edit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn("⬇ Download index.js", "workload:download")], [btn(ui.back, "workload:menu")]]));
   });
   bot.action("workload:download", async (ctx) => {
     await ctx.answerCbQuery("Preparing worker package…");
     try {
       const { readWorkloadPackageDocuments } = await import("../workload/package.js");
       for (const document of await readWorkloadPackageDocuments()) await ctx.replyWithDocument(document);
-        await edit(ctx, pageText("Workload · Downloaded", successResponse("Panel files sent", "Upload <code>index.js</code> to the Node.js panel and keep <code>README.md</code> open while deploying. When the worker prints its permanent code, return to Telegram and tap <b>Add My Workload Code</b>.")), keyboard([[btn("🔑 Create One-Time Setup", "workload:enroll", "success")], [btn("➕ Add Permanent Workload Code", "workload:add")], [btn("📖 Open Setup Guide", "workload:guide")], [btn(ui.back, "workload:menu")]]));
+        await edit(ctx, pageText("Workload · Downloaded", successResponse("Panel files sent", "Telegram sent <code>index.js</code> and <code>README.md</code>. Tap <b>Add Workload</b> to receive the pairing code that the panel will ask for after you click Start.")), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn("📖 Open Setup Guide", "workload:guide")], [btn(ui.back, "workload:menu")]]));
     } catch (error) {
       await edit(ctx, pageText("Workload · Download", dangerResponse("Package unavailable", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn(ui.back, "workload:menu")]]));
     }
@@ -5308,14 +5314,14 @@ async function startPairing(
     preferredWorkloadWorker.delete(userId);
     targetWorker = undefined;
     if (workloadMode === "OFF") {
-      await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("⚡ Create Panel Code", "workload:enroll", "success")], [btn("📖 Simple Setup Guide", "workload:guide")], [btn(ui.back, "menu:main")]]));
+      await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn("📖 Simple Setup Guide", "workload:guide")], [btn(ui.back, "menu:main")]]));
       return;
     }
     await sendOrEdit(ctx, pageText("Pairing", dangerResponse("Selected panel is offline", "Check the panel status or choose another panel before pairing.")), keyboard([[btn("◌ Workload", "workload:menu")], [btn(ui.back, "menu:main")]]));
     return;
   }
   if (workloadMode === "OFF" && !targetWorker) {
-    await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("⚡ Create Panel Code", "workload:enroll", "success")], [btn("➕ Add My Workload Code", "workload:add")], [btn(ui.back, "menu:main")]]));
+    await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn(ui.back, "menu:main")]]));
     return;
   }
   const normalizedName = requestedName.trim().replace(/\s+/g, "-");
@@ -5375,7 +5381,7 @@ async function beginPairingWizard(ctx: Context, workloadSelected = false): Promi
     });
     if (await getWorkloadMode(user.workspaceId) === "ON") rows.push([btn("▣ Use Central Workload", "pair:local")]);
     if (!rows.length) {
-      await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("⚡ Create Panel Code", "workload:enroll", "success")], [btn("⬇ Download Panel Worker", "workload:download")], [btn(ui.back, "menu:main")]]));
+      await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn("⬇ Download Panel Worker", "workload:download")], [btn(ui.back, "menu:main")]]));
       return;
     }
     rows.push([btn(ui.close, "menu:main", "danger")]);

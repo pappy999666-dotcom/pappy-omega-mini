@@ -42,7 +42,7 @@ const packagePath = path.join(root, "package.json");
 const runtimePath = path.join(root, ".pappy-workload-runtime.mjs");
 const manifest = {
   name: "pappy-omega-mini-workload-worker",
-  version: "1.2.3",
+  version: "1.2.4",
   private: true,
   main: "index.js",
   engines: { node: ">=20" },

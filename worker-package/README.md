@@ -6,13 +6,9 @@ The user does not need to create an `.env` file, write a `package.json`, configu
 
 ## Setup
 
-In Telegram, open **PAPPY OMEGA-MINI → Workload → Create Panel Code** and copy the one-time enrollment token or setup command. Upload `index.js` to a Node.js 20+ panel, open the terminal in that folder, and run:
+In Telegram, open **PAPPY OMEGA-MINI → Workload → Add Workload**. The bot shows a black-quote instruction screen, gives you a copy button for a short-lived pairing code, and sends the exact `index.js` file. Save both the code and the file. Upload the file to a Node.js 20+ panel, make sure its name is exactly `index.js`, and click **Start**. You do not need to type a command or create an `.env` file.
 
-```bash
-node index.js --enrollment ONE_TIME_TOKEN
-```
-
-The first run has four visible stages. The panel prints a progress line for every stage, and a long installation step prints a heartbeat every five seconds so nobody mistakes it for a freeze. Any npm output before the green readiness message belongs to installation; do not type a panel name while that stage is running. A normal first start looks like this:
+The first run has four visible stages. The panel prints a progress line for every stage, and a long installation step prints a heartbeat every five seconds so nobody mistakes it for a freeze. Any npm output before the green readiness message belongs to installation; do not type the pairing code while that stage is running. A normal first start looks like this:
 
 ```text
 [PAPPY PANEL] Boot sequence started · Node.js v22.x
@@ -30,22 +26,16 @@ The first run has four visible stages. The panel prints a progress line for ever
 If dependencies are already present, the panel says `[STAGE 2/4] Dependencies already installed · skipping npm install.` and moves on. Only after Stage 4 will it ask:
 
 ```text
-[PAPPY SETUP · STEP 1/2] Choose a short name for this panel.
-Use letters or numbers, for example: pappy, jesus, business-panel.
-› Panel name:
+[PAPPY SETUP · FINAL STEP] Paste the pairing code from Telegram.
+In Telegram open Workload → Add Workload, tap Copy Pairing Code, then paste it here.
+› Telegram pairing code:
 ```
 
-Enter a simple name such as `pappy`, `jesus`, or `business-panel`. Do not enter only `.`, punctuation, or a blank value. The worker registers securely and prints a permanent workload code such as:
-
-```text
-pappy-ab12cd
-```
-
-Keep that code safe. In Telegram, open **Workload → Add My Workload Code** and paste it. Wait for the panel to show `ACTIVE` and a fresh heartbeat. Then open **My Workloads**, select the panel, tap **Use This Workload**, and tap **Pair Number**. Telegram will use the selected workload for the new WhatsApp session.
+Paste the code copied from the bot. The panel registers automatically and then prints its workload matrix and heartbeat. Return to Telegram, tap **Refresh Status**, wait for `ACTIVE`, then tap **Use This Workload** and **Pair Number**. The same panel can host multiple sessions within its available resources.
 
 ## Restarting the panel
 
-Run the same command again or use the panel’s normal start command. The generated `package.json`, `node_modules`, and `pappy-workload-data` directory remain on the panel, so dependencies are not installed again and the worker credential/session state is reused. The one-time enrollment token is only needed on the first registration.
+Click Start again or use the panel’s normal start control. The generated `package.json`, `node_modules`, and `pappy-workload-data` directory remain on the panel, so dependencies are not installed again and the worker credential/session state is reused. The Telegram pairing code is only needed for the first registration.
 
 Keep `pappy-workload-data` persistent. It contains the encrypted worker credential and WhatsApp session files. Do not delete it unless you intentionally want to enroll a new worker.
 
@@ -55,7 +45,7 @@ The workload code is workspace-scoped, permanently reserved, and cannot be reuse
 
 The worker checks the control plane shortly after startup and periodically thereafter. A release is accepted only when its SHA-256 hash and Ed25519 signature verify against the public key embedded in this file’s release build. The worker writes the new `index.js` atomically, flushes encrypted session state, and restarts through the panel’s existing process supervisor. WhatsApp auth files, the worker credential, and assignment state remain in `pappy-workload-data`.
 
-Updates are disabled with `PAPPY_WORKLOAD_AUTO_UPDATE=false` when a panel operator needs a maintenance freeze. No MongoDB URI, Redis URI, Telegram token, enrollment token, or release private key is delivered to the panel.
+Updates are disabled with `PAPPY_WORKLOAD_AUTO_UPDATE=false` when a panel operator needs a maintenance freeze. No MongoDB URI, Redis URI, Telegram token, Telegram pairing code after registration, or release private key is delivered to the panel.
 
 The downloadable `index.js` is generated in a minified/mangled release form so it can be further protected by the panel operator’s approved obfuscation pipeline. The third-party Baileys dependency itself is not modified or repackaged; its license and attribution requirements remain unchanged.
 
@@ -82,4 +72,4 @@ The worker prints a compact ASCII matrix instead of a raw or garbled event strea
 
 ## If setup stops with `fatal startup error`
 
-Do not type a panel name into an npm installation screen. Wait for `[OK] Dependencies installed successfully.`, `[OK] Runtime verification passed.`, and `[STAGE 4/4] Launching the interactive PAPPY setup now…`. The yellow `[PROCESSING] … still working … Ns elapsed` line means the panel is actively installing and is not frozen. If the worker says that an enrollment token is missing or expired, return to Telegram, create a new one-time setup command, copy the complete command beginning with `node index.js --enrollment`, and run it again in the panel folder. If the name is rejected, answer with letters, numbers, or hyphens such as `pappy` and never use only `.`.
+Do not type a pairing code into an npm installation screen. Wait for `[OK] Dependencies installed successfully.`, `[OK] Runtime verification passed.`, and `[STAGE 4/4] Launching the interactive PAPPY setup now…`. The yellow `[PROCESSING] … still working … Ns elapsed` line means the panel is actively installing and is not frozen. If the worker says that a pairing code is missing, return to Telegram, tap **Workload → Add Workload**, tap **Copy Pairing Code**, and paste the code into the panel console. If the code is invalid or expired, create a fresh Add Workload flow; never share the code publicly.

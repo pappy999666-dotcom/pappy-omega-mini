@@ -1204,8 +1204,7 @@ export function autoPromoteGlobalTargetsKeyboard(
 
 export function workloadKeyboard(hasWorker: boolean): InlineKeyboardMarkup {
   return keyboard([
-    [btn("⚡ Create Panel Code", "workload:enroll", "success")],
-    [btn("➕ Add My Workload Code", "workload:add")],
+    [btn("➕ Add Workload", "workload:add", "success")],
     [btn(hasWorker ? "▣ My Workloads" : "▣ My Workload", "workload:list")],
     [btn("⬇ Download Panel Worker", "workload:download", "success")],
     [btn("📖 Simple Setup Guide", "workload:guide")],
@@ -1229,7 +1228,7 @@ export function workloadText(
     "Workload",
     infoResponse(
       "Central control · panel execution",
-      `<b>Panel workload:</b> ${mode === "ON" ? "🟢 ON" : "⚪ OFF"}\n\n${body}\n\n<b>How it works:</b> download <code>index.js</code>, run the one-time command from <b>Create Panel Code</b>, save the permanent code printed by the panel, then add that code here. During pairing, select the ACTIVE workload that should host the WhatsApp session. ${mode === "OFF" ? "New sessions currently require an ACTIVE workload." : "Existing sessions are not deleted when workload mode changes."}`,
+      `<b>Panel workload:</b> ${mode === "ON" ? "🟢 ON" : "⚪ OFF"}\n\n${body}\n\n<b>How it works:</b> tap <b>Add Workload</b>. Telegram gives you a copyable pairing code and sends <code>index.js</code>. Upload that exact file to your panel, click <b>Start</b>, then paste the Telegram code when the panel asks. The panel becomes your workload and can host as many sessions as its resources can support. ${mode === "OFF" ? "New sessions currently require an ACTIVE workload." : "Existing sessions are not deleted when workload mode changes."}`,
     ),
   );
 }
@@ -1241,7 +1240,7 @@ export function workloadPanelText(
     "Workload Panel",
     infoResponse(
       `${escapeHtml(worker.workerName ?? "Panel")} · ${escapeHtml(worker.workloadCode ?? worker.displayKey)}`,
-      `<b>Permanent code:</b> <code>${escapeHtml(worker.workloadCode ?? worker.displayKey)}</code>\n<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Last heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}\n<b>Assigned sessions:</b> ${worker.assignedSessionIds.length}\n\nThis is the panel that will host WhatsApp workload. Tap <b>Use This Workload</b> before pairing. Keep the permanent code private and do not reuse it in another workspace.`,
+      `<b>Workload code:</b> <code>${escapeHtml(worker.workloadCode ?? worker.displayKey)}</code>\n<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Last heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}\n<b>Assigned sessions:</b> ${worker.assignedSessionIds.length}\n\nThis panel is attached to Telegram and can host multiple WhatsApp sessions within its available resources. Tap <b>Use This Workload</b> before pairing.`,
     ),
   );
 }
@@ -1259,8 +1258,8 @@ export function workloadGuideText(controlUrl?: string): string {
   return pageText(
     "Workload Deployment Guide",
     infoResponse(
-      "One command · one saved workload code",
-      `<b>1.</b> Tap <b>Download Panel Worker</b> and receive exactly two files: <code>index.js</code> and <code>README.md</code>.\n<b>2.</b> Tap <b>Create Panel Code</b> and copy the one-time command. It expires and is used only for first registration.\n<b>3.</b> Open the real Node.js 20+ panel, upload <code>index.js</code> into an empty folder, open that folder’s terminal, and run the copied command. Do not create <code>.env</code>, <code>package.json</code>, MongoDB, Redis, or Telegram configuration files.\n<b>4.</b> When the panel asks for a name, enter a short name such as <code>pappy</code>. The worker installs its restricted dependencies and prints a permanent code such as <code>pappy-ab12cd</code>.\n<b>5.</b> Copy that permanent code exactly and return to Telegram. Tap <b>Add My Workload Code</b> and paste it. Wait until the worker shows <b>ACTIVE</b> with a fresh heartbeat.\n<b>6.</b> Open <b>My Workloads</b>, select the new panel, tap <b>Use This Workload</b>, then tap <b>Pair Number</b>.\n<b>7.</b> Enter the WhatsApp number in international format. The WhatsApp session and encrypted auth state will live on that panel; Telegram remains the control plane.\n\n<b>Control URL:</b> <code>${escapeHtml(controlUrl ?? "configured by the owner")}</code>\n\nThe worker contains only WhatsApp workload runtime. It never receives Telegram, MongoDB, Redis, owner, or admin credentials. Keep the permanent workload code and panel data private. Keep the panel data folder persistent so sessions survive restarts.`,
+      "Deploy once · paste one Telegram code",
+      `<b>1.</b> Tap <b>Add Workload</b>. Telegram shows a black-quote instruction screen, a copy button for your private pairing code, and sends the exact <code>index.js</code> file.\n<b>2.</b> Save the code and the file. On your Node.js 20+ panel, the file name must be exactly <code>index.js</code>; rename it if the panel changed the name.\n<b>3.</b> Upload <code>index.js</code> into the panel and click <b>Start</b>. Wait while the panel installs and verifies its runtime. Do not type anything during installation.\n<b>4.</b> When the console says <b>Paste the pairing code from Telegram</b>, paste the code you copied from this bot. The panel registers itself automatically.\n<b>5.</b> Return to Telegram and tap <b>Refresh Status</b>. When the panel is <b>ACTIVE</b> with a fresh heartbeat, tap <b>Use This Workload</b> and then <b>Pair Number</b>.\n\nYou do not need an <code>.env</code> file, <code>package.json</code>, MongoDB, Redis, Telegram token, terminal enrollment command, or permanent-code exchange. The worker contains only WhatsApp workload runtime, while Telegram remains the control plane. Keep <code>pappy-workload-data</code> persistent so sessions survive restarts.\n\n<b>Control URL:</b> <code>${escapeHtml(controlUrl ?? "configured by the owner")}</code>`,
     ),
   );
 }

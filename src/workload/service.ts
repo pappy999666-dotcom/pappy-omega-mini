@@ -55,6 +55,12 @@ export interface WorkloadEnrollmentResult {
   expiresAt: number;
 }
 
+export interface WorkloadPairingCodeResult {
+  enrollmentId: string;
+  pairingCode: string;
+  expiresAt: number;
+}
+
 export interface AuthenticatedWorkloadWorker {
   worker: WorkloadWorkerRecord;
   credential: string;
@@ -103,6 +109,29 @@ function createWorkloadCode(workerName: string): string {
   return `${workerName}-${crypto.randomBytes(3).toString("hex")}`;
 }
 
+function createHumanPairingCode(): string {
+  const suffix = crypto.randomBytes(9).toString("base64url").replace(/[^a-zA-Z0-9]/g, "").slice(0, 12).toUpperCase();
+  return `PAPPY-${suffix}`;
+}
+
+export async function createWorkloadPairingCode(
+  workspaceId: string,
+  ownerTelegramUserId: string,
+): Promise<WorkloadPairingCodeResult> {
+  const pairingCode = createHumanPairingCode();
+  const now = Date.now();
+  const record: WorkloadEnrollmentRecord = {
+    enrollmentId: crypto.randomUUID(),
+    workspaceId,
+    ownerTelegramUserId,
+    tokenHash: hashCredential(pairingCode),
+    expiresAt: now + WORKLOAD_ENROLLMENT_TTL_MS,
+    createdAt: now,
+  };
+  await createWorkloadEnrollment(record);
+  return { enrollmentId: record.enrollmentId, pairingCode, expiresAt: record.expiresAt };
+}
+
 export async function createWorkloadEnrollmentToken(
   workspaceId: string,
   ownerTelegramUserId: string,
@@ -124,10 +153,12 @@ export async function createWorkloadEnrollmentToken(
 export async function registerWorkloadWorker(
   input: WorkloadRegistrationRequest,
 ): Promise<WorkloadRegistrationResponse & { workspaceId: string }> {
-  const enrollment = await getWorkloadEnrollmentByTokenHash(hashCredential(input.enrollmentToken));
-  if (!enrollment) throw new Error("Workload enrollment token is invalid or expired.");
+  const suppliedCode = input.pairingCode ?? input.enrollmentToken;
+  if (!suppliedCode) throw new Error("Panel pairing code is required.");
+  const enrollment = await getWorkloadEnrollmentByTokenHash(hashCredential(suppliedCode));
+  if (!enrollment) throw new Error(input.pairingCode ? "Panel pairing code is invalid or expired." : "Workload enrollment token is invalid or expired.");
   if (!(await consumeWorkloadEnrollment(enrollment.enrollmentId)) )
-    throw new Error("Workload enrollment token was already consumed.");
+    throw new Error(input.pairingCode ? "Panel pairing code was already used." : "Workload enrollment token was already consumed.");
 
   const now = Date.now();
   const credential = createOpaqueToken(48);
