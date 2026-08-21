@@ -295,7 +295,7 @@ async function applyVerifiedUpdate(release) {
   if (!bundle.length || actualHash !== expectedHash) throw new Error("Worker release hash verification failed.");
   const signature = Buffer.from(String(release.signature ?? ""), "base64");
   if (!signature.length || !verify(null, bundle, RELEASE_PUBLIC_KEY_PEM, signature)) throw new Error("Worker release signature verification failed.");
-  const temp = `${ENTRYPOINT}.update-${process.pid}-${randomUUID()}`;
+  const temp = `${ENTRYPOINT}.update-${process.pid}-${randomUUID()}.js`;
   const backupPath = `${ENTRYPOINT}.previous`;
   await writeFile(temp, bundle, { mode: 0o700 });
   const syntax = spawnSync(process.execPath, ["--check", temp], { stdio: "ignore" });
