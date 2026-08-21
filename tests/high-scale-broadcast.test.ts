@@ -56,11 +56,14 @@ describe("high-scale worker-local broadcast contract", () => {
 
   it("keeps Validator Hub cooldown and permanent-failure rules in the control plane", async () => {
     const runtime = await readFile(new URL("../src/jobs/runtime.ts", import.meta.url), "utf8");
+    const mongo = await readFile(new URL("../src/persistence/mongo.ts", import.meta.url), "utf8");
     expect(runtime).toContain("isInviteValidationRateLimited");
     expect(runtime).toContain("validatorRetiredUntil: Date.now() + VALIDATOR_RETIRE_MS");
     expect(runtime).toContain("if (isInviteValidationPermanentFailure(validationMessage)) break;");
     expect(runtime).toContain("healthySessionKeys");
     expect(runtime).toContain("isInviteValidationPermanentFailure(lower)");
+    expect(mongo).toContain("validatorRetiredUntil: Number");
+    expect(mongo).toContain("validatorRateLimitCount: Number");
   });
 
   it("does not place group inventory on the broadcast workload intent", () => {

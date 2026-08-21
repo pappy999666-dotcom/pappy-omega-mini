@@ -382,6 +382,11 @@ const sessionSchema = new mongoose.Schema<SessionDocument>(
     workloadWorkerId: String,
     lastError: String,
     disconnectReason: String,
+    validatorRetiredUntil: Number,
+    validatorRetireReason: String,
+    validatorFailureCount: Number,
+    validatorRateLimitCount: Number,
+    validatorLastSuccessAt: Number,
   },
   { collection: "whatsapp_sessions", versionKey: false },
 );
