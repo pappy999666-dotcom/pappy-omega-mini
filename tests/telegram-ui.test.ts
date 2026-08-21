@@ -273,7 +273,7 @@ describe("Telegram UI authorization", () => {
     expect(on).toContain("bucket:live:off");
     const text = validatorLiveText(
       {
-        counts: { main: 2, active: 3, dead: 1, error: 0, master: 6 },
+        counts: { main: 2, validating: 1, active: 3, dead: 1, error: 0 },
         recent: [
           { canonicalUrl: "https://chat.whatsapp.com/abc", bucket: "active" },
         ],

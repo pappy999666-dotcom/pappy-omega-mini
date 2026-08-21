@@ -4,11 +4,11 @@ import { env } from "../config/env.js";
 import type { JobProgress, WorkerContext } from "./job-contracts.js";
 import {
   LinkBucketStore,
+  GLOBAL_VALIDATOR_SCOPE,
   type LinkRecord,
 } from "../links/link-bucket-store.js";
 import {
   claimValidatorMainLinks,
-  requeueLegacyValidatorErrors,
   requeueValidatorMainLinks,
 } from "../links/validator-operations.js";
 import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
@@ -113,7 +113,6 @@ let jobCompletionNotifier:
 let activeBuckets: LinkBucketStore | undefined;
 let activeJoinResults: JoinResultStore | undefined;
 let validatorSweepTimer: NodeJS.Timeout | undefined;
-const validatorErrorMigrations = new Set<string>();
 
 export function getWorkerRuntime(): JobOrchestrator | undefined {
   return activeRuntime;
@@ -125,6 +124,11 @@ export function getInceptorSnapshot() {
 
 export async function runInceptorSweep() {
   return getInceptor()?.sweep();
+}
+
+export async function runValidatorSweepNow(): Promise<void> {
+  if (activeRuntime && activeBuckets)
+    await sweepPendingMainValidation(activeRuntime, activeBuckets);
 }
 
 export function setJobCompletionNotifier(
@@ -234,8 +238,7 @@ export function startWorkerRuntime(): JobOrchestrator {
   orchestrator.addCloseHook(async () => {
     if (validatorSweepTimer) clearInterval(validatorSweepTimer);
     validatorSweepTimer = undefined;
-    validatorErrorMigrations.clear();
-    await redis.quit();
+      await redis.quit();
   });
 
   orchestrator.register("link-validation", async (context) => {
@@ -790,17 +793,16 @@ export function startWorkerRuntime(): JobOrchestrator {
           await buckets.move(
             context.job.workspaceId,
             record.canonicalUrl,
-            "main",
+            "dead",
             {
-              validationError:
-                "Dead or revoked invite returned to Main for re-validation.",
+              validationError: "Dead or revoked invite moved to the shared Dead bucket.",
               lastCheckedAt: Date.now(),
               metadata: {
                 ...metadata,
                 joinClassification: "dead-link",
-                joinRetryable: true,
-                needsValidation: true,
-                validationState: "pending",
+                joinRetryable: false,
+                needsValidation: false,
+                validationState: "dead",
               },
             },
           );
@@ -811,8 +813,8 @@ export function startWorkerRuntime(): JobOrchestrator {
           });
           await context.report({
             deadLinks,
-            lastResult: `Dead link returned to Main: ${record.canonicalUrl}`,
-            currentAction: "returned to main",
+            lastResult: `Dead link moved to shared Dead: ${record.canonicalUrl}`,
+            currentAction: "moved to dead",
           });
         } else {
           const retryable = classified.retryable || classified.classification === "rate-limit";
@@ -1159,26 +1161,22 @@ export function startWorkerRuntime(): JobOrchestrator {
 }
 
 
+let validatorSweepBusy = false;
+
 async function sweepPendingMainValidation(
   orchestrator: JobOrchestrator,
   buckets: LinkBucketStore,
 ): Promise<void> {
-  const activeSessions = listAllSessions().filter(
-    (session) => session.status === "ACTIVE" && session.authHealth !== "INVALID",
-  );
-  const workspaceIds = [...new Set(activeSessions.map((session) => session.workspaceId))];
-  for (const workspaceId of workspaceIds) {
-    if (!validatorErrorMigrations.has(workspaceId)) {
-      await requeueLegacyValidatorErrors(workspaceId).catch(() => 0);
-      validatorErrorMigrations.add(workspaceId);
-    }
-    const sessions = activeSessions.filter(
-      (session) => session.workspaceId === workspaceId,
+  if (validatorSweepBusy) return;
+  validatorSweepBusy = true;
+  try {
+    await buckets.migrateLegacyWorkspacesToGlobal().catch(() => 0);
+    const activeSessions = listAllSessions().filter(
+      (session) => session.status === "ACTIVE" && session.authHealth !== "INVALID",
     );
-    if (!sessions.length) continue;
-    const activeValidationJobs = (await orchestrator.listRecent(500)).filter(
+    if (!activeSessions.length) return;
+    const activeValidationJobs = (await orchestrator.listRecent(1000)).filter(
       (job) =>
-        job.workspaceId === workspaceId &&
         job.kind === "link-validation" &&
         ["QUEUED", "RUNNING", "RETRYING"].includes(job.state),
     );
@@ -1187,14 +1185,14 @@ async function sweepPendingMainValidation(
         .map((job) => job.sessionId)
         .filter((sessionId): sessionId is string => Boolean(sessionId)),
     );
-    const availableSessions = sessions.filter(
+    const availableSessions = activeSessions.filter(
       (session) => !busySessionIds.has(session.sessionId),
     );
-    if (!availableSessions.length) continue;
+    if (!availableSessions.length) return;
     const records: LinkRecord[] = [];
     let cursor = 0;
     do {
-      const page = await buckets.list(workspaceId, "main", cursor, 500);
+      const page = await buckets.list(GLOBAL_VALIDATOR_SCOPE, "main", cursor, 500);
       records.push(...page.records);
       cursor = page.nextCursor;
     } while (cursor !== 0);
@@ -1210,10 +1208,9 @@ async function sweepPendingMainValidation(
           (right.firstSeenAt - left.firstSeenAt) ||
           left.canonicalUrl.localeCompare(right.canonicalUrl),
       );
-    if (!pending.length) continue;
+    if (!pending.length) return;
     const validatorBatchSize = 5;
-    const admissionLimit = availableSessions.length * validatorBatchSize;
-    const admitted = pending.slice(0, admissionLimit);
+    const admitted = pending.slice(0, availableSessions.length * validatorBatchSize);
     const chunks = availableSessions.map(() => [] as string[]);
     admitted.forEach((record, index) => {
       chunks[index % chunks.length]?.push(record.canonicalUrl);
@@ -1224,7 +1221,7 @@ async function sweepPendingMainValidation(
       if (!session || !urls.length) continue;
       const batch = urls.slice(0, validatorBatchSize);
       const claimed = await claimValidatorMainLinks(
-        workspaceId,
+        GLOBAL_VALIDATOR_SCOPE,
         batch,
         session.sessionId,
       ).catch(() => 0);
@@ -1240,15 +1237,15 @@ async function sweepPendingMainValidation(
       jobs.push(
         orchestrator
           .enqueue({
-            workspaceId,
+            workspaceId: session.workspaceId,
             sessionId: session.sessionId,
             kind: "link-validation",
             payload,
-            idempotencyKey: `validator-auto:${workspaceId}:${session.sessionId}:${payloadHash}`,
+            idempotencyKey: `validator-auto:global:${session.sessionId}:${payloadHash}`,
           })
           .catch(async (error) => {
             for (const url of batch)
-              await buckets.move(workspaceId, url, "main", {
+              await buckets.move(GLOBAL_VALIDATOR_SCOPE, url, "main", {
                 metadata: {
                   needsValidation: true,
                   validationState: "pending",
@@ -1258,7 +1255,9 @@ async function sweepPendingMainValidation(
           }),
       );
     }
-    await Promise.all(jobs);
+    await Promise.allSettled(jobs);
+  } finally {
+    validatorSweepBusy = false;
   }
 }
 
@@ -1305,5 +1304,4 @@ async function waitWithHeartbeat(
 export function stopWorkerRuntimeForTests(): void {
   if (validatorSweepTimer) clearInterval(validatorSweepTimer);
   validatorSweepTimer = undefined;
-  validatorErrorMigrations.clear();
 }

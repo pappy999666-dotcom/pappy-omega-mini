@@ -7,7 +7,7 @@ import {
 } from "./link-bucket-store.js";
 import { canonicalizeHttpUrl } from "./url-canonicalization.js";
 
-export type ValidatorBucket = LinkBucket;
+export type ValidatorBucket = Exclude<LinkBucket, "master">;
 
 async function withStore<T>(
   fn: (store: LinkBucketStore) => Promise<T>,

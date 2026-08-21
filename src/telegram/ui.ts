@@ -89,7 +89,7 @@ export function dashboardKeyboard(isAdmin: boolean): InlineKeyboardMarkup {
       btn("▣ Sessions", "sessions:list:0"),
     ],
     [
-      btn("⌁ Validator Hub", "bucket:status"),
+      ...(isAdmin ? [btn("⌁ Validator Hub", "bucket:status")] : [btn("📥 Active Links", "bucket:user:active")]),
       btn("⚡ Auto Promote", "autopromote:user"),
     ],
     [btn("🌉 Global Bridge", "bridge:global")],
@@ -285,8 +285,7 @@ export function sessionValidatorKeyboard(
   sessionId: string,
 ): InlineKeyboardMarkup {
   return keyboard([
-    [btn("📊 Link Statistics", `session:${sessionId}:collect`, "success")],
-    [btn("⌁ Open Live Validator Hub", "bucket:status", "success")],
+    [btn("📥 Shared Active Links", "bucket:user:active", "success")],
     [btn("‹ Session Control", `session:${sessionId}:menu`)],
   ]);
 }
@@ -295,8 +294,8 @@ export function linkCollectionKeyboard(
   sessionId: string,
 ): InlineKeyboardMarkup {
   return keyboard([
-    [btn("↻ Refresh Statistics", `session:${sessionId}:collect`, "success")],
-    [btn("⌁ Open Live Validator Hub", "bucket:status", "success")],
+    [btn("↻ Refresh Shared Statistics", `session:${sessionId}:collect`, "success")],
+    [btn("📥 Download Active Links", "bucket:user:active", "success")],
     [btn(ui.back, `session:${sessionId}:menu`)],
   ]);
 }
@@ -318,7 +317,7 @@ export function validatorDashboardText(snapshot: {
     "Validator Hub",
     infoResponse(
       "Live Workspace Buckets",
-      `<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating:</b> ${snapshot.counts.validating ?? 0}\n<b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}\n<b>Retryable:</b> ${snapshot.counts.error ?? 0}  <b>Master:</b> ${snapshot.counts.master ?? 0}\n\n<b>Recent records</b>\n${recent}\n\n<i>Updated ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+      `<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating:</b> ${snapshot.counts.validating ?? 0}\n<b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}\n<b>Retryable:</b> ${snapshot.counts.error ?? 0}\n\n<b>Recent records</b>\n${recent}\n\n<i>Updated ${new Date(snapshot.capturedAt).toISOString()}</i>`,
     ),
   );
 }
@@ -370,7 +369,7 @@ export function validatorLiveText(
     "Validator Hub · Live",
     infoResponse(
       active ? "Live feed is ON" : "Live feed is PAUSED",
-      `<b>Live validation workers · state matrix</b> · refreshed in place\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating:</b> ${snapshot.counts.validating ?? 0}\n<b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}\n<b>Retryable:</b> ${snapshot.counts.error ?? 0}  <b>Master total:</b> ${snapshot.counts.master ?? 0}\n\n<b>Validator intake</b> · automatic collection ON · admission every 5s · bounded batches per ACTIVE socket\n\n<b>Validation sockets</b>\n${sessionFeed}\n\n<b>Current validation</b>\n${activeFeed}\n\n<b>Group matrix</b>\n${matrix}\n\n<i>Links leave Main into Validating while the distributor checks them. Only confirmed invite metadata enters Active. Dead means revoked, expired, invalid, or missing groups. Temporary transport failures return to Main and never contaminate Retryable/Error.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+      `<b>Live validation workers · state matrix</b> · refreshed in place\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating:</b> ${snapshot.counts.validating ?? 0}\n<b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}\n<b>Retryable:</b> ${snapshot.counts.error ?? 0}\n\n<b>Validator intake</b> · automatic collection ON · admission every 5s · bounded batches per ACTIVE socket\n\n<b>Validation sockets</b>\n${sessionFeed}\n\n<b>Current validation</b>\n${activeFeed}\n\n<b>Group matrix</b>\n${matrix}\n\n<i>Links leave Main into Validating while the distributor checks them. Only confirmed invite metadata enters Active. Dead means revoked, expired, invalid, or missing groups. Temporary transport failures return to Main and never contaminate Retryable/Error.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
     ),
   );
 }
@@ -397,7 +396,7 @@ export function bucketKeyboard(): InlineKeyboardMarkup {
       btn("↻ Refresh Dashboard", "bucket:status", "primary"),
     ],
     [
-      btn("📦 Main / Master", "bucket:view:main"),
+      btn("📥 Main", "bucket:view:main"),
       btn("◌ Validating", "bucket:view:validating"),
       btn("✅ Active", "bucket:view:active"),
     ],
@@ -408,7 +407,6 @@ export function bucketKeyboard(): InlineKeyboardMarkup {
       btn("🗑 Purge Dead", "bucket:purge:dead", "danger"),
       btn("🗑 Purge Retryable", "bucket:purge:error", "danger"),
     ],
-    [btn("🗑 Purge Everything", "bucket:purge:master", "danger")],
     [btn(ui.back, "menu:main")],
   ]);
 }
@@ -642,11 +640,11 @@ export function adminBucketText(snapshot: {
             `${record.bucket === "active" ? "✅" : record.bucket === "dead" ? "⛔" : "•"} <code>${escapeHtml(record.canonicalUrl.slice(0, 80))}</code>${record.validationError ? `\n<i>${escapeHtml(record.validationError.slice(0, 120))}</i>` : ""}`,
         )
         .join("\n\n")
-    : "No master-bucket records are available.";
+    : "No shared validator records are available.";
   return pageText(
-    "Admin · Master Bucket",
+    "Admin · Validator Hub",
     infoResponse(
-      "Validator Workspace Snapshot",
+      "Shared Admin Validator Snapshot",
       `${counts}\n\n<b>Recent records</b>\n${recent}\n\n<i>Captured ${new Date(snapshot.capturedAt).toISOString()}</i>`,
     ),
   );
@@ -792,7 +790,7 @@ export function adminKeyboard(): InlineKeyboardMarkup {
     [btn("◌ Workload", "admin:workload", "success")],
     [
       btn("◷ Global Jobs", "admin:jobs"),
-      btn("▤ Master Bucket", "admin:bucket"),
+      btn("⌁ Validator Hub", "bucket:status"),
     ],
     [btn("🛡 Inceptor", "admin:inceptor")],
     [btn("🗑 Clear All Jobs", "admin:jobs:clear", "danger")],

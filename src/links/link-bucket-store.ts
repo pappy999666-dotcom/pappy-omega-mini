@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
 
+export const GLOBAL_VALIDATOR_SCOPE = "__admin_validator__";
+
 export type LinkBucket =
   | "main"
   | "validating"
@@ -49,22 +51,19 @@ export class LinkBucketStore {
       duplicateCount?: number;
     },
   ): Promise<LinkRecord> {
-    const key = this.recordKey(input.workspaceId, input.canonicalUrl);
-    const existing = await this.get(input.workspaceId, input.canonicalUrl);
+    const normalizedInput = { ...input, workspaceId: GLOBAL_VALIDATOR_SCOPE };
+    const key = this.recordKey(GLOBAL_VALIDATOR_SCOPE, input.canonicalUrl);
+    const existing = await this.get(GLOBAL_VALIDATOR_SCOPE, input.canonicalUrl);
     const record: LinkRecord = existing
-      ? { ...existing, ...input, duplicateCount: existing.duplicateCount + 1 }
+      ? { ...existing, ...normalizedInput, duplicateCount: existing.duplicateCount + 1 }
       : {
-          ...input,
+          ...normalizedInput,
           duplicateCount: input.duplicateCount ?? 0,
           firstSeenAt: Date.now(),
         };
     await this.redis.set(key, JSON.stringify(record));
     await this.redis.sadd(
       this.bucketKey(record.workspaceId, record.bucket),
-      record.canonicalUrl,
-    );
-    await this.redis.sadd(
-      this.bucketKey(record.workspaceId, "master"),
       record.canonicalUrl,
     );
     return record;
@@ -91,6 +90,7 @@ export class LinkBucketStore {
     const next: LinkRecord = {
       ...current,
       ...patch,
+      workspaceId: GLOBAL_VALIDATOR_SCOPE,
       bucket,
       lastCheckedAt: Date.now(),
     };
@@ -104,7 +104,6 @@ export class LinkBucketStore {
         canonicalUrl,
       );
     await this.redis.sadd(this.bucketKey(workspaceId, bucket), canonicalUrl);
-    await this.redis.sadd(this.bucketKey(workspaceId, "master"), canonicalUrl);
     return next;
   }
 
@@ -198,23 +197,25 @@ export class LinkBucketStore {
     }
   }
 
-  async listAll(workspaceId: string): Promise<LinkRecord[]> {
-    const records: LinkRecord[] = [];
-    let cursor = 0;
-    do {
-      const [nextCursor, urls] = await this.redis.sscan(
-        this.bucketKey(workspaceId, "master"),
-        cursor,
-        "COUNT",
-        500,
-      );
-      for (const url of urls) {
-        const record = await this.get(workspaceId, url);
-        if (record) records.push(record);
-      }
-      cursor = Number(nextCursor);
-    } while (cursor !== 0);
-    return records;
+  async listAll(_workspaceId: string): Promise<LinkRecord[]> {
+    const records = new Map<string, LinkRecord>();
+    for (const bucket of ["main", "validating", "active", "dead", "error"] as LinkBucket[]) {
+      let cursor = 0;
+      do {
+        const [nextCursor, urls] = await this.redis.sscan(
+          this.bucketKey(GLOBAL_VALIDATOR_SCOPE, bucket),
+          cursor,
+          "COUNT",
+          500,
+        );
+        for (const url of urls) {
+          const record = await this.get(GLOBAL_VALIDATOR_SCOPE, url);
+          if (record) records.set(record.canonicalUrl, record);
+        }
+        cursor = Number(nextCursor);
+      } while (cursor !== 0);
+    }
+    return [...records.values()];
   }
 
   async removeSourceSession(
@@ -233,34 +234,40 @@ export class LinkBucketStore {
     return removed;
   }
 
-  async reconcileMaster(workspaceId: string): Promise<number> {
-    let added = 0;
-    for (const bucket of ["main", "validating", "active", "dead", "error"] as LinkBucket[]) {
-      let cursor = 0;
-      do {
-        const [nextCursor, urls] = await this.redis.sscan(
-          this.bucketKey(workspaceId, bucket),
-          cursor,
-          "COUNT",
-          500,
-        );
-        if (urls.length) {
-          added += await this.redis.sadd(
-            this.bucketKey(workspaceId, "master"),
-            ...urls,
-          );
-        }
-        cursor = Number(nextCursor);
-      } while (cursor !== 0);
-    }
-    return added;
+  async reconcileMaster(_workspaceId: string): Promise<number> {
+    return 0;
   }
 
-  private recordKey(workspaceId: string, canonicalUrl: string): string {
-    return `pappy-omega-mini:link:${workspaceId}:${createHash("sha256").update(canonicalUrl).digest("hex")}`;
+  async migrateLegacyWorkspacesToGlobal(): Promise<number> {
+    const claimKey = "pappy-omega-mini:validator-global-migration";
+    const claimed = await this.redis.set(claimKey, "1", "EX", 300, "NX");
+    if (claimed !== "OK") return 0;
+    let migrated = 0;
+    let cursor = "0";
+    do {
+      const result = await this.redis.scan(cursor, "MATCH", "pappy-omega-mini:link:*", "COUNT", 500);
+      cursor = result[0];
+      for (const key of result[1]) {
+        const parts = key.split(":");
+        if (parts.length !== 4 || parts[2] === GLOBAL_VALIDATOR_SCOPE) continue;
+        const raw = await this.redis.get(key);
+        if (!raw) continue;
+        const legacy = JSON.parse(raw) as LinkRecord;
+        await this.upsert({ ...legacy, workspaceId: GLOBAL_VALIDATOR_SCOPE });
+        await this.redis.del(key);
+        migrated += 1;
+      }
+    } while (cursor !== "0");
+    const legacyMasterKeys = await this.redis.keys("pappy-omega-mini:links:*:master");
+    if (legacyMasterKeys.length) await this.redis.del(...legacyMasterKeys);
+    return migrated;
   }
 
-  private bucketKey(workspaceId: string, bucket: LinkBucket): string {
-    return `pappy-omega-mini:links:${workspaceId}:${bucket}`;
+  private recordKey(_workspaceId: string, canonicalUrl: string): string {
+    return `pappy-omega-mini:link:${GLOBAL_VALIDATOR_SCOPE}:${createHash("sha256").update(canonicalUrl).digest("hex")}`;
+  }
+
+  private bucketKey(_workspaceId: string, bucket: LinkBucket): string {
+    return `pappy-omega-mini:links:${GLOBAL_VALIDATOR_SCOPE}:${bucket}`;
   }
 }

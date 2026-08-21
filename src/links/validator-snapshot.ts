@@ -7,7 +7,7 @@ import {
 } from "./link-bucket-store.js";
 
 export interface ValidatorSnapshot {
-  counts: Record<LinkBucket, number>;
+  counts: Record<Exclude<LinkBucket, "master">, number>;
   recent: LinkRecord[];
   capturedAt: number;
 }
@@ -22,16 +22,14 @@ const store = new LinkBucketStore(redis);
 export async function getValidatorSnapshot(
   workspaceId: string,
 ): Promise<ValidatorSnapshot> {
-  await store.reconcileMaster(workspaceId);
-  const buckets: LinkBucket[] = [
+  const buckets: Exclude<LinkBucket, "master">[] = [
     "main",
     "validating",
     "active",
     "dead",
     "error",
-    "master",
   ];
-  const counts = {} as Record<LinkBucket, number>;
+  const counts = {} as Record<Exclude<LinkBucket, "master">, number>;
   for (const bucket of buckets)
     counts[bucket] = await store.count(workspaceId, bucket);
   const recentRecords = [

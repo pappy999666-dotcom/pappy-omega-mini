@@ -32,6 +32,7 @@ import {
   getInceptorSnapshot,
   getWorkerRuntime,
   runInceptorSweep,
+  runValidatorSweepNow,
   setJobCompletionNotifier,
 } from "../jobs/runtime.js";
 import type { JobRecord } from "../jobs/job-contracts.js";
@@ -57,7 +58,6 @@ import {
 import { getValidatorSnapshot } from "../links/validator-snapshot.js";
 import {
   listValidatorBucket,
-  listAllValidatorBucket,
   countValidatorBucket,
   claimValidatorMainLinks,
   mergeValidatorBuckets,
@@ -3055,48 +3055,57 @@ export function createTelegramBot(): Telegraf<Context> {
     });
   }
 
+  bot.action("bucket:user:active", async (ctx) => {
+    await ctx.answerCbQuery();
+    await edit(
+      ctx,
+      pageText(
+        "Active Links",
+        infoResponse(
+          "Shared verified bucket",
+          "These links are centrally validated and shared across Join Manager sessions. Choose a download format.",
+        ),
+      ),
+      keyboard([
+        [btn("⬇ Active · TXT", "bucket:user:download:active:txt")],
+        [btn("⬇ Active · HTML", "bucket:user:download:active:html")],
+        [btn(ui.back, "menu:main")],
+      ]),
+    );
+  });
+  bot.action(/^bucket:user:download:active:(txt|html)$/, async (ctx) => {
+    await ctx.answerCbQuery("Preparing verified Active export…");
+    const user = resolveTelegramUser(ctx);
+    const format = (ctx.match[1] ?? "txt") as "txt" | "html";
+    try {
+      const exported = await exportBucket(user.workspaceId, "active", format);
+      await ctx.replyWithDocument({
+        source: Buffer.from(exported.content, "utf8"),
+        filename: exported.fileName,
+      });
+    } catch (error) {
+      await ctx.reply(
+        pageText(
+          "Active Links",
+          dangerResponse(
+            "Export Failed",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        { parse_mode: "HTML" },
+      );
+    }
+  });
   bot.action("bucket:status", async (ctx) => {
     await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
     await showValidatorHub(ctx);
   });
   bot.action("bucket:validate", async (ctx) => {
-    await ctx.answerCbQuery("Starting validation…");
-    const user = resolveTelegramUser(ctx);
-    const runtime = getWorkerRuntime();
-    const records = await listAllValidatorBucket(
-      user.workspaceId,
-      "main",
-    ).catch(() => []);
-    const activeSessions = listSessions(user.workspaceId).filter(
-      (entry) => entry.status === "ACTIVE",
-    );
-    const session = activeSessions[0];
-    const urls = records.map((record) => record.canonicalUrl).filter(Boolean);
-    if (!runtime || !session || urls.length === 0) {
-      await edit(
-        ctx,
-        pageText(
-          "Validator Hub",
-          dangerResponse(
-            "Validation Unavailable",
-            !session
-              ? "No authenticated WhatsApp session is currently active. Pair or recover a session first."
-              : "Main has no pending links to validate.",
-          ),
-        ),
-        bucketKeyboard(),
-      );
-      return;
-    }
+    await ctx.answerCbQuery("Starting centralized validation…");
+    if (!requireAdmin(ctx)) return;
     try {
-      const jobs = await enqueueValidatorJobs(
-        runtime,
-        user.workspaceId,
-        urls,
-        String(ctx.from?.id ?? "telegram"),
-      );
-      if (!jobs.length)
-        throw new Error("No active validation worker was available.");
+      await runValidatorSweepNow();
       await showValidatorHub(ctx);
     } catch (error) {
       await edit(
@@ -3115,26 +3124,32 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.action("ui:validator", async (ctx) => {
     await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
     await showValidatorHub(ctx);
   });
   bot.action("bucket:live", async (ctx) => {
     await ctx.answerCbQuery("Opening live log…");
+    if (!requireAdmin(ctx)) return;
     await showValidatorLiveLog(ctx, true);
   });
   bot.action("bucket:live:on", async (ctx) => {
     await ctx.answerCbQuery("Live log resumed");
+    if (!requireAdmin(ctx)) return;
     await showValidatorLiveLog(ctx, true);
   });
   bot.action("bucket:live:off", async (ctx) => {
     await ctx.answerCbQuery("Live log stopped");
+    if (!requireAdmin(ctx)) return;
     await showValidatorLiveLog(ctx, false);
   });
   bot.action("bucket:live:refresh", async (ctx) => {
     await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
     await showValidatorLiveLog(ctx, true);
   });
   bot.action("bucket:downloads", async (ctx) => {
     await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
     await edit(
       ctx,
       pageText(
@@ -3165,20 +3180,17 @@ export function createTelegramBot(): Telegraf<Context> {
           btn("Error · TXT", "bucket:download:error:txt"),
           btn("Error · HTML", "bucket:download:error:html"),
         ],
-        [
-          btn("Master · TXT", "bucket:download:master:txt"),
-          btn("Master · HTML", "bucket:download:master:html"),
-        ],
         [btn("‹ Validator Hub", "bucket:status")],
       ]),
     );
   });
   bot.action(
-    /^bucket:download:(main|validating|active|dead|error|master):(txt|html)$/,
+    /^bucket:download:(main|validating|active|dead|error):(txt|html)$/,
     async (ctx) => {
       await ctx.answerCbQuery("Preparing export…");
+      if (!requireAdmin(ctx)) return;
       const user = resolveTelegramUser(ctx);
-      const bucket = (ctx.match[1] ?? "master") as ValidatorBucket;
+      const bucket = (ctx.match[1] ?? "main") as ValidatorBucket;
       const format = (ctx.match[2] ?? "txt") as "txt" | "html";
       try {
         const exported = await exportBucket(user.workspaceId, bucket, format);
@@ -3218,10 +3230,11 @@ export function createTelegramBot(): Telegraf<Context> {
       }
     },
   );
-  bot.action(/^bucket:view:(main|validating|active|dead|error|master)$/, async (ctx) => {
+  bot.action(/^bucket:view:(main|validating|active|dead|error)$/, async (ctx) => {
     await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
     const user = resolveTelegramUser(ctx);
-    const bucket = (ctx.match[1] ?? "master") as ValidatorBucket;
+    const bucket = (ctx.match[1] ?? "main") as ValidatorBucket;
     try {
       const records = await listValidatorBucket(user.workspaceId, bucket, 30);
       const body = records.length
@@ -3266,6 +3279,7 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.action("bucket:merge:main", async (ctx) => {
     await ctx.answerCbQuery("Merging active and error links…");
+    if (!requireAdmin(ctx)) return;
     const user = resolveTelegramUser(ctx);
     try {
       const moved = await mergeValidatorBuckets(user.workspaceId);
@@ -3282,7 +3296,7 @@ export function createTelegramBot(): Telegraf<Context> {
           "Validator Hub",
           successResponse(
             "Merge Complete",
-            `${moved} link${moved === 1 ? "" : "s"} moved into Main and retained in Master inventory.`,
+            `${moved} link${moved === 1 ? "" : "s"} moved into the shared Main bucket.`,
           ),
         ),
         bucketKeyboard(),
@@ -3301,9 +3315,10 @@ export function createTelegramBot(): Telegraf<Context> {
       );
     }
   });
-  bot.action(/^bucket:purge:(dead|error|master)$/, async (ctx) => {
+  bot.action(/^bucket:purge:(dead|error)$/, async (ctx) => {
     await ctx.answerCbQuery();
-    const bucket = ctx.match[1] ?? "master";
+    if (!requireAdmin(ctx)) return;
+    const bucket = ctx.match[1] ?? "dead";
     await edit(
       ctx,
       pageText(
@@ -3319,10 +3334,11 @@ export function createTelegramBot(): Telegraf<Context> {
       ]),
     );
   });
-  bot.action(/^bucket:purge:confirm:(dead|error|master)$/, async (ctx) => {
+  bot.action(/^bucket:purge:confirm:(dead|error)$/, async (ctx) => {
     await ctx.answerCbQuery("Purging…");
+    if (!requireAdmin(ctx)) return;
     const user = resolveTelegramUser(ctx);
-    const bucket = (ctx.match[1] ?? "master") as ValidatorBucket;
+    const bucket = (ctx.match[1] ?? "dead") as ValidatorBucket;
     try {
       const removed = await purgeValidatorBucket(user.workspaceId, bucket);
       recordAudit({
@@ -3369,7 +3385,7 @@ export function createTelegramBot(): Telegraf<Context> {
         "Link Collection",
         infoResponse(
           "Session Collector",
-          `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Transport:</b> ${escapeHtml(session.status)}\n<b>Main:</b> ${snapshot.counts.main} · <b>Active:</b> ${snapshot.counts.active}\n<b>Dead:</b> ${snapshot.counts.dead} · <b>Error:</b> ${snapshot.counts.error}\n<b>Master:</b> ${snapshot.counts.master}\n\nThese are the current workspace records collected from Telegram and WhatsApp inbound text.`,
+          `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Transport:</b> ${escapeHtml(session.status)}\n<b>Shared Main:</b> ${snapshot.counts.main} · <b>Active:</b> ${snapshot.counts.active}\n<b>Dead:</b> ${snapshot.counts.dead} · <b>Error:</b> ${snapshot.counts.error}\n\nThese are the shared admin-validator records collected from Telegram and WhatsApp inbound text.`,
         ),
       ),
       linkCollectionKeyboard(session.sessionId),
@@ -6227,13 +6243,12 @@ async function showValidatorLiveLog(
   validatorLiveStates.set(user.workspaceId, active);
   if (!active) stopValidatorLiveLoops(user.workspaceId);
   const snapshot = await getValidatorSnapshot(user.workspaceId);
-  const jobs = ((await getWorkerRuntime()?.listRecent(200)) ?? []).filter(
+  const jobs = ((await getWorkerRuntime()?.listRecent(1000)) ?? []).filter(
     (job) =>
-      job.workspaceId === user.workspaceId &&
       job.kind === "link-validation" &&
-      ["RUNNING", "RETRYING"].includes(job.state),
+      ["QUEUED", "RUNNING", "RETRYING"].includes(job.state),
   );
-  const validationSessions = listSessions(user.workspaceId).map((session) => ({
+  const validationSessions = (isAdmin(ctx) ? listAllSessions() : listSessions(user.workspaceId)).map((session) => ({
     sessionId: session.sessionId,
     sessionName: session.sessionName,
     status: effectiveSessionStatus(session),
@@ -6262,18 +6277,17 @@ async function showValidatorLiveLog(
     void Promise.all([
       getValidatorSnapshot(user.workspaceId),
       getWorkerRuntime()
-        ?.listRecent(200)
+        ?.listRecent(1000)
         .then((jobs) =>
           jobs.filter(
             (job) =>
-              job.workspaceId === user.workspaceId &&
               job.kind === "link-validation" &&
-              ["RUNNING", "RETRYING"].includes(job.state),
+              ["QUEUED", "RUNNING", "RETRYING"].includes(job.state),
           ),
         ) ?? Promise.resolve([]),
     ])
       .then(([nextSnapshot, nextJobs]) => {
-        const nextValidationSessions = listSessions(user.workspaceId).map((session) => ({
+        const nextValidationSessions = (isAdmin(ctx) ? listAllSessions() : listSessions(user.workspaceId)).map((session) => ({
           sessionId: session.sessionId,
           sessionName: session.sessionName,
           status: effectiveSessionStatus(session),
