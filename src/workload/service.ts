@@ -68,6 +68,46 @@ export interface AuthenticatedWorkloadWorker {
 
 const workloadCommandWaiters = new Map<string, Set<() => void>>();
 
+export type WorkloadNotificationState = "CONNECTED" | "RECOVERED" | "OFFLINE" | "UNREACHABLE" | "ERROR";
+export interface WorkloadNotification {
+  state: WorkloadNotificationState;
+  workspaceId: string;
+  ownerTelegramUserId: string;
+  workerId: string;
+  workerName: string;
+  workloadCode: string;
+  workerVersion: string;
+  assignedSessionCount: number;
+  reason?: string;
+}
+let workloadNotifier: ((notification: WorkloadNotification) => Promise<void>) | undefined;
+const lastWorkloadNotification = new Map<string, WorkloadNotificationState>();
+
+export function setWorkloadNotifier(
+  notifier: (notification: WorkloadNotification) => Promise<void>,
+): void {
+  workloadNotifier = notifier;
+}
+
+function notifyWorkloadOwner(worker: WorkloadWorkerRecord, state: WorkloadNotificationState, reason?: string): void {
+  if (!workloadNotifier) return;
+  const previous = lastWorkloadNotification.get(worker.workerId);
+  if (previous === state) return;
+  lastWorkloadNotification.set(worker.workerId, state);
+  const notification: WorkloadNotification = {
+    state,
+    workspaceId: worker.workspaceId,
+    ownerTelegramUserId: worker.ownerTelegramUserId,
+    workerId: worker.workerId,
+    workerName: worker.workerName,
+    workloadCode: worker.workloadCode ?? worker.displayKey,
+    workerVersion: worker.workerVersion,
+    assignedSessionCount: worker.assignedSessionIds.length,
+    ...(reason ? { reason: reason.slice(0, 240) } : {}),
+  };
+  void workloadNotifier(notification).catch(() => undefined);
+}
+
 function notifyWorkloadCommandWaiters(workerId: string): void {
   const waiters = workloadCommandWaiters.get(workerId);
   if (!waiters) return;
@@ -248,6 +288,7 @@ export async function recordWorkloadHeartbeat(
   if (input.workerVersion < env.WORKLOAD_MIN_WORKER_VERSION)
     throw new Error(`Worker version ${input.workerVersion} is incompatible.`);
   const now = Date.now();
+  const previousStatus = worker.status;
   const durableSessionIds = (await listWorkloadAssignments(worker.workspaceId))
     .filter((assignment) => {
       if (assignment.workerId !== worker.workerId || !["ASSIGNED", "RUNNING", "DEGRADED", "OFFLINE"].includes(assignment.status)) return false;
@@ -266,6 +307,8 @@ export async function recordWorkloadHeartbeat(
     ...(input.lastError ? { lastError: input.lastError.slice(0, 500) } : { lastError: undefined }),
   });
   if (!next) throw new Error("Workload worker no longer exists.");
+  if (next.status === "ACTIVE") notifyWorkloadOwner(next, previousStatus === "UNREACHABLE" || previousStatus === "OFFLINE" ? "RECOVERED" : "CONNECTED");
+  else if (next.status === "ERROR") notifyWorkloadOwner(next, "ERROR", input.lastError);
   for (const sessionId of next.assignedSessionIds) {
     const assignment = await getWorkloadAssignmentBySession(sessionId);
     if (assignment && assignment.workerId === next.workerId && assignment.status === "OFFLINE")
@@ -456,6 +499,7 @@ export async function disconnectWorkloadWorker(workerId: string): Promise<Worklo
   if (!worker) throw new Error("Workload worker not found.");
   const updated = await updateWorkloadWorker(workerId, { status: "OFFLINE", lastError: "Graceful disconnect." });
   if (!updated) throw new Error("Workload worker could not be disconnected.");
+  notifyWorkloadOwner(updated, "OFFLINE", "Graceful disconnect.");
   for (const assignment of (await listWorkloadAssignments(worker.workspaceId)).filter((item) => item.workerId === workerId && item.status !== "REVOKED"))
     await updateWorkloadAssignment(assignment.assignmentId, { status: "OFFLINE", lastError: "Worker disconnected." });
   await appendWorkloadEvent({ workspaceId: updated.workspaceId, workerId, kind: "worker.status", metadata: { status: "OFFLINE", reason: "graceful-disconnect" } });
@@ -470,7 +514,8 @@ export async function markUnreachableWorkloadWorkers(
   for (const worker of await listWorkloadWorkers()) {
     if (!["ACTIVE", "CONNECTING"].includes(worker.status)) continue;
     if (!worker.lastHeartbeatAt || worker.lastHeartbeatAt >= cutoff) continue;
-    await updateWorkloadWorker(worker.workerId, { status: "UNREACHABLE", lastError: "Heartbeat timeout." });
+    const updated = await updateWorkloadWorker(worker.workerId, { status: "UNREACHABLE", lastError: "Heartbeat timeout." });
+    if (updated) notifyWorkloadOwner(updated, "UNREACHABLE", "Heartbeat timeout.");
     const assignments = await listWorkloadAssignments(worker.workspaceId);
     for (const assignment of assignments.filter((item) => item.workerId === worker.workerId && item.status !== "REVOKED"))
       await updateWorkloadAssignment(assignment.assignmentId, { status: "OFFLINE", lastError: "Worker heartbeat timeout." });

@@ -211,6 +211,8 @@ import {
   listWorkspaceWorkloadWorkers,
   revokeWorkloadWorker,
   setWorkloadMode,
+  setWorkloadNotifier,
+  type WorkloadNotification,
   toggleWorkloadWorker,
 } from "../workload/service.js";
 import { isWorkloadWorkerReady } from "../workload/readiness.js";
@@ -488,6 +490,24 @@ export function createTelegramBot(): Telegraf<Context> {
       chatId,
       `✦ <b>PAPPY OMEGA MINI</b>\n──────────────────────────────\n\n${message}`,
       { parse_mode: "HTML" },
+    );
+  });
+  setWorkloadNotifier(async (notification: WorkloadNotification) => {
+    const title = notification.state === "CONNECTED"
+      ? "Workload Connected"
+      : notification.state === "RECOVERED"
+        ? "Workload Recovered"
+        : notification.state === "OFFLINE"
+          ? "Workload Offline"
+          : notification.state === "UNREACHABLE"
+            ? "Workload Heartbeat Lost"
+            : "Workload Error";
+    const icon = notification.state === "CONNECTED" || notification.state === "RECOVERED" ? "🟢" : notification.state === "ERROR" ? "🔴" : "🟡";
+    const detail = notification.reason ? `\n<b>Reason:</b> ${escapeHtml(notification.reason)}` : "";
+    await bot.telegram.sendMessage(
+      notification.ownerTelegramUserId,
+      `✦ <b>PAPPY OMEGA MINI</b>\n──────────────────────────────\n\n${icon} <b>${title}</b>\n\n<blockquote><b>Panel:</b> ${escapeHtml(notification.workerName)}\n<b>Code:</b> <code>${escapeHtml(notification.workloadCode)}</code>\n<b>Version:</b> <code>${escapeHtml(notification.workerVersion)}</code>\n<b>Sessions:</b> ${notification.assignedSessionCount}${detail}</blockquote>\n\n${notification.state === "CONNECTED" ? "Your panel is ready. Open Workload to select it for pairing." : notification.state === "RECOVERED" ? "The panel is healthy again and its assigned sessions can continue." : "Open Workload → Refresh Status for the latest panel state."}`,
+      { parse_mode: "HTML", link_preview_options: { is_disabled: true } },
     );
   });
   setJobCompletionNotifier(async (job) => {
