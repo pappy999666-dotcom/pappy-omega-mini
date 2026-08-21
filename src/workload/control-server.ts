@@ -178,7 +178,11 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     }
     if (path === "/workload/poll") {
       const input: Record<string, unknown> = await body(request).catch(() => ({} as Record<string, unknown>));
-      const commands = await pollWorkloadCommands(credential, typeof input.limit === "number" ? input.limit : 10);
+      const commands = await pollWorkloadCommands(
+        credential,
+        typeof input.limit === "number" ? Math.max(1, Math.min(20, input.limit)) : 10,
+        typeof input.waitMs === "number" ? Math.max(0, Math.min(25_000, input.waitMs)) : 20_000,
+      );
       json(response, 200, { ok: true, controlVersion: WORKLOAD_CONTROL_VERSION, commands });
       return;
     }

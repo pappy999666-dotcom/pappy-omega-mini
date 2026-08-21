@@ -60,6 +60,35 @@ export interface AuthenticatedWorkloadWorker {
   credential: string;
 }
 
+const workloadCommandWaiters = new Map<string, Set<() => void>>();
+
+function notifyWorkloadCommandWaiters(workerId: string): void {
+  const waiters = workloadCommandWaiters.get(workerId);
+  if (!waiters) return;
+  workloadCommandWaiters.delete(workerId);
+  for (const wake of waiters) wake();
+}
+
+async function waitForWorkloadCommandSignal(workerId: string, timeoutMs: number): Promise<void> {
+  if (timeoutMs <= 0) return;
+  await new Promise<void>((resolve) => {
+    const waiters = workloadCommandWaiters.get(workerId) ?? new Set<() => void>();
+    const timer = setTimeout(() => {
+      waiters.delete(wake);
+      if (!waiters.size) workloadCommandWaiters.delete(workerId);
+      resolve();
+    }, Math.min(timeoutMs, 25_000));
+    const wake = () => {
+      clearTimeout(timer);
+      waiters.delete(wake);
+      if (!waiters.size) workloadCommandWaiters.delete(workerId);
+      resolve();
+    };
+    waiters.add(wake);
+    workloadCommandWaiters.set(workerId, waiters);
+  });
+}
+
 function normalizeWorkerName(input?: string): string {
   const normalized = String(input ?? "panel")
     .trim()
@@ -324,17 +353,24 @@ export async function queueWorkloadCommand(
     expiresAt: now + Math.max(5_000, Math.min(ttlMs, 10 * 60_000)),
   };
   await createWorkloadCommand(record);
+  notifyWorkloadCommandWaiters(assignment.workerId);
   return record;
 }
 
 export async function pollWorkloadCommands(
   credential: string,
   limit = 10,
+  waitMs = 20_000,
 ): Promise<WorkloadCommandRecord[]> {
   const { worker } = await authenticateWorkloadWorker(credential);
   await updateWorkloadWorker(worker.workerId, { lastHeartbeatAt: Date.now(), status: "ACTIVE" });
   await requeueStaleWorkloadCommands(worker.workerId);
-  return leaseWorkloadCommands(worker.workerId, limit);
+  let commands = await leaseWorkloadCommands(worker.workerId, limit);
+  if (commands.length || waitMs <= 0) return commands;
+  await waitForWorkloadCommandSignal(worker.workerId, waitMs);
+  await requeueStaleWorkloadCommands(worker.workerId);
+  commands = await leaseWorkloadCommands(worker.workerId, limit);
+  return commands;
 }
 
 export async function completeWorkloadCommand(

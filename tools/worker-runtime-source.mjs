@@ -19,7 +19,7 @@ const ENROLLMENT_TOKEN = process.env.PAPPY_WORKLOAD_ENROLLMENT_TOKEN ?? cliValue
 const DATA_DIR = process.env.PAPPY_WORKER_DATA_DIR ?? "./pappy-workload-data";
 let STORAGE_SECRET = process.env.PAPPY_WORKLOAD_SESSION_SECRET ?? "";
 let WORKER_NAME = (process.env.PAPPY_WORKLOAD_NAME ?? cliValue("--name")) || "";
-const WORKER_VERSION = process.env.PAPPY_WORKER_VERSION ?? "1.2.0";
+const WORKER_VERSION = process.env.PAPPY_WORKER_VERSION ?? "1.2.1";
 const AUTO_UPDATE_ENABLED = !["0", "false", "off"].includes(String(process.env.PAPPY_WORKLOAD_AUTO_UPDATE ?? "true").toLowerCase());
 const UPDATE_CHECK_MS = 15 * 60_000;
 const ENTRYPOINT = process.env.PAPPY_WORKER_ENTRYPOINT ?? "";
@@ -35,6 +35,7 @@ const assignedSessions = new Set();
 const reconnectTimers = new Map();
 const reconnectAttempts = new Map();
 const intentionallyStopped = new Set();
+const commandChains = new Map();
 let credentialState;
 let stopping = false;
 const matrix = { state: "BOOTING", lastHeartbeatAt: 0, lastControlAt: 0, lastAction: "starting", lastError: "none", lastRenderAt: 0 };
@@ -466,10 +467,9 @@ async function heartbeat() {
   renderMatrix();
   return result;
 }
-async function poll() {
-  const data = await control("/workload/poll", { limit: 5 }, credentialState.credential);
-  matrix.lastControlAt = Date.now();
-  for (const command of data.commands ?? []) {
+async function processCommand(command) {
+  const previous = commandChains.get(command.sessionId) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(async () => {
     try {
       const result = await execute(command);
       matrix.lastAction = `command ${safeText(command.kind, "unknown", 28)} complete`;
@@ -478,7 +478,16 @@ async function poll() {
       noteError(error, `command ${safeText(command.kind, "unknown", 28)} failed`);
       await control("/workload/result", { commandId: command.commandId, requestId: command.requestId, ok: false, error: error instanceof Error ? error.message : String(error) }, credentialState.credential).catch(() => undefined);
     }
-  }
+  });
+  commandChains.set(command.sessionId, current);
+  try { await current; } finally { if (commandChains.get(command.sessionId) === current) commandChains.delete(command.sessionId); }
+}
+async function poll() {
+  const data = await control("/workload/poll", { limit: 5, waitMs: 20_000 }, credentialState.credential);
+  matrix.lastControlAt = Date.now();
+  const commands = Array.isArray(data.commands) ? data.commands : [];
+  await Promise.all(commands.map((command) => processCommand(command)));
+  return commands.length;
 }
 async function run() {
   const baileys = await import("@crysnovax/baileys");
@@ -498,12 +507,12 @@ async function run() {
     try {
       if (Date.now() >= nextHeartbeat) { await heartbeat(); nextHeartbeat = Date.now() + HEARTBEAT_MS; }
       if (Date.now() >= nextUpdateCheck) { await checkForUpdate(); nextUpdateCheck = Date.now() + UPDATE_CHECK_MS; }
-      await poll();
+      const commandCount = await poll();
+      if (commandCount === 0) await new Promise((resolve) => setTimeout(resolve, CONTROL_POLL_MS));
     } catch (error) {
       noteError(error, "control loop retrying");
       await new Promise((resolve) => setTimeout(resolve, Math.min(15_000, CONTROL_POLL_MS * 3)));
     }
-    await new Promise((resolve) => setTimeout(resolve, CONTROL_POLL_MS));
   }
 }
 process.once("SIGINT", () => { stopping = true; });
