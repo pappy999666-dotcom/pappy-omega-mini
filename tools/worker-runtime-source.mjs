@@ -26,6 +26,9 @@ const HEARTBEAT_MS = 20_000;
 const workerStatePath = join(DATA_DIR, "worker.json");
 const runtimes = new Map();
 const assignedSessions = new Set();
+const reconnectTimers = new Map();
+const reconnectAttempts = new Map();
+const intentionallyStopped = new Set();
 let credentialState;
 let stopping = false;
 const matrix = { state: "BOOTING", lastHeartbeatAt: 0, lastControlAt: 0, lastAction: "starting", lastError: "none", lastRenderAt: 0 };
@@ -167,6 +170,29 @@ class FileAuthStore {
   async keys() { return []; }
 }
 
+function scheduleReconnect(workspaceId, sessionId) {
+  if (intentionallyStopped.has(sessionId) || reconnectTimers.has(sessionId)) return;
+  const attempt = (reconnectAttempts.get(sessionId) ?? 0) + 1;
+  reconnectAttempts.set(sessionId, attempt);
+  const delay = Math.min(60_000, 2_000 * 2 ** Math.min(attempt - 1, 5));
+  matrix.state = "DEGRADED";
+  matrix.lastAction = `reconnect scheduled in ${Math.ceil(delay / 1000)}s`;
+  matrix.lastError = "WhatsApp requested socket restart; preserving session auth.";
+  renderMatrix(true);
+  const timer = setTimeout(async () => {
+    reconnectTimers.delete(sessionId);
+    if (intentionallyStopped.has(sessionId)) return;
+    try {
+      await startSession(workspaceId, sessionId, true);
+      reconnectAttempts.delete(sessionId);
+    } catch (error) {
+      noteError(error, "reconnect attempt failed");
+      scheduleReconnect(workspaceId, sessionId);
+    }
+  }, delay);
+  reconnectTimers.set(sessionId, timer);
+}
+
 async function reportSessionStatus(runtime, status, authHealth, reason) {
   await control("/workload/session-status", {
     workspaceId: runtime.workspaceId,
@@ -178,6 +204,7 @@ async function reportSessionStatus(runtime, status, authHealth, reason) {
   }, credentialState.credential).catch((error) => noteError(error, "session status failed"));
 }
 async function startSession(workspaceId, sessionId, waitForReady = true) {
+  intentionallyStopped.delete(sessionId);
   const existing = runtimes.get(sessionId);
   if (existing) return existing;
   const authRoot = join(DATA_DIR, "sessions", workspaceId, sessionId);
@@ -203,6 +230,10 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
       setTimeout(() => pairingReadyResolve?.(), 1_500);
     }
     if (update.connection === "open") {
+      reconnectAttempts.delete(sessionId);
+      const timer = reconnectTimers.get(sessionId);
+      if (timer) clearTimeout(timer);
+      reconnectTimers.delete(sessionId);
       pairingReadyResolve?.();
       runtime.ready = true;
       matrix.state = "ACTIVE";
@@ -216,9 +247,14 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
       runtime.ready = false;
       matrix.state = "DEGRADED";
       matrix.lastAction = `session ${sessionId} closed`;
-      void reportSessionStatus(runtime, "DEGRADED", "DEGRADED", "WhatsApp connection closed.");
+      const closeReason = update.lastDisconnect?.error?.output?.statusCode
+        ? `WhatsApp connection closed (code ${update.lastDisconnect.error.output.statusCode}).`
+        : "WhatsApp connection closed.";
+      void reportSessionStatus(runtime, "DEGRADED", "DEGRADED", closeReason);
       runtimes.delete(sessionId);
       renderMatrix(true);
+      const restartable = Boolean(state.creds.registered || state.creds.me || state.creds.pairingCode);
+      if (restartable && !intentionallyStopped.has(sessionId)) scheduleReconnect(workspaceId, sessionId);
     }
   });
   if (!waitForReady) {
@@ -267,6 +303,11 @@ async function emitInbound(runtime, message) {
 }
 
 async function stopSession(sessionId) {
+  intentionallyStopped.add(sessionId);
+  const timer = reconnectTimers.get(sessionId);
+  if (timer) clearTimeout(timer);
+  reconnectTimers.delete(sessionId);
+  reconnectAttempts.delete(sessionId);
   const runtime = runtimes.get(sessionId);
   if (!runtime) return;
   await runtime.store.flush().catch(() => undefined);
