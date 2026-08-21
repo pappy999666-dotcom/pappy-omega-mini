@@ -102,7 +102,7 @@ export async function routeWhatsAppText(
     /^(?:[^\w\s]{1,3})?(?:menu|help|m)(?:\s|$)/i.test(trimmed)
   )
     return null;
-  if (shouldProxyWhatsAppSession(message.sessionId))
+  if (shouldProxyWhatsAppSession(message.workspaceId, message.sessionId))
     return routeViaRemoteBridge(message);
   const session = getSession(message.workspaceId, message.sessionId);
   const prefix = session.prefix;

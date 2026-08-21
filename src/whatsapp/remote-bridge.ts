@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
 import { env, isWorkerProcess, workerSessionIds } from "../config/env.js";
+import { getSession } from "../core/session-registry.js";
 import type { IncomingTextMessage, WhatsAppReply } from "./message-router.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 
@@ -88,8 +89,21 @@ function deserializeReply(reply: SerializedReply | string | null): BridgeResult 
     : rest;
 }
 
-export function shouldProxyWhatsAppSession(sessionId: string): boolean {
-  return !isWorkerProcess && Boolean(sessionId) && workerSessionIds.has(sessionId);
+export function shouldProxyWhatsAppSession(
+  workspaceId: string,
+  sessionId: string,
+): boolean {
+  if (isWorkerProcess || !sessionId || !workerSessionIds.has(sessionId)) return false;
+  try {
+    // External panel assignments are handled by the control-plane workload
+    // router. They must not be sent through the internal worker bridge, or
+    // allstatus/allchat will fall back to bridge.command inventory RPCs.
+    return !Boolean(getSession(workspaceId, sessionId).workloadWorkerId);
+  } catch {
+    // Preserve the old internal-worker behavior if the session registry has
+    // not hydrated yet; a missing session cannot be safely treated as panel-owned.
+    return true;
+  }
 }
 
 export async function routeViaRemoteBridge(
