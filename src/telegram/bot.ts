@@ -6246,6 +6246,7 @@ const validatorSessionSummaryCache = new Map<string, ValidatorSessionSummaryBase
 function validatorSessionView(
   ctx: Context,
   jobs: Array<{ sessionId?: string }>,
+  leaseSessionIds: string[] = [],
 ): {
   sample: Array<{ sessionId: string; sessionName: string; status: string; authHealth?: string }>;
   summary: {
@@ -6281,11 +6282,12 @@ function validatorSessionView(
     };
     validatorSessionSummaryCache.set(scope, base);
   }
-  const leasedSessions = new Set(
-    jobs
+  const leasedSessions = new Set([
+    ...jobs
       .map((job) => job.sessionId)
       .filter((sessionId): sessionId is string => Boolean(sessionId)),
-  ).size;
+    ...leaseSessionIds,
+  ]).size;
   return {
     sample: base.sample,
     summary: {
@@ -6310,7 +6312,13 @@ async function showValidatorLiveLog(
       job.kind === "link-validation" &&
       ["QUEUED", "RUNNING", "RETRYING"].includes(job.state),
   );
-  const validationSessionView = validatorSessionView(ctx, jobs);
+  const validationSessionView = validatorSessionView(
+    ctx,
+    jobs,
+    snapshot.recent
+      .filter((record) => record.bucket === "validating" && record.sourceSessionId)
+      .map((record) => record.sourceSessionId as string),
+  );
   await edit(
     ctx,
     validatorLiveText(snapshot, active, jobs, validationSessionView.sample, validationSessionView.summary),
@@ -6344,7 +6352,13 @@ async function showValidatorLiveLog(
         ) ?? Promise.resolve([]),
     ])
       .then(([nextSnapshot, nextJobs]) => {
-        const nextValidationSessionView = validatorSessionView(ctx, nextJobs);
+        const nextValidationSessionView = validatorSessionView(
+          ctx,
+          nextJobs,
+          nextSnapshot.recent
+            .filter((record) => record.bucket === "validating" && record.sourceSessionId)
+            .map((record) => record.sourceSessionId as string),
+        );
         void ctx.telegram
           .editMessageText(
             chatId,
