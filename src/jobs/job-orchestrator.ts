@@ -452,6 +452,8 @@ export class JobOrchestrator {
       `pappy-omega-mini:idempotency:${record.idempotencyKey}`,
       `${CODE_PREFIX}${record.workspaceId}:${record.jobCode ?? ""}`,
       `pappy-omega-mini:completion-notified:${jobId}`,
+      `pappy-omega-mini:broadcast-progress:${record.workspaceId}:${jobId}`,
+      `pappy-omega-mini:broadcast-progress:${record.workspaceId}:${jobId}:cancel`,
     );
     if (record.jobCode)
       await this.redis.del(`${CODE_PREFIX}${record.workspaceId}:${record.jobCode}`);
@@ -509,6 +511,7 @@ export class JobOrchestrator {
       "pappy-omega-mini:idempotency:*",
       "pappy-omega-mini:completion-notified:*",
       "pappy-omega-mini:broadcast-done:*",
+      "pappy-omega-mini:broadcast-progress:*",
       "pappy-omega-mini:recovery:*",
     ];
     for (const pattern of patterns) {
@@ -542,6 +545,8 @@ export class JobOrchestrator {
         await this.cancel(job.jobId).catch(() => undefined);
       await this.redis.del(
         `pappy-omega-mini:idempotency:${job.idempotencyKey}`,
+        `pappy-omega-mini:broadcast-progress:${workspaceId}:${job.jobId}`,
+        `pappy-omega-mini:broadcast-progress:${workspaceId}:${job.jobId}:cancel`,
       );
       if (job.jobCode)
         await this.redis.del(`${CODE_PREFIX}${workspaceId}:${job.jobCode}`);

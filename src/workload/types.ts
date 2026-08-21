@@ -25,7 +25,10 @@ export type WorkloadCommandKind =
   | "session.stop"
   | "session.pair.request"
   | "session.purge"
-  | "bridge.command";
+  | "bridge.command"
+  | "broadcast.start"
+  | "broadcast.progress"
+  | "broadcast.cancel";
 
 export type WorkloadCommandStatus =
   | "QUEUED"
@@ -150,6 +153,34 @@ export interface WorkloadCommandResultRequest {
   ok: boolean;
   result?: unknown;
   error?: string;
+}
+
+export type WorkloadBroadcastKind = "allstatus" | "allchat";
+
+export interface WorkloadBroadcastIntent {
+  jobId: string;
+  kind: WorkloadBroadcastKind;
+  text: string;
+  mediaRef?: Record<string, unknown>;
+  delayMs: number;
+  repeat: number;
+  sourceChatJid?: string;
+}
+
+export type WorkloadBroadcastState = "QUEUED" | "RUNNING" | "PAUSED" | "COMPLETED" | "PARTIAL" | "FAILED" | "CANCELLED";
+
+export interface WorkloadBroadcastProgress {
+  jobId: string;
+  sessionId: string;
+  state: WorkloadBroadcastState;
+  totalGroups: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+  currentGroup?: string;
+  nextActionAt?: number;
+  error?: string;
+  updatedAt: number;
 }
 
 export type WorkloadInboundMediaKind = "image" | "video" | "audio" | "document" | "sticker";

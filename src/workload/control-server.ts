@@ -18,6 +18,8 @@ import {
 import { handleWorkloadInboundEvent } from "./events.js";
 import { WORKLOAD_CONTROL_VERSION } from "./security.js";
 import type { WorkloadInboundEvent, WorkloadRegistrationRequest } from "./types.js";
+import { getBroadcastProgress, isBroadcastCancellationRequested, saveBroadcastProgress } from "./broadcast-progress.js";
+import { readJobMedia } from "../whatsapp/job-media-store.js";
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_INBOUND_MEDIA_BYTES = 5 * 1024 * 1024;
@@ -175,6 +177,64 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         ...(typeof input.lastError === "string" && input.lastError.trim() ? { lastError: input.lastError.trim() } : {}),
       });
       json(response, 200, { ok: true, workerId: worker.workerId, workspaceId: worker.workspaceId, status: worker.status, assignedSessionIds: worker.assignedSessionIds });
+      return;
+    }
+    if (path === "/workload/progress") {
+      const input = await body(request);
+      const { worker } = await authenticateWorkloadWorker(credential, { allowDisabled: true });
+      const workspaceId = stringField(input, "workspaceId");
+      const sessionId = stringField(input, "sessionId");
+      const assignment = await getAuthorizedWorkloadAssignment(worker.workerId, sessionId);
+      if (assignment.workspaceId !== workspaceId) throw new Error("Progress workspace mismatch.");
+      const state = enumField(input, "state", ["QUEUED", "RUNNING", "PAUSED", "COMPLETED", "PARTIAL", "FAILED", "CANCELLED"] as const);
+      const numeric = (name: string): number => {
+        const value = input[name];
+        if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error(`${name} must be a non-negative number.`);
+        return Math.floor(value);
+      };
+      await saveBroadcastProgress({
+        workspaceId,
+        sessionId,
+        jobId: stringField(input, "jobId"),
+        state,
+        totalGroups: numeric("totalGroups"),
+        completed: numeric("completed"),
+        failed: numeric("failed"),
+        skipped: numeric("skipped"),
+        ...(typeof input.currentGroup === "string" ? { currentGroup: input.currentGroup.slice(0, 120) } : {}),
+        ...(typeof input.nextActionAt === "number" ? { nextActionAt: input.nextActionAt } : {}),
+        ...(typeof input.error === "string" ? { error: input.error.slice(0, 500) } : {}),
+        updatedAt: Date.now(),
+      });
+      json(response, 200, { ok: true });
+      return;
+    }
+    if (path === "/workload/progress/get") {
+      const input = await body(request);
+      const { worker } = await authenticateWorkloadWorker(credential, { allowDisabled: true });
+      const workspaceId = stringField(input, "workspaceId");
+      if (workspaceId !== worker.workspaceId) throw new Error("Progress workspace mismatch.");
+      const jobId = stringField(input, "jobId");
+      const progress = await getBroadcastProgress(workspaceId, jobId);
+      const cancelRequested = await isBroadcastCancellationRequested(workspaceId, jobId);
+      json(response, 200, { ok: true, cancelRequested, ...(progress ? { progress } : {}) });
+      return;
+    }
+    if (path === "/workload/media") {
+      const input = await body(request);
+      const { worker } = await authenticateWorkloadWorker(credential, { allowDisabled: true });
+      const reference = input.mediaRef;
+      if (!reference || typeof reference !== "object" || Array.isArray(reference)) throw new Error("mediaRef is required.");
+      const referenceValue = reference as Record<string, unknown>;
+      if (referenceValue.workspaceId !== worker.workspaceId) throw new Error("Media workspace mismatch.");
+      const media = await readJobMedia(reference as Parameters<typeof readJobMedia>[0]);
+      json(response, 200, { ok: true, media: encode({
+        kind: referenceValue.kind,
+        bytes: media,
+        mimeType: referenceValue.mimeType,
+        fileName: referenceValue.originalFileName ?? referenceValue.fileName,
+        ptt: referenceValue.ptt,
+      }) });
       return;
     }
     if (path === "/workload/session-status") {

@@ -4,7 +4,7 @@ let downloadMediaMessage;
 let pino;
 import { spawnSync } from "node:child_process";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, verify } from "node:crypto";
-import { mkdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 
@@ -34,12 +34,15 @@ const CONTROL_POLL_MS = 2_000;
 const HEARTBEAT_MS = 20_000;
 const workerStatePath = join(DATA_DIR, "worker.json");
 const pendingReleasePath = join(DATA_DIR, ".pappy-update-state.json");
+const broadcastDataDir = join(DATA_DIR, "broadcasts");
 const runtimes = new Map();
 const assignedSessions = new Set();
 const reconnectTimers = new Map();
 const reconnectAttempts = new Map();
 const intentionallyStopped = new Set();
 const commandChains = new Map();
+const broadcastRunners = new Map();
+const broadcastGroupCache = new Map();
 const groupSummaryCache = new Map();
 const groupSummaryInflight = new Map();
 let credentialState;
@@ -396,6 +399,7 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
       matrix.lastError = "none";
       renderMatrix(true);
       void reportSessionStatus(runtime, "ACTIVE", "VALID");
+      void resumeBroadcastsForSession(workspaceId, sessionId);
     }
     if (update.connection === "close") {
       pairingReadyReject?.(new Error("WhatsApp connection closed before pairing."));
@@ -603,6 +607,200 @@ async function executeTransport(runtime, method, encodedArgs) {
   if (typeof fn !== "function") throw new Error(`Transport method is unavailable: ${method}`);
   return fn.apply(runtime.socket, args);
 }
+function broadcastCheckpointPath(jobId) {
+  return join(broadcastDataDir, `${encodeURIComponent(jobId)}.json`);
+}
+async function readBroadcastCheckpoint(jobId) {
+  try {
+    return decrypt(await readFile(broadcastCheckpointPath(jobId), "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+async function writeBroadcastCheckpoint(checkpoint) {
+  await mkdir(broadcastDataDir, { recursive: true });
+  const path = broadcastCheckpointPath(checkpoint.jobId);
+  const temp = `${path}.tmp-${process.pid}-${randomUUID()}`;
+  await writeFile(temp, encrypt(checkpoint), { mode: 0o600 });
+  await rename(temp, path);
+}
+function broadcastInaccessible(message) {
+  return /group is locked|group locked|group banned|group was banned|group does not exist|group not found|not a participant|not in the group|you were removed|you were kicked|kicked from the group|revoked group|invalid group/i.test(String(message));
+}
+function broadcastTransient(message) {
+  return /rate|over.?limit|429|timeout|tempor|network|closed|not connected|unavailable|5\d\d/i.test(String(message));
+}
+async function localBroadcastGroups(runtime) {
+  const cached = broadcastGroupCache.get(runtime.sessionId);
+  if (cached && cached.expiresAt > Date.now()) return [...cached.groups];
+  const raw = await runtime.socket.groupFetchAllParticipating();
+  const groups = Object.keys(raw ?? {}).filter((jid) => jid.endsWith("@g.us"));
+  broadcastGroupCache.set(runtime.sessionId, { expiresAt: Date.now() + 5 * 60_000, groups });
+  return [...groups];
+}
+async function loadBroadcastMedia(intent) {
+  if (!intent.mediaRef || typeof intent.mediaRef !== "object") return undefined;
+  const response = await control("/workload/media", { mediaRef: intent.mediaRef }, credentialState.credential);
+  const value = decode(response.media);
+  if (!value || typeof value !== "object" || !Buffer.isBuffer(value.bytes)) throw new Error("Worker could not resolve the broadcast media reference.");
+  return value;
+}
+async function workerParticipantJid(participant, runtime) {
+  if (!participant || typeof participant !== "object") return "";
+  const value = participant;
+  let jid = String(value.phoneNumber ?? value.pn ?? value.id ?? "");
+  if (!jid) return "";
+  if (jid.endsWith("@lid") || jid.endsWith("@hosted.lid")) {
+    const mapping = runtime.socket.signalRepository?.lidMapping?.getPNForLID;
+    const mapped = mapping ? await mapping.call(runtime.socket.signalRepository.lidMapping, jid).catch(() => "") : "";
+    jid = typeof mapped === "string" ? mapped : "";
+  }
+  if (!jid) return "";
+  return jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
+}
+async function sendLocalBroadcast(runtime, intent, jid, media) {
+  const text = typeof intent.text === "string" ? intent.text : "";
+  const content = media ? { media: { ...media, bytes: media.bytes }, text } : { text };
+  if (intent.kind === "allstatus") {
+    const hasMedia = Boolean(media);
+    const hasUrl = /https?:\/\/\S+/i.test(text);
+    if (typeof runtime.socket.sendGroupStatus === "function" && !hasMedia && !hasUrl) {
+      await runtime.socket.sendGroupStatus(jid, { text });
+      return;
+    }
+    const materialized = materializeWorkloadContent(content);
+    if (hasMedia) await runtime.socket.sendMessage(jid, { groupStatusMessage: materialized });
+    else await runtime.socket.sendMessage(jid, { ...materialized, groupStatus: true });
+    return;
+  }
+  const metadata = await runtime.socket.groupMetadata(jid);
+  const participants = (await Promise.all((metadata?.participants ?? []).map((participant) => workerParticipantJid(participant, runtime))))
+    .filter(Boolean)
+    .slice(0, 1000);
+  const materialized = materializeWorkloadContent(content);
+  await runtime.socket.sendMessage(jid, { ...materialized, mentions: participants });
+}
+async function remoteBroadcastCancelled(runtime, jobId) {
+  try {
+    const response = await control("/workload/progress/get", { workspaceId: runtime.workspaceId, jobId }, credentialState.credential);
+    return response.cancelRequested === true;
+  } catch {
+    return false;
+  }
+}
+async function reportLocalBroadcast(runtime, checkpoint) {
+  await control("/workload/progress", {
+    workspaceId: checkpoint.workspaceId,
+    sessionId: checkpoint.sessionId,
+    jobId: checkpoint.jobId,
+    state: checkpoint.state,
+    totalGroups: checkpoint.totalGroups,
+    completed: checkpoint.completed,
+    failed: checkpoint.failed,
+    skipped: checkpoint.skipped,
+    ...(checkpoint.currentGroup ? { currentGroup: checkpoint.currentGroup } : {}),
+    ...(checkpoint.nextActionAt ? { nextActionAt: checkpoint.nextActionAt } : {}),
+    ...(checkpoint.error ? { error: String(checkpoint.error).slice(0, 500) } : {}),
+    updatedAt: Date.now(),
+  }, credentialState.credential).catch((error) => noteError(error, "broadcast progress report failed"));
+}
+async function runLocalBroadcast(runtime, intent, groups, media) {
+  const repeat = Math.max(1, Math.min(20, Number(intent.repeat ?? 1)));
+  const delayMs = Math.max(1_000, Math.min(120_000, Number(intent.delayMs ?? 20_000)));
+  const previous = await readBroadcastCheckpoint(intent.jobId);
+  const checkpoint = previous && previous.jobId === intent.jobId
+    ? { ...previous, groups: Array.isArray(previous.groups) ? previous.groups : groups, totalGroups: Number(previous.totalGroups ?? groups.length), nextDelivery: Number(previous.nextDelivery ?? (Number(previous.completed ?? 0) + Number(previous.failed ?? 0) + Number(previous.skipped ?? 0))), state: "RUNNING" }
+    : { jobId: intent.jobId, workspaceId: runtime.workspaceId, sessionId: runtime.sessionId, kind: intent.kind, text: intent.text, mediaRef: intent.mediaRef, delayMs, repeat, groups, totalGroups: groups.length, nextDelivery: 0, completed: 0, failed: 0, skipped: 0, state: "RUNNING", updatedAt: Date.now() };
+  await writeBroadcastCheckpoint(checkpoint);
+  await reportLocalBroadcast(runtime, checkpoint);
+  let lastPostAt = 0;
+  let lastReportAt = 0;
+  const totalDeliveries = checkpoint.totalGroups * repeat;
+  for (let delivery = Number(checkpoint.nextDelivery ?? 0); delivery < totalDeliveries; delivery += 1) {
+    if (broadcastCancelRequested.has(intent.jobId) || await remoteBroadcastCancelled(runtime, intent.jobId)) {
+      checkpoint.state = "CANCELLED";
+      checkpoint.nextDelivery = delivery;
+      await writeBroadcastCheckpoint(checkpoint);
+      await reportLocalBroadcast(runtime, checkpoint);
+      return checkpoint;
+    }
+    if (lastPostAt) {
+      const waitMs = Math.max(0, delayMs - (Date.now() - lastPostAt));
+      if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+    const index = Math.floor(delivery / repeat);
+    const jid = groups[index];
+    checkpoint.currentGroup = jid;
+    checkpoint.nextActionAt = Date.now() + delayMs;
+    let delivered = false;
+    let lastError = "";
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        await sendLocalBroadcast(runtime, intent, jid, media);
+        delivered = true;
+        break;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        if (broadcastInaccessible(lastError)) break;
+        if (!broadcastTransient(lastError) && attempt >= 3) break;
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, Math.min(10_000, 1_000 * attempt)));
+      }
+    }
+    if (delivered) checkpoint.completed += 1;
+    else if (broadcastInaccessible(lastError)) checkpoint.skipped += 1;
+    else { checkpoint.failed += 1; checkpoint.error = lastError.slice(0, 500); }
+    lastPostAt = Date.now();
+    checkpoint.nextDelivery = delivery + 1;
+    checkpoint.updatedAt = Date.now();
+    await writeBroadcastCheckpoint(checkpoint);
+    if (Date.now() - lastReportAt >= 2_000 || checkpoint.nextDelivery >= totalDeliveries) {
+      lastReportAt = Date.now();
+      await reportLocalBroadcast(runtime, checkpoint);
+    }
+  }
+  checkpoint.state = checkpoint.failed > 0 ? "PARTIAL" : "COMPLETED";
+  checkpoint.nextActionAt = Date.now();
+  await writeBroadcastCheckpoint(checkpoint);
+  await reportLocalBroadcast(runtime, checkpoint);
+  broadcastCancelRequested.delete(intent.jobId);
+  return checkpoint;
+}
+const broadcastCancelRequested = new Set();
+async function startLocalBroadcast(runtime, intent) {
+  if (!intent || typeof intent.jobId !== "string" || !intent.jobId) throw new Error("broadcast.start requires jobId.");
+  if (intent.kind !== "allstatus" && intent.kind !== "allchat") throw new Error("broadcast.start has an unsupported kind.");
+  if (!String(intent.text ?? "").trim() && !intent.mediaRef) throw new Error("Broadcast requires text or media.");
+  const current = broadcastRunners.get(intent.jobId);
+  if (current) return current.ready;
+  const previous = await readBroadcastCheckpoint(intent.jobId);
+  const groups = previous && Array.isArray(previous.groups) && previous.groups.length ? previous.groups : await localBroadcastGroups(runtime);
+  const media = await loadBroadcastMedia(intent);
+  const ready = Promise.resolve({ accepted: true, jobId: intent.jobId, totalGroups: groups.length, totalPosts: groups.length * Math.max(1, Math.min(20, Number(intent.repeat ?? 1))), delayMs: Math.max(1_000, Math.min(120_000, Number(intent.delayMs ?? 20_000))) });
+  const done = ready.then(() => runLocalBroadcast(runtime, intent, groups, media)).catch(async (error) => {
+    const failed = { jobId: intent.jobId, workspaceId: runtime.workspaceId, sessionId: runtime.sessionId, state: "FAILED", totalGroups: groups.length, completed: 0, failed: groups.length, skipped: 0, error: error instanceof Error ? error.message : String(error), updatedAt: Date.now() };
+    await writeBroadcastCheckpoint(failed).catch(() => undefined);
+    await reportLocalBroadcast(runtime, failed).catch(() => undefined);
+    throw error;
+  });
+  broadcastRunners.set(intent.jobId, { ready, done });
+  void done.finally(() => { if (broadcastRunners.get(intent.jobId)?.done === done) broadcastRunners.delete(intent.jobId); }).catch(() => undefined);
+  return ready;
+}
+async function resumeBroadcastsForSession(workspaceId, sessionId) {
+  try {
+    const entries = await readdir(broadcastDataDir);
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) continue;
+      const checkpoint = await readBroadcastCheckpoint(decodeURIComponent(entry.slice(0, -5)));
+      if (!checkpoint || checkpoint.workspaceId !== workspaceId || checkpoint.sessionId !== sessionId || ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(checkpoint.state)) continue;
+      const runtime = runtimes.get(sessionId);
+      if (!runtime || broadcastRunners.has(checkpoint.jobId)) continue;
+      void startLocalBroadcast(runtime, { jobId: checkpoint.jobId, kind: checkpoint.kind, text: checkpoint.text ?? "", mediaRef: checkpoint.mediaRef, delayMs: checkpoint.delayMs, repeat: checkpoint.repeat }).catch((error) => noteError(error, `broadcast resume failed for ${checkpoint.jobId}`));
+    }
+  } catch {
+    // The directory may not exist on a new panel.
+  }
+}
 async function execute(command) {
   if (trafficPaused) throw new Error("Panel traffic is paused by the administrator.");
   if (command.kind === "session.start") {
@@ -618,6 +816,19 @@ async function execute(command) {
     await rm(join(DATA_DIR, "sessions", command.workspaceId, command.sessionId), { recursive: true, force: true });
     assignedSessions.delete(command.sessionId);
     return { status: "PURGED" };
+  }
+  if (command.kind === "broadcast.start") {
+    const runtime = await startSession(command.workspaceId, command.sessionId);
+    const intent = { ...command.payload, jobId: String(command.payload.jobId ?? ""), kind: String(command.payload.kind ?? ""), text: String(command.payload.text ?? ""), delayMs: Number(command.payload.delayMs ?? 20_000), repeat: Number(command.payload.repeat ?? 1) };
+    return await startLocalBroadcast(runtime, intent);
+  }
+  if (command.kind === "broadcast.cancel") {
+    const jobId = String(command.payload.jobId ?? "");
+    if (!jobId) throw new Error("broadcast.cancel requires jobId.");
+    broadcastCancelRequested.add(jobId);
+    const checkpoint = await readBroadcastCheckpoint(jobId);
+    if (checkpoint && ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(checkpoint.state)) broadcastCancelRequested.delete(jobId);
+    return { accepted: true, jobId };
   }
   if (command.kind === "session.pair.request") {
     const runtime = await startSession(command.workspaceId, command.sessionId, false);

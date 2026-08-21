@@ -17,6 +17,11 @@ import {
   waitForWhatsAppSessionReady,
 } from "../whatsapp/session-manager.js";
 import {
+  queueWorkloadCommand,
+  waitForWorkloadCommand,
+} from "../workload/service.js";
+import { getBroadcastProgress, requestBroadcastCancellation } from "../workload/broadcast-progress.js";
+import {
   getSession,
   getSessionJoinSettings,
   listAllSessions,
@@ -898,6 +903,7 @@ export function startWorkerRuntime(): JobOrchestrator {
         count?: number;
         delayMs?: number;
         media?: JobMediaReference;
+        workerLocal?: boolean;
       };
       if (kind === "allstatus" || kind === "allchat") {
         const readinessHeartbeat = setInterval(() => {
@@ -919,6 +925,73 @@ export function startWorkerRuntime(): JobOrchestrator {
             throw new Error("WhatsApp session is not ready yet; broadcast retry is scheduled.");
         } finally {
           clearInterval(readinessHeartbeat);
+        }
+      }
+      const text = typeof payload.text === "string" ? payload.text : "";
+      const repeat =
+        kind === "gstatus" || kind === "allstatus" || kind === "allchat"
+          ? Math.max(1, Math.min(20, Number(payload.count ?? 1)))
+          : 1;
+      const delayMs = Math.max(1500, Math.min(120000, Number(payload.delayMs ?? 2500)));
+      if (!text.trim() && !payload.media)
+        throw new Error(`${kind} requires text or media payload.`);
+      if ((kind === "allstatus" || kind === "allchat") && payload.workerLocal === true) {
+        const startCommand = await queueWorkloadCommand(
+          context.job.workspaceId,
+          sessionId,
+          "broadcast.start",
+          {
+            jobId: context.job.jobId,
+            kind,
+            text,
+            delayMs,
+            repeat,
+            ...(payload.media ? { mediaRef: payload.media } : {}),
+          },
+          10 * 60_000,
+        );
+        const accepted = await waitForWorkloadCommand(startCommand.commandId, 120_000);
+        const result = accepted.result as { totalGroups?: unknown } | undefined;
+        const totalGroups = Math.max(0, Number(result?.totalGroups ?? 0));
+        if (!totalGroups) throw new Error(`No WhatsApp groups were returned for ${kind}.`);
+        await context.report({
+          total: totalGroups * repeat,
+          currentAction: `${kind} worker-local delivery started`,
+          nextActionAt: Date.now(),
+          lastResult: `Panel resolved ${totalGroups} WhatsApp group(s); delivery remains on the owning worker.`,
+        });
+        await notifyBroadcastReady(context, kind, totalGroups, repeat, delayMs);
+        let cancelSent = false;
+        while (true) {
+          if (context.isCancellationRequested() && !cancelSent) {
+            cancelSent = true;
+            await requestBroadcastCancellation(context.job.workspaceId, context.job.jobId).catch(() => undefined);
+            const cancelCommand = await queueWorkloadCommand(
+              context.job.workspaceId,
+              sessionId,
+              "broadcast.cancel",
+              { jobId: context.job.jobId },
+              60_000,
+            ).catch(() => undefined);
+            if (cancelCommand) await waitForWorkloadCommand(cancelCommand.commandId, 20_000).catch(() => undefined);
+          }
+          const progress = await getBroadcastProgress(context.job.workspaceId, context.job.jobId);
+          if (progress) {
+            await context.report({
+              total: progress.totalGroups * repeat,
+              completed: progress.completed,
+              success: progress.completed,
+              failed: progress.failed,
+              skipped: progress.skipped,
+              ...(progress.currentGroup ? { currentGroup: progress.currentGroup } : {}),
+              ...(progress.nextActionAt ? { nextActionAt: progress.nextActionAt } : {}),
+              currentAction: progress.state.toLowerCase(),
+              lastResult: progress.error ?? `Worker-local ${kind} progress: ${progress.completed}/${progress.totalGroups * repeat}.`,
+            });
+            if (["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(progress.state))
+              return { success: progress.completed, failed: progress.failed, skipped: progress.skipped };
+          }
+          await new Promise((resolve) => setTimeout(resolve, 2_000));
         }
       }
       let baseGroups: string[];
@@ -966,10 +1039,6 @@ export function startWorkerRuntime(): JobOrchestrator {
         });
         throw new Error("No WhatsApp groups were returned for this session.");
       }
-      const repeat =
-        kind === "gstatus" || kind === "allstatus" || kind === "allchat"
-          ? Math.max(1, Math.min(20, Number(payload.count ?? 1)))
-          : 1;
       const uniqueGroups = [...new Set(baseGroups)];
       const ignoredLinks = getSession(
         context.job.workspaceId,
@@ -989,10 +1058,6 @@ export function startWorkerRuntime(): JobOrchestrator {
         }),
       );
       const deliverableGroups = uniqueGroups.filter((jid) => !ignoredJids.has(jid));
-      const delayMs = Math.max(
-        1500,
-        Math.min(120000, Number(payload.delayMs ?? 2500)),
-      );
       const resolvedPayload = {
         ...payload,
         groups: deliverableGroups,
@@ -1012,9 +1077,6 @@ export function startWorkerRuntime(): JobOrchestrator {
           repeatIndex: repeatIndex + 1,
         })),
       );
-      const text = typeof payload.text === "string" ? payload.text : "";
-      if (!text.trim() && !payload.media)
-        throw new Error(`${kind} requires text or media payload.`);
       let media: GroupMediaPayload | undefined;
       if (payload.media) {
         media = {

@@ -14,6 +14,8 @@ import {
 } from "../core/session-registry.js";
 import { createHash } from "node:crypto";
 import { getEmergencyState } from "../core/control-plane.js";
+import { isWorkerProcess } from "../config/env.js";
+import { isPanelAssignedSession } from "./workload-transport.js";
 
 const BROADCAST_INVENTORY_ACK_TIMEOUT_MS = 4_000;
 import { persistJobMedia } from "./job-media-store.js";
@@ -247,8 +249,12 @@ export async function routeWhatsAppText(
             const broadcastDelayMs = getWorkspaceDefaults(
               message.workspaceId,
             ).defaultBroadcastDelayMs;
+            const panelBroadcast =
+              !isWorkerProcess &&
+              (kind === "allstatus" || kind === "allchat") &&
+              isPanelAssignedSession(message.workspaceId, message.sessionId);
             let inventory: Array<{ jid: string }> = [];
-            if ((kind === "allstatus" || kind === "allchat") && !payload.groups) {
+            if (!panelBroadcast && (kind === "allstatus" || kind === "allchat") && !payload.groups) {
               try {
                 inventory = await listGroups(message.workspaceId, message.sessionId);
               } catch (error) {
@@ -259,11 +265,13 @@ export async function routeWhatsAppText(
               if (!inventory.length)
                 throw new Error(`No WhatsApp groups were returned for ${kind}.`);
             }
-            const resolvedGroups: string[] = Array.isArray(payload.groups)
-              ? payload.groups.filter((value): value is string => typeof value === "string")
-              : kind === "gstatus"
-                ? groups.map((group) => group.jid)
-                : inventory.map((group) => group.jid);
+            const resolvedGroups: string[] = panelBroadcast
+              ? []
+              : Array.isArray(payload.groups)
+                ? payload.groups.filter((value): value is string => typeof value === "string")
+                : kind === "gstatus"
+                  ? groups.map((group) => group.jid)
+                  : inventory.map((group) => group.jid);
             const enrichedPayload = {
               ...payload,
               ...(kind === "allstatus" || kind === "allchat"
@@ -274,7 +282,7 @@ export async function routeWhatsAppText(
                         : broadcastDelayMs,
                   }
                 : {}),
-              groups: resolvedGroups,
+              ...(panelBroadcast ? { workerLocal: true } : { groups: resolvedGroups }),
               ...(mediaReference ? { media: mediaReference } : {}),
               ...(kind === "allstatus" || kind === "allchat"
                 ? message.chatJid && !message.bridgeAuthorized
@@ -298,7 +306,20 @@ export async function routeWhatsAppText(
               ...(kind === "allstatus" || kind === "allchat" ? { maxAttempts: 12 } : {}),
             });
             const record = await recordPromise;
-            const totalGroups = resolvedGroups.length;
+            let totalGroups = resolvedGroups.length;
+            if (panelBroadcast && record.jobCode) {
+              const deadline = Date.now() + 20_000;
+              while (Date.now() < deadline) {
+                const current = await runtime.getByCode(message.workspaceId, record.jobCode);
+                const totalDeliveries = current?.progress.total;
+                if (typeof totalDeliveries === "number" && totalDeliveries > 0) {
+                  totalGroups = Math.max(1, Math.ceil(totalDeliveries / Math.max(1, Number((payload as { count?: unknown }).count ?? 1))));
+                  break;
+                }
+                if (current?.state === "FAILED") break;
+                await new Promise((resolve) => setTimeout(resolve, 250));
+              }
+            }
             const repeat = Math.max(
               1,
               Math.min(20, Number((payload as { count?: unknown }).count ?? 1)),
