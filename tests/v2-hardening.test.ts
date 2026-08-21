@@ -140,6 +140,31 @@ describe("WhatsApp command smoke paths", () => {
     expect(response).toContain("PAPPY OMEGA MINI");
   });
 
+  it("suppresses the WhatsApp menu while safe mode is enabled", async () => {
+    const session = createSession({
+      workspaceId: `safe-menu-${Date.now()}`,
+      sessionName: "safe-menu",
+      phoneNumber: "15551234567",
+    });
+    setEmergencyState("owner", { enabled: true });
+    try {
+      await expect(routeWhatsAppText({
+        workspaceId: session.workspaceId,
+        sessionId: session.sessionId,
+        senderJid: "15551234567@s.whatsapp.net",
+        text: ".menu",
+      })).resolves.toBeNull();
+    } finally {
+      setEmergencyState("owner", { enabled: false });
+    }
+    await expect(routeWhatsAppText({
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+      senderJid: "15551234567@s.whatsapp.net",
+      text: ".menu",
+    })).resolves.toBeTruthy();
+  });
+
   it("keeps allstatusx repeat count distinct in its worker payload", async () => {
     const session = createSession({
       workspaceId: `smoke-${Date.now()}`,

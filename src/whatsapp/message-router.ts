@@ -13,6 +13,7 @@ import {
   getWorkspaceSudo,
 } from "../core/session-registry.js";
 import { createHash } from "node:crypto";
+import { getEmergencyState } from "../core/control-plane.js";
 
 const BROADCAST_INVENTORY_ACK_TIMEOUT_MS = 4_000;
 import { persistJobMedia } from "./job-media-store.js";
@@ -114,6 +115,7 @@ export async function routeWhatsAppText(
     return null;
   }
   if (commandName === "menu" || commandName === "help" || commandName === "m") {
+    if (getEmergencyState().enabled) return null;
     const payload = await buildWhatsappMenuPayload(
       session,
       isOwnerFor(message, session),
