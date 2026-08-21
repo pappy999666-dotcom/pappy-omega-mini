@@ -8,6 +8,7 @@ import {
   workerSessionIds,
 } from "../config/env.js";
 import { assertOperationAllowed } from "../core/control-plane.js";
+import { getSession } from "../core/session-registry.js";
 import type {
   JobKind,
   JobProgress,
@@ -702,6 +703,24 @@ export class JobOrchestrator {
     }
   }
 
+  private async compactLegacyPanelBroadcast(record: JobRecord): Promise<JobRecord | undefined> {
+    if (isWorkerProcess || (record.kind !== "allstatus" && record.kind !== "allchat") || !record.sessionId || record.payload.workerLocal === true || ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(record.state))
+      return undefined;
+    let panelAssigned = false;
+    try {
+      panelAssigned = Boolean(getSession(record.workspaceId, record.sessionId).workloadWorkerId);
+    } catch {
+      return undefined;
+    }
+    if (!panelAssigned) return undefined;
+    const { groups: _groups, ...compactPayload } = record.payload;
+    const updated = await this.store.update(record.jobId, {
+      payload: { ...compactPayload, workerLocal: true },
+      error: "Legacy panel broadcast migrated to worker-local execution.",
+    });
+    return updated;
+  }
+
   private async reconcileWorkerLocalBroadcast(record: JobRecord): Promise<JobRecord | undefined> {
     if ((record.kind !== "allstatus" && record.kind !== "allchat") || record.payload.workerLocal !== true || !record.sessionId)
       return undefined;
@@ -755,8 +774,9 @@ export class JobOrchestrator {
           .filter((jobId) => jobId.includes(":"))
           .map((jobId) => jobId.split(":", 1)[0]),
       );
-      for (const record of await this.store.listAll()) {
-        if (!this.ownsRecord(record)) continue;
+      for (const originalRecord of await this.store.listAll()) {
+        if (!this.ownsRecord(originalRecord)) continue;
+        const record = await this.compactLegacyPanelBroadcast(originalRecord).catch(() => undefined) ?? originalRecord;
         const reconciled = await this.reconcileWorkerLocalBroadcast(record).catch(() => undefined);
         if (reconciled?.state === "COMPLETED" || reconciled?.state === "PARTIAL" || reconciled?.state === "FAILED" || reconciled?.state === "CANCELLED") continue;
         const heartbeatAge =
