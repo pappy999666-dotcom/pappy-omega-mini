@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { env } from "../config/env.js";
 import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
 
-const PREVIEW_CACHE_VERSION = "v6";
+const PREVIEW_CACHE_VERSION = "v7";
 const PREVIEW_TTL_SECONDS = 7 * 24 * 60 * 60;
 const PREVIEW_FAILURE_TTL_SECONDS = 60;
 const FETCH_TIMEOUT_MS = 8_000;
@@ -172,15 +172,19 @@ export function assertSafePreviewUrl(value: string): void {
 }
 
 async function assertSafeNetworkUrl(value: string): Promise<string> {
-  const canonical = canonicalizePreviewUrl(value);
-  assertSafePreviewUrl(canonical);
-  const hostname = new URL(canonical).hostname;
+  const source = new URL(value);
+  const canonical = new URL(canonicalizePreviewUrl(value));
+  if (source.hostname.toLowerCase() === "chat.whatsapp.com" && source.search && !canonical.search)
+    canonical.search = source.search;
+  const safeUrl = canonical.toString();
+  assertSafePreviewUrl(safeUrl);
+  const hostname = new URL(safeUrl).hostname;
   if (!isIP(hostname)) {
     const addresses = await lookup(hostname, { all: true, verbatim: true });
     if (!addresses.length || addresses.some(({ address }) => isPrivateIp(address)))
       throw new Error("Preview host resolved to a private address.");
   }
-  return canonical;
+  return safeUrl;
 }
 
 function isPrivateIp(value: string): boolean {
@@ -454,6 +458,17 @@ function groupInviteCode(url: string): string | undefined {
   return url.match(/^https?:\/\/chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/i)?.[1];
 }
 
+function publicInviteMetadataUrl(canonicalUrl: string): string {
+  try {
+    const url = new URL(canonicalUrl);
+    if (url.hostname.toLowerCase() === "chat.whatsapp.com" && !url.search)
+      url.search = "s=cl&p=a&mlu=4";
+    return url.toString();
+  } catch {
+    return canonicalUrl;
+  }
+}
+
 function socketCandidate(value: unknown): PreviewSocket | undefined {
   if (!value || typeof value !== "object") return undefined;
   return value as PreviewSocket;
@@ -515,7 +530,7 @@ async function resolveRecord(
       let image = await resolveImageCandidates(candidates);
       if (!image) {
         try {
-          const page = await retryPreview(() => readHtml(canonicalUrl));
+          const page = await retryPreview(() => readHtml(publicInviteMetadataUrl(canonicalUrl)));
           const metadata = parsePageMetadata(page.html, page.finalUrl);
           for (const candidate of metadata.images.slice(0, 8)) {
             image = await resolveImageCandidates([candidate.url]);
@@ -538,7 +553,7 @@ async function resolveRecord(
   }
 
   try {
-    const page = await retryPreview(() => readHtml(canonicalUrl));
+    const page = await retryPreview(() => readHtml(groupInviteCode(canonicalUrl) ? publicInviteMetadataUrl(canonicalUrl) : canonicalUrl));
     const metadata = parsePageMetadata(page.html, page.finalUrl);
     let image: Pick<CanonicalPreviewRecord, "selectedImageUrl" | "imageData" | "imageMimeType" | "sourceWidth" | "sourceHeight"> | undefined;
     for (const candidate of metadata.images.slice(0, 8)) {

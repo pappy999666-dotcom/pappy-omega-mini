@@ -125,6 +125,56 @@ describe("canonical Baileys-native preview pipeline", () => {
     }
   });
 
+  it("uses the stable public metadata variant for assigned-panel group invites", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls: string[] = [];
+    const imageBytes = await sharp({
+      create: {
+        width: 443,
+        height: 720,
+        channels: 3,
+        background: { r: 32, g: 120, b: 88 },
+      },
+    }).jpeg().toBuffer();
+    globalThis.fetch = vi.fn(async (input) => {
+      const requestUrl = String(input);
+      calls.push(requestUrl);
+      if (requestUrl.includes("pps.whatsapp.net"))
+        return new Response(imageBytes, { status: 200, headers: { "content-type": "image/jpeg" } });
+      expect(requestUrl).toContain("https://chat.whatsapp.com/KbDjI6Amhs38wh2nRz4pkN?s=cl&p=a&mlu=4");
+      return new Response(
+        '<html><head><meta property="og:title" content="Gc closed"><meta property="og:description" content="WhatsApp Group Invite"><meta property="og:image" content="https://pps.whatsapp.net/group-preview.jpg"></head></html>',
+        { status: 200, headers: { "content-type": "text/html" } },
+      );
+    }) as typeof fetch;
+    try {
+      let inviteCalls = 0;
+      const text = "https://chat.whatsapp.com/KbDjI6Amhs38wh2nRz4pkN";
+      const content = await prepareCanonicalPreviewContent({
+        text,
+        content: { text },
+        socket: {
+          __pappyAssignedWorkload: true,
+          groupGetInviteInfo: async () => {
+            inviteCalls += 1;
+            throw new Error("growth-locked");
+          },
+        } as never,
+        cacheScope: `panel-invite-query-${Date.now()}`,
+      });
+      expect(inviteCalls).toBe(0);
+      expect(calls.some((value) => value.includes("?s=cl&p=a&mlu=4"))).toBe(true);
+      expect(content.linkPreview).toMatchObject({
+        "canonical-url": text,
+        title: "Gc closed",
+        description: "WhatsApp Group Invite",
+      });
+      expect(content.linkPreview).toHaveProperty("jpegThumbnail");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("accepts only WhatsApp group invite URLs for Validator Hub", async () => {
     expect(isWhatsAppGroupInviteUrl("https://chat.whatsapp.com/ABC123")).toBe(
       true,
