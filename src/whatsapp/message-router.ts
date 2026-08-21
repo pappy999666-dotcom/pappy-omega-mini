@@ -92,11 +92,16 @@ export function mergeQuotedPayload(text: string, quotedText?: string): string {
 export async function routeWhatsAppText(
   message: IncomingTextMessage,
 ): Promise<string | WhatsAppReply | null> {
+  const commandInput = mergeQuotedPayload(message.text, message.quotedText);
+  const trimmed = commandInput.trim();
+  if (
+    getEmergencyState().enabled &&
+    /^(?:[^\w\s]{1,3})?(?:menu|help|m)(?:\s|$)/i.test(trimmed)
+  )
+    return null;
   if (shouldProxyWhatsAppSession(message.sessionId))
     return routeViaRemoteBridge(message);
   const session = getSession(message.workspaceId, message.sessionId);
-  const commandInput = mergeQuotedPayload(message.text, message.quotedText);
-  const trimmed = commandInput.trim();
   const prefix = session.prefix;
   if (prefix && !trimmed.startsWith(prefix)) return null;
   const raw = prefix ? trimmed.slice(prefix.length) : trimmed;
