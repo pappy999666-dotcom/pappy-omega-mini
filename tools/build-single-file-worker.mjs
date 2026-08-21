@@ -5,8 +5,15 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
+const workerPackageManifest = JSON.parse(await readFile(join(root, "worker-package", "package.json"), "utf8"));
+const workerVersion = String(workerPackageManifest.version ?? "").trim();
+const workerDependencies = workerPackageManifest.dependencies && typeof workerPackageManifest.dependencies === "object"
+  ? workerPackageManifest.dependencies
+  : {};
+if (!workerVersion) throw new Error("worker-package/package.json must define a release version.");
 const workerPath = join(root, "worker-package", "index.js");
-const runtimeSource = await readFile(join(root, "tools", "worker-runtime-source.mjs"), "utf8");
+const runtimeSource = (await readFile(join(root, "tools", "worker-runtime-source.mjs"), "utf8"))
+  .replaceAll("__PAPPY_WORKER_VERSION__", workerVersion);
 const encodedRuntime = Buffer.from(runtimeSource, "utf8").toString("base64");
 const bootstrap = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -42,17 +49,19 @@ const packagePath = path.join(root, "package.json");
 const runtimePath = path.join(root, ".pappy-workload-runtime.mjs");
 const manifest = {
   name: "pappy-omega-mini-workload-worker",
-  version: "1.2.5",
+  version: ${JSON.stringify(workerVersion)},
   private: true,
   main: "index.js",
   engines: { node: ">=20" },
-  dependencies: { "@crysnovax/baileys": "2.7.12", pino: "9.9.0" }
+  dependencies: ${JSON.stringify(workerDependencies)}
 };
 function dependencyExists() {
   try {
-    const baileys = JSON.parse(fs.readFileSync(path.join(root, "node_modules", "@crysnovax", "baileys", "package.json"), "utf8"));
-    const pino = JSON.parse(fs.readFileSync(path.join(root, "node_modules", "pino", "package.json"), "utf8"));
-    return baileys.version === manifest.dependencies["@crysnovax/baileys"] && pino.version === manifest.dependencies.pino;
+    return Object.entries(manifest.dependencies).every(([name, expectedVersion]) => {
+      const dependencyPackage = path.join(root, "node_modules", ...name.split("/"), "package.json");
+      const installed = JSON.parse(fs.readFileSync(dependencyPackage, "utf8"));
+      return installed.version === expectedVersion;
+    });
   } catch { return false; }
 }
 async function main() {
@@ -66,7 +75,7 @@ async function main() {
   if (!dependencyExists()) {
     for (;;) {
       log("[STAGE 2/4] Required WhatsApp dependencies are not ready.", ansi.yellow);
-      startPulse("Installing Baileys 2.7.12 and the Pino logger");
+      startPulse("Installing required WhatsApp workload dependencies");
       const npm = process.platform === "win32" ? "npm.cmd" : "npm";
       let install;
       try {

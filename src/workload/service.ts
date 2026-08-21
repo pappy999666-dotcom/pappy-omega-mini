@@ -6,6 +6,8 @@ import {
   createWorkloadCommand,
   createWorkloadEnrollment,
   createWorkloadWorker,
+  deleteRevokedWorkloadWorkers,
+  deleteWorkloadWorker,
   getWorkloadAssignment,
   getWorkloadAssignmentBySession,
   getWorkloadEnrollmentByTokenHash,
@@ -586,6 +588,7 @@ export async function getWorkloadMode(workspaceId: string): Promise<"ON" | "OFF"
 }
 
 export async function listWorkspaceWorkloadWorkers(workspaceId: string): Promise<WorkloadWorkerRecord[]> {
+  await deleteRevokedWorkloadWorkers(workspaceId);
   return listWorkloadWorkers(workspaceId);
 }
 
@@ -626,12 +629,16 @@ export async function revokeWorkloadWorker(workerId: string): Promise<WorkloadWo
   if (!worker) throw new Error("Workload worker not found.");
   const updated = await updateWorkloadWorker(workerId, { status: "REVOKED" });
   if (!updated) throw new Error("Workload worker could not be revoked.");
+  for (const assignment of (await listWorkloadAssignments(worker.workspaceId)).filter((item) => item.workerId === workerId && item.status !== "REVOKED")) {
+    await updateWorkloadAssignment(assignment.assignmentId, { status: "REVOKED", lastError: "Workload worker removed." });
+  }
   await appendWorkloadEvent({
     workspaceId: updated.workspaceId,
     workerId: updated.workerId,
     kind: "worker.revoked",
-    metadata: { reason: "user-removed-key" },
+    metadata: { reason: "user-removed-key", deletedImmediately: true },
   });
+  if (!(await deleteWorkloadWorker(workerId))) throw new Error("Workload worker could not be deleted after revocation.");
   return updated;
 }
 

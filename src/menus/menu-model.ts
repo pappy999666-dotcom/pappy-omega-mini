@@ -17,13 +17,11 @@ export interface SessionMenuModel {
 
 export function effectiveSessionStatus(
   session: WhatsAppSession,
-  now = Date.now(),
+  _now = Date.now(),
 ): WhatsAppSession["status"] {
-  if (
-    session.status === "ACTIVE" &&
-    (!session.lastHealthyAt || now - session.lastHealthyAt > 90_000)
-  )
-    return "DEGRADED";
+  // The transport lifecycle is authoritative. A stale health timestamp is
+  // informational only; it must not turn an explicitly connected session
+  // into DEGRADED while the worker is still reporting ACTIVE.
   return session.status;
 }
 

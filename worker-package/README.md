@@ -14,9 +14,9 @@ The first run has four visible stages. The panel prints a progress line for ever
 [PAPPY PANEL] Boot sequence started · Node.js v22.x
 [STAGE 1/4] Reading panel folder and preparing private worker files…
 [STAGE 2/4] Required WhatsApp dependencies are not ready.
-[PROCESSING] Installing Baileys 2.7.12 and the Pino logger · started · please do not type yet
-[PROCESSING] Installing Baileys 2.7.12 and the Pino logger · still working · 5s elapsed · panel is not frozen
-[PROCESSING] Installing Baileys 2.7.12 and the Pino logger · still working · 10s elapsed · panel is not frozen
+[PROCESSING] Installing required WhatsApp workload dependencies · started · please do not type yet
+[PROCESSING] Installing required WhatsApp workload dependencies · still working · 5s elapsed · panel is not frozen
+[PROCESSING] Installing required WhatsApp workload dependencies · still working · 10s elapsed · panel is not frozen
 [OK] Dependencies installed successfully.
 [STAGE 3/4] Verifying the installed runtime before asking questions…
 [OK] Runtime verification passed.
@@ -45,7 +45,7 @@ The workload code is workspace-scoped, permanently reserved, and cannot be reuse
 
 The worker checks the control plane shortly after startup and every 30 seconds thereafter. When a newer release is published, the panel fetches it from PAPPY automatically. A release is accepted only when its SHA-256 hash, Ed25519 signature, and Node.js syntax verify against the public key embedded in this file’s release build. The worker flushes encrypted session state, saves a protected previous `index.js`, replaces the file atomically, and restarts through the panel’s existing process supervisor. After restart, the new release must report a healthy heartbeat within two minutes; otherwise the supervisor restores the previous `index.js` automatically. WhatsApp auth files, the worker credential, assignment state, and `pappy-workload-data` remain untouched.
 
-Updates are disabled with `PAPPY_WORKLOAD_AUTO_UPDATE=false` when a panel operator needs a maintenance freeze. No MongoDB URI, Redis URI, Telegram token, Telegram pairing code after registration, or release private key is delivered to the panel.
+Each signed release carries the complete pinned dependency manifest. If a future release adds or changes a dependency, the panel rewrites its private `package.json`, installs the required packages automatically, verifies every declared package version, and retries installation without starting an incomplete runtime. Updates are disabled with `PAPPY_WORKLOAD_AUTO_UPDATE=false` when a panel operator needs a maintenance freeze. No MongoDB URI, Redis URI, Telegram token, Telegram pairing code after registration, or release private key is delivered to the panel.
 
 The downloadable `index.js` is generated in a minified/mangled release form so it can be further protected by the panel operator’s approved obfuscation pipeline. The third-party Baileys dependency itself is not modified or repackaged; its license and attribution requirements remain unchanged. If the control plane is temporarily unreachable, the current release continues running; it is not replaced and the panel does not shut down because an update check failed.
 

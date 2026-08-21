@@ -4574,7 +4574,7 @@ export function createTelegramBot(): Telegraf<Context> {
       : await getWorkspaceWorkloadWorkerByCode(user.workspaceId, token);
     if (worker) await revokeWorkloadWorker(worker.workerId);
     preferredWorkloadWorker.delete(String(ctx.from?.id ?? ""));
-    await edit(ctx, pageText("Workload", successResponse("Workload removed", "The workload record was revoked. Existing session metadata and auth are preserved.")), workloadKeyboard(false));
+    await edit(ctx, pageText("Workload", successResponse("Workload removed", "The workload credential and code were deleted immediately. Existing session metadata and WhatsApp auth are preserved.")), workloadKeyboard(false));
   });
   bot.action("admin:workload", async (ctx) => {
     await ctx.answerCbQuery();

@@ -1481,7 +1481,7 @@ export async function getWorkloadWorkerByDisplayKey(
 ): Promise<WorkloadWorkerRecord | undefined> {
   await connectMongo();
   const record = await workloadWorkerModel()
-    .findOne({ displayKey })
+    .findOne({ displayKey, status: { $ne: "REVOKED" } })
     .lean<WorkloadWorkerRecord>()
     .exec();
   return record ?? undefined;
@@ -1492,7 +1492,7 @@ export async function getWorkloadWorkerByWorkloadCode(
 ): Promise<WorkloadWorkerRecord | undefined> {
   await connectMongo();
   const record = await workloadWorkerModel()
-    .findOne({ workloadCode: workloadCode.trim().toLowerCase() })
+    .findOne({ workloadCode: workloadCode.trim().toLowerCase(), status: { $ne: "REVOKED" } })
     .lean<WorkloadWorkerRecord>()
     .exec();
   return record ?? undefined;
@@ -1514,7 +1514,7 @@ export async function listWorkloadWorkers(
 ): Promise<WorkloadWorkerRecord[]> {
   await connectMongo();
   return workloadWorkerModel()
-    .find(workspaceId ? { workspaceId } : {})
+    .find(workspaceId ? { workspaceId, status: { $ne: "REVOKED" } } : { status: { $ne: "REVOKED" } })
     .sort({ updatedAt: -1 })
     .lean<WorkloadWorkerRecord[]>()
     .exec();
@@ -1536,6 +1536,18 @@ export async function updateWorkloadWorker(
     .lean<WorkloadWorkerRecord>()
     .exec();
   return updated ?? undefined;
+}
+
+export async function deleteWorkloadWorker(workerId: string): Promise<boolean> {
+  await connectMongo();
+  const result = await workloadWorkerModel().deleteOne({ workerId }).exec();
+  return (result.deletedCount ?? 0) > 0;
+}
+
+export async function deleteRevokedWorkloadWorkers(workspaceId?: string): Promise<number> {
+  await connectMongo();
+  const result = await workloadWorkerModel().deleteMany({ ...(workspaceId ? { workspaceId } : {}), status: "REVOKED" }).exec();
+  return result.deletedCount ?? 0;
 }
 
 export async function createWorkloadAssignment(
