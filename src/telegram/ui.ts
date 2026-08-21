@@ -283,10 +283,7 @@ export function sessionAccessKeyboard(sessionId: string): InlineKeyboardMarkup {
 export function sessionValidatorKeyboard(
   sessionId: string,
 ): InlineKeyboardMarkup {
-  return keyboard([
-    [btn("📥 Shared Active Links", "bucket:user:active", "success")],
-    [btn("‹ Session Control", `session:${sessionId}:menu`)],
-  ]);
+  return keyboard([[btn("‹ Session Control", `session:${sessionId}:menu`)]]);
 }
 
 export function linkCollectionKeyboard(
