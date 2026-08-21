@@ -263,6 +263,32 @@ export async function assignWorkloadSession(
   return assignment;
 }
 
+export async function revokeWorkloadSessionAssignment(
+  workspaceId: string,
+  sessionId: string,
+  reason = "Session purged.",
+): Promise<void> {
+  const assignment = await getWorkloadAssignmentBySession(sessionId);
+  if (!assignment || assignment.workspaceId !== workspaceId) return;
+  await updateWorkloadAssignment(assignment.assignmentId, {
+    status: "REVOKED",
+    lastError: reason.slice(0, 500),
+  });
+  const worker = await getWorkloadWorker(assignment.workerId);
+  if (worker) {
+    await updateWorkloadWorker(assignment.workerId, {
+      assignedSessionIds: worker.assignedSessionIds.filter((id) => id !== sessionId),
+    });
+  }
+  await appendWorkloadEvent({
+    workspaceId,
+    workerId: assignment.workerId,
+    sessionId,
+    kind: "assignment.revoked",
+    metadata: { reason },
+  });
+}
+
 export async function getAuthorizedWorkloadAssignment(
   workerId: string,
   sessionId: string,

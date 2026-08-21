@@ -38,7 +38,11 @@ import {
   resolveMediaPayload,
 } from "./quoted-payload-resolver.js";
 import { createAssignedWorkloadSocket, callAssignedWorkloadTransport } from "./workload-transport.js";
-import { queueWorkloadCommand, waitForWorkloadCommand } from "../workload/service.js";
+import {
+  queueWorkloadCommand,
+  revokeWorkloadSessionAssignment,
+  waitForWorkloadCommand,
+} from "../workload/service.js";
 import {
   clearLifecycle,
   getLifecycleState,
@@ -971,9 +975,22 @@ export function getWhatsAppSocket(
 export async function purgeWhatsAppSession(
   workspaceId: string,
   sessionId: string,
-): Promise<{ jobs: number; links: number; traces: number }> {
-  getSession(workspaceId, sessionId);
-  await stopWhatsAppSession(workspaceId, sessionId);
+): Promise<{ jobs: number; links: number; traces: number; remoteCleanup: "CONFIRMED" | "UNREACHABLE" }> {
+  const session = getSession(workspaceId, sessionId);
+  let remoteCleanup: "CONFIRMED" | "UNREACHABLE" = "CONFIRMED";
+  if (session.workloadWorkerId) {
+    try {
+      const command = await queueWorkloadCommand(workspaceId, sessionId, "session.purge", {});
+      await waitForWorkloadCommand(command.commandId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/no reachable workload assignment|not authorized|control timeout|did not respond|worker is/i.test(message)) throw error;
+      remoteCleanup = "UNREACHABLE";
+    }
+    await revokeWorkloadSessionAssignment(workspaceId, sessionId, remoteCleanup === "CONFIRMED" ? "Session purged remotely." : "Session purged centrally; panel was unreachable.");
+  } else {
+    await stopWhatsAppSession(workspaceId, sessionId);
+  }
   const [{ purgeRuntimeSessionData }, { purgeWhatsAppSessionTraces }] =
     await Promise.all([
       import("../jobs/runtime.js"),
@@ -987,7 +1004,7 @@ export async function purgeWhatsAppSession(
   });
   resetWhatsAppSessionLifecycle(workspaceId, sessionId);
   await deleteSession(workspaceId, sessionId);
-  return { ...runtimeData, traces };
+  return { ...runtimeData, traces, remoteCleanup };
 }
 
 export async function stopWhatsAppSession(

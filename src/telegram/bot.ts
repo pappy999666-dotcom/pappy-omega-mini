@@ -2243,8 +2243,8 @@ export function createTelegramBot(): Telegraf<Context> {
         pageText(
           "Session Purged",
           successResponse(
-            "Encrypted Auth Removed",
-            `Session <b>${escapeHtml(session.sessionName)}</b> was stopped and permanently purged.\n\n<b>Deleted:</b> ${purged.jobs} jobs · ${purged.links} collected links · ${purged.traces} message traces · encrypted auth\n\nYou can create a new session from Sessions.`,
+            purged.remoteCleanup === "CONFIRMED" ? "Encrypted Auth Removed" : "Central Purge Completed",
+            `Session <b>${escapeHtml(session.sessionName)}</b> was stopped and removed from the control plane.\n\n<b>Deleted:</b> ${purged.jobs} jobs · ${purged.links} collected links · ${purged.traces} message traces · ${purged.remoteCleanup === "CONFIRMED" ? "panel encrypted auth" : "central auth record"}\n\n${purged.remoteCleanup === "CONFIRMED" ? "Panel auth was confirmed removed." : "The panel was unreachable, so its auth directory could not be confirmed removed; the assignment was revoked and it cannot reconnect this session."}\n\nYou can create a new session from Sessions.`,
           ),
         ),
         keyboard([[btn("‹ Sessions", "sessions:list:0", "success")]]),

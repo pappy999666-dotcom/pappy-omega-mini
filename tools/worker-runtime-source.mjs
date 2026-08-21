@@ -2,7 +2,7 @@ let makeWASocket;
 let makeCacheManagerAuthState;
 let pino;
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 
@@ -349,6 +349,12 @@ async function execute(command) {
   if (command.kind === "session.stop") {
     await stopSession(command.sessionId);
     return { status: "OFFLINE" };
+  }
+  if (command.kind === "session.purge") {
+    await stopSession(command.sessionId);
+    await rm(join(DATA_DIR, "sessions", command.workspaceId, command.sessionId), { recursive: true, force: true });
+    assignedSessions.delete(command.sessionId);
+    return { status: "PURGED" };
   }
   if (command.kind === "session.pair.request") {
     const runtime = await startSession(command.workspaceId, command.sessionId, false);

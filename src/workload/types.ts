@@ -24,6 +24,7 @@ export type WorkloadCommandKind =
   | "session.start"
   | "session.stop"
   | "session.pair.request"
+  | "session.purge"
   | "bridge.command";
 
 export type WorkloadCommandStatus =
@@ -102,6 +103,7 @@ export type WorkloadEventKind =
   | "worker.revoked"
   | "assignment.created"
   | "assignment.updated"
+  | "assignment.revoked"
   | "command.completed"
   | "command.failed";
 
