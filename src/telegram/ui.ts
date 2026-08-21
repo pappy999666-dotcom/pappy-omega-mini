@@ -1229,7 +1229,7 @@ export function workloadText(
     "Workload",
     infoResponse(
       "Central control · panel execution",
-      `<b>Panel workload:</b> ${mode === "ON" ? "🟢 ON" : "⚪ OFF"}\n\n${body}\n\n${mode === "OFF" ? "New sessions need one of your ACTIVE workloads." : "When you tap Pair, choose which ACTIVE workload should host the new session."}`,
+      `<b>Panel workload:</b> ${mode === "ON" ? "🟢 ON" : "⚪ OFF"}\n\n${body}\n\n<b>How it works:</b> download <code>index.js</code>, run the one-time command from <b>Create Panel Code</b>, save the permanent code printed by the panel, then add that code here. During pairing, select the ACTIVE workload that should host the WhatsApp session. ${mode === "OFF" ? "New sessions currently require an ACTIVE workload." : "Existing sessions are not deleted when workload mode changes."}`,
     ),
   );
 }
@@ -1241,7 +1241,7 @@ export function workloadPanelText(
     "Workload Panel",
     infoResponse(
       `${escapeHtml(worker.workerName ?? "Panel")} · ${escapeHtml(worker.workloadCode ?? worker.displayKey)}`,
-      `<b>Code:</b> <code>${escapeHtml(worker.workloadCode ?? worker.displayKey)}</code>\n<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Last heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}\n<b>Assigned sessions:</b> ${worker.assignedSessionIds.length}`,
+      `<b>Permanent code:</b> <code>${escapeHtml(worker.workloadCode ?? worker.displayKey)}</code>\n<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Last heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}\n<b>Assigned sessions:</b> ${worker.assignedSessionIds.length}\n\nThis is the panel that will host WhatsApp workload. Tap <b>Use This Workload</b> before pairing. Keep the permanent code private and do not reuse it in another workspace.`,
     ),
   );
 }
@@ -1260,7 +1260,7 @@ export function workloadGuideText(controlUrl?: string): string {
     "Workload Deployment Guide",
     infoResponse(
       "One command · one saved workload code",
-      `<b>1.</b> Tap <b>Create Panel Code</b> and copy the one-time command.\n<b>2.</b> On the user’s Node.js panel, paste that command and run it.\n<b>3.</b> When asked, choose a simple name such as <code>pappy</code>.\n<b>4.</b> The worker installs its own local secret and prints a permanent code such as <code>pappy-ab12cd</code>.\n<b>5.</b> Keep that code safe, then tap <b>Add My Workload Code</b> in Telegram and paste it.\n<b>6.</b> When the user taps <b>Pair</b>, they choose one of their ACTIVE workloads before entering the WhatsApp number.\n\n<b>Control URL:</b> <code>${escapeHtml(controlUrl ?? "configured by the owner")}</code>\n\nThe worker package contains only WhatsApp workload runtime. It does not need Telegram, MongoDB, Redis, or admin credentials. Do not share the saved workload code with another workspace.`,
+      `<b>1.</b> Tap <b>Download Panel Worker</b> and receive exactly two files: <code>index.js</code> and <code>README.md</code>.\n<b>2.</b> Tap <b>Create Panel Code</b> and copy the one-time command. It expires and is used only for first registration.\n<b>3.</b> Open the real Node.js 20+ panel, upload <code>index.js</code> into an empty folder, open that folder’s terminal, and run the copied command. Do not create <code>.env</code>, <code>package.json</code>, MongoDB, Redis, or Telegram configuration files.\n<b>4.</b> When the panel asks for a name, enter a short name such as <code>pappy</code>. The worker installs its restricted dependencies and prints a permanent code such as <code>pappy-ab12cd</code>.\n<b>5.</b> Copy that permanent code exactly and return to Telegram. Tap <b>Add My Workload Code</b> and paste it. Wait until the worker shows <b>ACTIVE</b> with a fresh heartbeat.\n<b>6.</b> Open <b>My Workloads</b>, select the new panel, tap <b>Use This Workload</b>, then tap <b>Pair Number</b>.\n<b>7.</b> Enter the WhatsApp number in international format. The WhatsApp session and encrypted auth state will live on that panel; Telegram remains the control plane.\n\n<b>Control URL:</b> <code>${escapeHtml(controlUrl ?? "configured by the owner")}</code>\n\nThe worker contains only WhatsApp workload runtime. It never receives Telegram, MongoDB, Redis, owner, or admin credentials. Keep the permanent workload code and panel data private. Keep the panel data folder persistent so sessions survive restarts.`,
     ),
   );
 }

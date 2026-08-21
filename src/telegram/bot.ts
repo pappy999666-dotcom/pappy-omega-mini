@@ -833,7 +833,7 @@ export function createTelegramBot(): Telegraf<Context> {
         return;
       }
       if (!/^[a-z0-9][a-z0-9-]{2,47}$/.test(workloadCode) && !/^\d{5}$/.test(workloadCode)) {
-        await ctx.reply(pageText("Workload", dangerResponse("Invalid workload code", "Send the saved code printed by your panel, for example <code>pappy-AB12CD</code>, or send <code>cancel</code>.")), { parse_mode: "HTML" });
+        await ctx.reply(pageText("Workload", dangerResponse("Invalid permanent code", "Send the permanent code printed after the panel setup finishes, for example <code>pappy-ab12cd</code>, or send <code>cancel</code>. Do not send the one-time enrollment token here.")), { parse_mode: "HTML" });
         return;
       }
       const ownerTelegramUserId = String(ctx.from.id);
@@ -843,7 +843,7 @@ export function createTelegramBot(): Telegraf<Context> {
         : (await getWorkspaceWorkloadWorkerByCode(workloadInput.workspaceId, workloadCode))
           ?? (await getOwnerWorkloadWorkerByCode(ownerTelegramUserId, workloadCode));
       if (!worker) {
-        await ctx.reply(pageText("Workload", dangerResponse("Panel not found", "That key is not registered to this workspace.")), { parse_mode: "HTML" });
+        await ctx.reply(pageText("Workload", dangerResponse("Panel code not found", "The permanent code has not registered to this Telegram workspace yet. Confirm that the setup command completed, copy the exact code printed by the panel, and try again. If the panel is still starting, wait a few seconds and send the code again.")), { parse_mode: "HTML" });
         return;
       }
       if (!isWorkloadWorkerReady(worker)) {
@@ -4456,7 +4456,7 @@ export function createTelegramBot(): Telegraf<Context> {
     pendingWorkloadKey.set(String(ctx.from?.id ?? ""), { workspaceId: user.workspaceId });
     await edit(
       ctx,
-      pageText("Workload · Add Workload", infoResponse("Paste your saved workload code", "Send the code printed by your panel, for example <code>pappy-AB12CD</code>, or send <code>cancel</code>.")),
+      pageText("Workload · Add Workload", infoResponse("Paste the permanent code from your panel", "After you run the one-time setup command, the panel prints a permanent code such as <code>pappy-ab12cd</code>. Send that code here, wait for an ACTIVE heartbeat, or send <code>cancel</code>. This is not the one-time enrollment token.")),
       keyboard([[btn(ui.close, "workload:menu", "danger")]]),
     );
   });
@@ -4469,8 +4469,8 @@ export function createTelegramBot(): Telegraf<Context> {
       const setupCommand = `node index.js --enrollment ${enrollment.token}`;
       await edit(
         ctx,
-        pageText("Workload · Setup", successResponse("Copy one setup command", `Download the worker package first, open its folder, then paste the command below. It installs the small runtime, asks for a friendly name, and prints the permanent code to save.\n\n<b>Expires:</b> <code>${escapeHtml(new Date(enrollment.expiresAt).toISOString())}</code>`)),
-        keyboard([[copyBtn("📋 Copy setup command", setupCommand, "success")], [btn("⬇ Download Panel Worker", "workload:download", "success")], [btn("📖 Simple Setup Guide", "workload:guide")], [btn(ui.back, "workload:menu")]]),
+        pageText("Workload · Setup", successResponse("One-time setup command ready", `<b>Do this now:</b> tap <b>Download Panel Worker</b> to receive <code>index.js</code>, upload it to the real Node.js panel, open the panel folder terminal, and run the copied command below. When the panel prints the permanent workload code, return here and tap <b>Add My Workload Code</b>.\n\n<b>Expires:</b> <code>${escapeHtml(new Date(enrollment.expiresAt).toISOString())}</code>\n\nThis enrollment command is used once. Do not put it in an <code>.env</code> file or share it publicly.`)),
+        keyboard([[copyBtn("📋 Copy setup command", setupCommand, "success")], [btn("⬇ Download Panel Worker", "workload:download", "success")], [btn("➕ Add My Workload Code", "workload:add")], [btn("📖 Simple Setup Guide", "workload:guide")], [btn(ui.back, "workload:menu")]]),
       );
     } catch (error) {
       await edit(ctx, pageText("Workload · Enrollment", dangerResponse("Could not create token", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn(ui.back, "workload:menu")]]));
@@ -4478,14 +4478,14 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.action("workload:guide", async (ctx) => {
     await ctx.answerCbQuery();
-    await edit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("⬇ Download Worker", "workload:download", "success")], [btn("🔑 Setup Panel", "workload:enroll", "success")], [btn(ui.back, "workload:menu")]]));
+      await edit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("⬇ Download index.js", "workload:download", "success")], [btn("🔑 Create One-Time Setup", "workload:enroll", "success")], [btn("➕ Add Permanent Workload Code", "workload:add")], [btn(ui.back, "workload:menu")]]));
   });
   bot.action("workload:download", async (ctx) => {
     await ctx.answerCbQuery("Preparing worker package…");
     try {
       const { readWorkloadPackageDocuments } = await import("../workload/package.js");
       for (const document of await readWorkloadPackageDocuments()) await ctx.replyWithDocument(document);
-      await edit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), workloadKeyboard(false));
+        await edit(ctx, pageText("Workload · Downloaded", successResponse("Panel files sent", "Upload <code>index.js</code> to the Node.js panel and keep <code>README.md</code> open while deploying. When the worker prints its permanent code, return to Telegram and tap <b>Add My Workload Code</b>.")), keyboard([[btn("🔑 Create One-Time Setup", "workload:enroll", "success")], [btn("➕ Add Permanent Workload Code", "workload:add")], [btn("📖 Open Setup Guide", "workload:guide")], [btn(ui.back, "workload:menu")]]));
     } catch (error) {
       await edit(ctx, pageText("Workload · Download", dangerResponse("Package unavailable", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn(ui.back, "workload:menu")]]));
     }
