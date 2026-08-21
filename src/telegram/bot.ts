@@ -5,6 +5,7 @@ import type { SessionJoinSettings } from "../types/domain.js";
 import {
   resolveUser,
   listSessions,
+  listVisibleSessions,
   listAllSessions,
   createSession,
   getSession,
@@ -5557,7 +5558,7 @@ async function handlePairingText(
 
 async function sendSessions(ctx: Context, page: number): Promise<void> {
   const user = resolveTelegramUser(ctx);
-  const sessions = listSessions(user.workspaceId);
+  const sessions = listVisibleSessions(user.workspaceId);
   const body = pageText(
     "Your WhatsApp Sessions",
     sessions.length

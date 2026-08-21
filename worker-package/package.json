@@ -1,6 +1,6 @@
 {
   "name": "pappy-omega-mini-workload-worker",
-  "version": "1.2.12",
+  "version": "1.2.13",
   "private": false,
   "description": "Restricted PAPPY OMEGA-MINI WhatsApp workload worker for Node.js panels",
   "type": "module",

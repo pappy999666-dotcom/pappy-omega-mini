@@ -173,6 +173,19 @@ export function listSessions(workspaceId: string): WhatsAppSession[] {
   );
 }
 
+export function isSessionVisibleInTelegram(session: WhatsAppSession): boolean {
+  if (session.status === "LOGGED_OUT" || session.status === "BANNED") return false;
+  return !(
+    Boolean(session.workloadWorkerId) &&
+    session.status === "DEGRADED" &&
+    session.disconnectReason?.startsWith("Panel heartbeat timeout;")
+  );
+}
+
+export function listVisibleSessions(workspaceId: string): WhatsAppSession[] {
+  return listSessions(workspaceId).filter(isSessionVisibleInTelegram);
+}
+
 export function listAllSessions(): WhatsAppSession[] {
   return [...sessions.values()];
 }

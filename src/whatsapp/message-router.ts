@@ -114,9 +114,10 @@ export async function routeWhatsAppText(
   // proof that this was sent by the authenticated account itself, even when
   // Baileys exposes its LID rather than its phone JID.
   if (!isOwner) {
-    console.info(
-      `[pappy-omega-mini] WhatsApp command unauthorized session=${message.sessionId} sender=${message.senderJid} command=${commandName}`,
-    );
+    if (process.env.PAPPY_DEBUG_WA_COMMANDS === "1")
+      console.info(
+        `[pappy-omega-mini] WhatsApp command unauthorized session=${message.sessionId} sender=${message.senderJid} command=${commandName}`,
+      );
     return null;
   }
   if (commandName === "menu" || commandName === "help" || commandName === "m") {

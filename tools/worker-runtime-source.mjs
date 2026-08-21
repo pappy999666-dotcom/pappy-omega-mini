@@ -1,5 +1,6 @@
 let makeWASocket;
 let makeCacheManagerAuthState;
+let downloadMediaMessage;
 let pino;
 import { spawnSync } from "node:child_process";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, verify } from "node:crypto";
@@ -439,15 +440,67 @@ function messageText(message) {
   if (typeof value.documentMessage?.caption === "string") return value.documentMessage.caption;
   return "";
 }
+function normalizedMessage(message) {
+  if (!message || typeof message !== "object") return undefined;
+  let current = message;
+  for (let index = 0; index < 5; index += 1) {
+    const wrapperKey = ["ephemeralMessage", "viewOnceMessage", "viewOnceMessageV2", "viewOnceMessageV2Extension", "groupStatusMessage", "groupStatusMessageV2"].find((name) => current?.[name]);
+    if (!wrapperKey) break;
+    const wrapper = current[wrapperKey];
+    current = wrapper?.message && typeof wrapper.message === "object" ? wrapper.message : wrapper;
+  }
+  return current;
+}
+function mediaKind(message) {
+  const content = normalizedMessage(message);
+  for (const kind of ["image", "video", "audio", "document", "sticker"]) {
+    if (content?.[`${kind}Message`] && typeof content[`${kind}Message`] === "object") return kind;
+  }
+  return undefined;
+}
+async function serializeInboundMedia(runtime, envelope) {
+  if (typeof downloadMediaMessage !== "function" || !envelope?.message) return undefined;
+  const content = normalizedMessage(envelope.message);
+  const kind = mediaKind(content);
+  if (!kind) return undefined;
+  try {
+    const bytes = await downloadMediaMessage(envelope, "buffer", {}, runtime.socket);
+    if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > 5 * 1024 * 1024) return undefined;
+    const body = content?.[`${kind}Message`] ?? {};
+    return {
+      kind,
+      bytes: bytes.toString("base64"),
+      ...(typeof body.mimetype === "string" ? { mimeType: body.mimetype } : {}),
+      ...(typeof body.fileName === "string" ? { fileName: body.fileName } : {}),
+      ...(typeof body.caption === "string" ? { caption: body.caption } : {}),
+      ...(typeof body.ptt === "boolean" ? { ptt: body.ptt } : {}),
+    };
+  } catch (error) {
+    matrix.lastAction = "inbound media download failed";
+    matrix.lastError = error instanceof Error ? error.message : String(error);
+    renderMatrix(true);
+    return undefined;
+  }
+}
 async function emitInbound(runtime, message) {
   if (trafficPaused) return;
   const key = message?.key ?? {};
   const remoteJid = key.remoteJid;
   if (typeof remoteJid !== "string" || !message.message) return;
   const text = messageText(message.message);
-  const context = message.message.extendedTextMessage?.contextInfo ?? message.message.imageMessage?.contextInfo ?? message.message.videoMessage?.contextInfo;
-  const quotedText = messageText(context?.quotedMessage);
+  const context = message.message.extendedTextMessage?.contextInfo ?? message.message.imageMessage?.contextInfo ?? message.message.videoMessage?.contextInfo ?? message.message.documentMessage?.contextInfo;
+  const quotedMessage = context?.quotedMessage;
+  const quotedText = messageText(quotedMessage);
   if (!text && !quotedText) return;
+  const commandSource = `${text} ${quotedText}`.trim().toLowerCase();
+  const needsMedia = /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate|allstatus|allchat|gstatus|tag|stag|status)/.test(commandSource);
+  const directMedia = needsMedia
+    ? await serializeInboundMedia(runtime, { key, message: message.message })
+    : undefined;
+  const quotedMedia = needsMedia && !directMedia && quotedMessage
+    ? await serializeInboundMedia(runtime, { key: { ...key, ...(typeof context?.stanzaId === "string" ? { id: context.stanzaId } : {}) }, message: quotedMessage })
+    : undefined;
+  const inboundMedia = directMedia ?? quotedMedia;
   const senderJid = key.fromMe ? (runtime.socket.user?.id ?? remoteJid) : (key.participantAlt ?? key.remoteJidAlt ?? key.participant ?? remoteJid);
   await control("/workload/event", {
     workspaceId: runtime.workspaceId,
@@ -459,6 +512,7 @@ async function emitInbound(runtime, message) {
     ...(quotedText ? { quotedText } : {}),
     ...(typeof context?.participant === "string" ? { quotedSenderJid: context.participant } : {}),
     ...(Array.isArray(context?.mentionedJid) ? { mentionedJids: context.mentionedJid } : {}),
+    ...(inboundMedia ? { media: inboundMedia } : {}),
     ...(key.fromMe ? { fromMe: true } : {}),
   }, credentialState.credential);
 }
@@ -509,8 +563,12 @@ async function executeTransport(runtime, method, encodedArgs) {
   if (method === "sendGroupStatus") {
     const [jid, payload] = args;
     const native = runtime.socket.sendGroupStatus;
-    if (typeof native === "function" && !(payload && typeof payload === "object" && payload.media)) return native.apply(runtime.socket, args);
-    return runtime.socket.sendMessage(jid, materializeWorkloadContent(payload));
+    const hasMedia = Boolean(payload && typeof payload === "object" && payload.media);
+    const text = payload && typeof payload === "object" && typeof payload.text === "string" ? payload.text : "";
+    if (typeof native === "function" && !hasMedia && !/https?:\/\/\S+/i.test(text)) return native.apply(runtime.socket, args);
+    const content = materializeWorkloadContent(payload);
+    if (hasMedia) return runtime.socket.sendMessage(jid, { groupStatusMessage: content });
+    return runtime.socket.sendMessage(jid, { ...content, groupStatus: true });
   }
   if (method === "sendGroupHidetag" || method === "sendGroupMentions") {
     const [jid, content] = args;
@@ -634,6 +692,7 @@ async function run() {
   const baileys = await import("@crysnovax/baileys");
   makeWASocket = baileys.default;
   makeCacheManagerAuthState = baileys.makeCacheManagerAuthState;
+  downloadMediaMessage = baileys.downloadMediaMessage;
   const logger = await import("pino");
   pino = logger.default;
   WORKER_NAME = normalizeWorkerName(WORKER_NAME);

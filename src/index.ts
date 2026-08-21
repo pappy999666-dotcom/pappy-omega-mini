@@ -87,6 +87,18 @@ async function main(): Promise<void> {
         ...(event.quotedText ? { quotedText: event.quotedText } : {}),
         ...(event.quotedSenderJid ? { quotedSenderJid: event.quotedSenderJid } : {}),
         ...(event.mentionedJids?.length ? { mentionedJids: event.mentionedJids } : {}),
+        ...(event.media
+          ? {
+              media: {
+                kind: event.media.kind,
+                bytes: Buffer.from(event.media.bytes, "base64"),
+                ...(event.media.mimeType ? { mimeType: event.media.mimeType } : {}),
+                ...(event.media.fileName ? { fileName: event.media.fileName } : {}),
+                ...(event.media.caption ? { caption: event.media.caption } : {}),
+                ...(event.media.ptt !== undefined ? { ptt: event.media.ptt } : {}),
+              },
+            }
+          : {}),
         ...(event.fromMe ? { fromMe: true } : {}),
       });
       if (!reply) return { reply: null };

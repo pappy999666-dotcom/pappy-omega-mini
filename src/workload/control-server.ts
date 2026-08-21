@@ -19,7 +19,8 @@ import { handleWorkloadInboundEvent } from "./events.js";
 import { WORKLOAD_CONTROL_VERSION } from "./security.js";
 import type { WorkloadInboundEvent, WorkloadRegistrationRequest } from "./types.js";
 
-const MAX_BODY_BYTES = 512 * 1024;
+const MAX_BODY_BYTES = 8 * 1024 * 1024;
+const MAX_INBOUND_MEDIA_BYTES = 5 * 1024 * 1024;
 
 function json(response: ServerResponse, status: number, body: unknown): void {
   response.statusCode = status;
@@ -83,6 +84,31 @@ function stringListField(input: Record<string, unknown>, key: string): string[] 
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string"))
     throw new Error(`${key} must be an array of strings.`);
   return [...new Set(value.map((item) => item.trim()).filter(Boolean))].slice(0, 50);
+}
+
+function inboundMediaField(input: Record<string, unknown>): WorkloadInboundEvent["media"] {
+  const value = input.media;
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("media must be an object.");
+  const media = value as Record<string, unknown>;
+  const kind = media.kind;
+  const bytes = media.bytes;
+  if (!(["image", "video", "audio", "document", "sticker"] as const).includes(kind as never))
+    throw new Error("media.kind is unsupported.");
+  if (typeof bytes !== "string" || !/^[A-Za-z0-9+/]*={0,2}$/.test(bytes))
+    throw new Error("media.bytes must be base64.");
+  const byteLength = Buffer.byteLength(bytes, "base64");
+  if (!byteLength || byteLength > MAX_INBOUND_MEDIA_BYTES)
+    throw new Error("media.bytes exceeds the inbound media limit.");
+  return {
+    kind: kind as NonNullable<WorkloadInboundEvent["media"]>["kind"],
+    bytes,
+    ...(typeof media.mimeType === "string" && media.mimeType.trim() ? { mimeType: media.mimeType.trim().slice(0, 160) } : {}),
+    ...(typeof media.fileName === "string" && media.fileName.trim() ? { fileName: media.fileName.trim().slice(0, 240) } : {}),
+    ...(typeof media.caption === "string" ? { caption: media.caption.slice(0, 4096) } : {}),
+    ...(typeof media.ptt === "boolean" ? { ptt: media.ptt } : {}),
+  };
 }
 
 async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -167,6 +193,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     }
     if (path === "/workload/event") {
       const input = await body(request);
+      const inboundMedia = input.media !== undefined ? inboundMediaField(input) : undefined;
       const event = {
         workspaceId: stringField(input, "workspaceId"),
         sessionId: stringField(input, "sessionId"),
@@ -177,6 +204,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         ...(typeof input.quotedText === "string" ? { quotedText: input.quotedText } : {}),
         ...(typeof input.quotedSenderJid === "string" ? { quotedSenderJid: input.quotedSenderJid } : {}),
         ...(Array.isArray(input.mentionedJids) ? { mentionedJids: input.mentionedJids.filter((item): item is string => typeof item === "string").slice(0, 100) } : {}),
+        ...(inboundMedia ? { media: inboundMedia } : {}),
         ...(input.fromMe === true ? { fromMe: true } : {}),
       } satisfies WorkloadInboundEvent;
       const { worker } = await authenticateWorkloadWorker(credential);

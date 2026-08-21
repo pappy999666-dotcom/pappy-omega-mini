@@ -152,6 +152,18 @@ export interface WorkloadCommandResultRequest {
   error?: string;
 }
 
+export type WorkloadInboundMediaKind = "image" | "video" | "audio" | "document" | "sticker";
+
+export interface WorkloadInboundMedia {
+  kind: WorkloadInboundMediaKind;
+  /** Base64-encoded media bytes; the control plane converts this to Buffer. */
+  bytes: string;
+  mimeType?: string;
+  fileName?: string;
+  caption?: string;
+  ptt?: boolean;
+}
+
 export interface WorkloadInboundEvent {
   workspaceId: string;
   sessionId: string;
@@ -162,6 +174,7 @@ export interface WorkloadInboundEvent {
   quotedText?: string;
   quotedSenderJid?: string;
   mentionedJids?: string[];
+  media?: WorkloadInboundMedia;
   fromMe?: boolean;
 }
 

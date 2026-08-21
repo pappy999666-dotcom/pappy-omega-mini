@@ -87,6 +87,9 @@ export interface WorkloadNotification {
 }
 let workloadNotifier: ((notification: WorkloadNotification) => Promise<void>) | undefined;
 const lastWorkloadNotification = new Map<string, WorkloadNotificationState>();
+const WORKLOAD_UI_CACHE_MS = 1_500;
+const workloadWorkerListCache = new Map<string, { expiresAt: number; workers: WorkloadWorkerRecord[] }>();
+const workloadLoggerCache = new Map<string, { expiresAt: number; snapshot: WorkloadLoggerSnapshot }>();
 
 export function setWorkloadNotifier(
   notifier: (notification: WorkloadNotification) => Promise<void>,
@@ -305,6 +308,9 @@ export async function getWorkloadLoggerSnapshot(
   workspaceId: string,
   workerId: string,
 ): Promise<WorkloadLoggerSnapshot> {
+  const cacheKey = `${workspaceId}:${workerId}`;
+  const cached = workloadLoggerCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.snapshot;
   const worker = await getWorkloadWorker(workerId);
   if (!worker || worker.workspaceId !== workspaceId) throw new Error("Workload worker not found.");
   const records = (await listWorkloadEvents(workspaceId, 300))
@@ -321,7 +327,7 @@ export async function getWorkloadLoggerSnapshot(
   const connected = statusEvents.filter((event) => ["CONNECTED", "RECOVERED"].includes(status(event)));
   const timeouts = statusEvents.filter((event) => ["UNREACHABLE"].includes(status(event)) || reason(event) === "heartbeat-timeout");
   const errors = statusEvents.filter((event) => ["ERROR", "DEGRADED", "LOGGED_OUT"].includes(status(event)));
-  return {
+  const snapshot: WorkloadLoggerSnapshot = {
     worker,
     connectionCount: connected.length,
     timeoutCount: timeouts.length,
@@ -330,6 +336,8 @@ export async function getWorkloadLoggerSnapshot(
     ...(timeouts[0]?.createdAt ? { lastTimeoutAt: timeouts[0].createdAt } : {}),
     events: statusEvents.slice(0, 16).map((event) => ({ at: event.createdAt, state: status(event), ...(reason(event) ? { detail: reason(event) } : {}) })),
   };
+  workloadLoggerCache.set(cacheKey, { expiresAt: Date.now() + WORKLOAD_UI_CACHE_MS, snapshot });
+  return snapshot;
 }
 
 export async function recordWorkloadHeartbeat(
@@ -587,8 +595,21 @@ export async function markUnreachableWorkloadWorkers(
     const updated = await updateWorkloadWorker(worker.workerId, { status: "UNREACHABLE", lastError: "Heartbeat timeout." });
     if (updated) notifyWorkloadOwner(updated, "UNREACHABLE", "Heartbeat timeout.");
     const assignments = await listWorkloadAssignments(worker.workspaceId);
-    for (const assignment of assignments.filter((item) => item.workerId === worker.workerId && item.status !== "REVOKED"))
+    for (const assignment of assignments.filter((item) => item.workerId === worker.workerId && item.status !== "REVOKED")) {
       await updateWorkloadAssignment(assignment.assignmentId, { status: "OFFLINE", lastError: "Worker heartbeat timeout." });
+      try {
+        const session = getSession(worker.workspaceId, assignment.sessionId);
+        if (session.status !== "LOGGED_OUT" && session.status !== "BANNED") {
+          updateSession(worker.workspaceId, assignment.sessionId, {
+            status: "DEGRADED",
+            authHealth: session.authHealth === "INVALID" ? "INVALID" : "DEGRADED",
+            disconnectReason: "Panel heartbeat timeout; panel is offline. Session data is retained for recovery.",
+          });
+        }
+      } catch {
+        // The assignment remains auditable even if its durable session row was removed separately.
+      }
+    }
     await appendWorkloadEvent({
       workspaceId: worker.workspaceId,
       workerId: worker.workerId,
@@ -605,8 +626,12 @@ export async function getWorkloadMode(workspaceId: string): Promise<"ON" | "OFF"
 }
 
 export async function listWorkspaceWorkloadWorkers(workspaceId: string): Promise<WorkloadWorkerRecord[]> {
+  const cached = workloadWorkerListCache.get(workspaceId);
+  if (cached && cached.expiresAt > Date.now()) return cached.workers;
   await deleteRevokedWorkloadWorkers(workspaceId);
-  return listWorkloadWorkers(workspaceId);
+  const workers = await listWorkloadWorkers(workspaceId);
+  workloadWorkerListCache.set(workspaceId, { expiresAt: Date.now() + WORKLOAD_UI_CACHE_MS, workers });
+  return workers;
 }
 
 export async function getWorkspaceWorkloadWorkerByDisplayKey(

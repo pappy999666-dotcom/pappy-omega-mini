@@ -296,7 +296,7 @@ async function openWhatsAppSession(
   let recoverStaleSocket: ((reason: string) => void) | undefined;
   let staleRecoveryTriggered = false;
   const logger = pino({
-    level: "info",
+    level: process.env.PAPPY_WA_LOG_LEVEL ?? "warn",
     hooks: {
       logMethod(inputArgs, method) {
         const rendered = inputArgs
@@ -404,9 +404,10 @@ async function openWhatsAppSession(
         };
       }>;
     }) => {
-      console.log(
-        `[pappy-omega-mini] WhatsApp inbound upsert session=${sessionId} count=${event.messages?.length ?? 0}`,
-      );
+      if (process.env.PAPPY_DEBUG_WA_EVENTS === "1")
+        console.log(
+          `[pappy-omega-mini] WhatsApp inbound upsert session=${sessionId} count=${event.messages?.length ?? 0}`,
+        );
       for (const message of event.messages ?? []) {
         const receivedAt = noteMessageReceived(key);
         updateSession(workspaceId, sessionId, {
