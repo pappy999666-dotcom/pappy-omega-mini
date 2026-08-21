@@ -19,6 +19,7 @@ import { JoinResultStore } from "./join-result-store.js";
 
 const QUEUE_NAME = "pappy-omega-mini-jobs";
 const BROADCAST_QUEUE_NAME = "pappy-omega-mini-broadcasts";
+const VALIDATOR_QUEUE_NAME = "pappy-omega-mini-validator";
 const STORE_PREFIX = "pappy-omega-mini:job:";
 const CODE_PREFIX = "pappy-omega-mini:job-code:";
 const STALE_ACTIVE_JOB_GRACE_MS = 60_000;
@@ -122,9 +123,11 @@ export class JobOrchestrator {
   private readonly store: RedisJobStore;
   private readonly queue: Queue<JobRecord>;
   private readonly broadcastQueue: Queue<JobRecord>;
+  private readonly validatorQueue: Queue<JobRecord>;
   private readonly handlers = new Map<JobKind, WorkerHandler>();
   private readonly worker: Worker<JobRecord>;
   private readonly broadcastWorker: Worker<JobRecord>;
+  private readonly validatorWorker: Worker<JobRecord>;
   private readonly joinResults: JoinResultStore;
   private readonly closeHooks: Array<() => Promise<void> | void> = [];
   private readonly completionHooks: Array<(job: JobRecord) => Promise<void> | void> = [];
@@ -145,6 +148,10 @@ export class JobOrchestrator {
       defaultJobOptions,
     });
     this.broadcastQueue = new Queue<JobRecord>(BROADCAST_QUEUE_NAME, {
+      connection: this.redis,
+      defaultJobOptions,
+    });
+    this.validatorQueue = new Queue<JobRecord>(VALIDATOR_QUEUE_NAME, {
       connection: this.redis,
       defaultJobOptions,
     });
@@ -171,6 +178,14 @@ export class JobOrchestrator {
         concurrency: Math.max(1, Math.min(env.BROADCAST_CONCURRENCY, 8)),
       },
     );
+    this.validatorWorker = new Worker<JobRecord>(
+      VALIDATOR_QUEUE_NAME,
+      async (job) => this.process(job),
+      {
+        ...workerOptions,
+        concurrency: Math.max(1, Math.min(env.VALIDATOR_CONCURRENCY, 32)),
+      },
+    );
     const handleFailed = (job: BullJob<JobRecord> | undefined, error: Error): void => {
       if (!job) return;
       void (async () => {
@@ -186,6 +201,7 @@ export class JobOrchestrator {
     };
     this.worker.on("failed", handleFailed);
     this.broadcastWorker.on("failed", handleFailed);
+    this.validatorWorker.on("failed", handleFailed);
     this.reaperTimer = setInterval(() => {
       void this.reapStaleJobs();
     }, 30_000);
@@ -202,11 +218,13 @@ export class JobOrchestrator {
   }
 
   private queueForKind(kind: JobKind): Queue<JobRecord> {
-    return isBroadcastKind(kind) ? this.broadcastQueue : this.queue;
+    if (isBroadcastKind(kind)) return this.broadcastQueue;
+    if (kind === "link-validation") return this.validatorQueue;
+    return this.queue;
   }
 
   private allQueues(): Queue<JobRecord>[] {
-    return [this.queue, this.broadcastQueue];
+    return [this.queue, this.broadcastQueue, this.validatorQueue];
   }
 
   private async findBullJob(record: JobRecord): Promise<BullJob<JobRecord> | undefined> {
@@ -535,12 +553,13 @@ export class JobOrchestrator {
   }
 
   async cancel(jobId: string): Promise<JobRecord | undefined> {
+    const current = await this.store.get(jobId);
     const record = await this.store.update(jobId, {
       state: "CANCELLING",
       cancellationRequested: true,
       pauseRequested: false,
     });
-    const job = await this.queue.getJob(jobId);
+    const job = current ? await this.queueForKind(current.kind).getJob(jobId) : undefined;
     if (job && !(await job.isActive()))
       await job.remove().catch(() => undefined);
     return record;
@@ -589,7 +608,7 @@ export class JobOrchestrator {
 
   async close(): Promise<void> {
     clearInterval(this.reaperTimer);
-    await Promise.all([this.worker.close(), this.broadcastWorker.close()]);
+    await Promise.all([this.worker.close(), this.broadcastWorker.close(), this.validatorWorker.close()]);
     await Promise.all(this.allQueues().map((queue) => queue.close()));
     for (const hook of this.closeHooks) await hook();
     await this.redis.quit();

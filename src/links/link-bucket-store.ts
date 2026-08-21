@@ -39,6 +39,7 @@ export interface LinkRecord {
     joinRetryable?: boolean;
     needsValidation?: boolean;
     validationState?: "pending" | "validating" | "active" | "dead" | "retryable-error";
+    validationLeaseToken?: string;
   };
   validationError?: string;
 }
@@ -62,8 +63,13 @@ export class LinkBucketStore {
           firstSeenAt: Date.now(),
         };
     await this.redis.set(key, JSON.stringify(record));
+    for (const bucketName of ["main", "validating", "active", "dead", "error"] as LinkBucket[])
+      await this.redis.srem(
+        this.bucketKey(GLOBAL_VALIDATOR_SCOPE, bucketName),
+        record.canonicalUrl,
+      );
     await this.redis.sadd(
-      this.bucketKey(record.workspaceId, record.bucket),
+      this.bucketKey(GLOBAL_VALIDATOR_SCOPE, record.bucket),
       record.canonicalUrl,
     );
     return record;
@@ -162,10 +168,61 @@ export class LinkBucketStore {
     return this.redis.scard(this.bucketKey(workspaceId, bucket));
   }
 
+  async reconcileGlobalIndexes(): Promise<{ removed: number; restored: number }> {
+    let removed = 0;
+    let restored = 0;
+    const bucketNames = ["main", "validating", "active", "dead", "error"] as LinkBucket[];
+    for (const bucket of bucketNames) {
+      let cursor = "0";
+      do {
+        const [nextCursor, urls] = await this.redis.sscan(
+          this.bucketKey(GLOBAL_VALIDATOR_SCOPE, bucket),
+          cursor,
+          "COUNT",
+          500,
+        );
+        cursor = nextCursor;
+        for (const url of urls) {
+          const record = await this.get(GLOBAL_VALIDATOR_SCOPE, url);
+          if (!record || record.bucket !== bucket) {
+            removed += Number(
+              await this.redis.srem(this.bucketKey(GLOBAL_VALIDATOR_SCOPE, bucket), url),
+            );
+          }
+        }
+      } while (cursor !== "0");
+    }
+    let cursor = "0";
+    do {
+      const [nextCursor, keys] = await this.redis.scan(
+        cursor,
+        "MATCH",
+        `${this.recordKey(GLOBAL_VALIDATOR_SCOPE, "")}*`,
+        "COUNT",
+        500,
+      );
+      cursor = nextCursor;
+      for (const key of keys) {
+        const raw = await this.redis.get(key);
+        if (!raw) continue;
+        const record = JSON.parse(raw) as LinkRecord;
+        if (!bucketNames.includes(record.bucket)) continue;
+        restored += Number(
+          await this.redis.sadd(
+            this.bucketKey(GLOBAL_VALIDATOR_SCOPE, record.bucket),
+            record.canonicalUrl,
+          ),
+        );
+      }
+    } while (cursor !== "0");
+    return { removed, restored };
+  }
+
   async claimMainForValidation(
     workspaceId: string,
     canonicalUrl: string,
     sourceSessionId?: string,
+    validationLeaseToken?: string,
   ): Promise<boolean> {
     const lockKey = `pappy-omega-mini:validator-claim:${workspaceId}:${createHash("sha256").update(canonicalUrl).digest("hex")}`;
     const token = randomUUID();
@@ -175,9 +232,10 @@ export class LinkBucketStore {
       const current = await this.get(workspaceId, canonicalUrl);
       if (!current || current.bucket !== "main") return false;
       const moved = await this.move(workspaceId, canonicalUrl, "validating", {
-        ...(sourceSessionId ? { sourceSessionId } : {}),
+          ...(sourceSessionId ? { sourceSessionId } : {}),
         metadata: {
           ...(current.metadata ?? {}),
+          ...(validationLeaseToken ? { validationLeaseToken } : {}),
           needsValidation: false,
           validationState: "validating",
         },

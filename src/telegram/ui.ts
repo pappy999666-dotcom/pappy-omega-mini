@@ -211,7 +211,7 @@ export function sessionKeyboard(
       btn("🌉 Session Bridge", `session:${id}:section:bridge`),
     ],
     [
-      btn("🔗 Validator Hub", `session:${id}:section:validator`, "success"),
+      btn("🔗 Shared Links", `session:${id}:section:validator`, "success"),
       btn("⚡ Auto Promote", `session:${id}:autopromote`, "primary"),
     ],
     [btn("🛠 Join Manager", `session:${id}:section:join`)],
@@ -1032,7 +1032,7 @@ export function dashboardText(isAdmin: boolean): string {
 export function helpText(): string {
   return pageText(
     "Help & Shortcuts",
-    "<b>Workspace</b> — Global Bridge, Validator Hub, Scheduled Jobs, Settings, Support.\n<b>Session</b> — Pairing, profile controls, link collection, Join Manager, and per-session Bridge.\n<b>WhatsApp</b> — <code>.menu</code>, <code>.ping</code>, <code>.autojoin on|off</code>, <code>.pfp</code>, <code>.setgpp</code>, <code>.groups</code>, <code>.health</code>, <code>.setname</code>, <code>.setbio</code>, <code>.setsudo</code>, and <code>.setprefix</code>.\n\n${ui.info} <b>Security:</b> Admin controls are never rendered for ordinary users and are checked again on every callback.",
+    "<b>Workspace</b> — Global Bridge, shared link intake, Scheduled Jobs, Settings, Support. The live Validator Hub is admin-owned.\n<b>Session</b> — Pairing, profile controls, link collection, Join Manager, and per-session Bridge.\n<b>WhatsApp</b> — <code>.menu</code>, <code>.ping</code>, <code>.autojoin on|off</code>, <code>.pfp</code>, <code>.setgpp</code>, <code>.groups</code>, <code>.health</code>, <code>.setname</code>, <code>.setbio</code>, <code>.setsudo</code>, and <code>.setprefix</code>.\n\n${ui.info} <b>Security:</b> Admin controls are never rendered for ordinary users and are checked again on every callback.",
   );
 }
 

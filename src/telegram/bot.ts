@@ -170,7 +170,6 @@ import {
   sessionToolsKeyboard,
   sessionSettingsKeyboard,
   sessionAccessKeyboard,
-  sessionValidatorKeyboard,
   sessionsKeyboard,
   autoPromoteScopeKeyboard,
   autoPromoteCommandKeyboard,
@@ -1698,7 +1697,7 @@ export function createTelegramBot(): Telegraf<Context> {
           : [];
         await ctx.reply(
           pageText(
-            "Validator Hub",
+            "Shared Link Intake",
             validationJobs.length
               ? successResponse(
                   "Imported · Validation Started",
@@ -2236,13 +2235,13 @@ export function createTelegramBot(): Telegraf<Context> {
         return edit(
           ctx,
           pageText(
-            `${session.sessionName} · Validator Hub`,
+            `${session.sessionName} · Shared Link Intake`,
             infoResponse(
               "Automatic Link Pipeline",
-              `<b>Collection:</b> automatic\n<b>Validation:</b> automatic\n<b>Collected:</b> ${session.collectedLinkCount ?? 0}\n<b>Validated:</b> ${session.validatedLinkCount ?? 0}\n\nOpen the workspace Hub for the live same-message validation dashboard.`,
+              `<b>Collection:</b> automatic into the admin-owned shared Main\n<b>Validation:</b> automatic across eligible sessions\n<b>Collected:</b> ${session.collectedLinkCount ?? 0}\n<b>Validated:</b> ${session.validatedLinkCount ?? 0}\n\nThis session does not own a Validator Hub. All users feed one shared pipeline.`,
             ),
           ),
-          sessionValidatorKeyboard(session.sessionId),
+          linkCollectionKeyboard(session.sessionId),
         );
       if (section === "settings")
         return edit(
@@ -2711,10 +2710,10 @@ export function createTelegramBot(): Telegraf<Context> {
     await edit(
       ctx,
       pageText(
-        `${session.sessionName} · Validator Hub`,
+        `${session.sessionName} · Shared Link Intake`,
         successResponse(
           "Automation Always ON",
-          `<b>Link collection:</b> automatic\n<b>Link validation:</b> automatic\n<b>Collected:</b> ${session.collectedLinkCount ?? 0}\n<b>Validated:</b> ${session.validatedLinkCount ?? 0}`,
+          `<b>Link collection:</b> automatic into the admin-owned shared Main\n<b>Link validation:</b> automatic across eligible sessions\n<b>Collected:</b> ${session.collectedLinkCount ?? 0}\n<b>Validated:</b> ${session.validatedLinkCount ?? 0}`,
         ),
       ),
       sessionKeyboard(session, isAdmin(ctx)),
@@ -3829,7 +3828,7 @@ export function createTelegramBot(): Telegraf<Context> {
             joinManagerKeyboard(session.sessionId, "idle"),
           );
         }
-        const existing = (await runtime.listRecent(200)).find(
+        const existing = (await runtime.listAllJobs()).find(
           (candidate) =>
             candidate.workspaceId === user.workspaceId &&
             candidate.sessionId === session.sessionId &&
@@ -6482,8 +6481,22 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
     activeLinks = count;
     totalGroups = groups?.length;
   });
-  const jobId = joinJobs.get(key);
-  const job = jobId ? await runtime?.get(jobId) : undefined;
+  let jobId = joinJobs.get(key);
+  let job = jobId ? await runtime?.get(jobId) : undefined;
+  if (!job && runtime) {
+    job = (await runtime.listAllJobs()).find(
+      (candidate) =>
+        candidate.workspaceId === user.workspaceId &&
+        candidate.sessionId === session.sessionId &&
+        candidate.kind === "join-manager" &&
+        ["QUEUED", "RUNNING", "PAUSED", "RETRYING", "CANCELLING"].includes(candidate.state),
+    );
+    if (job) {
+      jobId = job.jobId;
+      joinJobs.set(key, job.jobId);
+      joinStates.set(key, jobStateToJoinStatus(job.state));
+    }
+  }
   const status = job
     ? jobStateToJoinStatus(job.state)
     : (joinStates.get(key) ?? "idle");

@@ -172,6 +172,20 @@ export async function routeWhatsAppText(
             if (session.status !== "ACTIVE")
               return `\u26d4 Join Manager not started: WhatsApp session is ${session.status.toLowerCase()}, not ACTIVE.`;
             const settings = getSessionJoinSettings(message.workspaceId, message.sessionId);
+            const existing = (await runtime.listAllJobs()).find(
+              (candidate) =>
+                candidate.workspaceId === message.workspaceId &&
+                candidate.sessionId === message.sessionId &&
+                candidate.kind === "join-manager" &&
+                ["QUEUED", "RUNNING", "PAUSED", "RETRYING", "CANCELLING"].includes(candidate.state),
+            );
+            if (existing)
+              return {
+                jobCode: existing.jobCode ?? existing.jobId.slice(0, 8),
+                targetCount: Number(existing.payload.targetCount ?? settings.targetCount),
+                delayMs: Number(existing.payload.delayMs ?? settings.delayMs),
+                expectedTimeMs: Math.max(0, Number(existing.payload.targetCount ?? settings.targetCount) - 1) * Number(existing.payload.delayMs ?? settings.delayMs),
+              } satisfies EnqueueJoinJobResult;
             const targetCount = Math.max(1, Math.min(10000, Number(payload.targetCount ?? settings.targetCount)));
             const delayMs = Math.max(0, Math.min(600000, Number(payload.delayMs ?? settings.delayMs)));
             const record = await runtime.enqueue({
@@ -233,6 +247,23 @@ export async function routeWhatsAppText(
             const broadcastDelayMs = getWorkspaceDefaults(
               message.workspaceId,
             ).defaultBroadcastDelayMs;
+            let inventory: Array<{ jid: string }> = [];
+            if ((kind === "allstatus" || kind === "allchat") && !payload.groups) {
+              try {
+                inventory = await listGroups(message.workspaceId, message.sessionId);
+              } catch (error) {
+                throw new Error(
+                  `Unable to resolve WhatsApp groups before ${kind}: ${error instanceof Error ? error.message : String(error)}`,
+                );
+              }
+              if (!inventory.length)
+                throw new Error(`No WhatsApp groups were returned for ${kind}.`);
+            }
+            const resolvedGroups: string[] = Array.isArray(payload.groups)
+              ? payload.groups.filter((value): value is string => typeof value === "string")
+              : kind === "gstatus"
+                ? groups.map((group) => group.jid)
+                : inventory.map((group) => group.jid);
             const enrichedPayload = {
               ...payload,
               ...(kind === "allstatus" || kind === "allchat"
@@ -243,7 +274,7 @@ export async function routeWhatsAppText(
                         : broadcastDelayMs,
                   }
                 : {}),
-              groups: payload.groups ?? groups.map((group) => group.jid),
+              groups: resolvedGroups,
               ...(mediaReference ? { media: mediaReference } : {}),
               ...(kind === "allstatus" || kind === "allchat"
                 ? message.chatJid && !message.bridgeAuthorized
@@ -266,26 +297,8 @@ export async function routeWhatsAppText(
               idempotencyKey: `${message.workspaceId}:${message.sessionId}:${kind}:${message.messageId ?? payloadHash}`,
               ...(kind === "allstatus" || kind === "allchat" ? { maxAttempts: 12 } : {}),
             });
-            let inventoryPending = false;
-            const inventoryPromise =
-              kind === "allstatus" || kind === "allchat"
-                ? listGroups(message.workspaceId, message.sessionId).catch(() => {
-                    inventoryPending = true;
-                    return [];
-                  })
-                : Promise.resolve([]);
             const record = await recordPromise;
-            const inventory = await Promise.race([
-              inventoryPromise,
-              new Promise<Awaited<typeof inventoryPromise>>((resolve) => {
-                const timer = setTimeout(() => {
-                  inventoryPending = true;
-                  resolve([]);
-                }, BROADCAST_INVENTORY_ACK_TIMEOUT_MS);
-                timer.unref?.();
-              }),
-            ]);
-            const totalGroups = inventory.length;
+            const totalGroups = resolvedGroups.length;
             const repeat = Math.max(
               1,
               Math.min(20, Number((payload as { count?: unknown }).count ?? 1)),
@@ -299,7 +312,7 @@ export async function routeWhatsAppText(
               ...(totalGroups > 0
                 ? { expectedTimeMs: Math.max(0, totalGroups * repeat - 1) * delayMs }
                 : {}),
-              ...(inventoryPending ? { inventoryPending: true } : {}),
+
             } satisfies EnqueueJobResult;
           },
         }

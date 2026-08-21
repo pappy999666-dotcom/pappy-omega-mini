@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
 import type { JobProgress, WorkerContext } from "./job-contracts.js";
@@ -62,6 +62,7 @@ interface LinkValidationPayload {
   urls?: string[];
   sourceUserId?: string;
   sourceSessionId?: string;
+  validationLeaseToken?: string;
 }
 
 type JoinFailureClass =
@@ -301,27 +302,28 @@ export function startWorkerRuntime(): JobOrchestrator {
           if (!sourceSession)
             throw new Error("No healthy WhatsApp validation session is available yet.");
           const existing = await buckets.get(GLOBAL_VALIDATOR_SCOPE, canonicalUrl);
-          const validatingMetadata = {
-            ...(existing?.metadata ?? {}),
-            inviteCode,
-            needsValidation: false,
-            validationState: "validating" as const,
-          };
-          if (existing)
+          if (!existing || existing.bucket !== "validating")
+            return { status: "skipped" as const };
+          const leaseToken = payload.validationLeaseToken;
+          if (!leaseToken) return { status: "skipped" as const };
+          if (
+            existing.metadata?.validationLeaseToken &&
+            payload.validationLeaseToken &&
+            existing.metadata.validationLeaseToken !== payload.validationLeaseToken
+          )
+            return { status: "skipped" as const };
+          if (existing.metadata?.validationLeaseToken !== leaseToken) {
             await buckets.move(GLOBAL_VALIDATOR_SCOPE, canonicalUrl, "validating", {
               sourceSessionId: sourceSession.sessionId,
-              metadata: validatingMetadata,
+              metadata: {
+                ...(existing.metadata ?? {}),
+                inviteCode,
+                validationLeaseToken: leaseToken,
+                needsValidation: false,
+                validationState: "validating",
+              },
             });
-          else
-            await buckets.upsert({
-              canonicalUrl,
-              originalUrl: raw,
-              bucket: "validating",
-              workspaceId: context.job.workspaceId,
-              sourceUserId: payload.sourceUserId ?? "worker",
-              sourceSessionId: sourceSession.sessionId,
-              metadata: validatingMetadata,
-            });
+          }
           let metadata: Awaited<ReturnType<typeof validateInviteLink>> | undefined;
           let sourceSessionId: string | undefined;
           let lastValidationError: unknown;
@@ -342,25 +344,34 @@ export function startWorkerRuntime(): JobOrchestrator {
             throw lastValidationError instanceof Error
               ? lastValidationError
               : new Error("Invite validation failed on all healthy sessions.");
-          await buckets.upsert({
+          const currentRecord = await buckets.get(GLOBAL_VALIDATOR_SCOPE, canonicalUrl);
+          if (
+            !currentRecord ||
+            currentRecord.bucket !== "validating" ||
+            currentRecord.metadata?.validationLeaseToken !== leaseToken
+          )
+            return { status: "skipped" as const };
+          const movedActive = await buckets.move(
+            GLOBAL_VALIDATOR_SCOPE,
             canonicalUrl,
-            originalUrl: raw,
-            bucket: "active",
-            workspaceId: context.job.workspaceId,
-            sourceUserId: payload.sourceUserId ?? "worker",
-            sourceSessionId,
-            lastCheckedAt: Date.now(),
-            metadata: {
-              ...(existing?.metadata ?? {}),
-              ...(metadata.subject ? { title: metadata.subject } : {}),
-              ...(metadata.participantCount !== undefined
-                ? { memberCount: metadata.participantCount }
-                : {}),
-              inviteCode,
-              needsValidation: false,
-              validationState: "active",
+            "active",
+            {
+              originalUrl: raw,
+              sourceUserId: payload.sourceUserId ?? currentRecord.sourceUserId,
+              sourceSessionId,
+              metadata: {
+                ...(currentRecord.metadata ?? {}),
+                ...(metadata.subject ? { title: metadata.subject } : {}),
+                ...(metadata.participantCount !== undefined
+                  ? { memberCount: metadata.participantCount }
+                  : {}),
+                inviteCode,
+                needsValidation: false,
+                validationState: "active",
+              },
             },
-          });
+          );
+          if (!movedActive) return { status: "skipped" as const };
           await buckets.clearValidationError(
             GLOBAL_VALIDATOR_SCOPE,
             canonicalUrl,
@@ -436,9 +447,10 @@ export function startWorkerRuntime(): JobOrchestrator {
           ].some((marker) => lower.includes(marker));
           const existing = await buckets.get(GLOBAL_VALIDATOR_SCOPE, parsed);
           if (
-            existing &&
-            (existing.bucket !== "validating" ||
-              existing.metadata?.validationState !== "validating")
+            !existing ||
+            existing.bucket !== "validating" ||
+            !payload.validationLeaseToken ||
+            existing.metadata?.validationLeaseToken !== payload.validationLeaseToken
           )
             return { status: "skipped" as const };
           await buckets
@@ -1217,6 +1229,9 @@ export function startWorkerRuntime(): JobOrchestrator {
       error instanceof Error ? error.message : String(error),
     );
   });
+  void buckets.reconcileGlobalIndexes()
+    .then((result) => console.info(`[pappy-omega-mini] Validator index reconciled removed=${result.removed} restored=${result.restored}`))
+    .catch((error) => console.error("[pappy-omega-mini] Validator index reconciliation failed:", error));
   void sweepPendingMainValidation(orchestrator, buckets);
   void runValidatorGuard(orchestrator, buckets, redis);
   validatorSweepTimer = setInterval(
@@ -1242,6 +1257,12 @@ async function runValidatorGuard(
   validatorGuardBusy = true;
   try {
     const now = Date.now();
+    if (now - lastValidatorIndexReconcileAt >= 60_000) {
+      lastValidatorIndexReconcileAt = now;
+      await buckets.reconcileGlobalIndexes().catch((error) =>
+        console.error("[pappy-omega-mini] periodic Validator index reconciliation failed:", error),
+      );
+    }
     const activeValidationJobs = (await orchestrator.listRecent(1000)).filter(
       (job) =>
         job.kind === "link-validation" &&
@@ -1335,6 +1356,7 @@ async function runValidatorGuard(
 }
 
 let validatorSweepBusy = false;
+let lastValidatorIndexReconcileAt = 0;
 
 async function sweepPendingMainValidation(
   orchestrator: JobOrchestrator,
@@ -1393,16 +1415,19 @@ async function sweepPendingMainValidation(
       const session = availableSessions[index];
       if (!session || !urls.length) continue;
       const batch = urls.slice(0, validatorBatchSize);
+      const validationLeaseToken = randomUUID();
       const claimed = await claimValidatorMainLinks(
         GLOBAL_VALIDATOR_SCOPE,
         batch,
         session.sessionId,
+        validationLeaseToken,
       ).catch(() => 0);
       if (claimed !== batch.length) continue;
       const payload = {
         urls: batch,
         sourceSessionId: session.sessionId,
         sourceUserId: "validator-auto",
+        validationLeaseToken,
       };
       const payloadHash = createHash("sha256")
         .update(JSON.stringify(payload))
@@ -1422,6 +1447,7 @@ async function sweepPendingMainValidation(
                 metadata: {
                   needsValidation: true,
                   validationState: "pending",
+                  validationLeaseToken,
                 },
               });
             throw error;

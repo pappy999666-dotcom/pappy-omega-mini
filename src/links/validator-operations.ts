@@ -124,6 +124,7 @@ export async function claimValidatorMainLinks(
   workspaceId: string,
   urls: string[],
   sourceSessionId?: string,
+  validationLeaseToken?: string,
 ): Promise<number> {
   return withStore(async (store) => {
     let claimed = 0;
@@ -134,7 +135,7 @@ export async function claimValidatorMainLinks(
       } catch {
         continue;
       }
-      if (await store.claimMainForValidation(workspaceId, canonicalUrl, sourceSessionId))
+      if (await store.claimMainForValidation(workspaceId, canonicalUrl, sourceSessionId, validationLeaseToken))
         claimed += 1;
     }
     return claimed;
