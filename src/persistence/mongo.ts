@@ -378,6 +378,7 @@ const sessionSchema = new mongoose.Schema<SessionDocument>(
     socketGeneration: Number,
     authHealth: String,
     workerNodeId: String,
+    workloadWorkerId: String,
     lastError: String,
     disconnectReason: String,
   },
