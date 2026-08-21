@@ -15,6 +15,8 @@ const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 const NORMALIZED_PREVIEW_MAX_DIMENSION = 1920;
 const NORMALIZED_PREVIEW_MAX_BYTES = 512 * 1024;
 const MAX_REDIRECTS = 4;
+const PREVIEW_CONCURRENCY = 8;
+const LOCAL_CACHE_MAX_ENTRIES = 512;
 const URL_PATTERN = /(?:https?:\/\/|(?:www\.)?\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+(?:\/[^\s<>"']*)?)/gi;
 const TRAILING_URL_PUNCTUATION = /[),.;!?]+$/;
 
@@ -76,7 +78,40 @@ export interface CanonicalPreviewInput {
 let redis: Redis | undefined;
 const inFlight = new Map<string, Promise<CanonicalPreviewRecord | undefined>>();
 const nativeUploadCache = new Map<string, Promise<Record<string, unknown> | undefined>>();
+const localPreviewCache = new Map<string, CanonicalPreviewRecord>();
+const previewQueue: Array<() => void> = [];
+let activePreviewTasks = 0;
 const lastDebug = new Map<string, PreviewDebugSnapshot>();
+
+function pumpPreviewQueue(): void {
+  while (activePreviewTasks < PREVIEW_CONCURRENCY && previewQueue.length) {
+    const next = previewQueue.shift();
+    next?.();
+  }
+}
+
+async function withPreviewSlot<T>(task: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    previewQueue.push(() => {
+      activePreviewTasks += 1;
+      void task().then(resolve, reject).finally(() => {
+        activePreviewTasks -= 1;
+        pumpPreviewQueue();
+      });
+    });
+    pumpPreviewQueue();
+  });
+}
+
+function rememberLocalPreview(key: string, value: CanonicalPreviewRecord): void {
+  localPreviewCache.delete(key);
+  localPreviewCache.set(key, value);
+  while (localPreviewCache.size > LOCAL_CACHE_MAX_ENTRIES) {
+    const oldest = localPreviewCache.keys().next().value;
+    if (typeof oldest !== "string") break;
+    localPreviewCache.delete(oldest);
+  }
+}
 
 function getRedis(): Redis {
   if (redis) return redis;
@@ -216,6 +251,19 @@ async function readResponseBytes(response: Response, maxBytes: number): Promise<
 
 function contentType(response: Response): string {
   return response.headers.get("content-type")?.split(";", 1)[0]?.toLowerCase() ?? "";
+}
+
+async function retryPreview<T>(operation: () => Promise<T>, attempts = 2): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Preview operation failed."));
 }
 
 async function readHtml(url: string): Promise<{ html: string; finalUrl: string }> {
@@ -416,7 +464,7 @@ async function resolveImageCandidates(
 ): Promise<Pick<CanonicalPreviewRecord, "selectedImageUrl" | "imageData" | "imageMimeType" | "sourceWidth" | "sourceHeight"> | undefined> {
   for (const candidate of [...new Set(candidates)]) {
     try {
-      const image = await readImage(candidate);
+      const image = await retryPreview(() => readImage(candidate));
       return {
         selectedImageUrl: image.finalUrl,
         imageData: image.bytes.toString("base64"),
@@ -463,7 +511,7 @@ async function resolveRecord(
       let image = await resolveImageCandidates(candidates);
       if (!image) {
         try {
-          const page = await readHtml(canonicalUrl);
+          const page = await retryPreview(() => readHtml(canonicalUrl));
           const metadata = parsePageMetadata(page.html, page.finalUrl);
           for (const candidate of metadata.images.slice(0, 8)) {
             image = await resolveImageCandidates([candidate.url]);
@@ -486,7 +534,7 @@ async function resolveRecord(
   }
 
   try {
-    const page = await readHtml(canonicalUrl);
+    const page = await retryPreview(() => readHtml(canonicalUrl));
     const metadata = parsePageMetadata(page.html, page.finalUrl);
     let image: Pick<CanonicalPreviewRecord, "selectedImageUrl" | "imageData" | "imageMimeType" | "sourceWidth" | "sourceHeight"> | undefined;
     for (const candidate of metadata.images.slice(0, 8)) {
@@ -550,18 +598,29 @@ async function resolveCached(
 ): Promise<{ record: CanonicalPreviewRecord | undefined; cache: "HIT" | "MISS" | "BYPASS" }> {
   const canonicalUrl = canonicalizePreviewUrl(url);
   const key = cacheKey(scope, canonicalUrl);
+  const local = localPreviewCache.get(key);
+  if (local && local.expiresAt > Date.now() && (local.imageData || !groupInviteCode(canonicalUrl))) {
+    rememberLocalPreview(key, local);
+    return { record: local, cache: "HIT" };
+  }
+  if (local) localPreviewCache.delete(key);
   const cached = await readCached(key);
-  if (cached && (cached.imageData || !groupInviteCode(canonicalUrl)))
+  if (cached && (cached.imageData || !groupInviteCode(canonicalUrl))) {
+    rememberLocalPreview(key, cached);
     return { record: cached, cache: "HIT" };
+  }
   const runningKey = `${scope ?? "global"}:${canonicalUrl}`;
   const running = inFlight.get(runningKey);
   if (running) return { record: await running, cache: "MISS" };
-  const promise = resolveRecord(canonicalUrl, socket).finally(() => {
+  const promise = withPreviewSlot(() => resolveRecord(canonicalUrl, socket)).finally(() => {
     if (inFlight.get(runningKey) === promise) inFlight.delete(runningKey);
   });
   inFlight.set(runningKey, promise);
   const record = await promise;
-  if (record) await writeCached(key, record);
+  if (record) {
+    rememberLocalPreview(key, record);
+    await writeCached(key, record);
+  }
   return { record, cache: "MISS" };
 }
 
@@ -742,5 +801,7 @@ export async function closeCanonicalPreview(): Promise<void> {
   redis = undefined;
   inFlight.clear();
   nativeUploadCache.clear();
+  localPreviewCache.clear();
+  previewQueue.length = 0;
   lastDebug.clear();
 }

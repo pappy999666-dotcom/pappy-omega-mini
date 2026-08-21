@@ -475,12 +475,20 @@ export function createTelegramBot(): Telegraf<Context> {
     throw new Error("TELEGRAM_BOT_TOKEN is not configured.");
   const bot = new Telegraf<Context>(env.TELEGRAM_BOT_TOKEN);
   bot.use(async (ctx, next) => {
-    if (ctx.callbackQuery && ctx.from?.id !== undefined) {
+    if (ctx.from?.id !== undefined) {
       const userId = String(ctx.from.id);
-      const callbackData = "data" in ctx.callbackQuery ? String(ctx.callbackQuery.data ?? "") : "";
-      if (!isAutoPromoteWizardContinuation(callbackData)) {
+      const message = ctx.message;
+      const isNewCommand = Boolean(message && "text" in message && typeof message.text === "string" && message.text.trim().startsWith("/"));
+      if (isNewCommand) {
         clearPendingInputs(userId);
         passiveIntakeSuspended.delete(userId);
+      }
+      if (ctx.callbackQuery) {
+        const callbackData = "data" in ctx.callbackQuery ? String(ctx.callbackQuery.data ?? "") : "";
+        if (!isAutoPromoteWizardContinuation(callbackData)) {
+          clearPendingInputs(userId);
+          passiveIntakeSuspended.delete(userId);
+        }
       }
     }
     await next();
@@ -2352,7 +2360,7 @@ export function createTelegramBot(): Telegraf<Context> {
           `${session.sessionName} · PFP`,
           infoResponse(
             "Change Profile Picture",
-            "Send a photo here, or send an HTTPS image URL. The next input updates this WhatsApp profile picture.",
+            "Send the actual photo here. The next uploaded image updates this WhatsApp profile picture; an HTTPS image URL is supported only as a fallback.",
           ),
         ),
         keyboard([[btn("Cancel", `session:${session.sessionId}:action:pfp`)]]),
@@ -5346,6 +5354,11 @@ async function startPairing(
   const user = resolveTelegramUser(ctx);
   const userId = String(ctx.from?.id ?? "");
   const workloadMode = await getWorkloadMode(user.workspaceId);
+  if (workloadMode === "OFF") {
+    preferredWorkloadWorker.delete(userId);
+    await sendOrEdit(ctx, pageText("Pairing", warningResponse("Panel workload is OFF", "New WhatsApp sessions cannot use your VPS while Admin Workload is OFF. Existing sessions are preserved.")), keyboard([[btn("▣ Workload Status", "workload:menu")], [btn(ui.back, "menu:main")]]));
+    return;
+  }
   const preferred = preferredWorkloadWorker.get(userId);
   let targetWorker = preferred
     ? await getWorkspaceWorkloadWorkerByCode(user.workspaceId, preferred.workloadCode)
@@ -5354,15 +5367,7 @@ async function startPairing(
   if (preferred && (!targetWorker || !isWorkloadWorkerReady(targetWorker))) {
     preferredWorkloadWorker.delete(userId);
     targetWorker = undefined;
-    if (workloadMode === "OFF") {
-      await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn("📖 Simple Setup Guide", "workload:guide")], [btn(ui.back, "menu:main")]]));
-      return;
-    }
     await sendOrEdit(ctx, pageText("Pairing", dangerResponse("Selected panel is offline", "Check the panel status or choose another panel before pairing.")), keyboard([[btn("◌ Workload", "workload:menu")], [btn(ui.back, "menu:main")]]));
-    return;
-  }
-  if (workloadMode === "OFF" && !targetWorker) {
-    await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn(ui.back, "menu:main")]]));
     return;
   }
   const normalizedName = requestedName.trim().replace(/\s+/g, "-");
@@ -5414,8 +5419,9 @@ async function startPairing(
 async function beginPairingWizard(ctx: Context, workloadSelected = false): Promise<void> {
   const user = resolveTelegramUser(ctx);
   if (!workloadSelected) {
-    const workers = await listWorkspaceWorkloadWorkers(user.workspaceId);
-    const readyWorkers = workers.filter((worker) => isWorkloadWorkerReady(worker));
+    const workloadMode = await getWorkloadMode(user.workspaceId);
+    const workers = workloadMode === "ON" ? await listWorkspaceWorkloadWorkers(user.workspaceId) : [];
+    const readyWorkers = workloadMode === "ON" ? workers.filter((worker) => isWorkloadWorkerReady(worker)) : [];
     const rows = readyWorkers.map((worker) => {
       const code = worker.workloadCode ?? worker.displayKey;
       return [btn(`▣ ${worker.workerName ?? "Panel"} · ${code}`, `pair:workload:${code}`, "success")];

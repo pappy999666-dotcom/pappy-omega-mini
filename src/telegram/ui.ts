@@ -1309,7 +1309,7 @@ export function adminWorkloadText(
     "Admin · Workload",
     infoResponse(
       `Owner workload mode: ${mode}`,
-      `${body}\n\nUse the controls below to change placement policy or inspect a worker. Existing sessions are never deleted by the mode toggle.`,
+      `${body}\n\n<b>ON:</b> new WhatsApp sessions may be assigned to external panels.\n<b>OFF:</b> new external-panel assignments and panel pairing are blocked; existing sessions and auth are preserved.\n\nUse the controls below to change placement policy or inspect a worker.`,
     ),
   );
 }

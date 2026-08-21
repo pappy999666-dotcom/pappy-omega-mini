@@ -385,6 +385,7 @@ export async function assignWorkloadSession(
   if (!session || session.workspaceId !== workspaceId) throw new Error("Session is not in this workspace.");
   const worker = await getWorkloadWorker(workerId);
   if (!worker || worker.workspaceId !== workspaceId) throw new Error("Worker is not owned by this workspace.");
+  if (await getWorkspaceWorkloadMode(workspaceId) === "OFF") throw new Error("Admin Workload is OFF; new external-panel assignments are disabled.");
   if (!isWorkloadWorkerReady(worker)) throw new Error("Worker must be ACTIVE, compatible, and have a fresh heartbeat before assignment.");
   const existing = await getWorkloadAssignmentBySession(sessionId);
   if (existing && existing.workerId !== workerId && ["ASSIGNED", "RUNNING", "DEGRADED", "OFFLINE"].includes(existing.status))

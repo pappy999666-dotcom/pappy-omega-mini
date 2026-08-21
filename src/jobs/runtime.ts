@@ -964,14 +964,6 @@ export function startWorkerRuntime(): JobOrchestrator {
         },
         { payload: resolvedPayload },
       );
-      if (kind === "allstatus" || kind === "allchat")
-        await notifyBroadcastReady(
-          context,
-          kind,
-          deliverableGroups.length,
-          repeat,
-          delayMs,
-        );
       const deliveries = deliverableGroups.flatMap((jid) =>
         Array.from({ length: repeat }, (_, repeatIndex) => ({
           jid,
