@@ -169,12 +169,16 @@ describe("Telegram UI authorization", () => {
       recovered: 2,
       failed: 1,
       flushedDeadSessionJobs: 3,
+      flushedMissingSessionJobs: 0,
+      flushedStuckJobs: 0,
       prunedTerminalJobs: 4,
       skippedTransientSessions: 5,
       lastActions: ["recovered stuck allstatus ABCD1234"],
     });
     expect(text).toContain("Bounded Maintenance Engine");
     expect(text).toContain("Flushed terminal-session jobs");
+    expect(text).toContain("Flushed missing-session jobs");
+    expect(text).toContain("Flushed stuck broadcast jobs");
     expect(JSON.stringify(adminInceptorKeyboard())).toContain("admin:inceptor:run");
   });
 

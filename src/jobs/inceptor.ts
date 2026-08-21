@@ -18,6 +18,8 @@ export interface InceptorSnapshot {
   recovered: number;
   failed: number;
   flushedDeadSessionJobs: number;
+  flushedMissingSessionJobs: number;
+  flushedStuckJobs: number;
   prunedTerminalJobs: number;
   skippedTransientSessions: number;
   lastActions: string[];
@@ -36,6 +38,14 @@ function isStuck(record: JobRecord, now: number): boolean {
   return now - heartbeat >= STUCK_JOB_GRACE_MS;
 }
 
+function shouldFlushStuckBroadcast(record: JobRecord, now: number): boolean {
+  if (!isStuck(record, now)) return false;
+  if (record.kind !== "allstatus" && record.kind !== "allchat") return false;
+  if (record.attempts < 3) return false;
+  const error = (record.error ?? "").toLowerCase();
+  return /operation busy|heartbeat|recovery|timed out|timeout/.test(error);
+}
+
 export class Inceptor {
   private timer: ReturnType<typeof setInterval> | undefined;
   private sweeping = false;
@@ -46,6 +56,8 @@ export class Inceptor {
     recovered: 0,
     failed: 0,
     flushedDeadSessionJobs: 0,
+    flushedMissingSessionJobs: 0,
+    flushedStuckJobs: 0,
     prunedTerminalJobs: 0,
     skippedTransientSessions: 0,
     lastActions: [],
@@ -69,26 +81,49 @@ export class Inceptor {
     let recovered = 0;
     let failed = 0;
     let flushedDeadSessionJobs = 0;
+    let flushedMissingSessionJobs = 0;
+    let flushedStuckJobs = 0;
     let prunedTerminalJobs = 0;
     let skippedTransientSessions = 0;
     try {
       const sessions = listAllSessions();
+      const sessionKeys = new Set(
+        sessions.map((session) => `${session.workspaceId}:${session.sessionId}`),
+      );
       const deadSessionKeys = new Set(
         sessions.filter(isDeadSession).map((session) => `${session.workspaceId}:${session.sessionId}`),
       );
       const records = await this.orchestrator.listAllJobs();
       for (const record of records) {
         if (!this.orchestrator.ownsSession(record.sessionId)) continue;
-        if (record.sessionId && deadSessionKeys.has(`${record.workspaceId}:${record.sessionId}`)) {
-          if (flushedDeadSessionJobs >= MAX_FLUSHES_PER_SWEEP) break;
-          if (await this.orchestrator.flushJob(record.jobId)) {
-            flushedDeadSessionJobs += 1;
-            actions.push(`flushed ${record.kind} ${record.jobCode ?? record.jobId.slice(0, 8)} for terminal session ${record.sessionId.slice(0, 8)}`);
+        if (record.sessionId) {
+          const sessionKey = `${record.workspaceId}:${record.sessionId}`;
+          const missingSession = !sessionKeys.has(sessionKey);
+          const deadSession = deadSessionKeys.has(sessionKey);
+          if (missingSession || deadSession) {
+            if (flushedDeadSessionJobs + flushedMissingSessionJobs >= MAX_FLUSHES_PER_SWEEP) break;
+            if (await this.orchestrator.flushJob(record.jobId)) {
+              if (missingSession) {
+                flushedMissingSessionJobs += 1;
+                actions.push(`flushed ${record.kind} ${record.jobCode ?? record.jobId.slice(0, 8)} for missing session ${record.sessionId.slice(0, 8)}`);
+              } else {
+                flushedDeadSessionJobs += 1;
+                actions.push(`flushed ${record.kind} ${record.jobCode ?? record.jobId.slice(0, 8)} for terminal session ${record.sessionId.slice(0, 8)}`);
+              }
+            }
+            continue;
           }
-          continue;
         }
         if (record.sessionId && sessions.some((session) => session.sessionId === record.sessionId && session.status !== "ACTIVE"))
           skippedTransientSessions += 1;
+        if (shouldFlushStuckBroadcast(record, startedAt)) {
+          if (flushedStuckJobs >= MAX_FLUSHES_PER_SWEEP) break;
+          if (await this.orchestrator.flushJob(record.jobId)) {
+            flushedStuckJobs += 1;
+            actions.push(`flushed stuck ${record.kind} ${record.jobCode ?? record.jobId.slice(0, 8)} after repeated recovery/lock failure`);
+          }
+          continue;
+        }
         if (!isStuck(record, startedAt) || recovered + failed >= MAX_RECOVERIES_PER_SWEEP) continue;
         const outcome = await this.orchestrator.forceRecoverJob(record.jobId);
         if (outcome === "recovered") {
@@ -113,6 +148,8 @@ export class Inceptor {
         recovered,
         failed,
         flushedDeadSessionJobs,
+        flushedMissingSessionJobs,
+        flushedStuckJobs,
         prunedTerminalJobs,
         skippedTransientSessions,
         lastActions: actions.slice(-20),
@@ -126,6 +163,8 @@ export class Inceptor {
         recovered,
         failed,
         flushedDeadSessionJobs,
+        flushedMissingSessionJobs,
+        flushedStuckJobs,
         prunedTerminalJobs,
         skippedTransientSessions,
         lastActions: actions.slice(-20),

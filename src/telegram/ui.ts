@@ -763,6 +763,8 @@ export function adminInceptorText(snapshot?: InceptorSnapshot): string {
         `<b>Recovered:</b> ${snapshot.recovered}\n` +
         `<b>Failed after retry limit:</b> ${snapshot.failed}\n` +
         `<b>Flushed terminal-session jobs:</b> ${snapshot.flushedDeadSessionJobs}\n` +
+        `<b>Flushed missing-session jobs:</b> ${snapshot.flushedMissingSessionJobs}\n` +
+        `<b>Flushed stuck broadcast jobs:</b> ${snapshot.flushedStuckJobs}\n` +
         `<b>Pruned old terminal jobs:</b> ${snapshot.prunedTerminalJobs}\n` +
         `<b>Transient sessions skipped:</b> ${snapshot.skippedTransientSessions}\n` +
         `<b>Last sweep:</b> ${snapshot.lastSweepAt ? new Date(snapshot.lastSweepAt).toISOString() : "not yet"}\n\n` +

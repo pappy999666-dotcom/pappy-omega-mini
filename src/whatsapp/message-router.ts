@@ -36,6 +36,7 @@ const registry = createCommandRegistry();
 export interface IncomingTextMessage {
   workspaceId: string;
   sessionId: string;
+  messageId?: string;
   senderJid: string;
   quotedSenderJid?: string;
   mentionedJids?: string[];
@@ -262,7 +263,7 @@ export async function routeWhatsAppText(
               sessionId: message.sessionId,
               kind,
               payload: enrichedPayload,
-              idempotencyKey: `${message.workspaceId}:${message.sessionId}:${kind}:${payloadHash}`,
+              idempotencyKey: `${message.workspaceId}:${message.sessionId}:${kind}:${message.messageId ?? payloadHash}`,
               ...(kind === "allstatus" || kind === "allchat" ? { maxAttempts: 12 } : {}),
             });
             let inventoryPending = false;

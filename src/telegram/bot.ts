@@ -4659,7 +4659,7 @@ export function createTelegramBot(): Telegraf<Context> {
       action: "admin.inceptor.sweep",
       success: Boolean(snapshot),
       metadata: snapshot
-        ? { scanned: snapshot.scanned, recovered: snapshot.recovered, flushed: snapshot.flushedDeadSessionJobs, pruned: snapshot.prunedTerminalJobs }
+        ? { scanned: snapshot.scanned, recovered: snapshot.recovered, flushed: snapshot.flushedDeadSessionJobs, flushedMissing: snapshot.flushedMissingSessionJobs, flushedStuck: snapshot.flushedStuckJobs, pruned: snapshot.prunedTerminalJobs }
         : { unavailable: true },
     });
     await edit(ctx, adminInceptorText(snapshot), adminInceptorKeyboard());
