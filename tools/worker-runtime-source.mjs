@@ -117,6 +117,17 @@ function noteError(error, action = "control error") {
   matrix.lastError = error instanceof Error ? error.message : String(error);
   renderMatrix(true);
 }
+function isScopedInviteValidationFailure(command, error) {
+  if (command?.kind !== "bridge.command" || String(command?.payload?.method ?? "") !== "groupGetInviteInfo") return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return /growth[- ]locked|not[- ]authorized|not authorized/i.test(message);
+}
+function noteScopedInviteValidationFailure(command, error) {
+  const message = error instanceof Error ? error.message : String(error);
+  matrix.lastAction = `invite validation deferred: ${safeText(message, "scoped failure", 96)}`;
+  if (matrix.state !== "DEGRADED" && matrix.state !== "ERROR") matrix.lastError = "none";
+  renderMatrix(true);
+}
 
 function key() {
   return createHash("sha256").update(STORAGE_SECRET, "utf8").digest();
@@ -938,7 +949,8 @@ async function processCommand(command) {
       matrix.lastAction = `command ${safeText(command.kind, "unknown", 28)} complete`;
       await control("/workload/result", { commandId: command.commandId, requestId: command.requestId, ok: true, result: encode(result) }, credentialState.credential);
     } catch (error) {
-      noteError(error, `command ${safeText(command.kind, "unknown", 28)} failed`);
+      if (isScopedInviteValidationFailure(command, error)) noteScopedInviteValidationFailure(command, error);
+      else noteError(error, `command ${safeText(command.kind, "unknown", 28)} failed`);
       await control("/workload/result", { commandId: command.commandId, requestId: command.requestId, ok: false, error: error instanceof Error ? error.message : String(error) }, credentialState.credential).catch(() => undefined);
     }
   });

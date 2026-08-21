@@ -144,6 +144,14 @@ const VALIDATOR_GUARD_INTERVAL_MS = 15_000;
 const VALIDATOR_RETIRE_MS = 15 * 60_000;
 const VALIDATING_STALE_MS = 10 * 60_000;
 
+function isInviteValidationRateLimited(message: string): boolean {
+  return /growth[- ]locked|rate.?limit|429|flood|throttl|spam.?limit|temporarily banned|try again later/i.test(message);
+}
+
+function isInviteValidationPermanentFailure(message: string): boolean {
+  return /not[- ]authorized|invalid whatsapp group invite|not found|expired|revoked|unknown invite|group not found|gone/i.test(message);
+}
+
 export function getWorkerRuntime(): JobOrchestrator | undefined {
   return activeRuntime;
 }
@@ -343,6 +351,17 @@ export function startWorkerRuntime(): JobOrchestrator {
               break;
             } catch (error) {
               lastValidationError = error;
+              const validationMessage = error instanceof Error ? error.message : String(error);
+              if (isInviteValidationRateLimited(validationMessage)) {
+                const currentSession = getSession(context.job.workspaceId, candidate.sessionId);
+                updateSession(context.job.workspaceId, candidate.sessionId, {
+                  validatorFailureCount: (currentSession.validatorFailureCount ?? 0) + 1,
+                  validatorRateLimitCount: (currentSession.validatorRateLimitCount ?? 0) + 1,
+                  validatorRetiredUntil: Date.now() + VALIDATOR_RETIRE_MS,
+                  validatorRetireReason: "rate-limited during invite validation",
+                });
+              }
+              if (isInviteValidationPermanentFailure(validationMessage)) break;
             }
           }
           if (!metadata || !sourceSessionId)
@@ -441,15 +460,7 @@ export function startWorkerRuntime(): JobOrchestrator {
             lastResult: message.slice(0, 240),
           });
           const lower = message.toLowerCase();
-          const isDead = [
-            "invalid whatsapp group invite",
-            "not found",
-            "expired",
-            "revoked",
-            "unknown invite",
-            "group not found",
-            "gone",
-          ].some((marker) => lower.includes(marker));
+          const isDead = isInviteValidationPermanentFailure(lower);
           const existing = await buckets.get(GLOBAL_VALIDATOR_SCOPE, parsed);
           if (
             !existing ||
@@ -1377,7 +1388,7 @@ async function runValidatorGuard(
       if (!session) continue;
       const progress = job.progress;
       const resultText = `${job.error ?? ""} ${progress.lastResult ?? ""} ${progress.currentAction ?? ""}`.toLowerCase();
-      const rateLimited = /rate.?limit|429|flood|throttl|spam.?limit|temporarily banned/.test(resultText);
+      const rateLimited = isInviteValidationRateLimited(resultText);
       const transportFailure = /timeout|network|closed|not connected|decrypt|bad mac|session|no healthy|heartbeat/.test(resultText);
       const successful = job.state === "COMPLETED" && (progress.success ?? 0) > 0;
       if (successful) {
@@ -1428,8 +1439,14 @@ async function sweepPendingMainValidation(
   validatorSweepBusy = true;
   try {
     await buckets.migrateLegacyWorkspacesToGlobal().catch(() => 0);
-    const activeSessions = listAllSessions().filter(
-      (session) => session.status === "ACTIVE" && session.authHealth !== "INVALID",
+    const allSessions = listAllSessions();
+    const healthySessionKeys = new Set<string>();
+    for (const workspaceId of new Set(allSessions.map((session) => session.workspaceId))) {
+      for (const session of listHealthyWhatsAppSessions(workspaceId))
+        healthySessionKeys.add(`${session.workspaceId}:${session.sessionId}`);
+    }
+    const activeSessions = allSessions.filter((session) =>
+      healthySessionKeys.has(`${session.workspaceId}:${session.sessionId}`),
     );
     if (!activeSessions.length) return;
     const activeValidationJobs = (await orchestrator.listRecent(1000)).filter(

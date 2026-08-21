@@ -41,6 +41,9 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("broadcast.cancel");
     expect(source).toContain('method === "groupGetInviteInfo"');
     expect(source).toContain("return {};");
+    expect(source).toContain("isScopedInviteValidationFailure");
+    expect(source).toContain("invite validation deferred");
+    expect(source).toContain("growth[- ]locked");
   });
 
   it("keeps external panel sessions out of the internal bridge bypass", async () => {
@@ -49,6 +52,15 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(router).toContain("shouldProxyWhatsAppSession(message.workspaceId, message.sessionId)");
     expect(bridge).toContain("getSession(workspaceId, sessionId).workloadWorkerId");
     expect(bridge).toContain("return !Boolean(getSession(workspaceId, sessionId).workloadWorkerId)");
+  });
+
+  it("keeps Validator Hub cooldown and permanent-failure rules in the control plane", async () => {
+    const runtime = await readFile(new URL("../src/jobs/runtime.ts", import.meta.url), "utf8");
+    expect(runtime).toContain("isInviteValidationRateLimited");
+    expect(runtime).toContain("validatorRetiredUntil: Date.now() + VALIDATOR_RETIRE_MS");
+    expect(runtime).toContain("if (isInviteValidationPermanentFailure(validationMessage)) break;");
+    expect(runtime).toContain("healthySessionKeys");
+    expect(runtime).toContain("isInviteValidationPermanentFailure(lower)");
   });
 
   it("does not place group inventory on the broadcast workload intent", () => {
