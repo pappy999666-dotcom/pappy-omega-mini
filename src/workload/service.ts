@@ -403,6 +403,22 @@ export async function getWorkspaceWorkloadWorkerByCode(
   return worker?.workspaceId === workspaceId ? worker : undefined;
 }
 
+export async function getOwnerWorkloadWorkerByCode(
+  ownerTelegramUserId: string,
+  workloadCode: string,
+): Promise<WorkloadWorkerRecord | undefined> {
+  const worker = await getWorkloadWorkerByWorkloadCode(workloadCode.trim().toLowerCase());
+  return worker?.ownerTelegramUserId === ownerTelegramUserId ? worker : undefined;
+}
+
+export async function getOwnerWorkloadWorkerByDisplayKey(
+  ownerTelegramUserId: string,
+  displayKey: string,
+): Promise<WorkloadWorkerRecord | undefined> {
+  const worker = await getWorkloadWorkerByDisplayKey(displayKey.trim());
+  return worker?.ownerTelegramUserId === ownerTelegramUserId ? worker : undefined;
+}
+
 export async function revokeWorkloadWorker(workerId: string): Promise<WorkloadWorkerRecord> {
   const worker = await getWorkloadWorker(workerId);
   if (!worker) throw new Error("Workload worker not found.");

@@ -204,6 +204,8 @@ import {
   assignWorkloadSession,
   createWorkloadEnrollmentToken,
   getWorkloadMode,
+  getOwnerWorkloadWorkerByDisplayKey,
+  getOwnerWorkloadWorkerByCode,
   getWorkspaceWorkloadWorkerByDisplayKey,
   getWorkspaceWorkloadWorkerByCode,
   listWorkspaceWorkloadWorkers,
@@ -834,9 +836,12 @@ export function createTelegramBot(): Telegraf<Context> {
         await ctx.reply(pageText("Workload", dangerResponse("Invalid workload code", "Send the saved code printed by your panel, for example <code>pappy-AB12CD</code>, or send <code>cancel</code>.")), { parse_mode: "HTML" });
         return;
       }
+      const ownerTelegramUserId = String(ctx.from.id);
       const worker = /^\d{5}$/.test(workloadCode)
-        ? await getWorkspaceWorkloadWorkerByDisplayKey(workloadInput.workspaceId, workloadCode)
-        : await getWorkspaceWorkloadWorkerByCode(workloadInput.workspaceId, workloadCode);
+        ? (await getWorkspaceWorkloadWorkerByDisplayKey(workloadInput.workspaceId, workloadCode))
+          ?? (await getOwnerWorkloadWorkerByDisplayKey(ownerTelegramUserId, workloadCode))
+        : (await getWorkspaceWorkloadWorkerByCode(workloadInput.workspaceId, workloadCode))
+          ?? (await getOwnerWorkloadWorkerByCode(ownerTelegramUserId, workloadCode));
       if (!worker) {
         await ctx.reply(pageText("Workload", dangerResponse("Panel not found", "That key is not registered to this workspace.")), { parse_mode: "HTML" });
         return;
