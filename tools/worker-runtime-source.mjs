@@ -39,9 +39,35 @@ const commandChains = new Map();
 let credentialState;
 let stopping = false;
 const matrix = { state: "BOOTING", lastHeartbeatAt: 0, lastControlAt: 0, lastAction: "starting", lastError: "none", lastRenderAt: 0 };
+const ANSI = {
+  reset: "\x1b[0m",
+  cyan: "\x1b[36m",
+  blue: "\x1b[94m",
+  green: "\x1b[92m",
+  yellow: "\x1b[93m",
+  red: "\x1b[91m",
+  dim: "\x1b[90m",
+  bold: "\x1b[1m",
+};
+const COLOR = process.env.NO_COLOR ? false : Boolean(process.stdout.isTTY || process.env.PAPPY_COLOR === "1");
+function paint(value, color) { return COLOR ? `${color}${value}${ANSI.reset}` : value; }
 function safeText(value, fallback = "none", max = 42) {
   const text = String(value ?? fallback).replace(/[\r\n\t|]+/g, " ").trim();
   return (text || fallback).slice(0, max);
+}
+function wrapText(value, width = 76) {
+  const text = String(value ?? "").replace(/[\r\n]+/g, " ").trim();
+  if (!text) return [];
+  const words = text.split(/\s+/);
+  const lines = [];
+  let line = "";
+  for (const word of words) {
+    if (!line) line = word;
+    else if (line.length + word.length + 1 <= width) line += ` ${word}`;
+    else { lines.push(line); line = word; }
+  }
+  if (line) lines.push(line);
+  return lines;
 }
 function age(timestamp) {
   return timestamp > 0 ? `${Math.max(0, Math.floor((Date.now() - timestamp) / 1000))}s` : "-";
@@ -64,7 +90,16 @@ function renderMatrix(force = false) {
     `| ERROR      | ${safeText(matrix.lastError).padEnd(42).slice(0, 42)}|`,
     "+--------------------------------------------------------+",
   ];
-  console.log(lines.join("\n"));
+  const stateColor = matrix.state === "ACTIVE" ? ANSI.green : matrix.state === "DEGRADED" || matrix.state === "ERROR" ? ANSI.red : ANSI.yellow;
+  console.log(paint(lines[0], ANSI.dim));
+  console.log(paint(lines[1], ANSI.blue));
+  for (const line of lines.slice(2, 9)) console.log(paint(line, ANSI.cyan));
+  console.log(paint(lines[9], stateColor));
+  console.log(paint(lines[10], ANSI.blue));
+  if (matrix.lastError && matrix.lastError !== "none") {
+    console.log(paint("DETAIL     |", ANSI.red));
+    for (const line of wrapText(matrix.lastError)) console.log(paint(`             ${line}`, ANSI.red));
+  }
 }
 function noteError(error, action = "control error") {
   matrix.state = "DEGRADED";
@@ -77,16 +112,38 @@ function key() {
   return createHash("sha256").update(STORAGE_SECRET, "utf8").digest();
 }
 async function ensureWorkerName() {
-  if (WORKER_NAME || !process.stdin.isTTY || !process.stdout.isTTY) {
-    WORKER_NAME = WORKER_NAME || "panel";
+  if (WORKER_NAME) {
+    const normalized = normalizeWorkerName(WORKER_NAME);
+    if (normalized) { WORKER_NAME = normalized; return; }
+    WORKER_NAME = "";
+  }
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    WORKER_NAME = "panel";
     return;
   }
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    WORKER_NAME = (await prompt.question("Choose a name for this workload (example: pappy): ")).trim() || "panel";
+    console.log(paint("\n[PAPPY SETUP · STEP 1/2] Choose a short name for this panel.", ANSI.cyan));
+    console.log(paint("Use letters or numbers, for example: pappy, jesus, business-panel.", ANSI.dim));
+    while (true) {
+      const answer = (await prompt.question(paint("› Panel name: ", ANSI.green))).trim();
+      const normalized = normalizeWorkerName(answer);
+      if (normalized) { WORKER_NAME = normalized; break; }
+      console.log(paint("Please enter 2–24 letters/numbers, such as pappy. A dot or blank name is not valid.", ANSI.yellow));
+    }
   } finally {
     prompt.close();
   }
+}
+function normalizeWorkerName(value) {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24);
+  return /^[a-z0-9][a-z0-9-]{1,23}$/.test(normalized) ? normalized : "";
 }
 async function ensureStorageSecret() {
   await mkdir(DATA_DIR, { recursive: true });
@@ -425,7 +482,7 @@ async function execute(command) {
 async function register() {
   const existing = await loadState();
   if (existing?.credential && existing.workerId) { credentialState = existing; return; }
-  if (!ENROLLMENT_TOKEN) throw new Error("Paste the one-time enrollment command from Telegram for the first start.");
+  if (!ENROLLMENT_TOKEN) throw new Error("No one-time enrollment token was supplied. In Telegram tap Workload → Create One-Time Setup, copy the full command, and run it exactly as shown.");
   const registration = await control("/workload/register", {
     enrollmentToken: ENROLLMENT_TOKEN,
     workerName: WORKER_NAME,
@@ -517,4 +574,17 @@ async function run() {
 }
 process.once("SIGINT", () => { stopping = true; });
 process.once("SIGTERM", () => { stopping = true; });
-run().catch((error) => { noteError(error, "fatal startup error"); process.exitCode = 1; });
+run().catch((error) => {
+  noteError(error, "fatal startup error");
+  const message = error instanceof Error ? error.message : String(error);
+  console.log(paint("\n[PAPPY SETUP · NOT FINISHED]", ANSI.red));
+  if (/enrollment|token|expired|registered to this workspace/i.test(message)) {
+    console.log(paint("Next step: return to Telegram → Workload → Create One-Time Setup, copy the complete command, and run it in this panel folder.", ANSI.yellow));
+  } else if (/name|panel name/i.test(message)) {
+    console.log(paint("Next step: restart the command and answer the panel-name question with letters/numbers, for example pappy.", ANSI.yellow));
+  } else {
+    console.log(paint("Next step: read README.md, confirm the panel is online, then run the same setup command again.", ANSI.yellow));
+  }
+  console.log(paint(`Detail: ${message}`, ANSI.dim));
+  process.exitCode = 1;
+});

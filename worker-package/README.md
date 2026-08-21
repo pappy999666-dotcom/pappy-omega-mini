@@ -12,19 +12,28 @@ In Telegram, open **PAPPY OMEGA-MINI → Workload → Create Panel Code** and co
 node index.js --enrollment ONE_TIME_TOKEN
 ```
 
-The first run creates `package.json`, installs only `@crysnovax/baileys` 2.7.12 and `pino`, then asks for a friendly name:
+The first run has two clear stages. First, the bootstrap installs the exact `@crysnovax/baileys` 2.7.12 and `pino` dependencies. Any npm output before the green readiness message belongs to installation; do not type a panel name while that stage is running. Wait until the console prints:
 
 ```text
-Choose a name for this workload (example: pappy):
+[OK] Dependencies installed successfully.
+[2/2] Starting the interactive panel setup question now…
 ```
 
-Enter `pappy`, `business`, or another short name. The worker registers securely and prints a permanent workload code such as:
+Only after that message will it ask:
+
+```text
+[PAPPY SETUP · STEP 1/2] Choose a short name for this panel.
+Use letters or numbers, for example: pappy, jesus, business-panel.
+› Panel name:
+```
+
+Enter a simple name such as `pappy`, `jesus`, or `business-panel`. Do not enter only `.`, punctuation, or a blank value. The worker registers securely and prints a permanent workload code such as:
 
 ```text
 pappy-ab12cd
 ```
 
-Keep that code safe. In Telegram, open **Workload → Add My Workload Code** and paste it. When the user taps **Pair Number**, Telegram shows the user’s ACTIVE workloads. Selecting `pappy-ab12cd` makes the next WhatsApp pairing run on that panel.
+Keep that code safe. In Telegram, open **Workload → Add My Workload Code** and paste it. Wait for the panel to show `ACTIVE` and a fresh heartbeat. Then open **My Workloads**, select the panel, tap **Use This Workload**, and tap **Pair Number**. Telegram will use the selected workload for the new WhatsApp session.
 
 ## Restarting the panel
 
@@ -61,4 +70,8 @@ The worker prints a compact ASCII matrix instead of a raw or garbled event strea
 +--------------------------------------------------------+
 ```
 
-`ACTIVE` means the worker is registered and sending heartbeats. `DEGRADED` means the worker has reported a recoverable transport or control error; the last safe error is shown in the matrix. The matrix never prints enrollment tokens, worker credentials, Telegram tokens, MongoDB URLs, Redis URLs, message payloads, or another user’s data.
+`ACTIVE` means the worker is registered and sending heartbeats. `DEGRADED` means the worker has reported a recoverable transport or control error; the matrix now prints a readable wrapped detail and a beginner-facing next step. Dependency installation and the interactive question are intentionally separated so a name cannot be typed into an unfinished npm process. The logger uses clean ANSI cyber-console colors when the panel supports color and automatically falls back to readable plain text when it does not. The matrix never prints enrollment tokens, worker credentials, Telegram tokens, MongoDB URLs, Redis URLs, message payloads, or another user’s data.
+
+## If setup stops with `fatal startup error`
+
+Do not type a panel name into an npm installation screen. Wait for `[OK] Dependencies installed successfully.` and `[2/2] Starting the interactive panel setup question now…`. If the worker says that an enrollment token is missing or expired, return to Telegram, create a new one-time setup command, copy the complete command beginning with `node index.js --enrollment`, and run it again in the panel folder. If the name is rejected, answer with letters, numbers, or hyphens such as `pappy` and never use only `.`.

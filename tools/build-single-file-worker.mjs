@@ -14,6 +14,10 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const runtimeSource = Buffer.from(${JSON.stringify(encodedRuntime)}, "base64").toString("utf8");
 const root = process.cwd();
+const ansi = { reset: "\\x1b[0m", cyan: "\\x1b[36m", green: "\\x1b[92m", yellow: "\\x1b[93m", red: "\\x1b[91m", dim: "\\x1b[90m" };
+const color = process.env.NO_COLOR ? false : Boolean(process.stdout.isTTY || process.env.PAPPY_COLOR === "1");
+const paint = (text, tone) => color ? tone + text + ansi.reset : text;
+const log = (text, tone = ansi.cyan) => process.stdout.write(paint(text, tone) + "\\n");
 const packagePath = path.join(root, "package.json");
 const runtimePath = path.join(root, ".pappy-workload-runtime.mjs");
 const manifest = {
@@ -36,11 +40,20 @@ function dependencyExists() {
     return baileys.version === manifest.dependencies["@crysnovax/baileys"] && pino.version === manifest.dependencies.pino;
   } catch { return false; }
 }
+log("\\n[PAPPY PANEL] Preparing this workload panel…", ansi.cyan);
 if (!dependencyExists()) {
+  log("[1/2] Installing the required WhatsApp runtime. Please wait until this step finishes.", ansi.yellow);
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-  const install = spawnSync(npm, ["install", "--omit=dev", "--no-audit", "--no-fund"], { cwd: root, stdio: "inherit" });
-  if (install.status !== 0) process.exit(install.status || 1);
+  const install = spawnSync(npm, ["install", "--omit=dev", "--no-audit", "--no-fund", "--no-progress", "--loglevel=error"], { cwd: root, stdio: "inherit" });
+  if (install.status !== 0) {
+    log("[FAILED] Node dependency installation did not finish. Re-run the same command after the panel is online.", ansi.red);
+    process.exit(install.status || 1);
+  }
+  log("[OK] Dependencies installed successfully.", ansi.green);
+} else {
+  log("[OK] Node dependencies already installed.", ansi.green);
 }
+log("[2/2] Starting the interactive panel setup question now…", ansi.cyan);
 fs.writeFileSync(runtimePath, runtimeSource, { mode: 0o600 });
 const child = spawnSync(process.execPath, [runtimePath, "--worker-runtime", ...process.argv.slice(2)], { cwd: root, env: { ...process.env, PAPPY_WORKER_ENTRYPOINT: path.join(root, "index.js") }, stdio: "inherit" });
 try { fs.unlinkSync(runtimePath); } catch {}
