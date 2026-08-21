@@ -727,6 +727,8 @@ async function openWhatsAppSession(
           socketGeneration: getLifecycleState(key).socketGeneration,
           reconnectCount: 0,
           authHealth: "VALID",
+          lastError: undefined,
+          disconnectReason: undefined,
           workerNodeId: process.env.HOSTNAME ?? `pid-${process.pid}`,
         });
         const chatId = pairingNotifications.get(key);
@@ -844,7 +846,7 @@ export async function startWhatsAppSession(
     updateSession(workspaceId, sessionId, { status: "RECONNECTING", disconnectReason: "Starting on assigned workload worker." });
     const command = await queueWorkloadCommand(workspaceId, sessionId, "session.start", {});
     await waitForWorkloadCommand(command.commandId);
-    updateSession(workspaceId, sessionId, { status: "ACTIVE", authHealth: "VALID", connectedAt: Date.now(), lastHealthyAt: Date.now() });
+    updateSession(workspaceId, sessionId, { status: "ACTIVE", authHealth: "VALID", connectedAt: Date.now(), lastHealthyAt: Date.now(), lastError: undefined, disconnectReason: undefined });
     return;
   }
   const key = lifecycleKey(workspaceId, sessionId);
