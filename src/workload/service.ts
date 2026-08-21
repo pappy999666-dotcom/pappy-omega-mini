@@ -203,7 +203,7 @@ export async function recordWorkloadHeartbeat(
     assignedSessionIds,
     lastHeartbeatAt: now,
     connectedAt: worker.connectedAt ?? now,
-    ...(input.lastError ? { lastError: input.lastError.slice(0, 500) } : {}),
+    ...(input.lastError ? { lastError: input.lastError.slice(0, 500) } : { lastError: undefined }),
   });
   if (!next) throw new Error("Workload worker no longer exists.");
   for (const sessionId of next.assignedSessionIds) {
