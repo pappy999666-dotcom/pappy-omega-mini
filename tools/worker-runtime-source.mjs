@@ -471,7 +471,7 @@ async function serializeInboundMedia(runtime, envelope) {
   if (!kind) return undefined;
   try {
     const bytes = await downloadMediaMessage(envelope, "buffer", {}, runtime.socket);
-    if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > 5 * 1024 * 1024) return undefined;
+    if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > 2 * 1024 * 1024) return undefined;
     const body = content?.[`${kind}Message`] ?? {};
     return {
       kind,
@@ -498,17 +498,17 @@ async function emitInbound(runtime, message) {
   const quotedMessage = context?.quotedMessage;
   const quotedText = messageText(quotedMessage);
   if (!text && !quotedText) return;
-  const commandSource = `${text} ${quotedText}`.trim().toLowerCase();
-  const needsMedia = /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate|allstatus|allchat|gstatus|tag|stag|status)/.test(commandSource);
-  const directMedia = needsMedia
+  const directMediaKind = mediaKind(message.message);
+  const quotedMediaKind = quotedMessage ? mediaKind(quotedMessage) : undefined;
+  const directMedia = directMediaKind
     ? await serializeInboundMedia(runtime, { key, message: message.message })
     : undefined;
-  const quotedMedia = needsMedia && !directMedia && quotedMessage
+  const quotedMedia = !directMedia && quotedMediaKind && quotedMessage
     ? await serializeInboundMedia(runtime, { key: { ...key, ...(typeof context?.stanzaId === "string" ? { id: context.stanzaId } : {}) }, message: quotedMessage })
     : undefined;
   const inboundMedia = directMedia ?? quotedMedia;
   const senderJid = key.fromMe ? (runtime.socket.user?.id ?? remoteJid) : (key.participantAlt ?? key.remoteJidAlt ?? key.participant ?? remoteJid);
-  await control("/workload/event", {
+  const eventPayload = {
     workspaceId: runtime.workspaceId,
     sessionId: runtime.sessionId,
     ...(typeof key.id === "string" ? { messageId: key.id } : {}),
@@ -517,10 +517,18 @@ async function emitInbound(runtime, message) {
     text,
     ...(quotedText ? { quotedText } : {}),
     ...(typeof context?.participant === "string" ? { quotedSenderJid: context.participant } : {}),
-    ...(Array.isArray(context?.mentionedJid) ? { mentionedJids: context.mentionedJid } : {}),
+    ...(Array.isArray(context?.mentionedJid) ? { mentionedJids: context.mentionedJid.slice(0, 100) } : {}),
     ...(inboundMedia ? { media: inboundMedia } : {}),
     ...(key.fromMe ? { fromMe: true } : {}),
-  }, credentialState.credential);
+  };
+  try {
+    await control("/workload/event", eventPayload, credentialState.credential);
+  } catch (error) {
+    if (!inboundMedia || !/413|too large|payload/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    const compactPayload = { ...eventPayload };
+    delete compactPayload.media;
+    await control("/workload/event", compactPayload, credentialState.credential);
+  }
 }
 
 async function stopSession(sessionId) {
