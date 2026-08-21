@@ -275,9 +275,31 @@ export async function listGroups(
     }
   }
   const socket = socketFor(workspaceId, sessionId);
+  const fetchSummaries = method(socket, "listGroupSummaries");
   const fetchGroups = method(socket, "groupFetchAllParticipating");
-  if (!fetchGroups) throw new Error("Unsupported capability: groupMetadata");
-  const request = loadGroupInventory(fetchGroups)
+  if (!fetchSummaries && !fetchGroups) throw new Error("Unsupported capability: groupMetadata");
+  const request = (fetchSummaries
+    ? Promise.race([
+        fetchSummaries(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("WhatsApp group inventory timed out. Retry after the session is fully connected.")), GROUP_INVENTORY_TIMEOUT_MS),
+        ),
+      ]).then((result) => {
+        if (!Array.isArray(result)) throw new Error("Panel returned an invalid group inventory.");
+        return result.filter((item): item is GroupSummary => {
+          if (!item || typeof item !== "object") return false;
+          const value = item as Record<string, unknown>;
+          return typeof value.jid === "string";
+        }).map((item) => {
+          const value = item as unknown as Record<string, unknown>;
+          return {
+            jid: value.jid as string,
+            subject: typeof value.subject === "string" ? value.subject : String(value.jid),
+            participantCount: typeof value.participantCount === "number" ? value.participantCount : 0,
+          };
+        });
+      })
+    : loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>))
     .then((groups) => {
       groupInventoryLastKnown.set(cacheKey, groups);
       groupInventoryCache.set(cacheKey, {

@@ -2231,7 +2231,8 @@ export function createTelegramBot(): Telegraf<Context> {
           sessionAccessKeyboard(session.sessionId),
         );
       }
-      if (section === "validator")
+      if (section === "validator") {
+        if (!isAdmin(ctx)) return deny(ctx);
         return edit(
           ctx,
           pageText(
@@ -2243,6 +2244,7 @@ export function createTelegramBot(): Telegraf<Context> {
           ),
           linkCollectionKeyboard(session.sessionId),
         );
+      }
       if (section === "settings")
         return edit(
           ctx,
@@ -3070,6 +3072,7 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.action("bucket:user:active", async (ctx) => {
     await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
     await edit(
       ctx,
       pageText(
@@ -3088,6 +3091,7 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.action(/^bucket:user:download:active:(txt|html)$/, async (ctx) => {
     await ctx.answerCbQuery("Preparing verified Active export…");
+    if (!requireAdmin(ctx)) return;
     const user = resolveTelegramUser(ctx);
     const format = (ctx.match[1] ?? "txt") as "txt" | "html";
     try {

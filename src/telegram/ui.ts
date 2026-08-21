@@ -89,7 +89,7 @@ export function dashboardKeyboard(isAdmin: boolean): InlineKeyboardMarkup {
       btn("▣ Sessions", "sessions:list:0"),
     ],
     [
-      ...(isAdmin ? [btn("⌁ Validator Hub", "bucket:status")] : [btn("📥 Active Links", "bucket:user:active")]),
+      ...(isAdmin ? [btn("⌁ Validator Hub", "bucket:status")] : []),
       btn("⚡ Auto Promote", "autopromote:user"),
     ],
     [btn("🌉 Global Bridge", "bridge:global")],
@@ -211,7 +211,6 @@ export function sessionKeyboard(
       btn("🌉 Session Bridge", `session:${id}:section:bridge`),
     ],
     [
-      btn("🔗 Shared Links", `session:${id}:section:validator`, "success"),
       btn("⚡ Auto Promote", `session:${id}:autopromote`, "primary"),
     ],
     [btn("🛠 Join Manager", `session:${id}:section:join`)],

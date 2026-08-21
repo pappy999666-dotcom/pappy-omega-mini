@@ -334,19 +334,19 @@ describe("Telegram UI authorization", () => {
     expect(groupsRoute).toContain(":groups:2");
   });
 
-  it("renders advanced per-session submenu categories without placeholders", () => {
+  it("renders advanced per-session submenu categories without user Validator controls", () => {
     const userSession = JSON.stringify(sessionKeyboard(session, false));
     for (const section of [
       "overview",
       "tools",
       "bridge",
-      "validator",
       "join",
       "health",
       "settings",
     ]) {
       expect(userSession).toContain(`session:session-1:section:${section}`);
     }
+    expect(userSession).not.toContain("session:session-1:section:validator");
     expect(userSession).not.toContain("session:session-1:section:access");
     expect(userSession).toContain("session:session-1:groups");
     expect(userSession).toContain("session:session-1:action:purge");

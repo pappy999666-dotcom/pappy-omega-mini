@@ -57,6 +57,7 @@ export function createAssignedWorkloadSocket(
     "profilePictureUrl",
     "groupCreate",
     "groupFetchAllParticipating",
+    "listGroupSummaries",
     "groupInviteCode",
     "groupUpdateDescription",
     "groupUpdateSubject",

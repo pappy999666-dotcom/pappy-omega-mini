@@ -40,6 +40,8 @@ const reconnectTimers = new Map();
 const reconnectAttempts = new Map();
 const intentionallyStopped = new Set();
 const commandChains = new Map();
+const groupSummaryCache = new Map();
+const groupSummaryInflight = new Map();
 let credentialState;
 let stopping = false;
 const matrix = { state: "BOOTING", lastHeartbeatAt: 0, lastControlAt: 0, lastAction: "starting", lastError: "none", lastRenderAt: 0 };
@@ -573,6 +575,29 @@ async function executeTransport(runtime, method, encodedArgs) {
   if (method === "sendGroupHidetag" || method === "sendGroupMentions") {
     const [jid, content] = args;
     return runtime.socket.sendMessage(jid, content);
+  }
+  if (method === "listGroupSummaries") {
+    const cacheKey = runtime.sessionId;
+    const cached = groupSummaryCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.groups;
+    const pending = groupSummaryInflight.get(cacheKey);
+    if (pending) return pending;
+    const request = (async () => {
+      const raw = await runtime.socket.groupFetchAllParticipating();
+      const groups = Object.entries(raw ?? {}).map(([jid, metadata]) => {
+        const item = metadata && typeof metadata === "object" ? metadata : {};
+        const participants = Array.isArray(item.participants) ? item.participants.length : 0;
+        return {
+          jid,
+          subject: typeof item.subject === "string" && item.subject ? item.subject : jid,
+          participantCount: participants,
+        };
+      });
+      groupSummaryCache.set(cacheKey, { expiresAt: Date.now() + 30_000, groups });
+      return groups;
+    })().finally(() => groupSummaryInflight.delete(cacheKey));
+    groupSummaryInflight.set(cacheKey, request);
+    return request;
   }
   const fn = runtime.socket[method];
   if (typeof fn !== "function") throw new Error(`Transport method is unavailable: ${method}`);
