@@ -82,6 +82,7 @@ const localPreviewCache = new Map<string, CanonicalPreviewRecord>();
 const previewQueue: Array<() => void> = [];
 let activePreviewTasks = 0;
 const lastDebug = new Map<string, PreviewDebugSnapshot>();
+let fallbackInviteImage: Promise<Pick<CanonicalPreviewRecord, "imageData" | "imageMimeType" | "sourceWidth" | "sourceHeight">> | undefined;
 
 function pumpPreviewQueue(): void {
   while (activePreviewTasks < PREVIEW_CONCURRENCY && previewQueue.length) {
@@ -498,6 +499,35 @@ async function resolveImageCandidates(
   return undefined;
 }
 
+async function getFallbackInviteImage(): Promise<Pick<CanonicalPreviewRecord, "imageData" | "imageMimeType" | "sourceWidth" | "sourceHeight">> {
+  if (!fallbackInviteImage) {
+    fallbackInviteImage = (async () => {
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0b3b2e"/><stop offset="1" stop-color="#16a085"/></linearGradient></defs><rect width="1200" height="630" rx="36" fill="url(#bg)"/><circle cx="180" cy="315" r="92" fill="#25d366"/><path d="M132 438l18-68a78 78 0 1 1 34 29z" fill="none" stroke="#fff" stroke-width="18" stroke-linejoin="round"/><path d="M157 332c19 32 39 49 71 63 12 5 20 1 28-8l15-18-34-22-14 16c-17-8-29-20-38-37l15-14-22-33-18 9c-9 5-10 19-3 44z" fill="#fff"/><text x="330" y="285" fill="#fff" font-family="Arial, sans-serif" font-size="62" font-weight="700">WhatsApp Group Invite</text><text x="334" y="365" fill="#d5fff0" font-family="Arial, sans-serif" font-size="32">Open this invitation in WhatsApp</text><text x="334" y="435" fill="#b9f5df" font-family="Arial, sans-serif" font-size="25">Preview metadata is temporarily unavailable</text></svg>`;
+      const bytes = await sharp(Buffer.from(svg)).jpeg({ quality: 92, chromaSubsampling: "4:4:4", progressive: true }).toBuffer();
+      return {
+        imageData: bytes.toString("base64"),
+        imageMimeType: "image/jpeg",
+        sourceWidth: 1200,
+        sourceHeight: 630,
+      };
+    })();
+  }
+  return fallbackInviteImage;
+}
+
+async function fallbackInviteRecord(canonicalUrl: string): Promise<CanonicalPreviewRecord> {
+  return {
+    schemaVersion: 4,
+    canonicalUrl,
+    title: "WhatsApp Group Invite",
+    description: "Open this WhatsApp group invitation in WhatsApp.",
+    siteName: "WhatsApp",
+    ...(await getFallbackInviteImage()),
+    fetchedAt: Date.now(),
+    expiresAt: Date.now() + PREVIEW_TTL_SECONDS * 1000,
+  };
+}
+
 async function resolveRecord(
   canonicalUrl: string,
   socket: PreviewSocket | undefined,
@@ -540,12 +570,13 @@ async function resolveRecord(
           // Socket metadata remains usable even when the public page image fails.
         }
       }
+      const inviteImage = image ?? await getFallbackInviteImage();
       return {
         schemaVersion: 4,
         canonicalUrl,
         title: String(info.subject ?? "WhatsApp Group"),
         description: `${Number(info.size ?? info.participantsCount ?? 0) || 0} members · WhatsApp Group`,
-        ...(image ?? {}),
+        ...inviteImage,
         fetchedAt: Date.now(),
         expiresAt: Date.now() + PREVIEW_TTL_SECONDS * 1000,
       };
@@ -560,7 +591,8 @@ async function resolveRecord(
       image = await resolveImageCandidates([candidate.url]);
       if (image) break;
     }
-    if (!metadata.title && !metadata.description && !image) return undefined;
+    if (!metadata.title && !metadata.description && !image && !groupInviteCode(canonicalUrl)) return undefined;
+    const inviteImage = groupInviteCode(canonicalUrl) && !image ? await getFallbackInviteImage() : undefined;
     const resolvedCanonical = metadata.canonicalUrl
       ? canonicalizePreviewUrl(new URL(metadata.canonicalUrl, page.finalUrl).toString())
       : canonicalUrl;
@@ -570,11 +602,12 @@ async function resolveRecord(
       ...(metadata.title ? { title: metadata.title } : {}),
       ...(metadata.description ? { description: metadata.description } : {}),
       ...(metadata.siteName ? { siteName: metadata.siteName } : {}),
-      ...(image ?? {}),
+      ...(image ?? inviteImage ?? {}),
       fetchedAt: Date.now(),
       expiresAt: Date.now() + PREVIEW_TTL_SECONDS * 1000,
     };
   } catch {
+    if (groupInviteCode(canonicalUrl)) return fallbackInviteRecord(canonicalUrl);
     return undefined;
   }
 }

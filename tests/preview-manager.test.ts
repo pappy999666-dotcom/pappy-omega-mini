@@ -175,6 +175,28 @@ describe("canonical Baileys-native preview pipeline", () => {
     }
   });
 
+  it("falls back to an explicit native invite preview when WhatsApp metadata is rate-limited", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response(null, { status: 429 })) as typeof fetch;
+    try {
+      const text = "https://chat.whatsapp.com/RATE_LIMITED_INVITE";
+      const content = await prepareCanonicalPreviewContent({
+        text,
+        content: { text },
+        socket: { __pappyAssignedWorkload: true } as never,
+        cacheScope: `panel-invite-fallback-${Date.now()}`,
+      });
+      expect(content.linkPreview).toMatchObject({
+        "canonical-url": text,
+        title: "WhatsApp Group Invite",
+        description: "Open this WhatsApp group invitation in WhatsApp.",
+      });
+      expect(content.linkPreview).toHaveProperty("jpegThumbnail");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("accepts only WhatsApp group invite URLs for Validator Hub", async () => {
     expect(isWhatsAppGroupInviteUrl("https://chat.whatsapp.com/ABC123")).toBe(
       true,
