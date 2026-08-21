@@ -105,7 +105,9 @@ function notifyWorkloadOwner(worker: WorkloadWorkerRecord, state: WorkloadNotifi
     assignedSessionCount: worker.assignedSessionIds.length,
     ...(reason ? { reason: reason.slice(0, 240) } : {}),
   };
-  void workloadNotifier(notification).catch(() => undefined);
+  void workloadNotifier(notification).catch(() => {
+    if (lastWorkloadNotification.get(worker.workerId) === state) lastWorkloadNotification.delete(worker.workerId);
+  });
 }
 
 function notifyWorkloadCommandWaiters(workerId: string): void {
