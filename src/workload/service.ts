@@ -4,6 +4,7 @@ import {
   consumeWorkloadEnrollment,
   createWorkloadAssignment,
   createWorkloadCommand,
+  cancelWorkloadCommandsForWorker,
   createWorkloadEnrollment,
   createWorkloadWorker,
   deleteRevokedWorkloadWorkers,
@@ -259,11 +260,12 @@ export async function registerWorkloadWorker(
 
 export async function authenticateWorkloadWorker(
   credential: string,
+  options: { allowDisabled?: boolean } = {},
 ): Promise<AuthenticatedWorkloadWorker> {
   if (!credential || credential.length < 32) throw new Error("Missing workload credential.");
   const worker = await getWorkloadWorkerByCredentialHash(hashCredential(credential));
   if (!worker) throw new Error("Workload worker authentication failed.");
-  if (["DISABLED", "REVOKED"].includes(worker.status))
+  if (worker.status === "REVOKED" || (worker.status === "DISABLED" && options.allowDisabled !== true))
     throw new Error(`Workload worker is ${worker.status.toLowerCase()}.`);
   return { worker, credential };
 }
@@ -334,7 +336,7 @@ export async function recordWorkloadHeartbeat(
   credential: string,
   input: WorkloadHeartbeatRequest,
 ): Promise<WorkloadWorkerRecord> {
-  const { worker } = await authenticateWorkloadWorker(credential);
+  const { worker } = await authenticateWorkloadWorker(credential, { allowDisabled: true });
   if (input.workerVersion < env.WORKLOAD_MIN_WORKER_VERSION)
     throw new Error(`Worker version ${input.workerVersion} is incompatible.`);
   const now = Date.now();
@@ -499,7 +501,7 @@ export async function pollWorkloadCommands(
   limit = 10,
   waitMs = 20_000,
 ): Promise<WorkloadCommandRecord[]> {
-  const { worker } = await authenticateWorkloadWorker(credential);
+  const { worker } = await authenticateWorkloadWorker(credential, { allowDisabled: true });
   const paused = worker.status === "DISABLED";
   await updateWorkloadWorker(worker.workerId, { lastHeartbeatAt: Date.now(), status: paused ? "DISABLED" : "ACTIVE" });
   if (paused) {
@@ -519,7 +521,7 @@ export async function completeWorkloadCommand(
   credential: string,
   input: { commandId: string; requestId: string; ok: boolean; result?: unknown; error?: string },
 ): Promise<WorkloadCommandRecord> {
-  const { worker } = await authenticateWorkloadWorker(credential);
+  const { worker } = await authenticateWorkloadWorker(credential, { allowDisabled: true });
   const command = await getWorkloadCommand(input.commandId);
   if (!command || command.workerId !== worker.workerId || command.requestId !== input.requestId)
     throw new Error("Command is not owned by this worker.");
@@ -666,11 +668,14 @@ export async function toggleWorkloadWorker(workerId: string): Promise<WorkloadWo
     ...(disabled ? { disabledAt: Date.now() } : { disabledAt: undefined }),
   } as Partial<WorkloadWorkerRecord>);
   if (!updated) throw new Error("Workload worker could not be updated.");
+  const cancelledCommands = disabled
+    ? await cancelWorkloadCommandsForWorker(workerId)
+    : 0;
   await appendWorkloadEvent({
     workspaceId: updated.workspaceId,
     workerId: updated.workerId,
     kind: disabled ? "worker.disabled" : "worker.re-enabled",
-    metadata: { status: updated.status },
+    metadata: { status: updated.status, cancelledCommands },
   });
   return updated;
 }

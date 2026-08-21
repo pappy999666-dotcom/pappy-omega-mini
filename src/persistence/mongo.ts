@@ -1639,6 +1639,18 @@ export async function requeueStaleWorkloadCommands(
   return result.modifiedCount;
 }
 
+export async function cancelWorkloadCommandsForWorker(
+  workerId: string,
+  reason = "Workload traffic paused by administrator.",
+): Promise<number> {
+  await connectMongo();
+  const result = await workloadCommandModel().updateMany(
+    { workerId, status: { $in: ["QUEUED", "LEASED"] } },
+    { $set: { status: "FAILED", error: reason.slice(0, 500), completedAt: Date.now() }, $unset: { leasedAt: 1 } },
+  );
+  return result.modifiedCount;
+}
+
 export async function leaseWorkloadCommands(
   workerId: string,
   limit = 10,

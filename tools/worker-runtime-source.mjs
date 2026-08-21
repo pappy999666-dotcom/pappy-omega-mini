@@ -42,6 +42,7 @@ const commandChains = new Map();
 let credentialState;
 let stopping = false;
 const matrix = { state: "BOOTING", lastHeartbeatAt: 0, lastControlAt: 0, lastAction: "starting", lastError: "none", lastRenderAt: 0 };
+let trafficPaused = false;
 const ANSI = {
   reset: "\x1b[0m",
   cyan: "\x1b[36m",
@@ -439,6 +440,7 @@ function messageText(message) {
   return "";
 }
 async function emitInbound(runtime, message) {
+  if (trafficPaused) return;
   const key = message?.key ?? {};
   const remoteJid = key.remoteJid;
   if (typeof remoteJid !== "string" || !message.message) return;
@@ -519,6 +521,7 @@ async function executeTransport(runtime, method, encodedArgs) {
   return fn.apply(runtime.socket, args);
 }
 async function execute(command) {
+  if (trafficPaused) throw new Error("Panel traffic is paused by the administrator.");
   if (command.kind === "session.start") {
     const runtime = await startSession(command.workspaceId, command.sessionId);
     return { status: "ACTIVE", userId: runtime.socket.user?.id ?? null };
@@ -578,6 +581,7 @@ async function heartbeat() {
     status: "ACTIVE",
     assignedSessionIds: [...assignedSessions],
   }, credentialState.credential);
+  trafficPaused = result.status === "DISABLED";
   const restoredSessionIds = Array.isArray(result.assignedSessionIds)
     ? result.assignedSessionIds.filter((value) => typeof value === "string")
     : [];
@@ -593,8 +597,8 @@ async function heartbeat() {
   }
   matrix.lastHeartbeatAt = Date.now();
   matrix.lastControlAt = matrix.lastHeartbeatAt;
-  matrix.state = "ACTIVE";
-  matrix.lastAction = `heartbeat; ${assignedSessions.size} assigned`;
+  matrix.state = trafficPaused ? "PAUSED" : "ACTIVE";
+  matrix.lastAction = trafficPaused ? `traffic paused; ${assignedSessions.size} assigned` : `heartbeat; ${assignedSessions.size} assigned`;
   matrix.lastError = "none";
   await finalizeVerifiedRelease();
   renderMatrix();
@@ -616,6 +620,10 @@ async function processCommand(command) {
   try { await current; } finally { if (commandChains.get(command.sessionId) === current) commandChains.delete(command.sessionId); }
 }
 async function poll() {
+  if (trafficPaused) {
+    await new Promise((resolve) => setTimeout(resolve, Math.min(CONTROL_POLL_MS, 5_000)));
+    return 0;
+  }
   const data = await control("/workload/poll", { limit: 5, waitMs: 20_000 }, credentialState.credential);
   matrix.lastControlAt = Date.now();
   const commands = Array.isArray(data.commands) ? data.commands : [];

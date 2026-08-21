@@ -117,7 +117,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       return;
     }
     if (path === "/workload/release") {
-      await authenticateWorkloadWorker(credential);
+      await authenticateWorkloadWorker(credential, { allowDisabled: true });
       const input = await body(request).catch(() => ({} as Record<string, unknown>));
       const currentVersion = typeof input.workerVersion === "string" ? input.workerVersion.trim() : "";
       const updateAvailable = currentVersion !== env.WORKLOAD_RELEASE_VERSION;
@@ -153,7 +153,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     }
     if (path === "/workload/session-status") {
       const input = await body(request);
-      const { worker } = await authenticateWorkloadWorker(credential);
+      const { worker } = await authenticateWorkloadWorker(credential, { allowDisabled: true });
       await recordWorkloadSessionStatus(worker.workerId, {
         workspaceId: stringField(input, "workspaceId"),
         sessionId: stringField(input, "sessionId"),
@@ -180,6 +180,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         ...(input.fromMe === true ? { fromMe: true } : {}),
       } satisfies WorkloadInboundEvent;
       const { worker } = await authenticateWorkloadWorker(credential);
+      if (worker.status === "DISABLED") throw new Error("Panel traffic is paused by the administrator.");
       const assignment = await getAuthorizedWorkloadAssignment(worker.workerId, event.sessionId);
       if (assignment.workspaceId !== event.workspaceId) throw new Error("Inbound event workspace mismatch.");
       const result = await handleWorkloadInboundEvent(event);

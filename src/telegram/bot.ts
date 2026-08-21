@@ -4517,17 +4517,11 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.action("workload:guide", async (ctx) => {
     await ctx.answerCbQuery();
-      await edit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn("⬇ Download index.js", "workload:download")], [btn(ui.back, "workload:menu")]]));
+    await edit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn(ui.back, "workload:menu")]]));
   });
   bot.action("workload:download", async (ctx) => {
-    await ctx.answerCbQuery("Preparing worker package…");
-    try {
-      const { readWorkloadPackageDocuments } = await import("../workload/package.js");
-      for (const document of await readWorkloadPackageDocuments()) await ctx.replyWithDocument(document);
-        await edit(ctx, pageText("Workload · Downloaded", successResponse("Panel files sent", "Telegram sent <code>index.js</code> and <code>README.md</code>. Tap <b>Add Workload</b> to receive the pairing code that the panel will ask for after you click Start.")), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn("📖 Open Setup Guide", "workload:guide")], [btn(ui.back, "workload:menu")]]));
-    } catch (error) {
-      await edit(ctx, pageText("Workload · Download", dangerResponse("Package unavailable", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn(ui.back, "workload:menu")]]));
-    }
+    await ctx.answerCbQuery("Use Add Workload to receive the panel file.");
+    await edit(ctx, pageText("Workload · Add Workload", infoResponse("Files are sent only with Add Workload", "Tap <b>Add Workload</b>, choose your permanent panel name, and Telegram will send the current <code>index.js</code> only after creating the pairing enrollment.")), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn("📖 Open Setup Guide", "workload:guide")], [btn(ui.back, "workload:menu")]]));
   });
   bot.action(/^workload:select:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -5356,12 +5350,11 @@ async function startPairing(
   const user = resolveTelegramUser(ctx);
   const userId = String(ctx.from?.id ?? "");
   const workloadMode = await getWorkloadMode(user.workspaceId);
-  if (workloadMode === "OFF") {
-    preferredWorkloadWorker.delete(userId);
-    await sendOrEdit(ctx, pageText("Pairing", warningResponse("Panel workload is OFF", "New WhatsApp sessions cannot use your VPS while Admin Workload is OFF. Existing sessions are preserved.")), keyboard([[btn("▣ Workload Status", "workload:menu")], [btn(ui.back, "menu:main")]]));
+  const preferred = preferredWorkloadWorker.get(userId);
+  if (workloadMode === "OFF" && !preferred) {
+    await sendOrEdit(ctx, pageText("Pairing", warningResponse("Central workload is OFF", "New WhatsApp sessions cannot use your VPS while Admin Workload is OFF. Deploy or select an external panel workload instead. Existing sessions are preserved.")), keyboard([[btn("▣ Workload Panels", "workload:menu")], [btn(ui.back, "menu:main")]]));
     return;
   }
-  const preferred = preferredWorkloadWorker.get(userId);
   let targetWorker = preferred
     ? await getWorkspaceWorkloadWorkerByCode(user.workspaceId, preferred.workloadCode)
       ?? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, preferred.displayKey)
@@ -5422,13 +5415,13 @@ async function beginPairingWizard(ctx: Context, workloadSelected = false): Promi
   const user = resolveTelegramUser(ctx);
   if (!workloadSelected) {
     const workloadMode = await getWorkloadMode(user.workspaceId);
-    const workers = workloadMode === "ON" ? await listWorkspaceWorkloadWorkers(user.workspaceId) : [];
-    const readyWorkers = workloadMode === "ON" ? workers.filter((worker) => isWorkloadWorkerReady(worker)) : [];
+    const workers = await listWorkspaceWorkloadWorkers(user.workspaceId);
+    const readyWorkers = workers.filter((worker) => isWorkloadWorkerReady(worker));
     const rows = readyWorkers.map((worker) => {
       const code = worker.workloadCode ?? worker.displayKey;
       return [btn(`▣ ${worker.workerName ?? "Panel"} · ${code}`, `pair:workload:${code}`, "success")];
     });
-    if (await getWorkloadMode(user.workspaceId) === "ON") rows.push([btn("▣ Use Central Workload", "pair:local")]);
+    if (workloadMode === "ON") rows.push([btn("▣ Use Central Workload", "pair:local")]);
     if (!rows.length) {
       await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn("⬇ Download Panel Worker", "workload:download")], [btn(ui.back, "menu:main")]]));
       return;
