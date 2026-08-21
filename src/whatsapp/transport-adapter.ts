@@ -278,28 +278,36 @@ export async function listGroups(
   const fetchSummaries = method(socket, "listGroupSummaries");
   const fetchGroups = method(socket, "groupFetchAllParticipating");
   if (!fetchSummaries && !fetchGroups) throw new Error("Unsupported capability: groupMetadata");
-  const request = (fetchSummaries
-    ? Promise.race([
+  const loadPanelSummaries = async (): Promise<GroupSummary[]> => {
+    if (!fetchSummaries) return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>);
+    try {
+      const result = await Promise.race([
         fetchSummaries(),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("WhatsApp group inventory timed out. Retry after the session is fully connected.")), GROUP_INVENTORY_TIMEOUT_MS),
         ),
-      ]).then((result) => {
-        if (!Array.isArray(result)) throw new Error("Panel returned an invalid group inventory.");
-        return result.filter((item): item is GroupSummary => {
-          if (!item || typeof item !== "object") return false;
-          const value = item as Record<string, unknown>;
-          return typeof value.jid === "string";
-        }).map((item) => {
-          const value = item as unknown as Record<string, unknown>;
-          return {
-            jid: value.jid as string,
-            subject: typeof value.subject === "string" ? value.subject : String(value.jid),
-            participantCount: typeof value.participantCount === "number" ? value.participantCount : 0,
-          };
-        });
-      })
-    : loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>))
+      ]);
+      if (!Array.isArray(result)) throw new Error("Panel returned an invalid group inventory.");
+      return result.filter((item): item is GroupSummary => {
+        if (!item || typeof item !== "object") return false;
+        const value = item as Record<string, unknown>;
+        return typeof value.jid === "string";
+      }).map((item) => {
+        const value = item as unknown as Record<string, unknown>;
+        return {
+          jid: value.jid as string,
+          subject: typeof value.subject === "string" ? value.subject : String(value.jid),
+          participantCount: typeof value.participantCount === "number" ? value.participantCount : 0,
+        };
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (fetchGroups && /method is unavailable:\s*listGroupSummaries/i.test(reason))
+        return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>);
+      throw error;
+    }
+  };
+  const request = loadPanelSummaries()
     .then((groups) => {
       groupInventoryLastKnown.set(cacheKey, groups);
       groupInventoryCache.set(cacheKey, {
