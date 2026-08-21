@@ -6,6 +6,7 @@ const workerSourcePath = new URL("../tools/worker-runtime-source.mjs", import.me
 const messageRouterPath = new URL("../src/whatsapp/message-router.ts", import.meta.url);
 const remoteBridgePath = new URL("../src/whatsapp/remote-bridge.ts", import.meta.url);
 
+
 function makeIntent(): WorkloadBroadcastIntent {
   return {
     jobId: "job-compact-001",
@@ -38,6 +39,8 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("groupFetchAllParticipating");
     expect(source).toContain("broadcast.start");
     expect(source).toContain("broadcast.cancel");
+    expect(source).toContain('method === "groupGetInviteInfo"');
+    expect(source).toContain("return {};");
   });
 
   it("keeps external panel sessions out of the internal bridge bypass", async () => {

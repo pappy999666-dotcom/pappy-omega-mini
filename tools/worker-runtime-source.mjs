@@ -605,6 +605,15 @@ async function executeTransport(runtime, method, encodedArgs) {
   }
   const fn = runtime.socket[method];
   if (typeof fn !== "function") throw new Error(`Transport method is unavailable: ${method}`);
+  if (method === "groupGetInviteInfo") {
+    try {
+      return await fn.apply(runtime.socket, args);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/bad.?request|400|invalid invite|invite.*not found|revoked|expired/i.test(message)) return {};
+      throw error;
+    }
+  }
   return fn.apply(runtime.socket, args);
 }
 function broadcastCheckpointPath(jobId) {
