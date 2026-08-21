@@ -305,7 +305,7 @@ export async function pollWorkloadCommands(
 
 export async function completeWorkloadCommand(
   credential: string,
-  input: { commandId: string; requestId: string; ok: boolean; result?: Record<string, unknown>; error?: string },
+  input: { commandId: string; requestId: string; ok: boolean; result?: unknown; error?: string },
 ): Promise<WorkloadCommandRecord> {
   const { worker } = await authenticateWorkloadWorker(credential);
   const command = await getWorkloadCommand(input.commandId);

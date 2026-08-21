@@ -169,7 +169,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         commandId: stringField(input, "commandId"),
         requestId: stringField(input, "requestId"),
         ok: input.ok === true,
-        ...(input.result && typeof input.result === "object" && !Array.isArray(input.result) ? { result: input.result as Record<string, unknown> } : {}),
+        ...(input.result !== undefined ? { result: input.result } : {}),
         ...(typeof input.error === "string" ? { error: input.error.slice(0, 500) } : {}),
       });
       json(response, 200, { ok: true, commandId: command.commandId, status: command.status });

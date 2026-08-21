@@ -89,7 +89,7 @@ export interface WorkloadCommandRecord {
   expiresAt: number;
   leasedAt?: number;
   completedAt?: number;
-  result?: Record<string, unknown>;
+  result?: unknown;
   error?: string;
 }
 
@@ -144,7 +144,7 @@ export interface WorkloadCommandResultRequest {
   commandId: string;
   requestId: string;
   ok: boolean;
-  result?: Record<string, unknown>;
+  result?: unknown;
   error?: string;
 }
 
