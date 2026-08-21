@@ -451,13 +451,9 @@ export function createCommandRegistry(): RegisteredCommand[] {
               );
               return "Profile picture updated in HD from the original replied image; no bot-side crop was applied.";
             }
-            const url = ctx.args[1];
-            if (!url || !/^https:\/\//i.test(url))
-              return "Reply to an image or use .pfp set <https image URL>.";
-            await updateProfilePicture(ctx.workspaceId, ctx.sessionId, url);
-            return "Profile picture updated in HD.";
+            return "Reply to an image with .pfp set, .setpfp, or .pfp change. A real uploaded image is required; URLs are not accepted.";
           }
-          return "Usage: .pfp get | reply to an image with .setpfp | .pfp remove";
+          return "Usage: .pfp get | reply to an image with .pfp set or .setpfp | .pfp remove";
         } catch (error) {
           return error instanceof Error ? error.message : String(error);
         }

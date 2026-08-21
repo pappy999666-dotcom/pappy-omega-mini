@@ -2126,6 +2126,11 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.action("pair:local", async (ctx) => {
     await ctx.answerCbQuery();
+    const user = resolveTelegramUser(ctx);
+    if (await getWorkloadMode(user.workspaceId) === "OFF") {
+      await edit(ctx, pageText("Pairing", dangerResponse("Central workload is OFF", "Deploy or select an external panel workload to pair this WhatsApp session. Your existing sessions are preserved.")), keyboard([[btn("◌ Workload Panels", "workload:menu")], [btn(ui.back, "menu:main")]]));
+      return;
+    }
     preferredWorkloadWorker.delete(String(ctx.from?.id ?? ""));
     await beginPairingWizard(ctx, true);
   });

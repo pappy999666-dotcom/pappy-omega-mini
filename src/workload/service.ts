@@ -347,8 +347,9 @@ export async function recordWorkloadHeartbeat(
     })
     .map((assignment) => assignment.sessionId);
   const assignedSessionIds = [...new Set([...input.assignedSessionIds, ...durableSessionIds])].slice(0, 100);
+  const paused = worker.status === "DISABLED";
   const next = await updateWorkloadWorker(worker.workerId, {
-    status: input.status === "ERROR" ? "ERROR" : "ACTIVE",
+    status: paused ? "DISABLED" : input.status === "ERROR" ? "ERROR" : "ACTIVE",
     workerVersion: input.workerVersion,
     capabilities: [...new Set(input.capabilities)].slice(0, 50),
     assignedSessionIds,
@@ -365,10 +366,12 @@ export async function recordWorkloadHeartbeat(
     notifyWorkloadOwner(next, "ERROR", input.lastError);
     if (previousStatus !== "ERROR") await appendWorkloadEvent({ workspaceId: next.workspaceId, workerId: next.workerId, kind: "worker.status", metadata: { status: "ERROR", reason: input.lastError } });
   }
-  for (const sessionId of next.assignedSessionIds) {
-    const assignment = await getWorkloadAssignmentBySession(sessionId);
-    if (assignment && assignment.workerId === next.workerId && assignment.status === "OFFLINE")
-      await updateWorkloadAssignment(assignment.assignmentId, { status: "RUNNING" });
+  if (!paused) {
+    for (const sessionId of next.assignedSessionIds) {
+      const assignment = await getWorkloadAssignmentBySession(sessionId);
+      if (assignment && assignment.workerId === next.workerId && assignment.status === "OFFLINE")
+        await updateWorkloadAssignment(assignment.assignmentId, { status: "RUNNING" });
+    }
   }
   await appendWorkloadEvent({
     workspaceId: next.workspaceId,
@@ -469,6 +472,9 @@ export async function queueWorkloadCommand(
   const assignment = await getWorkloadAssignmentBySession(sessionId);
   if (!assignment || assignment.workspaceId !== workspaceId || ["REVOKED", "OFFLINE"].includes(assignment.status))
     throw new Error("Session has no reachable workload assignment.");
+  const worker = await getWorkloadWorker(assignment.workerId);
+  if (!worker || ["DISABLED", "REVOKED", "OFFLINE", "UNREACHABLE", "ERROR"].includes(worker.status))
+    throw new Error("Workload traffic is paused or the panel is not reachable.");
   const now = Date.now();
   const record: WorkloadCommandRecord = {
     commandId: crypto.randomUUID(),
@@ -494,7 +500,12 @@ export async function pollWorkloadCommands(
   waitMs = 20_000,
 ): Promise<WorkloadCommandRecord[]> {
   const { worker } = await authenticateWorkloadWorker(credential);
-  await updateWorkloadWorker(worker.workerId, { lastHeartbeatAt: Date.now(), status: "ACTIVE" });
+  const paused = worker.status === "DISABLED";
+  await updateWorkloadWorker(worker.workerId, { lastHeartbeatAt: Date.now(), status: paused ? "DISABLED" : "ACTIVE" });
+  if (paused) {
+    await waitForWorkloadCommandSignal(worker.workerId, Math.min(Math.max(waitMs, 0), 5_000));
+    return [];
+  }
   await requeueStaleWorkloadCommands(worker.workerId);
   let commands = await leaseWorkloadCommands(worker.workerId, limit);
   if (commands.length || waitMs <= 0) return commands;

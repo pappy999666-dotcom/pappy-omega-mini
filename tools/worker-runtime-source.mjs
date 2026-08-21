@@ -481,19 +481,34 @@ function normalizeArgs(runtime, method, args) {
   if (method === "groupCreate" && Array.isArray(next[1])) next[1] = next[1].map((item) => item === "me" ? ownJid(runtime) : item);
   return next;
 }
+function materializeWorkloadContent(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  const value = payload;
+  const media = value.media;
+  if (media && typeof media === "object" && !Array.isArray(media) && Buffer.isBuffer(media.bytes) && typeof media.kind === "string") {
+    const content = { [media.kind]: media.bytes };
+    if (typeof value.text === "string" && value.text) content.caption = value.text;
+    if (typeof media.mimeType === "string" && media.mimeType) content.mimetype = media.mimeType;
+    if (typeof media.fileName === "string" && media.fileName) content.fileName = media.fileName;
+    if (media.kind === "audio" && media.ptt !== undefined) content.ptt = Boolean(media.ptt);
+    return content;
+  }
+  const { media: _media, groupStatus: _groupStatus, groupStatusMessage: _groupStatusMessage, ...content } = value;
+  return content;
+}
 async function executeTransport(runtime, method, encodedArgs) {
   if (!/^[A-Za-z][A-Za-z0-9]*$/.test(method) || ["constructor", "end", "ev", "ws", "auth", "authState", "user"].includes(method))
     throw new Error(`Unsafe workload transport method: ${method}`);
   const args = normalizeArgs(runtime, method, encodedArgs);
   if (method === "sendGroup" || method === "sendGroupText") {
     const [jid, content] = args;
-    return runtime.socket.sendMessage(jid, content);
+    return runtime.socket.sendMessage(jid, materializeWorkloadContent(content));
   }
   if (method === "sendGroupStatus") {
     const [jid, payload] = args;
     const native = runtime.socket.sendGroupStatus;
-    if (typeof native === "function") return native.apply(runtime.socket, args);
-    return runtime.socket.sendMessage(jid, payload);
+    if (typeof native === "function" && !(payload && typeof payload === "object" && payload.media)) return native.apply(runtime.socket, args);
+    return runtime.socket.sendMessage(jid, materializeWorkloadContent(payload));
   }
   if (method === "sendGroupHidetag" || method === "sendGroupMentions") {
     const [jid, content] = args;

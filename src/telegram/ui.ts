@@ -1309,7 +1309,7 @@ export function adminWorkloadText(
     "Admin · Workload",
     infoResponse(
       `Owner workload mode: ${mode}`,
-      `${body}\n\n<b>ON:</b> new WhatsApp sessions may be assigned to external panels.\n<b>OFF:</b> new external-panel assignments and panel pairing are blocked; existing sessions and auth are preserved.\n\nUse the controls below to change placement policy or inspect a worker.`,
+      `${body}\n\n<b>ON:</b> new users may choose the central VPS workload or an ACTIVE external panel.\n<b>OFF:</b> central VPS pairing is blocked; users must deploy or select an external panel. Existing sessions, assignments, and auth are preserved.\n\n<b>Worker Pause:</b> pauses command traffic to that panel immediately while keeping its heartbeat, sessions, and auth files. Re-enable it to resume traffic.\n\nUse the controls below to change placement policy or inspect a worker.`,
     ),
   );
 }
@@ -1317,7 +1317,7 @@ export function adminWorkloadText(
 export function adminWorkloadKeyboard(mode: "ON" | "OFF", workers: Array<{ workerId: string; displayKey: string; status: string }>): InlineKeyboardMarkup {
   return keyboard([
     [btn(mode === "ON" ? "⚪ Turn Workload OFF" : "🟢 Turn Workload ON", "admin:workload:toggle", mode === "ON" ? "danger" : "success")],
-    ...workers.map((worker) => [btn(`${worker.status === "DISABLED" ? "▶" : "⏸"} ${worker.displayKey}`, `admin:workload:worker:${worker.workerId}`)]),
+    ...workers.map((worker) => [btn(`${worker.status === "DISABLED" ? "▶ Resume traffic" : "⏸ Pause traffic"} · ${worker.displayKey}`, `admin:workload:worker:${worker.workerId}`)]),
     [btn("↻ Refresh", "admin:workload")],
     [btn(ui.back, "admin:panel")],
   ]);
@@ -1328,14 +1328,14 @@ export function adminWorkloadWorkerText(worker: { workerId: string; workerName?:
     "Admin · Workload Worker",
     infoResponse(
       `Worker ${escapeHtml(worker.workerName ?? "Panel")} · ${escapeHtml(worker.workloadCode ?? worker.displayKey)}`,
-      `<b>Code:</b> <code>${escapeHtml(worker.workloadCode ?? worker.displayKey)}</code>\n<b>ID:</b> <code>${escapeHtml(worker.workerId)}</code>\n<b>Owner:</b> <code>${escapeHtml(worker.ownerTelegramUserId)}</code>\n<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Sessions:</b> ${worker.assignedSessionIds.length}\n<b>Heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}${worker.lastError ? `\n<b>Last error:</b> ${escapeHtml(worker.lastError)}` : ""}`,
+      `<b>Code:</b> <code>${escapeHtml(worker.workloadCode ?? worker.displayKey)}</code>\n<b>ID:</b> <code>${escapeHtml(worker.workerId)}</code>\n<b>Owner:</b> <code>${escapeHtml(worker.ownerTelegramUserId)}</code>\n<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Traffic:</b> ${worker.status === "DISABLED" ? "PAUSED · commands blocked" : "OPEN · commands allowed"}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Sessions:</b> ${worker.assignedSessionIds.length}\n<b>Heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}${worker.lastError ? `\n<b>Last error:</b> ${escapeHtml(worker.lastError)}` : ""}`,
     ),
   );
 }
 
 export function adminWorkloadWorkerKeyboard(workerId: string, disabled: boolean): InlineKeyboardMarkup {
   return keyboard([
-    [btn(disabled ? "▶ Re-enable Worker" : "⏸ Disable Worker", `admin:workload:worker:toggle:${workerId}`, disabled ? "success" : "danger")],
+    [btn(disabled ? "▶ Resume Traffic" : "⏸ Pause Traffic", `admin:workload:worker:toggle:${workerId}`, disabled ? "success" : "danger")],
     [btn("↻ Refresh Registry", `admin:workload:worker:check:${workerId}`)],
     [btn(ui.back, "admin:workload")],
   ]);
