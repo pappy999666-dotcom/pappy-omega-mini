@@ -52,6 +52,7 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain('method === "previewUpload"');
     expect(source).toContain('control("/workload/preview"');
     expect(source).toContain("const withPreview = linkPreview");
+    expect(source).toContain("await runtime.socket.sendMessage(jid, { ...withPreview, mentions: participants });");
     expect(source).toContain("Preview thumbnail upload exceeds the 8 MiB safety limit.");
   });
 

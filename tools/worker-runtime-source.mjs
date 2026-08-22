@@ -800,7 +800,10 @@ async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview) {
     .filter(Boolean)
     .slice(0, 1000);
   const materialized = materializeWorkloadContent(content);
-  await runtime.socket.sendMessage(jid, { ...materialized, mentions: participants });
+  const withPreview = linkPreview && typeof linkPreview === "object"
+    ? { ...materialized, linkPreview }
+    : materialized;
+  await runtime.socket.sendMessage(jid, { ...withPreview, mentions: participants });
 }
 async function remoteBroadcastCancelled(runtime, jobId) {
   try {
