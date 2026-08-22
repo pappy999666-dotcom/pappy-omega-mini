@@ -223,7 +223,7 @@ describe("canonical Baileys-native preview pipeline", () => {
     }).jpeg().toBuffer();
     const encodedImage = "https:" + "\\u002F".repeat(2) + "example.com" + "\\u002Fpreview.jpg";
     const unrelatedAssets = Array.from({ length: 30 }, (_, index) => `https://sf16-va.tiktokcdn.com/obj/model-${index}.bytenn`).join(" ");
-    const posterImage = "https:" + "\\u002F".repeat(2) + "p16-common-sign.tiktokcdn-eu.com" + "\\u002Ftos-useast5-p-0068-tx" + "\\u002Fposter~tplv-photomode.jpeg?x-expires=9999999999";
+    const posterImage = "https:" + "\\u002F".repeat(2) + "p16-common-sign.tiktokcdn-eu.com" + "\\u002Ftos-useast5-p-0068-tx" + "\\u002Fposter~tplv-photomode.jpeg?x-expires=9999999999&amp;x-signature=test";
     const requestedUrls: string[] = [];
     globalThis.fetch = vi.fn(async (input) => {
       const requestUrl = String(input);

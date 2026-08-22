@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { env } from "../config/env.js";
 import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
 
-const PREVIEW_CACHE_VERSION = "v7";
+const PREVIEW_CACHE_VERSION = "v8";
 const PREVIEW_TTL_SECONDS = 7 * 24 * 60 * 60;
 const PREVIEW_FAILURE_TTL_SECONDS = 60;
 const FETCH_TIMEOUT_MS = 8_000;
@@ -385,7 +385,7 @@ function extractEmbeddedImageCandidates(html: string, baseUrl: string): ImageCan
     .replaceAll("\\u003A", ":");
   const candidates: ImageCandidate[] = [];
   for (const match of normalized.matchAll(/https?:\/\/[^\s"'<>\\]+/gi)) {
-    const value = match[0];
+    const value = decodeHtmlEntities(match[0]);
     let parsed: URL;
     try {
       parsed = new URL(value, baseUrl);
@@ -673,11 +673,7 @@ async function readCached(key: string): Promise<CanonicalPreviewRecord | undefin
 
 async function writeCached(key: string, value: CanonicalPreviewRecord): Promise<void> {
   try {
-    const ttl = value.imageData
-      ? PREVIEW_TTL_SECONDS
-      : groupInviteCode(value.canonicalUrl)
-        ? PREVIEW_FAILURE_TTL_SECONDS
-        : PREVIEW_TTL_SECONDS;
+    const ttl = value.imageData ? PREVIEW_TTL_SECONDS : PREVIEW_FAILURE_TTL_SECONDS;
     await getRedis().set(key, JSON.stringify(value), "EX", ttl);
   } catch {
     // Redis failure cannot block a WhatsApp send.
