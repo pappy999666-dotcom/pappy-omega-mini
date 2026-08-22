@@ -211,6 +211,40 @@ describe("canonical Baileys-native preview pipeline", () => {
     ).toEqual(["https://chat.whatsapp.com/ABC123"]);
   });
 
+  it("recovers JSON-escaped image URLs from TikTok-style page data", async () => {
+    const originalFetch = globalThis.fetch;
+    const imageBytes = await sharp({
+      create: {
+        width: 720,
+        height: 1280,
+        channels: 3,
+        background: { r: 220, g: 60, b: 100 },
+      },
+    }).jpeg().toBuffer();
+    const encodedImage = "https:" + "\\u002F".repeat(2) + "example.com" + "\\u002Fpreview.jpg";
+    globalThis.fetch = vi.fn(async (input) => {
+      const requestUrl = String(input);
+      if (requestUrl.endsWith("/preview.jpg"))
+        return new Response(imageBytes, { status: 200, headers: { "content-type": "image/jpeg" } });
+      return new Response(`<html><head><title>TikTok - Make Your Day</title></head><body><script>window.__DATA__={cover:"${encodedImage}"}</script></body></html>`, { status: 200, headers: { "content-type": "text/html" } });
+    }) as typeof fetch;
+    try {
+      const text = "https://vt.tiktok.com/ZSV5kDvDQ/";
+      const content = await prepareCanonicalPreviewContent({
+        text,
+        content: { text },
+        cacheScope: `tiktok-embedded-image-${Date.now()}`,
+      });
+      expect(content.linkPreview).toMatchObject({
+        "canonical-url": text,
+        title: "TikTok - Make Your Day",
+      });
+      expect(content.linkPreview).toHaveProperty("jpegThumbnail");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("uses the exact native linkPreview contract for a URL text message", async () => {
     const source = await sharp({
       create: {

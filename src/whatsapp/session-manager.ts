@@ -25,7 +25,7 @@ import {
   writeEncryptedJson,
 } from "../core/encrypted-store.js";
 import { routeWhatsAppText, type WhatsAppReply } from "./message-router.js";
-import { collectLinks } from "../links/link-collector.js";
+import { collectLinks, extractWhatsAppGroupInviteUrls } from "../links/link-collector.js";
 import { prepareCanonicalPreviewContent } from "./baileys-native-preview.js";
 import {
   extractMessageText,
@@ -87,6 +87,7 @@ interface RuntimeSession {
 }
 
 const runtimes = new Map<string, RuntimeSession>();
+const lastInboundSessionPersistAt = new Map<string, number>();
 const sessionLocks = new Map<string, SessionLock>();
 const pairingNotifications = new Map<string, number>();
 let pairingNotifier:
@@ -406,9 +407,13 @@ async function openWhatsAppSession(
         );
       for (const message of event.messages ?? []) {
         const receivedAt = noteMessageReceived(key);
-        updateSession(workspaceId, sessionId, {
-          lastMessageReceivedAt: receivedAt,
-        });
+        const lastPersistedAt = lastInboundSessionPersistAt.get(key) ?? 0;
+        if (receivedAt - lastPersistedAt >= 5_000 || message.key?.fromMe === true) {
+          lastInboundSessionPersistAt.set(key, receivedAt);
+          updateSession(workspaceId, sessionId, {
+            lastMessageReceivedAt: receivedAt,
+          });
+        }
         if (!message.key?.remoteJid) continue;
         const messageKey = message.key;
 
@@ -421,11 +426,14 @@ async function openWhatsAppSession(
         const text = extractMessageText(envelope.message);
         const quoted = extractQuotedMessage(envelope.message);
         const quotedText = extractQuotedText(quoted);
-        const commandSource = [text, quotedText]
-          .filter(Boolean)
-          .join(" ")
-          .trim()
-          .toLowerCase();
+        const combinedText = [text, quotedText].filter(Boolean).join("\n");
+        const commandSource = combinedText.trim().toLowerCase();
+        const sessionPrefix = getSession(workspaceId, sessionId).prefix.trim();
+        const isPrefixedCommand = Boolean(
+          sessionPrefix && commandSource.startsWith(sessionPrefix),
+        );
+        const hasGroupInvite = extractWhatsAppGroupInviteUrls(combinedText).length > 0;
+        const shouldTraceInbound = Boolean(text || quotedText) && (isPrefixedCommand || hasGroupInvite);
         const mediaCommand =
           /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate|allstatus|allchat|gstatus|tag|stag|status)/.test(
             commandSource,
@@ -466,27 +474,21 @@ async function openWhatsAppSession(
           (contextInfo?.mentionedJid ?? []).map((candidate) => resolvePhoneJid(candidate)),
         );
 
-        void saveWhatsAppMessageTrace({
-          traceId: randomUUID(),
-          workspaceId,
-          sessionId,
-          ...(message.key.id ? { messageId: message.key.id } : {}),
-          direction: "inbound",
-          remoteJid: message.key.remoteJid,
-          ...(senderJid ? { senderJid } : {}),
-          ...(text || quotedText
-            ? { normalizedText: [text, quotedText].filter(Boolean).join("\\n") }
-            : {}),
-          outcome: text || quotedText ? "received" : "ignored",
-          timestamp: receivedAt,
-        }).catch(() => undefined);
+        if (shouldTraceInbound)
+          void saveWhatsAppMessageTrace({
+            traceId: randomUUID(),
+            workspaceId,
+            sessionId,
+            ...(message.key.id ? { messageId: message.key.id } : {}),
+            direction: "inbound",
+            remoteJid: message.key.remoteJid,
+            ...(senderJid ? { senderJid } : {}),
+            normalizedText: combinedText,
+            outcome: "received",
+            timestamp: receivedAt,
+          }).catch(() => undefined);
         if (!text && !quotedText) continue;
-        const sessionPrefix = getSession(workspaceId, sessionId).prefix.trim();
-        const isPrefixedCommand = Boolean(
-          sessionPrefix &&
-          [text, quotedText].filter(Boolean).join(" ").trim().startsWith(sessionPrefix),
-        );
-        if (!isPrefixedCommand) {
+        if (!isPrefixedCommand && hasGroupInvite) {
           void collectLinks({
             workspaceId,
             text: [text, quotedText].filter(Boolean).join("\n"),
@@ -514,9 +516,11 @@ async function openWhatsAppSession(
               );
             });
         }
-        console.info(
-          `[pappy-omega-mini] WhatsApp command candidate session=${sessionId} chat=${message.key.remoteJid} text=${JSON.stringify(text.slice(0, 160))}`,
-        );
+        if (!isPrefixedCommand && sessionPrefix) continue;
+        if (process.env.PAPPY_DEBUG_WA_COMMANDS === "1")
+          console.info(
+            `[pappy-omega-mini] WhatsApp command candidate session=${sessionId} chat=${message.key.remoteJid} text=${JSON.stringify(text.slice(0, 160))}`,
+          );
         void routeWhatsAppText({
           workspaceId,
           sessionId,

@@ -375,6 +375,39 @@ interface ImageCandidate {
   height: number;
 }
 
+function extractEmbeddedImageCandidates(html: string, baseUrl: string): ImageCandidate[] {
+  const normalized = html
+    .replaceAll("\\u002F", "/")
+    .replaceAll("\\/", "/")
+    .replaceAll("\\u003F", "?")
+    .replaceAll("\\u003D", "=")
+    .replaceAll("\\u0026", "&")
+    .replaceAll("\\u003A", ":");
+  const candidates: ImageCandidate[] = [];
+  for (const match of normalized.matchAll(/https?:\/\/[^\s"'<>\\]+/gi)) {
+    const value = match[0];
+    let parsed: URL;
+    try {
+      parsed = new URL(value, baseUrl);
+      assertSafePreviewUrl(parsed.toString());
+    } catch {
+      continue;
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    const pathname = parsed.pathname.toLowerCase();
+    const imageLike = /\.(?:avif|gif|jpe?g|png|webp)$/i.test(pathname) || hostname.includes("tiktokcdn.com") || hostname.includes("muscdn.com");
+    if (!imageLike) continue;
+    candidates.push({
+      url: parsed.toString(),
+      priority: hostname.includes("tiktokcdn.com") || hostname.includes("muscdn.com") ? 82 : 35,
+      width: 0,
+      height: 0,
+    });
+    if (candidates.length >= 24) break;
+  }
+  return candidates;
+}
+
 function parsePageMetadata(html: string, baseUrl: string): {
   title?: string;
   description?: string;
@@ -415,6 +448,9 @@ function parsePageMetadata(html: string, baseUrl: string): {
     } catch {
       // Unsafe or malformed candidates are rejected without affecting text metadata.
     }
+  }
+  for (const candidate of extractEmbeddedImageCandidates(html, baseUrl)) {
+    if (!images.some((existing) => existing.url === candidate.url)) images.push(candidate);
   }
   images.sort(
     (left, right) =>
