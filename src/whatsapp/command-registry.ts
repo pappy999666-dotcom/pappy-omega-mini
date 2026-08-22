@@ -656,7 +656,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
         if (!text && !ctx.media)
           return "Usage: .pstatus <text or media> (or reply to a message).";
         await ctx.sendCurrentPersonalStatus({ text });
-        return "";
+        return "Personal status posted successfully.";
       },
     },
     {

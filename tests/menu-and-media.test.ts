@@ -282,7 +282,7 @@ describe("WhatsApp command registry", () => {
         groupCalled = true;
       },
     });
-    expect(result).toBe("");
+    expect(result).toBe("Personal status posted successfully.");
     expect(captured).toEqual({ text: "hello world" });
     expect(groupCalled).toBe(false);
   });
