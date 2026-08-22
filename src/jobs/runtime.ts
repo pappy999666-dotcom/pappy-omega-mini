@@ -971,7 +971,8 @@ export function startWorkerRuntime(): JobOrchestrator {
           nextActionAt: Date.now(),
           lastResult: `Panel resolved ${totalGroups} WhatsApp group(s); delivery remains on the owning worker.`,
         });
-        await notifyBroadcastReady(context, kind, totalGroups, repeat, delayMs);
+        if ((context.job.payload as { sourceTransport?: unknown }).sourceTransport !== "whatsapp")
+          await notifyBroadcastReady(context, kind, totalGroups, repeat, delayMs);
         let cancelSent = false;
         while (true) {
           if (context.isCancellationRequested() && !cancelSent) {

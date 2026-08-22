@@ -425,6 +425,13 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
       matrix.lastError = "none";
       renderMatrix(true);
       void reportSessionStatus(runtime, "ACTIVE", "VALID");
+      void localBroadcastGroups(runtime)
+        .then((groups) => {
+          matrix.lastAction = `group inventory cached · ${groups.length} groups`;
+          matrix.lastError = "none";
+          renderMatrix(true);
+        })
+        .catch(() => undefined);
       void resumeBroadcastsForSession(workspaceId, sessionId);
     }
     if (update.connection === "close") {

@@ -159,7 +159,7 @@ function queuedJobAcknowledgement(
     `Delay         · ${delay}s`,
     `Expected time · ${expectedTime}`,
     `Live code     · ${result.jobCode}`,
-    "",
+    `Action        · ${kind === "allstatus" ? "Status delivery is now posting to every resolved group." : "Hidden-member mention delivery is now posting to every resolved group."}`,
   ].join("\n");
 }
 
