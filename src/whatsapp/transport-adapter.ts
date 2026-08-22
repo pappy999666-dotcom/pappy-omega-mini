@@ -1,6 +1,9 @@
 import type { WASocket } from "@crysnovax/baileys";
 import { getWhatsAppSocket } from "./session-manager.js";
-import { prepareCanonicalPreviewContent } from "./baileys-native-preview.js";
+import {
+  prepareCanonicalPreviewContent,
+} from "./baileys-native-preview.js";
+import { createGroupStatusDesign } from "./status-design.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 
 export type TransportCapability =
@@ -534,6 +537,46 @@ export async function sendPersonalStatus(
     cacheScope: `${workspaceId}:${sessionId}`,
   });
   await send(prepared);
+}
+
+export async function sendGroupColorStatus(
+  workspaceId: string,
+  sessionId: string,
+  jid: string,
+  payload: { text?: string; media?: GroupMediaPayload },
+): Promise<void> {
+  const socket = socketFor(workspaceId, sessionId);
+  const metadata = method(socket, "groupMetadata");
+  if (!metadata) throw new Error("Unsupported capability: groupMetadata");
+  const group = (await metadata(jid)) as { subject?: string };
+  const sourceText = payload.text ?? "";
+  const design = createGroupStatusDesign({
+    groupName: String(group.subject ?? "WhatsApp Group"),
+    text: sourceText,
+    seed: `${workspaceId}:${sessionId}:${jid}:${Date.now()}`,
+  });
+  const content = payload.media
+    ? messagePayload(design.text, payload.media)
+    : {
+        text: design.text,
+        backgroundColor: design.backgroundColor,
+        textColor: design.textColor,
+        font: design.font,
+      };
+  const prepared = await prepareCanonicalPreviewContent({
+    text: design.text,
+    content,
+    target: "group-status",
+    socket,
+    cacheScope: `${workspaceId}:${sessionId}`,
+  });
+  const send = method(socket, "sendMessage");
+  if (!send) throw new Error("Unsupported capability: groupStatus");
+  if (payload.media) {
+    await send(jid, { groupStatusMessage: prepared });
+  } else {
+    await send(jid, { ...prepared, groupStatus: true });
+  }
 }
 
 export async function updateWhatsAppGroupSubject(

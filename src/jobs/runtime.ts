@@ -915,6 +915,7 @@ export function startWorkerRuntime(): JobOrchestrator {
         delayMs?: number;
         media?: JobMediaReference;
         workerLocal?: boolean;
+        styled?: boolean;
       };
       if (kind === "allstatus" || kind === "allchat") {
         const readinessHeartbeat = setInterval(() => {
@@ -957,6 +958,7 @@ export function startWorkerRuntime(): JobOrchestrator {
             text,
             delayMs,
             repeat,
+            ...(payload.styled === true ? { styled: true } : {}),
             ...(payload.media ? { mediaRef: payload.media } : {}),
           },
           10 * 60_000,

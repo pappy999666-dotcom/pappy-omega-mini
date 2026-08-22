@@ -78,6 +78,10 @@ export interface CommandContext {
     text: string;
     repeat: number;
   }) => Promise<void>;
+  sendCurrentColorGroupStatus?: (input: {
+    text: string;
+    repeat: number;
+  }) => Promise<void>;
   sendCurrentPersonalStatus?: (input: { text: string }) => Promise<void>;
   sendCurrentGroupHidetag?: (input: {
     text: string;
@@ -628,6 +632,23 @@ export function createCommandRegistry(): RegisteredCommand[] {
       },
     },
     {
+      name: "dallstatus",
+      aliases: ["allstatusd"],
+      description: "Broadcast randomized per-group color status designs to all eligible groups.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
+        const { repeat, text } = repeatAndPayload(ctx, false);
+        if (!text && !ctx.media)
+          return "Usage: .dallstatus <text or media>.";
+        const queued = await ctx.enqueueJob({
+          kind: "allstatus",
+          payload: { text, count: repeat, styled: true },
+        });
+        return queuedJobAcknowledgement("allstatus", queued);
+      },
+    },
+    {
       name: "allstatusx",
       aliases: [],
       description: "Queue repeated status delivery to all eligible groups.",
@@ -657,6 +678,23 @@ export function createCommandRegistry(): RegisteredCommand[] {
           return "Usage: .pstatus <text or media> (or reply to a message).";
         await ctx.sendCurrentPersonalStatus({ text });
         return "Personal status posted successfully.";
+      },
+    },
+    {
+      name: "dgstatus",
+      aliases: ["gstatusd"],
+      description: "Send a styled group status with a randomized color and group design.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.chatJid || !ctx.chatJid.endsWith("@g.us"))
+          return "This command must be used inside a WhatsApp group.";
+        if (!ctx.sendCurrentColorGroupStatus)
+          return "WhatsApp transport is unavailable.";
+        const { repeat, text } = repeatAndPayload(ctx, false);
+        if (!text && !ctx.media)
+          return "Usage: .dgstatus <text or media> (or reply to a message).";
+        await ctx.sendCurrentColorGroupStatus({ text, repeat });
+        return "";
       },
     },
     {

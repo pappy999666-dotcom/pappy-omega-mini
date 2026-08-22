@@ -756,6 +756,32 @@ async function workerParticipantJid(participant, runtime) {
   return jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
 }
 const broadcastPreviewCache = new Map();
+const statusDesignBackgrounds = ["#075E54", "#128C7E", "#1F6FEB", "#6F42C1", "#B83280", "#C2410C", "#166534", "#0F766E", "#374151"];
+const statusDesignTemplates = [
+  (name, text) => `✦ ${name}\\n\\n${text}\\n\\n— PAPPY OMEGA MINI`,
+  (name, text) => `╭─ ${name} ─╮\\n│ ${text}\\n╰────────╯`,
+  (name, text) => `┏━ ${name} ━┓\\n${text}\\n┗━━━━━━━━┛`,
+  (name, text) => `⌁ ${name}\\n──────────\\n${text}`,
+  (name, text) => `${name}\\n\\n${text}\\n\\n◈ OMEGA STATUS`,
+];
+function statusDesignHash(input) {
+  let value = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    value ^= input.charCodeAt(index);
+    value = Math.imul(value, 16777619);
+  }
+  return value >>> 0;
+}
+function createWorkerStatusDesign(groupName, text, seed) {
+  const value = statusDesignHash(`${seed}:${groupName}:${text}`);
+  const template = statusDesignTemplates[value % statusDesignTemplates.length] ?? statusDesignTemplates[0];
+  return {
+    text: template(groupName.trim() || "WhatsApp Group", text),
+    backgroundColor: statusDesignBackgrounds[(value >>> 8) % statusDesignBackgrounds.length] ?? statusDesignBackgrounds[0],
+    textColor: "#FFFFFF",
+    font: value % 10,
+  };
+}
 async function resolveBroadcastPreview(runtime, intent) {
   const text = typeof intent.text === "string" ? intent.text : "";
   if (!/https?:\/\/\S+/i.test(text)) return undefined;
@@ -779,11 +805,25 @@ async function resolveBroadcastPreview(runtime, intent) {
 }
 async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview) {
   const text = typeof intent.text === "string" ? intent.text : "";
-  const content = media ? { media: { ...media, bytes: media.bytes }, text } : { text };
+  let statusText = text;
+  let style = {};
+  if (intent.kind === "allstatus" && intent.styled === true && !media) {
+    let groupName = "WhatsApp Group";
+    try {
+      const metadata = await runtime.socket.groupMetadata(jid);
+      groupName = String(metadata?.subject ?? groupName);
+    } catch {
+      // A missing group subject must never block the styled status delivery.
+    }
+    const design = createWorkerStatusDesign(groupName, text, `${runtime.sessionId}:${jid}:${Date.now()}`);
+    statusText = design.text;
+    style = { backgroundColor: design.backgroundColor, textColor: design.textColor, font: design.font };
+  }
+  const content = media ? { media: { ...media, bytes: media.bytes }, text: statusText } : { text: statusText, ...style };
   if (intent.kind === "allstatus") {
     const hasMedia = Boolean(media);
-    const hasUrl = /https?:\/\/\S+/i.test(text);
-    if (typeof runtime.socket.sendGroupStatus === "function" && !hasMedia && !hasUrl) {
+    const hasUrl = /https?:\/\/\S+/i.test(statusText);
+    if (typeof runtime.socket.sendGroupStatus === "function" && !hasMedia && !hasUrl && intent.styled !== true) {
       await runtime.socket.sendGroupStatus(jid, { text });
       return;
     }
@@ -835,7 +875,7 @@ async function runLocalBroadcast(runtime, intent, groups, media) {
   const previous = await readBroadcastCheckpoint(intent.jobId);
   const checkpoint = previous && previous.jobId === intent.jobId
     ? { ...previous, groups: Array.isArray(previous.groups) ? previous.groups : groups, totalGroups: Number(previous.totalGroups ?? groups.length), nextDelivery: Number(previous.nextDelivery ?? (Number(previous.completed ?? 0) + Number(previous.failed ?? 0) + Number(previous.skipped ?? 0))), state: "RUNNING" }
-    : { jobId: intent.jobId, workspaceId: runtime.workspaceId, sessionId: runtime.sessionId, kind: intent.kind, text: intent.text, mediaRef: intent.mediaRef, delayMs, repeat, groups, totalGroups: groups.length, nextDelivery: 0, completed: 0, failed: 0, skipped: 0, state: "RUNNING", updatedAt: Date.now() };
+    : { jobId: intent.jobId, workspaceId: runtime.workspaceId, sessionId: runtime.sessionId,       kind: intent.kind, text: intent.text, mediaRef: intent.mediaRef, styled: intent.styled === true, delayMs, repeat, groups, totalGroups: groups.length, nextDelivery: 0, completed: 0, failed: 0, skipped: 0, state: "RUNNING", updatedAt: Date.now() };
   await writeBroadcastCheckpoint(checkpoint);
   await reportLocalBroadcast(runtime, checkpoint);
   const linkPreview = await resolveBroadcastPreview(runtime, intent);
@@ -927,7 +967,7 @@ async function resumeBroadcastsForSession(workspaceId, sessionId) {
       if (!checkpoint || checkpoint.workspaceId !== workspaceId || checkpoint.sessionId !== sessionId || ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(checkpoint.state)) continue;
       const runtime = runtimes.get(sessionId);
       if (!runtime || broadcastRunners.has(checkpoint.jobId)) continue;
-      void startLocalBroadcast(runtime, { jobId: checkpoint.jobId, kind: checkpoint.kind, text: checkpoint.text ?? "", mediaRef: checkpoint.mediaRef, delayMs: checkpoint.delayMs, repeat: checkpoint.repeat }).catch((error) => noteError(error, `broadcast resume failed for ${checkpoint.jobId}`));
+      void startLocalBroadcast(runtime, { jobId: checkpoint.jobId, kind: checkpoint.kind, text: checkpoint.text ?? "", mediaRef: checkpoint.mediaRef, styled: checkpoint.styled === true, delayMs: checkpoint.delayMs, repeat: checkpoint.repeat }).catch((error) => noteError(error, `broadcast resume failed for ${checkpoint.jobId}`));
     }
   } catch {
     // The directory may not exist on a new panel.

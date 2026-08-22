@@ -26,7 +26,9 @@ import {
   listGroups,
   sendGroupMentions,
   sendGroupStatus,
+  sendGroupColorStatus,
   sendPersonalStatus,
+  sendGroupText,
 } from "./transport-adapter.js";
 import { buildWhatsappMenuPayload } from "../menus/whatsapp-menu.js";
 import {
@@ -364,6 +366,26 @@ export async function routeWhatsAppText(
         if (index > 0)
           await new Promise((resolve) => setTimeout(resolve, 1500));
         await sendGroupStatus(
+          message.workspaceId,
+          message.sessionId,
+          message.chatJid,
+          { text, ...(message.media ? { media: message.media } : {}) },
+        );
+      }
+    },
+    sendCurrentColorGroupStatus: async ({
+      text,
+      repeat,
+    }: {
+      text: string;
+      repeat: number;
+    }) => {
+      if (!message.chatJid || !message.chatJid.endsWith("@g.us"))
+        throw new Error("This command must be used inside a WhatsApp group.");
+      for (let index = 0; index < repeat; index += 1) {
+        if (index > 0)
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        await sendGroupColorStatus(
           message.workspaceId,
           message.sessionId,
           message.chatJid,

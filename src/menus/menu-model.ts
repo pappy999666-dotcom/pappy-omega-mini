@@ -57,6 +57,7 @@ export function buildSessionMenu(
     { id: "creategroup", label: "Create group", command: "creategroup", description: "Create a WhatsApp group." },
     { id: "pstatus", label: "Personal status", command: "pstatus", description: "Post a personal WhatsApp Status update." },
     { id: "gstatus", label: "Group status", command: "gstatus", description: "Post status to the current group." },
+    { id: "dgstatus", label: "Color group status", command: "dgstatus", description: "Post a randomized color/design status to the current group." },
     { id: "tag", label: "Tag", command: "tag", description: "Hidetag the current group." },
     { id: "stag", label: "Smart tag", command: "stag", description: "Immediate current-group hidetag." },
     { id: "iggc", label: "Ignore group", command: "iggc", description: "Ignore a group in broadcasts." },
@@ -64,6 +65,7 @@ export function buildSessionMenu(
     { id: "previewdebug", label: "Preview debug", command: "previewdebug", description: "Inspect native link preview metadata.", ownerOnly: true },
     { id: "broadcastdelay", label: "Broadcast delay", command: "broadcastdelay", description: "Set the all-group delay.", ownerOnly: true },
     { id: "allstatus", label: "All status", command: "allstatus", description: "Post status to every group.", ownerOnly: true },
+    { id: "dallstatus", label: "Color all status", command: "dallstatus", description: "Post randomized per-group color/design statuses.", ownerOnly: true },
     { id: "allstatusx", label: "All status ×", command: "allstatusx", description: "Repeat status per group.", ownerOnly: true },
     { id: "gstatusx", label: "Group status ×", command: "gstatusx", description: "Repeat status in the current group.", ownerOnly: true },
     { id: "stopstatus", label: "Stop status", command: "stopstatus", description: "Stop active all-status jobs.", ownerOnly: true },
@@ -105,8 +107,8 @@ export function renderAsciiMenu(model: SessionMenuModel): string {
   const health = rawHealth.replace("health ", "");
   const commandSet = new Set(["menu", "ping", "profile", "health", "support"]);
   const sessionSet = new Set(["autojoin", "join", "targetgs", "setprefix", "pfp", "setgpp", "setname", "setbio", "groups", "creategroup"]);
-  const localSet = new Set(["pstatus", "gstatus", "tag", "stag"]);
-  const ownerSet = new Set(["pair", "previewdebug", "broadcastdelay", "allstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "stopstag", "iggc", "setsudo"]);
+  const localSet = new Set(["pstatus", "gstatus", "dgstatus", "tag", "stag"]);
+  const ownerSet = new Set(["pair", "previewdebug", "broadcastdelay", "allstatus", "dallstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "stopstag", "iggc", "setsudo"]);
   const commandIndent = "︎ ".repeat(15);
   const renderSection = (title: string, icon: string, set: Set<string>): string[] => {
     const commands = model.actions

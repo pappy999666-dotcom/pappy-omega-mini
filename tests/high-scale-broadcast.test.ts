@@ -46,6 +46,9 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("if (command?.kind === \"broadcast.start\" || command?.kind === \"broadcast.cancel\") return broadcastCommandChains;");
     expect(source).toContain("const chains = commandChainFor(command);");
     expect(source).toContain("for (const command of commands) void processCommand(command);");
+    expect(source).toContain("intent.styled === true");
+    expect(source).toContain("createWorkerStatusDesign");
+    expect(source).toContain("const withPreview = linkPreview && typeof linkPreview === \"object\"");
     expect(source).toContain("return {};");
     expect(source).toContain("isScopedInviteValidationFailure");
     expect(source).toContain("invite validation deferred");
