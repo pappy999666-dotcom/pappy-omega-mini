@@ -749,7 +749,29 @@ async function workerParticipantJid(participant, runtime) {
   if (!jid) return "";
   return jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
 }
-async function sendLocalBroadcast(runtime, intent, jid, media) {
+const broadcastPreviewCache = new Map();
+async function resolveBroadcastPreview(runtime, intent) {
+  const text = typeof intent.text === "string" ? intent.text : "";
+  if (!/https?:\/\/\S+/i.test(text)) return undefined;
+  const cacheKey = `${runtime.sessionId}:${text}`;
+  const cached = broadcastPreviewCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.preview;
+  try {
+    const response = await control("/workload/preview", {
+      workspaceId: runtime.workspaceId,
+      sessionId: runtime.sessionId,
+      text,
+    }, credentialState.credential);
+    const preview = response.preview ? decode(response.preview) : undefined;
+    broadcastPreviewCache.set(cacheKey, { expiresAt: Date.now() + 60_000, preview });
+    return preview;
+  } catch (error) {
+    noteError(error, "broadcast preview resolution failed");
+    broadcastPreviewCache.set(cacheKey, { expiresAt: Date.now() + 5_000, preview: undefined });
+    return undefined;
+  }
+}
+async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview) {
   const text = typeof intent.text === "string" ? intent.text : "";
   const content = media ? { media: { ...media, bytes: media.bytes }, text } : { text };
   if (intent.kind === "allstatus") {
@@ -760,8 +782,11 @@ async function sendLocalBroadcast(runtime, intent, jid, media) {
       return;
     }
     const materialized = materializeWorkloadContent(content);
-    if (hasMedia) await runtime.socket.sendMessage(jid, { groupStatusMessage: materialized });
-    else await runtime.socket.sendMessage(jid, { ...materialized, groupStatus: true });
+    const withPreview = linkPreview && typeof linkPreview === "object"
+      ? { ...materialized, linkPreview }
+      : materialized;
+    if (hasMedia) await runtime.socket.sendMessage(jid, { groupStatusMessage: withPreview });
+    else await runtime.socket.sendMessage(jid, { ...withPreview, groupStatus: true });
     return;
   }
   const metadata = await runtime.socket.groupMetadata(jid);
@@ -804,6 +829,7 @@ async function runLocalBroadcast(runtime, intent, groups, media) {
     : { jobId: intent.jobId, workspaceId: runtime.workspaceId, sessionId: runtime.sessionId, kind: intent.kind, text: intent.text, mediaRef: intent.mediaRef, delayMs, repeat, groups, totalGroups: groups.length, nextDelivery: 0, completed: 0, failed: 0, skipped: 0, state: "RUNNING", updatedAt: Date.now() };
   await writeBroadcastCheckpoint(checkpoint);
   await reportLocalBroadcast(runtime, checkpoint);
+  const linkPreview = await resolveBroadcastPreview(runtime, intent);
   let lastPostAt = 0;
   let lastReportAt = 0;
   const totalDeliveries = checkpoint.totalGroups * repeat;
@@ -827,7 +853,7 @@ async function runLocalBroadcast(runtime, intent, groups, media) {
     let lastError = "";
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        await sendLocalBroadcast(runtime, intent, jid, media);
+        await sendLocalBroadcast(runtime, intent, jid, media, linkPreview);
         delivered = true;
         break;
       } catch (error) {

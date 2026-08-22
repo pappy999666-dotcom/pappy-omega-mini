@@ -20,6 +20,8 @@ import { WORKLOAD_CONTROL_VERSION } from "./security.js";
 import type { WorkloadInboundEvent, WorkloadRegistrationRequest } from "./types.js";
 import { getBroadcastProgress, isBroadcastCancellationRequested, saveBroadcastProgress } from "./broadcast-progress.js";
 import { readJobMedia } from "../whatsapp/job-media-store.js";
+import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
+import { prepareCanonicalPreviewContent } from "../whatsapp/baileys-native-preview.js";
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_INBOUND_MEDIA_BYTES = 5 * 1024 * 1024;
@@ -235,6 +237,27 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         fileName: referenceValue.originalFileName ?? referenceValue.fileName,
         ptt: referenceValue.ptt,
       }) });
+      return;
+    }
+    if (path === "/workload/preview") {
+      const input = await body(request);
+      const { worker } = await authenticateWorkloadWorker(credential, { allowDisabled: true });
+      const workspaceId = stringField(input, "workspaceId");
+      if (workspaceId !== worker.workspaceId) throw new Error("Preview workspace mismatch.");
+      const sessionId = stringField(input, "sessionId");
+      await getAuthorizedWorkloadAssignment(worker.workerId, sessionId);
+      const text = stringField(input, "text").slice(0, 12_000);
+      const prepared = await prepareCanonicalPreviewContent({
+        text,
+        content: { text },
+        target: "group-status",
+        socket: getWhatsAppSocket(workspaceId, sessionId),
+        cacheScope: `${workspaceId}:${sessionId}`,
+      });
+      const preview = prepared.linkPreview && typeof prepared.linkPreview === "object"
+        ? prepared.linkPreview
+        : undefined;
+      json(response, 200, { ok: true, ...(preview ? { preview: encode(preview) } : {}) });
       return;
     }
     if (path === "/workload/session-status") {
