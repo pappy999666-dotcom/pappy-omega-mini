@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   send: vi.fn(async () => undefined),
   sendStatus: vi.fn(async () => undefined),
+  getStatusJidList: vi.fn(async () => ["2348022222222@s.whatsapp.net"]),
   groupMetadata: vi.fn(async () => ({
     participants: [
       { id: "2348011111111@s.whatsapp.net" },
@@ -16,6 +17,7 @@ vi.mock("../src/whatsapp/session-manager.js", () => ({
     user: { id: "2348012345678:1@s.whatsapp.net" },
     sendMessage: mocks.send,
     sendStatus: mocks.sendStatus,
+    getStatusJidList: mocks.getStatusJidList,
     groupMetadata: mocks.groupMetadata,
   }),
 }));
@@ -69,7 +71,10 @@ describe("WhatsApp media transport coverage", () => {
     expect(mocks.send).not.toHaveBeenCalled();
     const [content] = mocks.sendStatus.mock.calls[0] as unknown as [Record<string, unknown>];
     expect(content.status).toBe(true);
-    expect(content.statusJidList).toEqual(["2348012345678:1@s.whatsapp.net"]);
+    expect(content.statusJidList).toEqual([
+      "2348022222222@s.whatsapp.net",
+      "2348012345678@s.whatsapp.net",
+    ]);
     expect(content.image).toBe(bytes);
     expect(content.caption).toBe("personal status");
     expect(content.mimetype).toBe("image/jpeg");

@@ -50,6 +50,7 @@ async function resolvePersonalStatusAudience(socket: WASocket): Promise<string[]
     if (jid.endsWith("@lid") || jid.endsWith("@hosted.lid"))
       jid = (await lidMapping?.getPNForLID?.(jid)) ?? "";
     else if (!jid.includes("@")) jid = `${jid}@s.whatsapp.net`;
+    jid = jid.replace(/:\d+(?=@)/, "");
     if (jid.endsWith("@s.whatsapp.net")) audience.add(jid);
   };
   const remoteAudience = method(socket, "getStatusJidList");

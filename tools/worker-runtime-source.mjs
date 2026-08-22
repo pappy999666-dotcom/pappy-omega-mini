@@ -617,10 +617,10 @@ async function getStatusJidList(runtime) {
   for (const [key, value] of entries) {
     const item = value && typeof value === "object" ? { ...value, id: value.id ?? key } : { id: value ?? key };
     const jid = await workerParticipantJid(item, runtime);
-    if (jid) recipients.add(jid);
+    if (jid) recipients.add(jid.replace(/:\d+(?=@)/, ""));
   }
   const self = await workerParticipantJid({ id: runtime.socket.user?.id }, runtime);
-  if (self) recipients.add(self);
+  if (self) recipients.add(self.replace(/:\d+(?=@)/, ""));
   return [...recipients];
 }
 async function executeTransport(runtime, method, encodedArgs) {
