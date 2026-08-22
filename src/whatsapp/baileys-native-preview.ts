@@ -396,7 +396,7 @@ function extractEmbeddedImageCandidates(html: string, baseUrl: string): ImageCan
     const hostname = parsed.hostname.toLowerCase();
     const pathname = parsed.pathname.toLowerCase();
     const hasImageExtension = /\.(?:avif|gif|jpe?g|png|webp)(?:$|[?#])/i.test(pathname);
-    const isTikTokCdn = hostname.includes("tiktokcdn.com") || hostname.includes("muscdn.com");
+    const isTikTokCdn = hostname.includes("tiktokcdn") || hostname.includes("muscdn");
     const isTikTokPoster = isTikTokCdn && /(?:~tplv-|\/tos-)/i.test(pathname);
     const imageLike = isTikTokCdn ? isTikTokPoster : hasImageExtension;
     if (!imageLike) continue;
