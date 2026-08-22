@@ -41,6 +41,12 @@ const reconnectTimers = new Map();
 const reconnectAttempts = new Map();
 const intentionallyStopped = new Set();
 const commandChains = new Map();
+const backgroundCommandChains = new Map();
+function isBackgroundCommand(command) {
+  if (command?.kind !== "bridge.command") return false;
+  const method = String(command?.payload?.method ?? "");
+  return method === "groupGetInviteInfo" || method === "groupAcceptInvite";
+}
 const broadcastRunners = new Map();
 const broadcastGroupCache = new Map();
 const groupSummaryCache = new Map();
@@ -965,7 +971,8 @@ async function heartbeat() {
   return result;
 }
 async function processCommand(command) {
-  const previous = commandChains.get(command.sessionId) ?? Promise.resolve();
+  const chains = isBackgroundCommand(command) ? backgroundCommandChains : commandChains;
+  const previous = chains.get(command.sessionId) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(async () => {
     try {
       const result = await execute(command);
@@ -977,8 +984,8 @@ async function processCommand(command) {
       await control("/workload/result", { commandId: command.commandId, requestId: command.requestId, ok: false, error: error instanceof Error ? error.message : String(error) }, credentialState.credential).catch(() => undefined);
     }
   });
-  commandChains.set(command.sessionId, current);
-  try { await current; } finally { if (commandChains.get(command.sessionId) === current) commandChains.delete(command.sessionId); }
+  chains.set(command.sessionId, current);
+  try { await current; } finally { if (chains.get(command.sessionId) === current) chains.delete(command.sessionId); }
 }
 async function poll() {
   if (trafficPaused) {
