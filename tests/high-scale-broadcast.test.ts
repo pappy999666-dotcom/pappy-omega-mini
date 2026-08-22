@@ -63,6 +63,13 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("Preview thumbnail upload exceeds the 8 MiB safety limit.");
   });
 
+  it("recreates the private runtime module before every bootstrap retry", async () => {
+    const builder = await readFile(new URL("../tools/build-single-file-worker.mjs", import.meta.url), "utf8");
+    expect(builder).toContain("fs.writeFileSync(runtimePath, runtimeSource, { mode: 0o600 });");
+    expect(builder).toContain("for (;;) {\n    // The child exits on a recoverable crash or update hand-off.");
+    expect(builder).toContain("const child = spawnSync(process.execPath, [runtimePath");
+  });
+
   it("keeps external panel sessions out of the internal bridge bypass", async () => {
     const router = await readFile(messageRouterPath, "utf8");
     const bridge = await readFile(remoteBridgePath, "utf8");

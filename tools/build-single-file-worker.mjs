@@ -101,7 +101,6 @@ async function main() {
   }
   log("[OK] Runtime verification passed.", ansi.green);
   log("[STAGE 4/4] Launching the interactive PAPPY setup now…", ansi.cyan);
-  fs.writeFileSync(runtimePath, runtimeSource, { mode: 0o600 });
   const entrypoint = path.join(root, "index.js");
   const args = process.argv.slice(2);
   function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -119,6 +118,9 @@ async function main() {
   }
   let crashCount = 0;
   for (;;) {
+    // The child exits on a recoverable crash or update hand-off. Recreate the
+    // private module every time because the previous iteration removes it.
+    fs.writeFileSync(runtimePath, runtimeSource, { mode: 0o600 });
     const child = spawnSync(process.execPath, [runtimePath, "--worker-runtime", ...args], { cwd: root, env: { ...process.env, PAPPY_WORKER_ENTRYPOINT: entrypoint }, stdio: "inherit" });
     try { fs.unlinkSync(runtimePath); } catch {}
     if (child.status === 75) {
