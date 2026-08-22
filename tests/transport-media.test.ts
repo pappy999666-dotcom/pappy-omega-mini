@@ -104,6 +104,27 @@ describe("WhatsApp media transport coverage", () => {
     },
   );
 
+  it("uses live group metadata for a hidden-mention WhatsApp invite URL", async () => {
+    mocks.send.mockClear();
+    const text = "https://chat.whatsapp.com/KbDjI6Amhs38wh2nRz4pkN";
+    await sendGroupMentions(
+      "workspace",
+      "session",
+      "120363000000000001@g.us",
+      text,
+    );
+    const [, content] = mocks.send.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(content.text).toBe(text);
+    expect(content.linkPreview).toMatchObject({
+      title: "Cyber Alpha",
+      description: "2 members · WhatsApp Group",
+    });
+    expect(content.linkPreview).not.toMatchObject({ title: "WhatsApp Group Invite" });
+  });
+
   it("attaches a native link preview to a hidden-mention URL payload", async () => {
     mocks.send.mockClear();
     const originalFetch = globalThis.fetch;

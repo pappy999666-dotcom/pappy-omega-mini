@@ -47,6 +47,7 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("const chains = commandChainFor(command);");
     expect(source).toContain("for (const command of commands) void processCommand(command);");
     expect(source).toContain("intent.styled === true");
+    expect(source).toContain("/https?:\\/\\/\\S+/i.test(detectorText)");
     expect(source).toContain("createWorkerStatusDesign");
     expect(source).toContain("statusDesignUrlTemplates");
     expect(source).toContain("previewTitle");
