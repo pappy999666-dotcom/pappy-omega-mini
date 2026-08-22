@@ -516,10 +516,6 @@ function socketCandidate(value: unknown): PreviewSocket | undefined {
   return value as PreviewSocket;
 }
 
-function isAssignedPanelSocket(socket: PreviewSocket | undefined): boolean {
-  return Boolean(socket && (socket as PreviewSocket & { __pappyAssignedWorkload?: boolean }).__pappyAssignedWorkload === true);
-}
-
 async function resolveImageCandidates(
   candidates: string[],
 ): Promise<Pick<CanonicalPreviewRecord, "selectedImageUrl" | "imageData" | "imageMimeType" | "sourceWidth" | "sourceHeight"> | undefined> {
@@ -574,10 +570,10 @@ async function resolveRecord(
   socket: PreviewSocket | undefined,
 ): Promise<CanonicalPreviewRecord | undefined> {
   const groupCode = groupInviteCode(canonicalUrl);
-  if (groupCode && socket?.groupGetInviteInfo && !isAssignedPanelSocket(socket)) {
+  if (groupCode && socket?.groupGetInviteInfo) {
     let info: Record<string, unknown> | undefined;
     try {
-      info = await socket.groupGetInviteInfo(groupCode);
+      info = await retryPreview(() => socket.groupGetInviteInfo!(groupCode));
     } catch {
       info = undefined;
     }

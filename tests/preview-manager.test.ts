@@ -94,16 +94,16 @@ describe("canonical Baileys-native preview pipeline", () => {
       const cacheScope = `negative-cache-${Date.now()}`;
       await prepareCanonicalPreviewContent({ text, content: { text }, socket, cacheScope });
       await prepareCanonicalPreviewContent({ text, content: { text }, socket, cacheScope });
-      expect(calls).toBe(1);
+      expect(calls).toBe(2);
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
-  it("uses public metadata without remote invite calls for assigned panel previews", async () => {
+  it("uses live WhatsApp invite metadata for assigned panel previews", async () => {
     const originalFetch = globalThis.fetch;
     let inviteCalls = 0;
-    globalThis.fetch = vi.fn(async () => new Response("<html><head><title>Panel link</title></head></html>", { status: 200, headers: { "content-type": "text/html" } })) as typeof fetch;
+    globalThis.fetch = vi.fn(async () => new Response(null, { status: 404 })) as typeof fetch;
     try {
       const text = "https://chat.whatsapp.com/PANEL_PREVIEW_TEST";
       const content = await prepareCanonicalPreviewContent({
@@ -113,13 +113,14 @@ describe("canonical Baileys-native preview pipeline", () => {
           __pappyAssignedWorkload: true,
           groupGetInviteInfo: async () => {
             inviteCalls += 1;
-            throw new Error("growth-locked");
+            return { id: "120363000000000000@g.us", subject: "Panel group", size: 64 };
           },
         } as never,
         cacheScope: `panel-preview-${Date.now()}`,
       });
-      expect(inviteCalls).toBe(0);
+      expect(inviteCalls).toBe(1);
       expect(content.text).toBe(text);
+      expect(content.linkPreview).toMatchObject({ title: "Panel group", description: "64 members · WhatsApp Group" });
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -157,17 +158,17 @@ describe("canonical Baileys-native preview pipeline", () => {
           __pappyAssignedWorkload: true,
           groupGetInviteInfo: async () => {
             inviteCalls += 1;
-            throw new Error("growth-locked");
+            return { id: "120363000000000000@g.us", subject: "Gc closed", size: 123 };
           },
         } as never,
         cacheScope: `panel-invite-query-${Date.now()}`,
       });
-      expect(inviteCalls).toBe(0);
+      expect(inviteCalls).toBe(1);
       expect(calls.some((value) => value.includes("?s=cl&p=a&mlu=4"))).toBe(true);
       expect(content.linkPreview).toMatchObject({
         "canonical-url": text,
         title: "Gc closed",
-        description: "WhatsApp Group Invite",
+        description: "123 members · WhatsApp Group",
       });
       expect(content.linkPreview).toHaveProperty("jpegThumbnail");
     } finally {

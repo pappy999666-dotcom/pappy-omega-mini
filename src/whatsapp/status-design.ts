@@ -9,9 +9,8 @@ export interface GroupStatusDesign {
   title: string;
 }
 
-// Baileys accepts #RRGGBB and converts it to an opaque ARGB value. Keep this
-// palette intentionally bright and never use #000000/#0000: some WhatsApp
-// clients otherwise fall back to a black story canvas.
+// Bright opaque colors only. The Baileys fork accepts six-digit #RRGGBB
+// values and converts them to the status canvas color.
 const BACKGROUNDS = [
   "#2563EB",
   "#7C3AED",
@@ -25,24 +24,26 @@ const BACKGROUNDS = [
   "#4F46E5",
 ] as const;
 
+// Keep the story composition compact: one title, one framed payload, and no
+// repeated preview title. The original URL remains in the body for matching.
 const TEXT_TEMPLATES = [
   (title: string, body: string) =>
-    `╭────────────────────────────╮\n\n        ✦ ${title} ✦\n\n              ◈\n\n${body}\n\n╰────────────────────────────╯`,
+    `╭────── ✦ ${title} ✦ ──────╮\n\n${body}\n\n╰───────────────╯`,
   (title: string, body: string) =>
-    `┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n\n          ♡ ${title} ♡\n\n          ── ✧ ──\n\n${body}\n\n┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`,
+    `┌───── ♡ ${title} ♡ ─────┐\n\n        ${body}\n\n└────────────────────┘`,
   (title: string, body: string) =>
-    `╔════════════════════════════╗\n║                            ║\n║        ${title}        ║\n║                            ║\n║          ${body}          ║\n║                            ║\n╚════════════════════════════╝`,
+    `⌜────── ${title} ──────⌝\n\n      ${body}\n\n⌞────────────────⌟`,
   (title: string, body: string) =>
-    `⌜────────────────────────────⌝\n\n          ${title}\n\n       ⟡  ${body}  ⟡\n\n⌞────────────────────────────⌟`,
+    `╭─── ◈ ${title} ◈ ───╮\n\n${body}\n\n╰─────────────────╯`,
 ] as const;
 
 const URL_TEMPLATES = [
   (title: string, body: string) =>
-    `╭────────────── ✦ ──────────────╮\n\n            ♡ ${title} ♡\n\n              ── ◈ ──\n\n${body}\n\n╰────────────── ✦ ──────────────╯`,
+    `╭──── ✦ ${title} ✦ ────╮\n\n${body}\n\n╰────── ⟡ ──────╯`,
   (title: string, body: string) =>
-    `┏━━━━━━━━━━━━━━ ✧ ━━━━━━━━━━━━━━┓\n\n             ${title}\n\n        ── 𝗟𝗜𝗡𝗞 𝗗𝗥𝗢𝗣 ──\n\n${body}\n\n┗━━━━━━━━━━━━━━ ✧ ━━━━━━━━━━━━━━┛`,
+    `┌─── ♡ ${title} ♡ ───┐\n\n${body}\n\n└─────── ✧ ───────┘`,
   (title: string, body: string) =>
-    `╔═══════════════╗\n║   ♡ ${title} ♡   ║\n╚═══════════════╝\n\n          ${body}\n\n        ⟡ OPEN THE LINK ⟡`,
+    `⌜──── ${title} ────⌝\n\n   ${body}\n\n⌞──── OPEN LINK ────⌟`,
 ] as const;
 
 function hash(input: string): number {
@@ -56,7 +57,7 @@ function hash(input: string): number {
 
 function cleanTitle(value: string): string {
   const cleaned = value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
-  return (cleaned || "WhatsApp Group").slice(0, 42);
+  return (cleaned || "WhatsApp Group").slice(0, 36);
 }
 
 function hasHttpUrl(text: string): boolean {

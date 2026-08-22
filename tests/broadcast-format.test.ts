@@ -41,7 +41,9 @@ describe("styled group-status design", () => {
     expect(second.mode).toBe("url");
     expect(first.title).toBe("Alpha");
     expect(second.title).toBe("Beta");
-    expect(first.text).toMatch(/𝗟𝗜𝗡𝗞 𝗗𝗥𝗢𝗣|OPEN THE LINK/);
+    expect(first.text).toMatch(/OPEN LINK|✦|♡/);
+    expect(first.text).not.toContain("𝗟𝗜𝗡𝗞 𝗗𝗥𝗢𝗣");
+    expect(first.text).not.toContain("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     expect(first.text !== second.text || first.backgroundColor !== second.backgroundColor).toBe(true);
     expect(first.backgroundColor).toMatch(/^#[0-9A-F]{6}$/);
     expect(first.backgroundColor).not.toBe("#000000");
@@ -50,7 +52,8 @@ describe("styled group-status design", () => {
     expect(plain.mode).toBe("text");
     expect(plain.text).toContain("Alpha");
     expect(plain.text).toContain("Hello everyone");
-    expect(plain.text).not.toContain("OPEN THE LINK");
+    expect(plain.text).not.toContain("OPEN LINK");
+    expect(plain.text).not.toContain("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   });
 
   it("registers styled status commands separately from ordinary status commands", () => {
