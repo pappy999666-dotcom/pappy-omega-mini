@@ -416,12 +416,18 @@ function clearPendingInputs(userId: string): void {
   pendingSessionSetting.delete(userId);
   pendingJoinSettingInput.delete(userId);
   pendingBroadcastDelay.delete(userId);
-  pendingPairing.delete(userId);
+  // Pairing state is persisted in Mongo; deleting only the in-memory entry
+  // leaves a stale request that can consume the next unrelated text message.
+  clearPendingPairing(userId);
   pendingGlobalCommand.delete(userId);
   pendingSessionBridge.delete(userId);
   pendingAdminBridge.delete(userId);
   pendingAdminGlobalBridge.delete(userId);
   pendingLiveJobCode.delete(userId);
+}
+
+function beginExclusiveInput(userId: string): void {
+  clearPendingInputs(userId);
 }
 
 export function isAutoPromoteWizardContinuation(callbackData: string): boolean {
@@ -724,7 +730,9 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.command("autopromote", async (ctx) => {
     const user = resolveTelegramUser(ctx);
-    pendingAutoPromote.set(String(ctx.from?.id ?? ""), {
+    const userId = String(ctx.from?.id ?? "");
+    beginExclusiveInput(userId);
+    pendingAutoPromote.set(userId, {
       workspaceId: user.workspaceId,
       scope: "USER",
       stage: "command",
@@ -890,7 +898,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const pairing =
       pendingPairing.get(userId) ??
       (await getPairingRequest(userId).catch(() => undefined));
-    if (pairing && !ctx.message.text.startsWith("/")) {
+    if (pairing && !pendingAdminInput.has(userId) && !ctx.message.text.startsWith("/")) {
       await handlePairingText(ctx, pairing, ctx.message.text.trim());
       return;
     }
@@ -2153,6 +2161,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     const session = ownedSession(ctx, ctx.match[1] ?? "");
     if (!session) return deny(ctx);
+    beginExclusiveInput(String(ctx.from?.id ?? ""));
     savePendingPairing(String(ctx.from?.id ?? ""), {
       stage: "phone",
       chatId: ctx.chat?.id ?? 0,
@@ -3594,6 +3603,7 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("support:menu", async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
+    beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingSupportInput.set(String(ctx.from?.id ?? ""), {
       workspaceId: user.workspaceId,
     });
@@ -3617,6 +3627,7 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action(/^admin:support:reply:([a-f0-9-]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
+    beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingSupportReply.set(String(ctx.from?.id ?? ""), {
       ticketId: ctx.match[1] ?? "",
     });
@@ -3654,6 +3665,7 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("ui:support", async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
+    beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingSupportInput.set(String(ctx.from?.id ?? ""), {
       workspaceId: user.workspaceId,
     });
@@ -3685,6 +3697,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const messageId =
       message && "message_id" in message ? message.message_id : undefined;
     if (!chatId || !messageId) return;
+    beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingSessionBridge.set(String(ctx.from?.id ?? ""), {
       workspaceId: session.workspaceId,
       sessionId: session.sessionId,
@@ -3754,6 +3767,7 @@ export function createTelegramBot(): Telegraf<Context> {
       const chatId = ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : undefined);
       const messageId = message && "message_id" in message ? message.message_id : undefined;
       if (!chatId || !messageId) return;
+      beginExclusiveInput(String(ctx.from?.id ?? ""));
       const current = getSessionJoinSettings(session.workspaceId, session.sessionId);
       const instructions: Record<JoinSettingField, string> = {
         target: `Send the target link count as a whole number from 1 to 10,000. Current: <code>${current.targetCount}</code>.`,
@@ -4168,6 +4182,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     const session = ownedSession(ctx, ctx.match[1] ?? "");
     if (!session) return deny(ctx);
+    beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingAutoPromote.set(String(ctx.from?.id ?? ""), {
       workspaceId: session.workspaceId,
       scope: "SESSION",
@@ -4191,9 +4206,11 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
     const user = resolveTelegramUser(ctx);
+    const userId = String(ctx.from?.id ?? "");
+    beginExclusiveInput(userId);
     const activeSessions = activeAllSessions();
     const targets = activeSessions.map((session) => session.sessionId);
-    pendingAutoPromote.set(String(ctx.from?.id ?? ""), {
+    pendingAutoPromote.set(userId, {
       workspaceId: user.workspaceId,
       scope: "GLOBAL",
       allFutureSessions: true,
@@ -4535,6 +4552,7 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("workload:add", async (ctx) => {
     await ctx.answerCbQuery("Choose a panel name first…");
     const userId = String(ctx.from?.id ?? "");
+    beginExclusiveInput(userId);
     pendingAdminInput.set(userId, "workload:name");
     await edit(
       ctx,
@@ -4821,6 +4839,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const chatId = ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : undefined);
     const messageId = message && "message_id" in message ? message.message_id : undefined;
     if (!chatId || !messageId) return;
+    beginExclusiveInput(userId);
     pendingAdminGlobalBridge.set(userId, { chatId, messageId });
     await edit(
       ctx,
@@ -4869,6 +4888,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const chatId = ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : undefined);
     const messageId = message && "message_id" in message ? message.message_id : undefined;
     if (!chatId || !messageId) return;
+    beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingAdminBridge.set(String(ctx.from?.id ?? ""), {
       workspaceId: session.workspaceId,
       sessionId: session.sessionId,
@@ -4904,6 +4924,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const messageId =
       message && "message_id" in message ? message.message_id : undefined;
     if (!chatId || !messageId) return;
+    beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingAdminBridge.set(String(ctx.from?.id ?? ""), {
       workspaceId,
       sessionId,
@@ -4978,6 +4999,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
     const userId = String(ctx.from?.id ?? "");
+    beginExclusiveInput(userId);
     pendingForceJoin.set(userId, {
       workspaceId: resolveTelegramUser(ctx).workspaceId,
     });
@@ -5157,6 +5179,7 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action(/^admin:media:add:(image|video)$/, async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
+    beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingMedia.set(
       String(ctx.from?.id ?? ""),
       ctx.match[1] as "image" | "video",
@@ -5270,6 +5293,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
     const userId = String(ctx.from?.id ?? "");
+    beginExclusiveInput(userId);
     pendingAdminInput.set(userId, "menu:caption");
     await edit(
       ctx,
@@ -5286,7 +5310,9 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("admin:broadcast", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
-    pendingAdminInput.set(String(ctx.from?.id ?? ""), "broadcast:compose");
+    const userId = String(ctx.from?.id ?? "");
+    beginExclusiveInput(userId);
+    pendingAdminInput.set(userId, "broadcast:compose");
     await edit(
       ctx,
       pageText(
@@ -5380,6 +5406,7 @@ async function startPairing(
   ctx: Context,
   requestedName: string,
 ): Promise<void> {
+  beginExclusiveInput(String(ctx.from?.id ?? ""));
   if (!requestedName.trim()) return beginPairingWizard(ctx);
   const user = resolveTelegramUser(ctx);
   const userId = String(ctx.from?.id ?? "");
@@ -5447,6 +5474,7 @@ async function startPairing(
 
 async function beginPairingWizard(ctx: Context, workloadSelected = false): Promise<void> {
   const user = resolveTelegramUser(ctx);
+  beginExclusiveInput(String(ctx.from?.id ?? ""));
   if (!workloadSelected) {
     const workloadMode = await getWorkloadMode(user.workspaceId);
     const workers = await listWorkspaceWorkloadWorkers(user.workspaceId);
