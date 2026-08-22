@@ -43,10 +43,16 @@ const reconnectAttempts = new Map();
 const intentionallyStopped = new Set();
 const commandChains = new Map();
 const backgroundCommandChains = new Map();
+const broadcastCommandChains = new Map();
 function isBackgroundCommand(command) {
   if (command?.kind !== "bridge.command") return false;
   const method = String(command?.payload?.method ?? "");
   return method === "groupGetInviteInfo" || method === "groupAcceptInvite";
+}
+function commandChainFor(command) {
+  if (command?.kind === "broadcast.start" || command?.kind === "broadcast.cancel") return broadcastCommandChains;
+  if (isBackgroundCommand(command)) return backgroundCommandChains;
+  return commandChains;
 }
 const broadcastRunners = new Map();
 const broadcastGroupCache = new Map();
@@ -1016,7 +1022,7 @@ async function heartbeat() {
   return result;
 }
 async function processCommand(command) {
-  const chains = isBackgroundCommand(command) ? backgroundCommandChains : commandChains;
+  const chains = commandChainFor(command);
   const previous = chains.get(command.sessionId) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(async () => {
     try {

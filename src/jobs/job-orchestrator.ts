@@ -778,6 +778,28 @@ export class JobOrchestrator {
     return updated;
   }
 
+  private async pruneTerminalRecoveryChildren(jobs: BullJob<JobRecord>[]): Promise<void> {
+    const now = Date.now();
+    for (const job of jobs) {
+      const childId = String(job.id);
+      if (!childId.includes(":")) continue;
+      const parentId = childId.split(":", 1)[0] ?? "";
+      if (!parentId) continue;
+      const parent = await this.store.get(parentId);
+      if (!parent || !["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(parent.state)) continue;
+      if (!parent.completedAt || now - parent.completedAt < 60_000) continue;
+      try {
+        if (await job.isActive()) {
+          if (job.token) await job.moveToCompleted({ orphaned: true, parentId }, job.token, false);
+        } else {
+          await job.remove();
+        }
+      } catch {
+        // A child may finish naturally between the state check and cleanup.
+      }
+    }
+  }
+
   private async reapStaleJobs(): Promise<void> {
     if (this.reaperBusy) return;
     this.reaperBusy = true;
@@ -790,6 +812,7 @@ export class JobOrchestrator {
           ),
         )
       ).flat();
+      await this.pruneTerminalRecoveryChildren(recoveryJobs);
       const recoveryParents = new Set(
         recoveryJobs
           .map((job) => String(job.id))

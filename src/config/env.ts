@@ -48,11 +48,11 @@ const envSchema = z.object({
   ),
   WORKLOAD_CONTROL_BIND: z.string().default("127.0.0.1"),
   WORKLOAD_CONTROL_PORT: z.coerce.number().int().positive().max(65535).default(8787),
-  WORKLOAD_PACKAGE_VERSION: z.string().default("1.2.39"),
+  WORKLOAD_PACKAGE_VERSION: z.string().default("1.2.40"),
   WORKLOAD_MIN_WORKER_VERSION: z.string().default("1.0.0"),
   WORKLOAD_RELEASE_PATH: z.string().default("./worker-package/index.js"),
   WORKLOAD_RELEASE_PRIVATE_KEY_PATH: z.string().default("./.secrets/worker-release-private.pem"),
-  WORKLOAD_RELEASE_VERSION: z.string().default("1.2.39"),
+  WORKLOAD_RELEASE_VERSION: z.string().default("1.2.40"),
   WORKLOAD_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().min(30_000).max(10 * 60_000).default(75_000),
 });
 
