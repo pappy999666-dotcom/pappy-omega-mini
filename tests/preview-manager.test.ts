@@ -222,11 +222,15 @@ describe("canonical Baileys-native preview pipeline", () => {
       },
     }).jpeg().toBuffer();
     const encodedImage = "https:" + "\\u002F".repeat(2) + "example.com" + "\\u002Fpreview.jpg";
+    const unrelatedAssets = Array.from({ length: 30 }, (_, index) => `https://sf16-va.tiktokcdn.com/obj/model-${index}.bytenn`).join(" ");
+    const posterImage = "https:" + "\\u002F".repeat(2) + "p16.tiktokcdn.com" + "\\u002Ftos-useast5-p-0068-tx" + "\\u002Fposter~tplv-photomode.jpeg";
+    const requestedUrls: string[] = [];
     globalThis.fetch = vi.fn(async (input) => {
       const requestUrl = String(input);
-      if (requestUrl.endsWith("/preview.jpg"))
+      requestedUrls.push(requestUrl);
+      if (requestUrl.endsWith("/preview.jpg") || requestUrl.includes("poster~tplv-photomode.jpeg"))
         return new Response(imageBytes, { status: 200, headers: { "content-type": "image/jpeg" } });
-      return new Response(`<html><head><title>TikTok - Make Your Day</title></head><body><script>window.__DATA__={cover:"${encodedImage}"}</script></body></html>`, { status: 200, headers: { "content-type": "text/html" } });
+      return new Response(`<html><head><title>TikTok - Make Your Day</title></head><body><script>${unrelatedAssets} window.__DATA__={cover:"${encodedImage}",poster:"${posterImage}"}</script></body></html>`, { status: 200, headers: { "content-type": "text/html" } });
     }) as typeof fetch;
     try {
       const text = "https://vt.tiktok.com/ZSV5kDvDQ/";
@@ -240,6 +244,7 @@ describe("canonical Baileys-native preview pipeline", () => {
         title: "TikTok - Make Your Day",
       });
       expect(content.linkPreview).toHaveProperty("jpegThumbnail");
+      expect(requestedUrls.some((url) => url.includes("poster~tplv-photomode.jpeg"))).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
     }

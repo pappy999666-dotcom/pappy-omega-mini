@@ -395,13 +395,18 @@ function extractEmbeddedImageCandidates(html: string, baseUrl: string): ImageCan
     }
     const hostname = parsed.hostname.toLowerCase();
     const pathname = parsed.pathname.toLowerCase();
-    const imageLike = /\.(?:avif|gif|jpe?g|png|webp)$/i.test(pathname) || hostname.includes("tiktokcdn.com") || hostname.includes("muscdn.com");
+    const hasImageExtension = /\.(?:avif|gif|jpe?g|png|webp)(?:$|[?#])/i.test(pathname);
+    const isTikTokCdn = hostname.includes("tiktokcdn.com") || hostname.includes("muscdn.com");
+    const isTikTokPoster = isTikTokCdn && /(?:~tplv-|\/tos-)/i.test(pathname);
+    const imageLike = isTikTokCdn ? isTikTokPoster : hasImageExtension;
     if (!imageLike) continue;
+    const sizeMatch = pathname.match(/:(\d+):(?:\d+)(?:\.[a-z0-9]+)?$/i);
+    const size = sizeMatch ? Number(sizeMatch[1]) : 0;
     candidates.push({
       url: parsed.toString(),
-      priority: hostname.includes("tiktokcdn.com") || hostname.includes("muscdn.com") ? 82 : 35,
-      width: 0,
-      height: 0,
+      priority: isTikTokCdn ? 82 + Math.min(size / 1000, 10) : 35,
+      width: size,
+      height: size,
     });
     if (candidates.length >= 24) break;
   }
