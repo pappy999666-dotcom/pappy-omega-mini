@@ -812,9 +812,11 @@ async function resolveBroadcastPreview(runtime, intent) {
 }
 async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview) {
   const text = typeof intent.text === "string" ? intent.text : "";
+  const mediaCaption = typeof media?.caption === "string" ? media.caption.trim() : "";
+  const detectorText = text || mediaCaption;
   let statusText = text;
   let styleOptions = {};
-  if (intent.kind === "allstatus" && intent.styled === true && !media) {
+  if (intent.kind === "allstatus" && intent.styled === true && /https?:\/\/\S+/i.test(detectorText)) {
     let groupName = "WhatsApp Group";
     try {
       const metadata = await runtime.socket.groupMetadata(jid);
@@ -823,15 +825,15 @@ async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview) {
       // A missing group subject must never block the styled status delivery.
     }
     const previewTitle = typeof linkPreview?.title === "string" ? linkPreview.title.trim() : "";
-    const design = createWorkerStatusDesign(groupName, text, `${runtime.sessionId}:${jid}:${Date.now()}`, previewTitle || groupName);
+    const design = createWorkerStatusDesign(groupName, detectorText, `${runtime.sessionId}:${jid}:${Date.now()}`, previewTitle || groupName);
     statusText = design.text;
     styleOptions = { backgroundColor: design.backgroundColor, font: design.font };
   }
   const content = media ? { media: { ...media, bytes: media.bytes }, text: statusText } : { text: statusText };
   if (intent.kind === "allstatus") {
     const hasMedia = Boolean(media);
-    const hasUrl = /https?:\/\/\S+/i.test(statusText);
-    if (typeof runtime.socket.sendGroupStatus === "function" && !hasMedia && !hasUrl && intent.styled !== true) {
+    const hasUrl = /https?:\/\/\S+/i.test(statusText || mediaCaption);
+    if (typeof runtime.socket.sendGroupStatus === "function" && !hasMedia && !hasUrl) {
       await runtime.socket.sendGroupStatus(jid, { text });
       return;
     }

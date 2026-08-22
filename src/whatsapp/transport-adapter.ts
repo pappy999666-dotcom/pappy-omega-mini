@@ -1,6 +1,7 @@
 import type { WASocket } from "@crysnovax/baileys";
 import { getWhatsAppSocket } from "./session-manager.js";
 import {
+  firstHttpUrl,
   prepareCanonicalPreviewContent,
 } from "./baileys-native-preview.js";
 import { createGroupStatusDesign } from "./status-design.js";
@@ -550,12 +551,20 @@ export async function sendGroupColorStatus(
   if (!metadata) throw new Error("Unsupported capability: groupMetadata");
   const group = (await metadata(jid)) as { subject?: string };
   const sourceText = payload.text ?? "";
+  const mediaCaption = payload.media?.caption?.trim() ?? "";
+  const detectorText = sourceText || mediaCaption;
+  // `d` means design only for a URL. Plain text must remain the ordinary
+  // group-status path so `.dgstatus hello` never creates a colored canvas.
+  if (!firstHttpUrl(detectorText)) {
+    await sendGroupStatus(workspaceId, sessionId, jid, payload);
+    return;
+  }
   const groupName = String(group.subject ?? "WhatsApp Group").trim() || "WhatsApp Group";
   const sourceContent = payload.media
-    ? messagePayload(sourceText, payload.media)
-    : { text: sourceText };
+    ? messagePayload(detectorText, payload.media)
+    : { text: detectorText };
   const sourcePrepared = await prepareCanonicalPreviewContent({
-    text: sourceText,
+    text: detectorText,
     content: sourceContent,
     target: "group-status",
     socket,
@@ -566,7 +575,7 @@ export async function sendGroupColorStatus(
   const design = createGroupStatusDesign({
     groupName,
     title: previewTitle || groupName,
-    text: sourceText,
+    text: detectorText,
     seed: `${workspaceId}:${sessionId}:${jid}:${Date.now()}`,
   });
   const content = payload.media

@@ -104,6 +104,36 @@ describe("WhatsApp media transport coverage", () => {
     },
   );
 
+  it("attaches a native link preview to a hidden-mention URL payload", async () => {
+    mocks.send.mockClear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response(
+      "<html><head><meta property=\"og:title\" content=\"Example Link\"><meta property=\"og:description\" content=\"Example description\"></head></html>",
+      { status: 200, headers: { "content-type": "text/html" } },
+    )) as typeof fetch;
+    try {
+      const text = "Open https://example.com/tag-preview";
+      await sendGroupMentions(
+        "workspace",
+        "session",
+        "120363000000000001@g.us",
+        text,
+      );
+      const [, content] = mocks.send.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(content.text).toBe(text);
+      expect(content.linkPreview).toMatchObject({ title: "Example Link" });
+      expect(content.mentions).toEqual([
+        "2348011111111@s.whatsapp.net",
+        "2348022222222@s.whatsapp.net",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it.each(mediaCases)(
     "keeps $kind bytes in a hidden-mention payload",
     async ({ kind, key, mimeType }) => {
@@ -134,6 +164,25 @@ describe("WhatsApp media transport coverage", () => {
 
 
 describe("styled group status transport", () => {
+  it("leaves ordinary text unstyled even when sent through the d-status adapter", async () => {
+    mocks.send.mockClear();
+    await sendGroupColorStatus(
+      "workspace",
+      "session",
+      "120363000000000001@g.us",
+      { text: "ordinary status text" },
+    );
+    expect(mocks.send).toHaveBeenCalledOnce();
+    const [, content, options] = mocks.send.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+      Record<string, unknown> | undefined,
+    ];
+    expect(content.text).toBe("ordinary status text");
+    expect(content.groupStatus).toBe(true);
+    expect(options).toBeUndefined();
+  });
+
   it("sends group-aware color metadata through Baileys generation options", async () => {
     mocks.send.mockClear();
     const originalFetch = globalThis.fetch;
