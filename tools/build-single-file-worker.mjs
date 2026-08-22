@@ -46,7 +46,7 @@ function runInstall(npm, args) {
   });
 }
 const packagePath = path.join(root, "package.json");
-const runtimePath = path.join(root, ".pappy-workload-runtime.mjs");
+const runtimePath = path.join(root, ".pappy-workload-runtime-" + process.pid + ".mjs");
 const manifest = {
   name: "pappy-omega-mini-workload-worker",
   version: ${JSON.stringify(workerVersion)},
