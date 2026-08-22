@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   sendStatus: vi.fn(async () => undefined),
   getStatusJidList: vi.fn(async () => ["2348022222222@s.whatsapp.net"]),
   groupMetadata: vi.fn(async () => ({
+    subject: "Cyber Alpha",
     participants: [
       { id: "2348011111111@s.whatsapp.net" },
       { id: "2348022222222@s.whatsapp.net" },
@@ -25,6 +26,7 @@ vi.mock("../src/whatsapp/session-manager.js", () => ({
 import {
   sendGroupMentions,
   sendGroupStatus,
+  sendGroupColorStatus,
   sendGroupText,
   sendPersonalStatus,
 } from "../src/whatsapp/transport-adapter.js";
@@ -128,4 +130,26 @@ describe("WhatsApp media transport coverage", () => {
       ]);
     },
   );
+});
+
+
+describe("styled group status transport", () => {
+  it("sends group-aware color metadata through the real adapter path", async () => {
+    mocks.send.mockClear();
+    await sendGroupColorStatus("workspace", "session", "120363000000000001@g.us", {
+      text: "https://example.com/styled-card",
+    });
+    expect(mocks.groupMetadata).toHaveBeenCalled();
+    expect(mocks.send).toHaveBeenCalledOnce();
+    const [, content] = mocks.send.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(content.groupStatus).toBe(true);
+    expect(content.text).toContain("Cyber Alpha");
+    expect(content.text).toContain("https://example.com/styled-card");
+    expect(content.backgroundColor).toMatch(/^#[0-9A-F]{6}$/);
+    expect(content.textColor).toBe("#FFFFFF");
+    expect(typeof content.font).toBe("number");
+  });
 });
