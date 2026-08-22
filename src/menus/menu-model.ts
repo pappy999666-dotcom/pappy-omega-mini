@@ -55,6 +55,7 @@ export function buildSessionMenu(
     { id: "setbio", label: "Bio", command: "setbio", description: "Update the WhatsApp bio." },
     { id: "groups", label: "Groups", command: "groups", description: "Browse the session groups." },
     { id: "creategroup", label: "Create group", command: "creategroup", description: "Create a WhatsApp group." },
+    { id: "pstatus", label: "Personal status", command: "pstatus", description: "Post a personal WhatsApp Status update." },
     { id: "gstatus", label: "Group status", command: "gstatus", description: "Post status to the current group." },
     { id: "tag", label: "Tag", command: "tag", description: "Hidetag the current group." },
     { id: "stag", label: "Smart tag", command: "stag", description: "Immediate current-group hidetag." },
@@ -104,7 +105,7 @@ export function renderAsciiMenu(model: SessionMenuModel): string {
   const health = rawHealth.replace("health ", "");
   const commandSet = new Set(["menu", "ping", "profile", "health", "support"]);
   const sessionSet = new Set(["autojoin", "join", "targetgs", "setprefix", "pfp", "setgpp", "setname", "setbio", "groups", "creategroup"]);
-  const localSet = new Set(["gstatus", "tag", "stag"]);
+  const localSet = new Set(["pstatus", "gstatus", "tag", "stag"]);
   const ownerSet = new Set(["pair", "previewdebug", "broadcastdelay", "allstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "stopstag", "iggc", "setsudo"]);
   const commandIndent = "︎ ".repeat(15);
   const renderSection = (title: string, icon: string, set: Set<string>): string[] => {

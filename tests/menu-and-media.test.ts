@@ -53,7 +53,7 @@ describe("shared session menu", () => {
     const model = buildSessionMenu(session, true);
     const commands = model.actions.map((action) => action.command);
     expect(commands).toEqual(
-      expect.arrayContaining(["autojoin", "pfp", "setgpp", "groups", "health"]),
+      expect.arrayContaining(["autojoin", "pfp", "setgpp", "groups", "health", "pstatus", "gstatus"]),
     );
     expect(renderAsciiMenu(model)).toContain("ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎");
     expect(renderAsciiMenu(model)).toContain("autojoin");
@@ -71,6 +71,7 @@ describe("shared session menu", () => {
     expect(payload.text).toContain("⎔ Owner   · ⇆ 𝗝𝗲𝘀𝘂𝘀");
     expect(payload.text).toContain("⎔ Status  · ⇆ PAIRING");
     expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .menu`);
+    expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .pstatus`);
     expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .allstatus`);
     expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .stopstag`);
     expect(payload.text).toContain(`${"︎ ".repeat(15)}⊹ .join`);
@@ -258,6 +259,32 @@ describe("WhatsApp command registry", () => {
       text: "hello",
       repeat: 1,
     });
+  });
+
+  it("routes pstatus to the personal-status callback without requiring a group", async () => {
+    const user = resolveUser(`pstatus-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "personal-status",
+      phoneNumber: "2348012345678",
+    });
+    let captured: { text: string } | undefined;
+    let groupCalled = false;
+    const result = await executeCommand(createCommandRegistry(), "pstatus hello world", {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      args: [],
+      sendCurrentPersonalStatus: async (input) => {
+        captured = input;
+      },
+      sendCurrentGroupStatus: async () => {
+        groupCalled = true;
+      },
+    });
+    expect(result).toBe("");
+    expect(captured).toEqual({ text: "hello world" });
+    expect(groupCalled).toBe(false);
   });
 
   it("strips the gstatus command token from a media caption", async () => {

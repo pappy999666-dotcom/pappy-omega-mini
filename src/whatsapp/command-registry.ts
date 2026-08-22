@@ -78,6 +78,7 @@ export interface CommandContext {
     text: string;
     repeat: number;
   }) => Promise<void>;
+  sendCurrentPersonalStatus?: (input: { text: string }) => Promise<void>;
   sendCurrentGroupHidetag?: (input: {
     text: string;
     participantCount?: number;
@@ -641,6 +642,21 @@ export function createCommandRegistry(): RegisteredCommand[] {
           payload: { text, count: repeat },
         });
         return queuedJobAcknowledgement("allstatus", queued);
+      },
+    },
+    {
+      name: "pstatus",
+      aliases: [],
+      description: "Post one personal WhatsApp Status update.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.sendCurrentPersonalStatus)
+          return "WhatsApp transport is unavailable.";
+        const text = mediaCommandPayload(ctx);
+        if (!text && !ctx.media)
+          return "Usage: .pstatus <text or media> (or reply to a message).";
+        await ctx.sendCurrentPersonalStatus({ text });
+        return "";
       },
     },
     {

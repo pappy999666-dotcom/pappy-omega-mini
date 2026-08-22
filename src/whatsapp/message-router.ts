@@ -26,6 +26,7 @@ import {
   listGroups,
   sendGroupMentions,
   sendGroupStatus,
+  sendPersonalStatus,
 } from "./transport-adapter.js";
 import { buildWhatsappMenuPayload } from "../menus/whatsapp-menu.js";
 import {
@@ -338,6 +339,13 @@ export async function routeWhatsAppText(
           },
         }
       : {}),
+    sendCurrentPersonalStatus: async ({ text }: { text: string }) => {
+      await sendPersonalStatus(
+        message.workspaceId,
+        message.sessionId,
+        { text, ...(message.media ? { media: message.media } : {}) },
+      );
+    },
     sendCurrentGroupHidetag: async ({
       text,
       participantCount,

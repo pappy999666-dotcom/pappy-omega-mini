@@ -10,6 +10,7 @@ export type TransportCapability =
   | "groupMetadata"
   | "groupInviteLink"
   | "groupStatus"
+  | "personalStatus"
   | "mentions";
 
 export interface GroupSummary {
@@ -49,6 +50,7 @@ export function hasTransportCapability(
     groupMetadata: ["groupFetchAllParticipating", "groupMetadata"],
     groupInviteLink: ["groupInviteCode"],
     groupStatus: ["sendGroupStatus", "sendMessage"],
+    personalStatus: ["sendStatus", "sendMessage"],
     mentions: ["sendMessage"],
   };
   return methods[capability].some((name) => Boolean(method(socket, name)));
@@ -446,6 +448,30 @@ export async function sendGroupStatus(
     cacheScope: `${workspaceId}:${sessionId}`,
   });
   await send(jid, prepared);
+}
+
+export async function sendPersonalStatus(
+  workspaceId: string,
+  sessionId: string,
+  payload: {
+    text?: string;
+    media?: GroupMediaPayload;
+  },
+): Promise<void> {
+  const socket = socketFor(workspaceId, sessionId);
+  const send = method(socket, "sendStatus");
+  if (!send) throw new Error("Unsupported capability: personalStatus");
+  const text = payload.text ?? "";
+  const content = payload.media
+    ? messagePayload(text, payload.media)
+    : { text };
+  const prepared = await prepareCanonicalPreviewContent({
+    text,
+    content,
+    socket,
+    cacheScope: `${workspaceId}:${sessionId}`,
+  });
+  await send(prepared);
 }
 
 export async function updateWhatsAppGroupSubject(

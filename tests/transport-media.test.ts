@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(async () => undefined),
+  sendStatus: vi.fn(async () => undefined),
   groupMetadata: vi.fn(async () => ({
     participants: [
       { id: "2348011111111@s.whatsapp.net" },
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../src/whatsapp/session-manager.js", () => ({
   getWhatsAppSocket: () => ({
     sendMessage: mocks.send,
+    sendStatus: mocks.sendStatus,
     groupMetadata: mocks.groupMetadata,
   }),
 }));
@@ -21,6 +23,7 @@ import {
   sendGroupMentions,
   sendGroupStatus,
   sendGroupText,
+  sendPersonalStatus,
 } from "../src/whatsapp/transport-adapter.js";
 
 const mediaCases = [
@@ -52,6 +55,22 @@ describe("WhatsApp media transport coverage", () => {
       expect(statusPayload.mimetype).toBe(mimeType);
     },
   );
+
+  it("uses Baileys sendStatus for a personal image status and never group status", async () => {
+    mocks.send.mockClear();
+    mocks.sendStatus.mockClear();
+    const bytes = Buffer.from("personal-image-status");
+    await sendPersonalStatus("workspace", "session", {
+      text: "personal status",
+      media: { kind: "image", bytes, mimeType: "image/jpeg" },
+    });
+    expect(mocks.sendStatus).toHaveBeenCalledOnce();
+    expect(mocks.send).not.toHaveBeenCalled();
+    const [content] = mocks.sendStatus.mock.calls[0] as unknown as [Record<string, unknown>];
+    expect(content.image).toBe(bytes);
+    expect(content.caption).toBe("personal status");
+    expect(content.mimetype).toBe("image/jpeg");
+  });
 
   it.each(mediaCases)(
     "keeps $kind bytes in an all-group chat payload",
