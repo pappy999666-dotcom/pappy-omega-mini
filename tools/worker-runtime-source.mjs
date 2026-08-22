@@ -899,11 +899,17 @@ async function startLocalBroadcast(runtime, intent) {
   const current = broadcastRunners.get(intent.jobId);
   if (current) return current.ready;
   const previous = await readBroadcastCheckpoint(intent.jobId);
-  const groups = previous && Array.isArray(previous.groups) && previous.groups.length ? previous.groups : await localBroadcastGroups(runtime);
-  const media = await loadBroadcastMedia(intent);
-  const ready = Promise.resolve({ accepted: true, jobId: intent.jobId, totalGroups: groups.length, totalPosts: groups.length * Math.max(1, Math.min(20, Number(intent.repeat ?? 1))), delayMs: Math.max(1_000, Math.min(120_000, Number(intent.delayMs ?? 20_000))) });
-  const done = ready.then(() => runLocalBroadcast(runtime, intent, groups, media)).catch(async (error) => {
-    const failed = { jobId: intent.jobId, workspaceId: runtime.workspaceId, sessionId: runtime.sessionId, state: "FAILED", totalGroups: groups.length, completed: 0, failed: groups.length, skipped: 0, error: error instanceof Error ? error.message : String(error), updatedAt: Date.now() };
+  const cachedGroups = previous && Array.isArray(previous.groups) && previous.groups.length ? previous.groups : undefined;
+  const delayMs = Math.max(1_000, Math.min(120_000, Number(intent.delayMs ?? 20_000)));
+  const repeat = Math.max(1, Math.min(20, Number(intent.repeat ?? 1)));
+  const ready = Promise.resolve({ accepted: true, jobId: intent.jobId, totalGroups: cachedGroups?.length ?? 0, totalPosts: (cachedGroups?.length ?? 0) * repeat, delayMs });
+  let resolvedGroups = cachedGroups ?? [];
+  const done = (async () => {
+    resolvedGroups = cachedGroups ?? await localBroadcastGroups(runtime);
+    const media = await loadBroadcastMedia(intent);
+    return runLocalBroadcast(runtime, intent, resolvedGroups, media);
+  })().catch(async (error) => {
+    const failed = { jobId: intent.jobId, workspaceId: runtime.workspaceId, sessionId: runtime.sessionId, state: "FAILED", totalGroups: resolvedGroups.length, completed: 0, failed: resolvedGroups.length, skipped: 0, error: error instanceof Error ? error.message : String(error), updatedAt: Date.now() };
     await writeBroadcastCheckpoint(failed).catch(() => undefined);
     await reportLocalBroadcast(runtime, failed).catch(() => undefined);
     throw error;

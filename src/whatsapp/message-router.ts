@@ -307,20 +307,7 @@ export async function routeWhatsAppText(
               ...(kind === "allstatus" || kind === "allchat" ? { maxAttempts: 12 } : {}),
             });
             const record = await recordPromise;
-            let totalGroups = resolvedGroups.length;
-            if (panelBroadcast && record.jobCode) {
-              const deadline = Date.now() + 20_000;
-              while (Date.now() < deadline) {
-                const current = await runtime.getByCode(message.workspaceId, record.jobCode);
-                const totalDeliveries = current?.progress.total;
-                if (typeof totalDeliveries === "number" && totalDeliveries > 0) {
-                  totalGroups = Math.max(1, Math.ceil(totalDeliveries / Math.max(1, Number((payload as { count?: unknown }).count ?? 1))));
-                  break;
-                }
-                if (current?.state === "FAILED") break;
-                await new Promise((resolve) => setTimeout(resolve, 250));
-              }
-            }
+            const totalGroups = resolvedGroups.length;
             const repeat = Math.max(
               1,
               Math.min(20, Number((payload as { count?: unknown }).count ?? 1)),

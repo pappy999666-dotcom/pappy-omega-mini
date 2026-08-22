@@ -964,14 +964,15 @@ export function startWorkerRuntime(): JobOrchestrator {
         const accepted = await waitForWorkloadCommand(startCommand.commandId, 120_000);
         const result = accepted.result as { totalGroups?: unknown } | undefined;
         const totalGroups = Math.max(0, Number(result?.totalGroups ?? 0));
-        if (!totalGroups) throw new Error(`No WhatsApp groups were returned for ${kind}.`);
         await context.report({
-          total: totalGroups * repeat,
-          currentAction: `${kind} worker-local delivery started`,
+          ...(totalGroups > 0 ? { total: totalGroups * repeat } : {}),
+          currentAction: totalGroups > 0 ? `${kind} worker-local delivery started` : `${kind} worker-local dispatch started`,
           nextActionAt: Date.now(),
-          lastResult: `Panel resolved ${totalGroups} WhatsApp group(s); delivery remains on the owning worker.`,
+          lastResult: totalGroups > 0
+            ? `Panel resolved ${totalGroups} WhatsApp group(s); delivery remains on the owning worker.`
+            : `Panel accepted the broadcast; group inventory is resolving on the owning worker while delivery starts independently.`,
         });
-        if ((context.job.payload as { sourceTransport?: unknown }).sourceTransport !== "whatsapp")
+        if (totalGroups > 0 && (context.job.payload as { sourceTransport?: unknown }).sourceTransport !== "whatsapp")
           await notifyBroadcastReady(context, kind, totalGroups, repeat, delayMs);
         let cancelSent = false;
         while (true) {
