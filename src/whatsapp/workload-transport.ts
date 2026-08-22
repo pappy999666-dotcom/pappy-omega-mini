@@ -60,6 +60,7 @@ export function createAssignedWorkloadSocket(
   const methods = [
     "sendMessage",
     "sendStatus",
+    "getStatusJidList",
     "sendGroupStatus",
     "updateProfileName",
     "updateProfileStatus",

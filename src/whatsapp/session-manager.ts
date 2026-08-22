@@ -317,11 +317,21 @@ async function openWhatsAppSession(
       },
     },
   });
+  const { makeInMemoryStore } = (await import("@crysnovax/baileys")) as unknown as {
+    makeInMemoryStore: (config?: Record<string, unknown>) => {
+      contacts?: Record<string, unknown>;
+      bind: (events: RuntimeEvents) => void;
+    };
+  };
+  const contactStore = makeInMemoryStore({ logger });
   const socket = makeWASocket({
     auth: state,
     logger,
     generateHighQualityLinkPreview: true,
-  }) as unknown as RuntimeSocket;
+    store: contactStore,
+  } as never) as unknown as RuntimeSocket;
+  contactStore.bind(socket.ev);
+  (socket as unknown as { store?: unknown }).store = contactStore;
   const forceSocketRecovery = (error?: unknown) => {
     const reason =
       error instanceof Error

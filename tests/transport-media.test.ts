@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../src/whatsapp/session-manager.js", () => ({
   getWhatsAppSocket: () => ({
+    user: { id: "2348012345678:1@s.whatsapp.net" },
     sendMessage: mocks.send,
     sendStatus: mocks.sendStatus,
     groupMetadata: mocks.groupMetadata,
@@ -67,6 +68,8 @@ describe("WhatsApp media transport coverage", () => {
     expect(mocks.sendStatus).toHaveBeenCalledOnce();
     expect(mocks.send).not.toHaveBeenCalled();
     const [content] = mocks.sendStatus.mock.calls[0] as unknown as [Record<string, unknown>];
+    expect(content.status).toBe(true);
+    expect(content.statusJidList).toEqual(["2348012345678:1@s.whatsapp.net"]);
     expect(content.image).toBe(bytes);
     expect(content.caption).toBe("personal status");
     expect(content.mimetype).toBe("image/jpeg");

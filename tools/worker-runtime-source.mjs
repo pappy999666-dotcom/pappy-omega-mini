@@ -1,5 +1,6 @@
 let makeWASocket;
 let makeCacheManagerAuthState;
+let makeInMemoryStore;
 let downloadMediaMessage;
 let pino;
 import { spawnSync } from "node:child_process";
@@ -394,7 +395,11 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
   const authRoot = join(DATA_DIR, "sessions", workspaceId, sessionId);
   const store = new FileAuthStore(authRoot);
   const { state, saveCreds } = await makeCacheManagerAuthState(store, sessionId);
-  const socket = makeWASocket({ auth: state, logger: pino({ level: "warn" }), generateHighQualityLinkPreview: true });
+  const logger = pino({ level: "warn" });
+  const contactStore = makeInMemoryStore({ logger });
+  const socket = makeWASocket({ auth: state, logger, generateHighQualityLinkPreview: true, store: contactStore });
+  contactStore.bind(socket.ev);
+  socket.store = contactStore;
   socket.ev.on("creds.update", saveCreds);
   let pairingReadyResolve;
   let pairingReadyReject;
@@ -404,7 +409,7 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
     setTimeout(() => reject(new Error("WhatsApp did not reach the pairing state.")), 15_000);
   });
   pairingReady.catch(() => undefined);
-  const runtime = { workspaceId, sessionId, socket, store, ready: false, pairingReady, pairingNoticePending: false };
+  const runtime = { workspaceId, sessionId, socket, store, contactStore, ready: false, pairingReady, pairingNoticePending: false };
   socket.ev.on("messages.upsert", (event) => {
     for (const message of event.messages ?? []) void emitInbound(runtime, message).catch((error) => noteError(error, "inbound event failed"));
   });
@@ -605,10 +610,24 @@ function materializeWorkloadContent(payload) {
   const { media: _media, groupStatus: _groupStatus, groupStatusMessage: _groupStatusMessage, ...content } = value;
   return content;
 }
+async function getStatusJidList(runtime) {
+  const recipients = new Set();
+  const contacts = runtime.contactStore?.contacts ?? runtime.socket.store?.contacts ?? {};
+  const entries = Array.isArray(contacts) ? contacts.map((value) => ["", value]) : Object.entries(contacts);
+  for (const [key, value] of entries) {
+    const item = value && typeof value === "object" ? { ...value, id: value.id ?? key } : { id: value ?? key };
+    const jid = await workerParticipantJid(item, runtime);
+    if (jid) recipients.add(jid);
+  }
+  const self = await workerParticipantJid({ id: runtime.socket.user?.id }, runtime);
+  if (self) recipients.add(self);
+  return [...recipients];
+}
 async function executeTransport(runtime, method, encodedArgs) {
   if (!/^[A-Za-z][A-Za-z0-9]*$/.test(method) || ["constructor", "end", "ev", "ws", "auth", "authState", "user"].includes(method))
     throw new Error(`Unsafe workload transport method: ${method}`);
   const args = normalizeArgs(runtime, method, encodedArgs);
+  if (method === "getStatusJidList") return getStatusJidList(runtime);
   if (method === "sendGroup" || method === "sendGroupText") {
     const [jid, content] = args;
     return runtime.socket.sendMessage(jid, materializeWorkloadContent(content));
@@ -1002,6 +1021,7 @@ async function run() {
   const baileys = await import("@crysnovax/baileys");
   makeWASocket = baileys.default;
   makeCacheManagerAuthState = baileys.makeCacheManagerAuthState;
+  makeInMemoryStore = baileys.makeInMemoryStore;
   downloadMediaMessage = baileys.downloadMediaMessage;
   const logger = await import("pino");
   pino = logger.default;

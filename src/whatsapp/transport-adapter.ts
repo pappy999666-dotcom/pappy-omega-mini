@@ -27,6 +27,61 @@ function ownJid(socket: WASocket): string {
   return (socket as WASocket & { user?: { id?: string } }).user?.id ?? "me";
 }
 
+function statusContactValues(source: unknown): unknown[] {
+  if (source instanceof Map) return [...source.values()];
+  if (Array.isArray(source)) return source;
+  if (source && typeof source === "object") return Object.values(source);
+  return [];
+}
+
+async function resolvePersonalStatusAudience(socket: WASocket): Promise<string[]> {
+  const audience = new Set<string>();
+  const lidMapping = (
+    socket as unknown as {
+      signalRepository?: {
+        lidMapping?: { getPNForLID?: (lid: string) => Promise<string | null> };
+      };
+    }
+  ).signalRepository?.lidMapping;
+  const add = async (value: unknown): Promise<void> => {
+    if (typeof value !== "string") return;
+    let jid = value.trim();
+    if (!jid) return;
+    if (jid.endsWith("@lid") || jid.endsWith("@hosted.lid"))
+      jid = (await lidMapping?.getPNForLID?.(jid)) ?? "";
+    else if (!jid.includes("@")) jid = `${jid}@s.whatsapp.net`;
+    if (jid.endsWith("@s.whatsapp.net")) audience.add(jid);
+  };
+  const remoteAudience = method(socket, "getStatusJidList");
+  if (remoteAudience) {
+    try {
+      const resolved = await remoteAudience();
+      if (Array.isArray(resolved)) {
+        for (const value of resolved) await add(value);
+      }
+    } catch {
+      // The self-recipient fallback below still gives Baileys a valid audience.
+    }
+  }
+  const sources = [
+    (socket as unknown as { store?: { contacts?: unknown } }).store?.contacts,
+    (socket as unknown as { contactStore?: { contacts?: unknown } }).contactStore?.contacts,
+    (socket as unknown as { contacts?: unknown }).contacts,
+  ];
+  for (const source of sources) {
+    for (const contact of statusContactValues(source)) {
+      if (typeof contact === "string") await add(contact);
+      else if (contact && typeof contact === "object") {
+        const item = contact as Record<string, unknown>;
+        await add(item.phoneNumber ?? item.id ?? item.jid);
+      }
+    }
+  }
+  const self = ownJid(socket);
+  if (self !== "me") await add(self);
+  return [...audience];
+}
+
 function method(
   socket: WASocket,
   name: string,
@@ -465,9 +520,15 @@ export async function sendPersonalStatus(
   const content = payload.media
     ? messagePayload(text, payload.media)
     : { text };
+  const statusJidList = await resolvePersonalStatusAudience(socket);
+  const statusContent = {
+    ...content,
+    status: true,
+    ...(statusJidList.length ? { statusJidList } : {}),
+  };
   const prepared = await prepareCanonicalPreviewContent({
     text,
-    content,
+    content: statusContent,
     socket,
     cacheScope: `${workspaceId}:${sessionId}`,
   });
