@@ -758,15 +758,15 @@ async function workerParticipantJid(participant, runtime) {
 const broadcastPreviewCache = new Map();
 const statusDesignBackgrounds = ["#2563EB", "#7C3AED", "#C026D3", "#DB2777", "#EA580C", "#D97706", "#16A34A", "#0D9488", "#0891B2", "#4F46E5"];
 const statusDesignTextTemplates = [
-  (name, text) => `╭────────────────────────────╮\\n\\n        ✦ ${name} ✦\\n\\n              ◈\\n\\n${text}\\n\\n╰────────────────────────────╯`,
-  (name, text) => `┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\\n\\n          ♡ ${name} ♡\\n\\n          ── ✧ ──\\n\\n${text}\\n\\n┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`,
-  (name, text) => `╔════════════════════════════╗\\n║                            ║\\n║        ${name}        ║\\n║                            ║\\n║          ${text}          ║\\n║                            ║\\n╚════════════════════════════╝`,
-  (name, text) => `⌜────────────────────────────⌝\\n\\n          ${name}\\n\\n       ⟡  ${text}  ⟡\\n\\n⌞────────────────────────────⌟`,
+  (name, text) => `╭────────────────────────────╮\n\n        ✦ ${name} ✦\n\n              ◈\n\n${text}\n\n╰────────────────────────────╯`,
+  (name, text) => `┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n\n          ♡ ${name} ♡\n\n          ── ✧ ──\n\n${text}\n\n┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`,
+  (name, text) => `╔════════════════════════════╗\n║                            ║\n║        ${name}        ║\n║                            ║\n║          ${text}          ║\n║                            ║\n╚════════════════════════════╝`,
+  (name, text) => `⌜────────────────────────────⌝\n\n          ${name}\n\n       ⟡  ${text}  ⟡\n\n⌞────────────────────────────⌟`,
 ];
 const statusDesignUrlTemplates = [
-  (name, text) => `╭────────────── ✦ ──────────────╮\\n\\n            ♡ ${name} ♡\\n\\n              ── ◈ ──\\n\\n${text}\\n\\n╰────────────── ✦ ──────────────╯`,
-  (name, text) => `┏━━━━━━━━━━━━━━ ✧ ━━━━━━━━━━━━━━┓\\n\\n             ${name}\\n\\n        ── 𝗟𝗜𝗡𝗞 𝗗𝗥𝗢𝗣 ──\\n\\n${text}\\n\\n┗━━━━━━━━━━━━━━ ✧ ━━━━━━━━━━━━━━┛`,
-  (name, text) => `╔═══════════════╗\\n║   ♡ ${name} ♡   ║\\n╚═══════════════╝\\n\\n          ${text}\\n\\n        ⟡ OPEN THE LINK ⟡`,
+  (name, text) => `╭────────────── ✦ ──────────────╮\n\n            ♡ ${name} ♡\n\n              ── ◈ ──\n\n${text}\n\n╰────────────── ✦ ──────────────╯`,
+  (name, text) => `┏━━━━━━━━━━━━━━ ✧ ━━━━━━━━━━━━━━┓\n\n             ${name}\n\n        ── 𝗟𝗜𝗡𝗞 𝗗𝗥𝗢𝗣 ──\n\n${text}\n\n┗━━━━━━━━━━━━━━ ✧ ━━━━━━━━━━━━━━┛`,
+  (name, text) => `╔═══════════════╗\n║   ♡ ${name} ♡   ║\n╚═══════════════╝\n\n          ${text}\n\n        ⟡ OPEN THE LINK ⟡`,
 ];
 function statusDesignHash(input) {
   let value = 2166136261;
@@ -778,8 +778,8 @@ function statusDesignHash(input) {
 }
 function createWorkerStatusDesign(groupName, text, seed, title = groupName) {
   const sourceText = String(text ?? '').trim();
-  const cleanTitle = String(title || groupName || 'WhatsApp Group').replace(/[\\r\\n]+/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 42) || 'WhatsApp Group';
-  const mode = /https?:\\/\\/\\S+/i.test(sourceText) ? 'url' : 'text';
+  const cleanTitle = String(title || groupName || 'WhatsApp Group').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 42) || 'WhatsApp Group';
+  const mode = /https?:\/\/\S+/i.test(sourceText) ? 'url' : 'text';
   const templates = mode === 'url' ? statusDesignUrlTemplates : statusDesignTextTemplates;
   const value = statusDesignHash(`${seed}:${groupName}:${cleanTitle}:${sourceText}:${mode}`);
   const template = templates[value % templates.length] ?? templates[0];
