@@ -11,6 +11,12 @@ const mocks = vi.hoisted(() => ({
       { id: "2348022222222@s.whatsapp.net" },
     ],
   })),
+  groupGetInviteInfo: vi.fn(async () => ({
+    id: "120363999999999999@g.us",
+    subject: "Source Invite Group",
+    size: 777,
+    profilePic: "https://source.example/image.jpg",
+  })),
 }));
 
 vi.mock("../src/whatsapp/session-manager.js", () => ({
@@ -20,6 +26,7 @@ vi.mock("../src/whatsapp/session-manager.js", () => ({
     sendStatus: mocks.sendStatus,
     getStatusJidList: mocks.getStatusJidList,
     groupMetadata: mocks.groupMetadata,
+    groupGetInviteInfo: mocks.groupGetInviteInfo,
   }),
 }));
 
@@ -106,6 +113,13 @@ describe("WhatsApp media transport coverage", () => {
 
   it("uses live group metadata for a hidden-mention WhatsApp invite URL", async () => {
     mocks.send.mockClear();
+    const originalFetch = globalThis.fetch;
+    const tinyJpeg = Buffer.from("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/AP/EABQQAQAAAAAAAAAAAAAAAAAAACD/2gAIAQEAAT8hH//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQIBAT8hH//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQMBAT8hH//Z", "base64");
+    globalThis.fetch = vi.fn(async (input) =>
+      String(input).includes("source.example/image.jpg")
+        ? new Response(tinyJpeg, { status: 200, headers: { "content-type": "image/jpeg" } })
+        : new Response(null, { status: 503 }),
+    ) as typeof fetch;
     const text = "https://chat.whatsapp.com/KbDjI6Amhs38wh2nRz4pkN";
     await sendGroupMentions(
       "workspace",
@@ -119,10 +133,12 @@ describe("WhatsApp media transport coverage", () => {
     ];
     expect(content.text).toBe(text);
     expect(content.linkPreview).toMatchObject({
-      title: "Cyber Alpha",
-      description: "2 members · WhatsApp Group",
+      title: "Source Invite Group",
+      description: "777 members · WhatsApp Group",
     });
+    expect(content.linkPreview).not.toMatchObject({ title: "Cyber Alpha" });
     expect(content.linkPreview).not.toMatchObject({ title: "WhatsApp Group Invite" });
+    globalThis.fetch = originalFetch;
   });
 
   it("attaches a native link preview to a hidden-mention URL payload", async () => {

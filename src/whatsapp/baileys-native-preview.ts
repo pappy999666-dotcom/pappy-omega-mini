@@ -29,7 +29,6 @@ const imagePriorities = new Map([
 
 export interface PreviewSocket {
   groupGetInviteInfo?: (code: string) => Promise<Record<string, unknown>>;
-  groupMetadata?: (jid: string) => Promise<Record<string, unknown>>;
   profilePictureUrl?: (jid: string, type: string) => Promise<string | null>;
   waUploadToServer?: (...args: unknown[]) => Promise<unknown>;
 }
@@ -74,7 +73,6 @@ export interface CanonicalPreviewInput {
   socket?: unknown;
   cacheScope?: string;
   target?: "group-status";
-  groupJid?: string;
 }
 
 let redis: Redis | undefined;
@@ -570,33 +568,8 @@ async function fallbackInviteRecord(canonicalUrl: string): Promise<CanonicalPrev
 async function resolveRecord(
   canonicalUrl: string,
   socket: PreviewSocket | undefined,
-  groupJid?: string,
 ): Promise<CanonicalPreviewRecord | undefined> {
   const groupCode = groupInviteCode(canonicalUrl);
-  if (groupCode && groupJid && socket?.groupMetadata) {
-    try {
-      const metadata = await retryPreview(() => socket.groupMetadata!(groupJid));
-      const subject = typeof metadata.subject === "string" && metadata.subject.trim()
-        ? metadata.subject.trim()
-        : "WhatsApp Group";
-      const picture = socket.profilePictureUrl
-        ? await socket.profilePictureUrl(groupJid, "image").catch(() => null)
-        : null;
-      const image = picture ? await resolveImageCandidates([picture]) : undefined;
-      const participants = Array.isArray(metadata.participants) ? metadata.participants.length : 0;
-      return {
-        schemaVersion: 4,
-        canonicalUrl,
-        title: subject,
-        description: `${participants} members · WhatsApp Group`,
-        ...(image ?? await getFallbackInviteImage()),
-        fetchedAt: Date.now(),
-        expiresAt: Date.now() + PREVIEW_TTL_SECONDS * 1000,
-      };
-    } catch {
-      // Fall through to invite-code/public metadata resolution.
-    }
-  }
   if (groupCode && socket?.groupGetInviteInfo) {
     let info: Record<string, unknown> | undefined;
     try {
@@ -707,7 +680,6 @@ async function resolveCached(
   url: string,
   scope: string | undefined,
   socket: PreviewSocket | undefined,
-  groupJid?: string,
 ): Promise<{ record: CanonicalPreviewRecord | undefined; cache: "HIT" | "MISS" | "BYPASS" }> {
   const canonicalUrl = canonicalizePreviewUrl(url);
   const key = cacheKey(scope, canonicalUrl);
@@ -722,10 +694,10 @@ async function resolveCached(
     rememberLocalPreview(key, cached);
     return { record: cached, cache: "HIT" };
   }
-  const runningKey = `${scope ?? "global"}:${canonicalUrl}:${groupJid ?? ""}`;
+  const runningKey = `${scope ?? "global"}:${canonicalUrl}`;
   const running = inFlight.get(runningKey);
   if (running) return { record: await running, cache: "MISS" };
-  const promise = withPreviewSlot(() => resolveRecord(canonicalUrl, socket, groupJid)).finally(() => {
+  const promise = withPreviewSlot(() => resolveRecord(canonicalUrl, socket)).finally(() => {
     if (inFlight.get(runningKey) === promise) inFlight.delete(runningKey);
   });
   inFlight.set(runningKey, promise);
@@ -868,7 +840,7 @@ export async function prepareCanonicalPreviewContent(
     result: "FALLBACK",
   };
   try {
-    const { record, cache } = await resolveCached(url, input.cacheScope, socketCandidate(input.socket), input.groupJid);
+    const { record, cache } = await resolveCached(url, input.cacheScope, socketCandidate(input.socket));
     if (!record || (!record.title && !record.description && !record.imageData)) {
       lastDebug.set(input.cacheScope ?? "global", { ...snapshotBase, cache, reason: "no-valid-preview" });
       return content;

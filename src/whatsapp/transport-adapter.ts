@@ -457,7 +457,6 @@ export async function sendGroupText(
       content,
       socket,
       cacheScope: `${workspaceId}:${sessionId}`,
-      groupJid: jid,
     }),
   );
 }
@@ -490,7 +489,6 @@ export async function sendGroupStatus(
       target: "group-status",
       socket,
       cacheScope: `${workspaceId}:${sessionId}`,
-      groupJid: jid,
     });
     await send(jid, {
       groupStatusMessage: preparedMedia,
@@ -508,7 +506,6 @@ export async function sendGroupStatus(
     target: "group-status",
     socket,
     cacheScope: `${workspaceId}:${sessionId}`,
-    groupJid: jid,
   });
   await send(jid, prepared);
 }
@@ -572,7 +569,6 @@ export async function sendGroupColorStatus(
     target: "group-status",
     socket,
     cacheScope: `${workspaceId}:${sessionId}`,
-    groupJid: jid,
   });
   const sourcePreview = sourcePrepared.linkPreview as Record<string, unknown> | undefined;
   const previewTitle = typeof sourcePreview?.title === "string" ? sourcePreview.title.trim() : "";
@@ -591,7 +587,6 @@ export async function sendGroupColorStatus(
     target: "group-status",
     socket,
     cacheScope: `${workspaceId}:${sessionId}`,
-    groupJid: jid,
   });
   const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: groupStatus");
@@ -743,7 +738,6 @@ export async function sendGroupMentions(
       content: { ...messagePayload(text, media), mentions: selected },
       socket,
       cacheScope: `${workspaceId}:${sessionId}`,
-      groupJid: jid,
     }),
   );
 }
