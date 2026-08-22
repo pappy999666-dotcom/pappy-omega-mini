@@ -682,7 +682,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
     },
     {
       name: "dgstatus",
-      aliases: ["gstatusd"],
+      aliases: ["gstatusd", "dgstatsus"],
       description: "Send a styled group status with a randomized color and group design.",
       ownerOnly: true,
       run: async (ctx) => {

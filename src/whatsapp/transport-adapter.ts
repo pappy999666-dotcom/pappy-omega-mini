@@ -550,32 +550,45 @@ export async function sendGroupColorStatus(
   if (!metadata) throw new Error("Unsupported capability: groupMetadata");
   const group = (await metadata(jid)) as { subject?: string };
   const sourceText = payload.text ?? "";
+  const groupName = String(group.subject ?? "WhatsApp Group").trim() || "WhatsApp Group";
+  const sourceContent = payload.media
+    ? messagePayload(sourceText, payload.media)
+    : { text: sourceText };
+  const sourcePrepared = await prepareCanonicalPreviewContent({
+    text: sourceText,
+    content: sourceContent,
+    target: "group-status",
+    socket,
+    cacheScope: `${workspaceId}:${sessionId}`,
+  });
+  const sourcePreview = sourcePrepared.linkPreview as Record<string, unknown> | undefined;
+  const previewTitle = typeof sourcePreview?.title === "string" ? sourcePreview.title.trim() : "";
   const design = createGroupStatusDesign({
-    groupName: String(group.subject ?? "WhatsApp Group"),
+    groupName,
+    title: previewTitle || groupName,
     text: sourceText,
     seed: `${workspaceId}:${sessionId}:${jid}:${Date.now()}`,
   });
   const content = payload.media
     ? messagePayload(design.text, payload.media)
-    : {
-        text: design.text,
-        backgroundColor: design.backgroundColor,
-        textColor: design.textColor,
-        font: design.font,
-      };
+    : { text: design.text };
   const prepared = await prepareCanonicalPreviewContent({
     text: design.text,
-    content,
+    content: sourcePreview ? { ...content, linkPreview: sourcePreview } : content,
     target: "group-status",
     socket,
     cacheScope: `${workspaceId}:${sessionId}`,
   });
   const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: groupStatus");
+  const sendOptions = {
+    backgroundColor: design.backgroundColor,
+    font: design.font,
+  };
   if (payload.media) {
-    await send(jid, { groupStatusMessage: prepared });
+    await send(jid, { groupStatusMessage: prepared }, sendOptions);
   } else {
-    await send(jid, { ...prepared, groupStatus: true });
+    await send(jid, { ...prepared, groupStatus: true }, sendOptions);
   }
 }
 

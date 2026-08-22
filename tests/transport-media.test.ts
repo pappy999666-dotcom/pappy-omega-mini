@@ -134,22 +134,31 @@ describe("WhatsApp media transport coverage", () => {
 
 
 describe("styled group status transport", () => {
-  it("sends group-aware color metadata through the real adapter path", async () => {
+  it("sends group-aware color metadata through Baileys generation options", async () => {
     mocks.send.mockClear();
-    await sendGroupColorStatus("workspace", "session", "120363000000000001@g.us", {
-      text: "https://example.com/styled-card",
-    });
-    expect(mocks.groupMetadata).toHaveBeenCalled();
-    expect(mocks.send).toHaveBeenCalledOnce();
-    const [, content] = mocks.send.mock.calls[0] as unknown as [
-      string,
-      Record<string, unknown>,
-    ];
-    expect(content.groupStatus).toBe(true);
-    expect(content.text).toContain("Cyber Alpha");
-    expect(content.text).toContain("https://example.com/styled-card");
-    expect(content.backgroundColor).toMatch(/^#[0-9A-F]{6}$/);
-    expect(content.textColor).toBe("#FFFFFF");
-    expect(typeof content.font).toBe("number");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response(null, { status: 503 })) as typeof fetch;
+    try {
+      await sendGroupColorStatus("workspace", "session", "120363000000000001@g.us", {
+        text: "https://example.com/styled-card",
+      });
+      expect(mocks.groupMetadata).toHaveBeenCalled();
+      expect(mocks.send).toHaveBeenCalledOnce();
+      const [, content, options] = mocks.send.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+        Record<string, unknown>,
+      ];
+      expect(content.groupStatus).toBe(true);
+      expect(content.text).toContain("Cyber Alpha");
+      expect(content.text).toContain("https://example.com/styled-card");
+      expect(content.backgroundColor).toBeUndefined();
+      expect(content.textColor).toBeUndefined();
+      expect(options.backgroundColor).toMatch(/^#[0-9A-F]{6}$/);
+      expect(options.backgroundColor).not.toBe("#000000");
+      expect(typeof options.font).toBe("number");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

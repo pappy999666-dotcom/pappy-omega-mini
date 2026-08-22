@@ -37,8 +37,20 @@ describe("styled group-status design", () => {
     expect(second.text).toContain(url);
     expect(first.text).toContain("Alpha");
     expect(second.text).toContain("Beta");
+    expect(first.mode).toBe("url");
+    expect(second.mode).toBe("url");
+    expect(first.title).toBe("Alpha");
+    expect(second.title).toBe("Beta");
+    expect(first.text).toMatch(/𝗟𝗜𝗡𝗞 𝗗𝗥𝗢𝗣|OPEN THE LINK/);
     expect(first.text !== second.text || first.backgroundColor !== second.backgroundColor).toBe(true);
     expect(first.backgroundColor).toMatch(/^#[0-9A-F]{6}$/);
+    expect(first.backgroundColor).not.toBe("#000000");
+
+    const plain = createGroupStatusDesign({ groupName: "Alpha", text: "Hello everyone", seed: "plain" });
+    expect(plain.mode).toBe("text");
+    expect(plain.text).toContain("Alpha");
+    expect(plain.text).toContain("Hello everyone");
+    expect(plain.text).not.toContain("OPEN THE LINK");
   });
 
   it("registers styled status commands separately from ordinary status commands", () => {

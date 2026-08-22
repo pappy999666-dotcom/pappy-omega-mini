@@ -756,13 +756,17 @@ async function workerParticipantJid(participant, runtime) {
   return jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
 }
 const broadcastPreviewCache = new Map();
-const statusDesignBackgrounds = ["#075E54", "#128C7E", "#1F6FEB", "#6F42C1", "#B83280", "#C2410C", "#166534", "#0F766E", "#374151"];
-const statusDesignTemplates = [
-  (name, text) => `✦ ${name}\\n\\n${text}\\n\\n— PAPPY OMEGA MINI`,
-  (name, text) => `╭─ ${name} ─╮\\n│ ${text}\\n╰────────╯`,
-  (name, text) => `┏━ ${name} ━┓\\n${text}\\n┗━━━━━━━━┛`,
-  (name, text) => `⌁ ${name}\\n──────────\\n${text}`,
-  (name, text) => `${name}\\n\\n${text}\\n\\n◈ OMEGA STATUS`,
+const statusDesignBackgrounds = ["#2563EB", "#7C3AED", "#C026D3", "#DB2777", "#EA580C", "#D97706", "#16A34A", "#0D9488", "#0891B2", "#4F46E5"];
+const statusDesignTextTemplates = [
+  (name, text) => `╭────────────────────────────╮\\n\\n        ✦ ${name} ✦\\n\\n              ◈\\n\\n${text}\\n\\n╰────────────────────────────╯`,
+  (name, text) => `┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\\n\\n          ♡ ${name} ♡\\n\\n          ── ✧ ──\\n\\n${text}\\n\\n┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`,
+  (name, text) => `╔════════════════════════════╗\\n║                            ║\\n║        ${name}        ║\\n║                            ║\\n║          ${text}          ║\\n║                            ║\\n╚════════════════════════════╝`,
+  (name, text) => `⌜────────────────────────────⌝\\n\\n          ${name}\\n\\n       ⟡  ${text}  ⟡\\n\\n⌞────────────────────────────⌟`,
+];
+const statusDesignUrlTemplates = [
+  (name, text) => `╭────────────── ✦ ──────────────╮\\n\\n            ♡ ${name} ♡\\n\\n              ── ◈ ──\\n\\n${text}\\n\\n╰────────────── ✦ ──────────────╯`,
+  (name, text) => `┏━━━━━━━━━━━━━━ ✧ ━━━━━━━━━━━━━━┓\\n\\n             ${name}\\n\\n        ── 𝗟𝗜𝗡𝗞 𝗗𝗥𝗢𝗣 ──\\n\\n${text}\\n\\n┗━━━━━━━━━━━━━━ ✧ ━━━━━━━━━━━━━━┛`,
+  (name, text) => `╔═══════════════╗\\n║   ♡ ${name} ♡   ║\\n╚═══════════════╝\\n\\n          ${text}\\n\\n        ⟡ OPEN THE LINK ⟡`,
 ];
 function statusDesignHash(input) {
   let value = 2166136261;
@@ -772,13 +776,16 @@ function statusDesignHash(input) {
   }
   return value >>> 0;
 }
-function createWorkerStatusDesign(groupName, text, seed) {
-  const value = statusDesignHash(`${seed}:${groupName}:${text}`);
-  const template = statusDesignTemplates[value % statusDesignTemplates.length] ?? statusDesignTemplates[0];
+function createWorkerStatusDesign(groupName, text, seed, title = groupName) {
+  const sourceText = String(text ?? '').trim();
+  const cleanTitle = String(title || groupName || 'WhatsApp Group').replace(/[\\r\\n]+/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 42) || 'WhatsApp Group';
+  const mode = /https?:\\/\\/\\S+/i.test(sourceText) ? 'url' : 'text';
+  const templates = mode === 'url' ? statusDesignUrlTemplates : statusDesignTextTemplates;
+  const value = statusDesignHash(`${seed}:${groupName}:${cleanTitle}:${sourceText}:${mode}`);
+  const template = templates[value % templates.length] ?? templates[0];
   return {
-    text: template(groupName.trim() || "WhatsApp Group", text),
+    text: template(cleanTitle, sourceText || ' '),
     backgroundColor: statusDesignBackgrounds[(value >>> 8) % statusDesignBackgrounds.length] ?? statusDesignBackgrounds[0],
-    textColor: "#FFFFFF",
     font: value % 10,
   };
 }
@@ -806,20 +813,21 @@ async function resolveBroadcastPreview(runtime, intent) {
 async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview) {
   const text = typeof intent.text === "string" ? intent.text : "";
   let statusText = text;
-  let style = {};
+  let styleOptions = {};
   if (intent.kind === "allstatus" && intent.styled === true && !media) {
     let groupName = "WhatsApp Group";
     try {
       const metadata = await runtime.socket.groupMetadata(jid);
-      groupName = String(metadata?.subject ?? groupName);
+      groupName = String(metadata?.subject ?? groupName).trim() || groupName;
     } catch {
       // A missing group subject must never block the styled status delivery.
     }
-    const design = createWorkerStatusDesign(groupName, text, `${runtime.sessionId}:${jid}:${Date.now()}`);
+    const previewTitle = typeof linkPreview?.title === "string" ? linkPreview.title.trim() : "";
+    const design = createWorkerStatusDesign(groupName, text, `${runtime.sessionId}:${jid}:${Date.now()}`, previewTitle || groupName);
     statusText = design.text;
-    style = { backgroundColor: design.backgroundColor, textColor: design.textColor, font: design.font };
+    styleOptions = { backgroundColor: design.backgroundColor, font: design.font };
   }
-  const content = media ? { media: { ...media, bytes: media.bytes }, text: statusText } : { text: statusText, ...style };
+  const content = media ? { media: { ...media, bytes: media.bytes }, text: statusText } : { text: statusText };
   if (intent.kind === "allstatus") {
     const hasMedia = Boolean(media);
     const hasUrl = /https?:\/\/\S+/i.test(statusText);
@@ -831,8 +839,8 @@ async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview) {
     const withPreview = linkPreview && typeof linkPreview === "object"
       ? { ...materialized, linkPreview }
       : materialized;
-    if (hasMedia) await runtime.socket.sendMessage(jid, { groupStatusMessage: withPreview });
-    else await runtime.socket.sendMessage(jid, { ...withPreview, groupStatus: true });
+    if (hasMedia) await runtime.socket.sendMessage(jid, { groupStatusMessage: withPreview }, styleOptions);
+    else await runtime.socket.sendMessage(jid, { ...withPreview, groupStatus: true }, styleOptions);
     return;
   }
   const metadata = await runtime.socket.groupMetadata(jid);

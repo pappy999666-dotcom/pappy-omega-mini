@@ -48,6 +48,9 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("for (const command of commands) void processCommand(command);");
     expect(source).toContain("intent.styled === true");
     expect(source).toContain("createWorkerStatusDesign");
+    expect(source).toContain("statusDesignUrlTemplates");
+    expect(source).toContain("previewTitle");
+    expect(source).toContain("styleOptions = { backgroundColor: design.backgroundColor, font: design.font }");
     expect(source).toContain("const withPreview = linkPreview && typeof linkPreview === \"object\"");
     expect(source).toContain("return {};");
     expect(source).toContain("isScopedInviteValidationFailure");

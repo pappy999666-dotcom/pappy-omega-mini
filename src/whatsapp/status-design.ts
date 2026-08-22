@@ -1,28 +1,48 @@
+export type GroupStatusDesignMode = "text" | "url";
+
 export interface GroupStatusDesign {
   text: string;
   backgroundColor: string;
   textColor: string;
   font: number;
+  mode: GroupStatusDesignMode;
+  title: string;
 }
 
+// Baileys accepts #RRGGBB and converts it to an opaque ARGB value. Keep this
+// palette intentionally bright and never use #000000/#0000: some WhatsApp
+// clients otherwise fall back to a black story canvas.
 const BACKGROUNDS = [
-  "#075E54",
-  "#128C7E",
-  "#1F6FEB",
-  "#6F42C1",
-  "#B83280",
-  "#C2410C",
-  "#166534",
-  "#0F766E",
-  "#374151",
+  "#2563EB",
+  "#7C3AED",
+  "#C026D3",
+  "#DB2777",
+  "#EA580C",
+  "#D97706",
+  "#16A34A",
+  "#0D9488",
+  "#0891B2",
+  "#4F46E5",
 ] as const;
 
-const TEMPLATES = [
-  (name: string, text: string) => `✦ ${name}\n\n${text}\n\n— PAPPY OMEGA MINI`,
-  (name: string, text: string) => `╭─ ${name} ─╮\n│ ${text}\n╰────────╯`,
-  (name: string, text: string) => `┏━ ${name} ━┓\n${text}\n┗━━━━━━━━┛`,
-  (name: string, text: string) => `⌁ ${name}\n──────────\n${text}`,
-  (name: string, text: string) => `${name}\n\n${text}\n\n◈ OMEGA STATUS`,
+const TEXT_TEMPLATES = [
+  (title: string, body: string) =>
+    `╭────────────────────────────╮\n\n        ✦ ${title} ✦\n\n              ◈\n\n${body}\n\n╰────────────────────────────╯`,
+  (title: string, body: string) =>
+    `┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n\n          ♡ ${title} ♡\n\n          ── ✧ ──\n\n${body}\n\n┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`,
+  (title: string, body: string) =>
+    `╔════════════════════════════╗\n║                            ║\n║        ${title}        ║\n║                            ║\n║          ${body}          ║\n║                            ║\n╚════════════════════════════╝`,
+  (title: string, body: string) =>
+    `⌜────────────────────────────⌝\n\n          ${title}\n\n       ⟡  ${body}  ⟡\n\n⌞────────────────────────────⌟`,
+] as const;
+
+const URL_TEMPLATES = [
+  (title: string, body: string) =>
+    `╭────────────── ✦ ──────────────╮\n\n            ♡ ${title} ♡\n\n              ── ◈ ──\n\n${body}\n\n╰────────────── ✦ ──────────────╯`,
+  (title: string, body: string) =>
+    `┏━━━━━━━━━━━━━━ ✧ ━━━━━━━━━━━━━━┓\n\n             ${title}\n\n        ── 𝗟𝗜𝗡𝗞 𝗗𝗥𝗢𝗣 ──\n\n${body}\n\n┗━━━━━━━━━━━━━━ ✧ ━━━━━━━━━━━━━━┛`,
+  (title: string, body: string) =>
+    `╔═══════════════╗\n║   ♡ ${title} ♡   ║\n╚═══════════════╝\n\n          ${body}\n\n        ⟡ OPEN THE LINK ⟡`,
 ] as const;
 
 function hash(input: string): number {
@@ -34,19 +54,35 @@ function hash(input: string): number {
   return value >>> 0;
 }
 
+function cleanTitle(value: string): string {
+  const cleaned = value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+  return (cleaned || "WhatsApp Group").slice(0, 42);
+}
+
+function hasHttpUrl(text: string): boolean {
+  return /https?:\/\/\S+/i.test(text);
+}
+
 export function createGroupStatusDesign(input: {
   groupName: string;
   text: string;
   seed: string;
+  title?: string;
+  mode?: GroupStatusDesignMode;
 }): GroupStatusDesign {
-  const value = hash(`${input.seed}:${input.groupName}:${input.text}`);
-  const template = TEMPLATES[value % TEMPLATES.length] ?? TEMPLATES[0];
+  const sourceText = input.text.trim();
+  const mode = input.mode ?? (hasHttpUrl(sourceText) ? "url" : "text");
+  const title = cleanTitle(input.title ?? input.groupName);
+  const value = hash(`${input.seed}:${input.groupName}:${title}:${sourceText}:${mode}`);
+  const templates = mode === "url" ? URL_TEMPLATES : TEXT_TEMPLATES;
+  const template = templates[value % templates.length] ?? templates[0];
   const backgroundColor = BACKGROUNDS[(value >>> 8) % BACKGROUNDS.length] ?? BACKGROUNDS[0];
-  const font = value % 10;
   return {
-    text: template(input.groupName.trim() || "WhatsApp Group", input.text),
+    text: template(title, sourceText || " "),
     backgroundColor,
     textColor: "#FFFFFF",
-    font,
+    font: value % 10,
+    mode,
+    title,
   };
 }
