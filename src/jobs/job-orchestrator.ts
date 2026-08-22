@@ -778,24 +778,24 @@ export class JobOrchestrator {
     return updated;
   }
 
-  private async pruneTerminalRecoveryChildren(jobs: BullJob<JobRecord>[]): Promise<void> {
+  private async pruneTerminalRecoveryChildren(): Promise<void> {
     const now = Date.now();
-    for (const job of jobs) {
-      const childId = String(job.id);
-      if (!childId.includes(":")) continue;
-      const parentId = childId.split(":", 1)[0] ?? "";
-      if (!parentId) continue;
-      const parent = await this.store.get(parentId);
-      if (!parent || !["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(parent.state)) continue;
-      if (!parent.completedAt || now - parent.completedAt < 60_000) continue;
-      try {
-        if (await job.isActive()) {
-          if (job.token) await job.moveToCompleted({ orphaned: true, parentId }, job.token, false);
-        } else {
-          await job.remove();
+    for (const queue of this.allQueues()) {
+      const jobs = await queue.getJobs(["active", "waiting", "delayed"], 0, 2000, true);
+      for (const job of jobs) {
+        const childId = String(job.id);
+        const hasParentSuffix = childId.includes(":");
+        const parentId = hasParentSuffix ? (childId.split(":", 1)[0] ?? "") : childId;
+        if (!parentId) continue;
+        const parent = await this.store.get(parentId);
+        if (!parent || !["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(parent.state)) continue;
+        if (!parent.completedAt || now - parent.completedAt < 60_000) continue;
+        try {
+          if (await job.isActive()) await this.redis.del(queue.toKey(`${childId}:lock`));
+          await queue.remove(childId, { removeChildren: false });
+        } catch {
+          // A child may finish naturally between the state check and cleanup.
         }
-      } catch {
-        // A child may finish naturally between the state check and cleanup.
       }
     }
   }
@@ -812,7 +812,7 @@ export class JobOrchestrator {
           ),
         )
       ).flat();
-      await this.pruneTerminalRecoveryChildren(recoveryJobs);
+      await this.pruneTerminalRecoveryChildren();
       const recoveryParents = new Set(
         recoveryJobs
           .map((job) => String(job.id))
