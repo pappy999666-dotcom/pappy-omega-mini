@@ -1049,7 +1049,7 @@ async function poll() {
   const data = await control("/workload/poll", { limit: 5, waitMs: 20_000 }, credentialState.credential);
   matrix.lastControlAt = Date.now();
   const commands = Array.isArray(data.commands) ? data.commands : [];
-  await Promise.all(commands.map((command) => processCommand(command)));
+  for (const command of commands) void processCommand(command);
   return commands.length;
 }
 async function run() {
