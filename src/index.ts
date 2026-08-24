@@ -166,12 +166,14 @@ async function main(): Promise<void> {
               ...(result.media.kind === "video" || result.media.kind === "document" ? { fileName: result.media.fileName } : {}),
               ...(result.nativeFlow ? { nativeFlow: result.nativeFlow } : {}),
               ...(result.nativeTable ? { nativeTable: result.nativeTable } : {}),
+              ...(result.richMenu ? { richMenu: result.richMenu } : {}),
               ...(result.mentions?.length ? { mentions: result.mentions } : {}),
             }
           : {
               ...(result.text ? { text: result.text } : {}),
               ...(result.nativeFlow ? { nativeFlow: result.nativeFlow } : {}),
               ...(result.nativeTable ? { nativeTable: result.nativeTable } : {}),
+              ...(result.richMenu ? { richMenu: result.richMenu } : {}),
               ...(result.mentions?.length ? { mentions: result.mentions } : {}),
             };
       }

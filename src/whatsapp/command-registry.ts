@@ -729,9 +729,15 @@ export function createCommandRegistry(): RegisteredCommand[] {
     {
       name: "menu",
       aliases: ["help", "m"],
-      description: "Open the polished session menu.",
+      description: "Open the polished RichMenu home.",
       run: async (ctx) =>
         renderAsciiMenu(buildSessionMenu(session(ctx), ctx.isOwner)),
+    },
+    {
+      name: "menulist",
+      aliases: [],
+      description: "Choose the interactive rich menu or the classic text menu.",
+      run: async () => "Use .menulist rich for the interactive menu or .menulist text for the classic list.",
     },
     {
       name: "previewdebug",
@@ -1532,17 +1538,16 @@ export function createCommandRegistry(): RegisteredCommand[] {
       run: async (ctx) => {
         const global = ctx.args[0]?.toLowerCase() === "global";
         const offset = global ? 1 : 0;
-        const action = ctx.args[offset]?.toLowerCase();
-        if (global && action === "list") {
-                      const identities = getWorkspaceSudo(ctx.workspaceId)
-              .map((identity) => firstVerifiedPhone(identity))
-              .filter((identity): identity is string => Boolean(identity));
-            return identities.length
-              ? `Global sudo phone identities:\n${identities.map((identity) => `+${identity}`).join("\n")}`
-              : "No verified global sudo phone identities configured.";
-
+        const requestedAction = ctx.args[offset]?.toLowerCase();
+        if (global && requestedAction === "list") {
+          const identities = getWorkspaceSudo(ctx.workspaceId)
+            .map((identity) => firstVerifiedPhone(identity))
+            .filter((identity): identity is string => Boolean(identity));
+          return identities.length
+            ? `Global sudo phone identities:\n${identities.map((identity) => `+${identity}`).join("\n")}`
+            : "No verified global sudo phone identities configured.";
         }
-        if (!global && action === "list") {
+        if (!global && requestedAction === "list") {
           const identities = session(ctx).sudoList
             .map((identity) => firstVerifiedPhone(identity))
             .filter((identity): identity is string => Boolean(identity));
@@ -1550,27 +1555,21 @@ export function createCommandRegistry(): RegisteredCommand[] {
             ? `Session sudo phone identities:\n${identities.map((identity) => `+${identity}`).join("\n")}`
             : "No verified session sudo phone identities configured.";
         }
-        const identityDigits = verifiedTargetPhone(
-          global ? ctx.args.slice(offset + 1) : ctx.args.slice(offset + 1),
-          ctx.mentionedJids,
-          ctx.quotedSenderJid,
-        );
+        const explicitAction = requestedAction === "add" || requestedAction === "remove";
+        const action = explicitAction ? requestedAction : ctx.invokedName === "rmsudo" ? "remove" : "add";
+        const targetArgs = explicitAction ? ctx.args.slice(offset + 1) : ctx.args.slice(offset);
+        const identityDigits = verifiedTargetPhone(targetArgs, ctx.mentionedJids, ctx.quotedSenderJid);
         const identity = phoneJidFromIdentity(identityDigits);
-        if (!identity || !["add", "remove"].includes(action ?? ""))
-          return commandUsageCard({ title: "Sudo Command", command: ".setsudo", commandSyntax: ".setsudo add|remove <target> | global add|remove <phone>", acceptedTargets: ["Tag / Mention · Real WhatsApp mention", "Reply · Reply to a verified phone identity", "Phone · Explicit international number for global scope"], note: "LID-only identities are not accepted." });
+        if (!identity || !["add", "remove"].includes(action))
+          return commandUsageCard({ title: ctx.invokedName === "rmsudo" ? "RMsudo Command" : "Setsudo Command", command: ctx.invokedName === "rmsudo" ? ".rmsudo" : ".setsudo", commandSyntax: ctx.invokedName === "rmsudo" ? ".rmsudo [global] <target>" : ".setsudo [global] <target>", acceptedTargets: ["Tag / Mention · Real WhatsApp mention", "Reply · Reply to a verified phone identity", "Phone · Explicit international number for global scope"], note: ctx.invokedName === "rmsudo" ? "Removes the verified target; no add/remove keyword is required." : "Adds the verified target; no add/remove keyword is required. LID-only identities are not accepted." });
         if (global) {
-          const next = updateWorkspaceSudo(
-            ctx.workspaceId,
-            action as "add" | "remove",
-            identity,
-          );
+          const next = updateWorkspaceSudo(ctx.workspaceId, action, identity);
           return `Global sudo ${action} complete for +${identityDigits}.\nInherited by ${next.length} configured phone identity${next.length === 1 ? "" : "ies"}.`;
         }
         const current = session(ctx).sudoList;
-        const next =
-          action === "add"
-            ? [...new Set([...current, identity])]
-            : current.filter((item) => item !== identity);
+        const next = action === "add"
+          ? [...new Set([...current, identity])]
+          : current.filter((item) => item !== identity);
         updateSession(ctx.workspaceId, ctx.sessionId, { sudoList: next });
         return `Session sudo ${action} complete for +${identityDigits}.`;
       },
@@ -1632,7 +1631,7 @@ export async function executeCommand(
   const invokedName = name.toLowerCase();
   const command = registry.find(
     (item) => item.name === invokedName || item.aliases.includes(invokedName),
-  );
+  ) ?? (invokedName === "rmsudo" ? registry.find((item) => item.name === "setsudo") : undefined);
   if (!command) return `Unknown command. Use ${session(ctx).prefix}menu.`;
   if (command.ownerOnly && !ctx.isOwner)
     return "This command is restricted to the session owner.";

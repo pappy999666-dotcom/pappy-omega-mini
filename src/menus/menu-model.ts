@@ -53,6 +53,7 @@ export function buildSessionMenu(
   const liveStatus = effectiveSessionStatus(session);
   const actions: MenuAction[] = [
     { id: "menu", label: "Menu", command: "menu", description: "Open this menu." },
+    { id: "menulist", label: "Menu list", command: "menulist", description: "Choose the interactive or classic menu." },
     { id: "ping", label: "Ping", command: "ping", description: "Fast session health check." },
     { id: "profile", label: "Profile", command: "profile", description: "View session identity and health." },
     { id: "health", label: "Health", command: "health", description: "View reconnect and queue health." },
@@ -86,6 +87,7 @@ export function buildSessionMenu(
     { id: "stopchat", label: "Stop chat", command: "stopchat", description: "Stop active all-chat jobs.", ownerOnly: true },
     { id: "stopstag", label: "Stop smart tag", command: "stopstag", description: "Stop active smart-tag jobs.", ownerOnly: true },
     { id: "setsudo", label: "Sudo", command: "setsudo", description: "Manage session and global sudo identities.", ownerOnly: true },
+    { id: "rmsudo", label: "Remove sudo", command: "rmsudo", description: "Remove a session or global sudo identity.", ownerOnly: true },
     { id: "pendingjoin", label: "Pending joins", command: "pendingjoin", description: "List pending group join requests.", ownerOnly: true },
     { id: "approveall", label: "Approve all", command: "approveall", description: "Approve all pending group join requests.", ownerOnly: true },
     { id: "approveamt", label: "Approve amount", command: "approveamt", description: "Approve the first N pending join requests.", ownerOnly: true },

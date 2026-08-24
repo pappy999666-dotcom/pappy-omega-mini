@@ -33,7 +33,12 @@ import {
   sendDirectText,
   sendGroupPoll,
 } from "./transport-adapter.js";
-import { buildWhatsappMenuPayload } from "../menus/whatsapp-menu.js";
+import {
+  buildWhatsappHelpPayload,
+  buildWhatsappMenuPayload,
+  buildWhatsappTextMenuPayload,
+} from "../menus/whatsapp-menu.js";
+import { resolveMenuInteraction, type RichMenuContent } from "../menus/rich-menu-runtime.js";
 import {
   routeViaRemoteBridge,
   shouldProxyWhatsAppSession,
@@ -62,6 +67,7 @@ export interface WhatsAppReply {
   mentions?: string[];
   nativeFlow?: Array<{ text: string; copy?: string; id?: string; url?: string }>;
   nativeTable?: GroupControlTable;
+  richMenu?: RichMenuContent;
   media?: WhatsAppMediaPayload;
   caption?: string;
 }
@@ -102,7 +108,8 @@ export async function routeWhatsAppText(
 ): Promise<string | WhatsAppReply | null> {
   const commandInput = mergeQuotedPayload(message.text, message.quotedText);
   const interactionId = message.interactionId?.trim();
-  const trimmed = interactionId || commandInput.trim();
+  const menuAction = resolveMenuInteraction(interactionId || commandInput.trim());
+  const trimmed = menuAction?.command || (menuAction?.view ? "menu" : interactionId || commandInput.trim());
   if (
     getEmergencyState().enabled &&
     /^(?:[^\w\s]{1,3})?(?:menu|help|m)(?:\s|$)/i.test(trimmed)
@@ -115,8 +122,10 @@ export async function routeWhatsAppText(
   // Telegram Bridge is an already-authorized control-plane transport. It must
   // dispatch the command body independently of the target session's local
   // WhatsApp prefix. Direct WhatsApp messages still require their session prefix.
-  if (!message.interactionId && !message.bridgeAuthorized && prefix && !trimmed.startsWith(prefix)) return null;
-  const raw = message.interactionId
+  if (!message.interactionId && !menuAction && !message.bridgeAuthorized && prefix && !trimmed.startsWith(prefix)) return null;
+  const raw = menuAction?.command || menuAction?.view
+    ? trimmed
+    : message.interactionId
     ? trimmed
     : message.bridgeAuthorized
     ? prefix && trimmed.startsWith(prefix)
@@ -142,15 +151,26 @@ export async function routeWhatsAppText(
       );
     return null;
   }
-  if (commandName === "menu" || commandName === "help" || commandName === "m") {
+  if (commandName === "help") {
     if (getEmergencyState().enabled) return null;
-    const payload = await buildWhatsappMenuPayload(
-      session,
-      isOwnerFor(message, session),
-    );
+    return buildWhatsappHelpPayload(session, isOwnerFor(message, session));
+  }
+  if (commandName === "menulist") {
+    if (getEmergencyState().enabled) return null;
+    const mode = raw.trim().split(/\s+/)[1]?.toLowerCase() || "rich";
+    if (mode === "text") return buildWhatsappTextMenuPayload(session, isOwnerFor(message, session));
+    if (mode !== "rich") return { text: "Usage: .menulist rich or .menulist text" };
+    const payload = await buildWhatsappMenuPayload(session, isOwnerFor(message, session), "all");
     return payload.media
-      ? { media: payload.media, caption: payload.caption }
-      : { text: payload.text };
+      ? { media: payload.media, caption: payload.caption, richMenu: payload.richMenu }
+      : { text: payload.text, richMenu: payload.richMenu };
+  }
+  if (commandName === "menu" || commandName === "m") {
+    if (getEmergencyState().enabled) return null;
+    const payload = await buildWhatsappMenuPayload(session, isOwnerFor(message, session), menuAction?.view || "root");
+    return payload.media
+      ? { media: payload.media, caption: payload.caption, richMenu: payload.richMenu }
+      : { text: payload.text, richMenu: payload.richMenu };
   }
 
   const runtime = getWorkerRuntime();

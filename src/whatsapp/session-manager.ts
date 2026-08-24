@@ -744,12 +744,14 @@ async function openWhatsAppSession(
                     ...(mediaReply.media.kind === "video" || mediaReply.media.kind === "document" ? { fileName: mediaReply.media.fileName } : {}),
                     ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
                     ...(mediaReply.nativeTable ? { nativeTable: mediaReply.nativeTable } : {}),
+                    ...(mediaReply.richMenu ? { richMenu: mediaReply.richMenu } : {}),
                     ...(mediaReply.mentions?.length ? { mentions: mediaReply.mentions } : {}),
                   }
                 : {
                     ...(mediaReply.text ? { text: mediaReply.text } : {}),
                     ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
                     ...(mediaReply.nativeTable ? { nativeTable: mediaReply.nativeTable } : {}),
+                    ...(mediaReply.richMenu ? { richMenu: mediaReply.richMenu } : {}),
                     ...(mediaReply.mentions?.length ? { mentions: mediaReply.mentions } : {}),
                   };
               try {
@@ -758,13 +760,13 @@ async function openWhatsAppSession(
                 const reason = error instanceof Error ? error.message : String(error);
                 if (!mediaReply.nativeFlow) throw error;
                 // nativeFlow is an optional enhancement; a rejected extension must never suppress the command reply.
-                const { nativeFlow: _nativeFlow, nativeTable: _nativeTable, ...plainContent } = content;
+                const { nativeFlow: _nativeFlow, nativeTable: _nativeTable, richMenu: _richMenu, ...plainContent } = content;
                 await sendTrackedMessage(jid, plainContent).catch((fallbackError) => {
                   throw new Error(`${reason}; plain-text fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
                 });
               }
             };
-            if (mediaReply.media || mediaReply.text || mediaReply.nativeFlow || mediaReply.mentions?.length) {
+            if (mediaReply.media || mediaReply.text || mediaReply.nativeFlow || mediaReply.nativeTable || mediaReply.richMenu || mediaReply.mentions?.length) {
               void deliverObjectReply()
                 .then(() =>
                   saveWhatsAppMessageTrace({

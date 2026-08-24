@@ -482,6 +482,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         senderJid: stringField(input, "senderJid"),
         text: typeof input.text === "string" ? input.text : "",
         ...(typeof input.messageId === "string" ? { messageId: input.messageId } : {}),
+        ...(typeof input.interactionId === "string" ? { interactionId: input.interactionId } : {}),
         ...(typeof input.quotedText === "string" ? { quotedText: input.quotedText } : {}),
         ...(typeof input.quotedSenderJid === "string" ? { quotedSenderJid: input.quotedSenderJid } : {}),
         ...(Array.isArray(input.mentionedJids) ? { mentionedJids: input.mentionedJids.filter((item): item is string => typeof item === "string").slice(0, 100) } : {}),

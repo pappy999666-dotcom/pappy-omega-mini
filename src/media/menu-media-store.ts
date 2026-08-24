@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { env } from "../config/env.js";
 import type {
   MediaKind,
@@ -21,6 +22,29 @@ const allowedTypes: Record<MediaKind, Set<string>> = {
 const catalog = new Map<string, MenuMedia>();
 
 const defaultMenuCaption = "Choose a session and send a command.";
+const selectionPath = join(env.SESSION_ROOT, "..", "menu-media-selection.json");
+const durableSelections = new Map<string, string>();
+let selectionsLoaded = false;
+
+function ensureSelectionsLoaded(): void {
+  if (selectionsLoaded) return;
+  selectionsLoaded = true;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(selectionPath, "utf8"));
+    if (!Array.isArray(parsed)) return;
+    for (const item of parsed) {
+      if (item && typeof item === "object" && "workspaceId" in item && "mediaId" in item && typeof item.workspaceId === "string" && typeof item.mediaId === "string" && item.workspaceId && item.mediaId)
+        durableSelections.set(item.workspaceId, item.mediaId);
+    }
+  } catch {
+    // Missing or temporarily unreadable selection state is safe; settings remain the fallback.
+  }
+}
+
+function persistSelections(): void {
+  mkdirSync(dirname(selectionPath), { recursive: true });
+  writeFileSync(selectionPath, JSON.stringify([...durableSelections].map(([workspaceId, mediaId]) => ({ workspaceId, mediaId })), null, 2), { mode: 0o600 });
+}
 
 function inferKind(mimeType: string): MediaKind | null {
   if (mimeType.startsWith("image/")) return "image";
@@ -98,15 +122,24 @@ export function getMenuMedia(workspaceId: string, mediaId: string): MenuMedia {
 
 export function setWhatsappMenuMedia(
   workspaceId: string,
-  mediaId: string | undefined,
+  mediaId: string | null | undefined,
   caption?: string,
 ): MenuMediaSettings {
-  if (mediaId) getMenuMedia(workspaceId, mediaId);
+  ensureSelectionsLoaded();
+  if (typeof mediaId === "string" && mediaId) getMenuMedia(workspaceId, mediaId);
   const current = getWhatsappMenuSettings(workspaceId);
   const nextCaption =
     caption === undefined ? current.whatsappMenuCaption : caption.slice(0, 1024);
+  const selectionPatch = mediaId === null
+    ? { whatsappMenuMediaId: undefined }
+    : mediaId === undefined
+      ? {}
+      : { whatsappMenuMediaId: mediaId };
+  if (mediaId === null) durableSelections.delete(workspaceId);
+  else if (typeof mediaId === "string" && mediaId) durableSelections.set(workspaceId, mediaId);
+  persistSelections();
   const nextWorkspace = updateWorkspaceSettings(workspaceId, {
-    ...(mediaId === undefined ? { whatsappMenuMediaId: undefined } : { whatsappMenuMediaId: mediaId }),
+    ...selectionPatch,
     whatsappMenuCaption: nextCaption,
   });
   return {
@@ -123,12 +156,16 @@ export function setWhatsappMenuMedia(
 export function getWhatsappMenuSettings(
   workspaceId: string,
 ): MenuMediaSettings {
+  ensureSelectionsLoaded();
   const current = getWorkspaceSettings(workspaceId);
+  const mediaId = current.whatsappMenuMediaId || durableSelections.get(workspaceId);
+  if (current.whatsappMenuMediaId && durableSelections.get(workspaceId) !== current.whatsappMenuMediaId) {
+    durableSelections.set(workspaceId, current.whatsappMenuMediaId);
+    persistSelections();
+  }
   return {
     workspaceId,
-    ...(current.whatsappMenuMediaId
-      ? { whatsappMenuMediaId: current.whatsappMenuMediaId }
-      : {}),
+    ...(mediaId ? { whatsappMenuMediaId: mediaId } : {}),
     whatsappMenuCaption: current.whatsappMenuCaption ?? defaultMenuCaption,
     updatedAt: current.updatedAt,
   };
