@@ -1,7 +1,8 @@
+import { stat } from "node:fs/promises";
 import {
+  getMenuMedia,
   getWhatsappMenuSettings,
   listMenuMedia,
-  readMenuMedia,
 } from "../media/menu-media-store.js";
 import { buildSessionMenu, renderAsciiMenu } from "./menu-model.js";
 import {
@@ -35,9 +36,6 @@ export async function buildWhatsappMenuPayload(
   const fallbackText = textForView(model, view);
   const legacyText = renderAsciiMenu(model);
   const displayText = view === "root" || view === "all" ? legacyText : fallbackText;
-  let selectedMedia:
-    | Awaited<ReturnType<typeof readMenuMedia>>
-    | undefined;
   let image:
     | {
         url: string;
@@ -58,12 +56,13 @@ export async function buildWhatsappMenuPayload(
   ];
   for (const mediaId of candidateIds) {
     try {
-      const candidate = await readMenuMedia(session.workspaceId, mediaId);
-      if (candidate.media.kind !== "image") continue;
-      selectedMedia = candidate;
+      const candidate = getMenuMedia(session.workspaceId, mediaId);
+      if (candidate.kind !== "image") continue;
+      const fileStat = await stat(candidate.filePath);
+      if (!fileStat.isFile() || fileStat.size <= 0) throw new Error("Menu media file is unavailable.");
       image = {
-        url: buildMenuMediaUrl(session.workspaceId, candidate.media.mediaId),
-        mime_type: candidate.media.mimeType,
+        url: buildMenuMediaUrl(session.workspaceId, candidate.mediaId),
+        mime_type: candidate.mimeType,
         width: 1080,
         height: 620,
         inline: true,
@@ -81,19 +80,8 @@ export async function buildWhatsappMenuPayload(
   const caption = [configuration.whatsappMenuCaption, displayText]
     .filter(Boolean)
     .join("\n\n");
-  if (selectedMedia) {
-    return {
-      text: displayText,
-      caption,
-      richMenu,
-      media: {
-        kind: selectedMedia.media.kind,
-        bytes: selectedMedia.bytes,
-        mimeType: selectedMedia.media.mimeType,
-        fileName: selectedMedia.media.fileName,
-      },
-    };
-  }
+  // The native RichMenu encoder fetches the signed URL itself. Do not attach a
+  // duplicate base64 copy of the image to the control-plane response.
   return { text: displayText || legacyText, caption, richMenu };
 }
 
