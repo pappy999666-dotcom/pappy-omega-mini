@@ -24,6 +24,7 @@ import {
 import { moderatorCommandScopes } from "../src/telegram/moderator.js";
 import { isCompletePreview } from "../src/whatsapp/baileys-native-preview.js";
 import {
+  extractMessageContextInfo,
   extractMessageText,
   extractQuotedMessage,
   extractQuotedText,
@@ -255,6 +256,31 @@ describe("quoted payload resolver", () => {
     expect(extractQuotedText(quoted)).toBe(
       "quoted image https://example.com/image",
     );
+  });
+
+  it("keeps context info and quoted text through wrapped messages", () => {
+    const quoted = { conversation: "quoted payload" };
+    const wrapped = {
+      viewOnceMessageV2: {
+        message: {
+          extendedTextMessage: {
+            text: ".gstatus hello",
+            contextInfo: {
+              participant: "2348022222222@s.whatsapp.net",
+              mentionedJid: ["2348033333333@s.whatsapp.net"],
+              quotedMessage: quoted,
+            },
+          },
+        },
+      },
+    };
+    expect(extractMessageText(wrapped)).toBe(".gstatus hello");
+    expect(extractMessageContextInfo(wrapped)).toMatchObject({
+      participant: "2348022222222@s.whatsapp.net",
+      mentionedJid: ["2348033333333@s.whatsapp.net"],
+    });
+    expect(extractQuotedMessage(wrapped)).toEqual(quoted);
+    expect(extractQuotedText(extractQuotedMessage(wrapped))).toBe("quoted payload");
   });
 });
 

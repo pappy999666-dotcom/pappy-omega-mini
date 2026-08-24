@@ -641,8 +641,8 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
   return runtime;
 }
 function messageText(message) {
-  if (!message || typeof message !== "object") return "";
-  const value = message;
+  const value = normalizedMessage(message);
+  if (!value || typeof value !== "object") return "";
   if (typeof value.conversation === "string") return value.conversation;
   if (typeof value.extendedTextMessage?.text === "string") return value.extendedTextMessage.text;
   if (typeof value.imageMessage?.caption === "string") return value.imageMessage.caption;
@@ -654,7 +654,7 @@ function normalizedMessage(message) {
   if (!message || typeof message !== "object") return undefined;
   let current = message;
   for (let index = 0; index < 5; index += 1) {
-    const wrapperKey = ["ephemeralMessage", "viewOnceMessage", "viewOnceMessageV2", "viewOnceMessageV2Extension", "groupStatusMessage", "groupStatusMessageV2"].find((name) => current?.[name]);
+    const wrapperKey = ["associatedChildMessage", "botForwardedMessage", "botInvokeMessage", "botTaskMessage", "documentWithCaptionMessage", "editedMessage", "ephemeralMessage", "viewOnceMessage", "viewOnceMessageV2", "viewOnceMessageV2Extension", "groupStatusMessage", "groupStatusMessageV2", "statusMentionMessage"].find((name) => current?.[name]);
     if (!wrapperKey) break;
     const wrapper = current[wrapperKey];
     current = wrapper?.message && typeof wrapper.message === "object" ? wrapper.message : wrapper;
@@ -736,12 +736,13 @@ async function emitInbound(runtime, message) {
   const remoteJid = key.remoteJid;
   if (typeof remoteJid !== "string" || !message.message) return;
   const interactionId = interactionIdFromMessage(message.message);
-  const text = messageText(message.message);
-  const context = message.message.extendedTextMessage?.contextInfo ?? message.message.imageMessage?.contextInfo ?? message.message.videoMessage?.contextInfo ?? message.message.documentMessage?.contextInfo;
+  const normalized = normalizedMessage(message.message) ?? message.message;
+  const text = messageText(normalized);
+  const context = normalized.extendedTextMessage?.contextInfo ?? normalized.imageMessage?.contextInfo ?? normalized.videoMessage?.contextInfo ?? normalized.audioMessage?.contextInfo ?? normalized.documentMessage?.contextInfo;
   const quotedMessage = context?.quotedMessage;
   const quotedText = messageText(quotedMessage);
   if (!text && !quotedText && !interactionId) return;
-  const directMediaKind = mediaKind(message.message);
+  const directMediaKind = mediaKind(normalized);
   const quotedMediaKind = quotedMessage ? mediaKind(quotedMessage) : undefined;
   const directMedia = directMediaKind
     ? await serializeInboundMedia(runtime, { key, message: message.message })
@@ -882,16 +883,26 @@ async function executeTransport(runtime, method, encodedArgs) {
   const args = normalizeArgs(runtime, method, encodedArgs);
   if (method === "getStatusJidList") return getStatusJidList(runtime);
   if (method === "sendGroup" || method === "sendGroupText") {
-    const [jid, content] = args;
+    const [jid, content, options] = args;
     const table = content && typeof content === "object" && !Array.isArray(content) ? content.nativeTable : undefined;
-    if (table && typeof runtime.socket.sendInteractiveTable === "function") return runtime.socket.sendInteractiveTable(jid, table);
-    return runtime.socket.sendMessage(jid, materializeWorkloadContent(content));
+    const sendOptions = options && typeof options === "object" ? options : content && typeof content === "object" && Array.isArray(content.mentions) ? { mentions: content.mentions } : {};
+    if (table && typeof runtime.socket.sendInteractiveTable === "function") return runtime.socket.sendInteractiveTable(jid, table, sendOptions);
+    return runtime.socket.sendMessage(jid, materializeWorkloadContent(content), sendOptions);
   }
   if (method === "sendMessage") {
-    const [jid, content] = args;
-    const table = content && typeof content === "object" && !Array.isArray(content) ? content.nativeTable : undefined;
-    if (table && typeof runtime.socket.sendInteractiveTable === "function") return runtime.socket.sendInteractiveTable(jid, table);
-    return runtime.socket.sendMessage(jid, materializeWorkloadContent(content));
+    const [jid, content, options] = args;
+    const value = content && typeof content === "object" && !Array.isArray(content) ? content : {};
+    const sendOptions = options && typeof options === "object" ? options : Array.isArray(value.mentions) ? { mentions: value.mentions } : {};
+    const table = value.nativeTable;
+    if (table && typeof runtime.socket.sendInteractiveTable === "function") return runtime.socket.sendInteractiveTable(jid, table, sendOptions);
+    if (value.groupStatusMessage && typeof value.groupStatusMessage === "object") {
+      return runtime.socket.sendMessage(jid, { groupStatusMessage: materializeWorkloadContent(value.groupStatusMessage) }, sendOptions);
+    }
+    if (value.groupStatus === true) {
+      const { groupStatus: _groupStatus, ...statusContent } = value;
+      return runtime.socket.sendMessage(jid, { ...materializeWorkloadContent(statusContent), groupStatus: true }, sendOptions);
+    }
+    return runtime.socket.sendMessage(jid, materializeWorkloadContent(content), sendOptions);
   }
   if (method === "sendGroupStatus") {
     const [jid, payload] = args;

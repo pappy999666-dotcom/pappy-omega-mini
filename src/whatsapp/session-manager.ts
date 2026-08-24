@@ -31,6 +31,7 @@ import { prepareCanonicalPreviewContent } from "./baileys-native-preview.js";
 import { enqueueInbound } from "./inbound-admission.js";
 import { enqueueOutbound } from "./outbound-admission.js";
 import {
+  extractMessageContextInfo,
   extractMessageText,
   extractWhatsAppInteraction,
   extractQuotedMessage,
@@ -553,7 +554,7 @@ async function openWhatsAppSession(
             message.key.remoteJidAlt ??
             message.key.participant ??
             message.key.remoteJid);
-        const contextInfo = message.message?.extendedTextMessage?.contextInfo as
+        const contextInfo = extractMessageContextInfo(envelope.message) as
           | { quotedMessage?: Record<string, unknown>; participant?: string; mentionedJid?: string[]; stanzaId?: string }
           | undefined;
         const lidMapping = (

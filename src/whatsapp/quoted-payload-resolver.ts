@@ -92,12 +92,29 @@ export function extractMessageText(
   return "";
 }
 
-export function extractQuotedMessage(
+export function extractMessageContextInfo(
   message: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
   const content = normalizedContent(message);
-  const extended = content?.extendedTextMessage;
-  const contextInfo = isRecord(extended) ? extended.contextInfo : undefined;
+  if (!content) return undefined;
+  const candidates = [
+    content.extendedTextMessage,
+    content.imageMessage,
+    content.videoMessage,
+    content.audioMessage,
+    content.documentMessage,
+    content.stickerMessage,
+  ];
+  for (const candidate of candidates) {
+    if (isRecord(candidate) && isRecord(candidate.contextInfo)) return candidate.contextInfo;
+  }
+  return undefined;
+}
+
+export function extractQuotedMessage(
+  message: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const contextInfo = extractMessageContextInfo(message);
   const quoted = isRecord(contextInfo) ? contextInfo.quotedMessage : undefined;
   return isRecord(quoted) ? quoted : undefined;
 }
