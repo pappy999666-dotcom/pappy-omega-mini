@@ -105,6 +105,7 @@ async function main(): Promise<void> {
   await ensureMongoIndexes();
   await ensureDurableValidatorIndexes();
   await hydrateSessionRegistry();
+  await hydrateMenuMedia();
   await hydrateControlPlane();
   let bot: ReturnType<typeof createTelegramBot> | undefined;
   if (!isWorkerProcess) {
