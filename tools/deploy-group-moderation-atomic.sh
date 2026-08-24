@@ -102,6 +102,8 @@ rollback() {
     rm -rf "$RESTORE_DIR"
   fi
   if [ -f ".deploy-backups/${LABEL}-worker-index.js" ]; then cp -a ".deploy-backups/${LABEL}-worker-index.js" worker-package/index.js; fi
+  chown pappy-omega:pappy-omega worker-package/index.js 2>/dev/null || true
+  chmod 0600 worker-package/index.js 2>/dev/null || true
   systemctl unmask pappy-omega-mini.service >/dev/null 2>&1 || true
   systemctl start pappy-omega-mini.service >/dev/null 2>&1 || true
   rm -rf "$STAGE"
@@ -117,7 +119,7 @@ for _ in $(seq 1 30); do
 done
 test "$(systemctl is-active pappy-omega-mini.service 2>/dev/null || true)" = inactive
 cp -a "$STAGE/dist/." dist/
-install -m 0700 "$STAGE/worker-package/index.js" worker-package/index.js
+install -o pappy-omega -g pappy-omega -m 0600 "$STAGE/worker-package/index.js" worker-package/index.js
 systemctl unmask pappy-omega-mini.service
 systemctl start pappy-omega-mini.service
 READY=false
