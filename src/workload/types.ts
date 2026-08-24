@@ -232,6 +232,10 @@ export interface WorkloadInboundEvent {
   quotedSenderJid?: string;
   quotedMessageKey?: Record<string, unknown>;
   mentionedJids?: string[];
+  /** Sanitized Baileys message shape used only by the central Anti System. */
+  message?: Record<string, unknown>;
+  /** Sanitized message key used for deletion and bot-signal checks. */
+  rawKey?: Record<string, unknown>;
   media?: WorkloadInboundMedia;
   fromMe?: boolean;
 }

@@ -102,6 +102,7 @@ let credentialState;
 let stopping = false;
 const matrix = { state: "BOOTING", lastHeartbeatAt: 0, lastControlAt: 0, lastAction: "starting", lastError: "none", lastRenderAt: 0 };
 let trafficPaused = false;
+let lastReadySessionStatusSyncAt = 0;
 const ANSI = {
   reset: "\x1b[0m",
   cyan: "\x1b[36m",
@@ -730,6 +731,22 @@ async function serializeInboundMedia(runtime, envelope) {
     return undefined;
   }
 }
+function sanitizeAntiValue(value, depth = 0, seen = new WeakSet()) {
+  if (depth > 8 || value === null || value === undefined) return undefined;
+  if (typeof value === "string") return value.slice(0, 2_000);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value !== "object") return undefined;
+  if (seen.has(value)) return undefined;
+  seen.add(value);
+  if (Array.isArray(value)) return value.slice(0, 100).map((item) => sanitizeAntiValue(item, depth + 1, seen)).filter((item) => item !== undefined);
+  const output = {};
+  for (const [key, item] of Object.entries(value).slice(0, 100)) {
+    if (/^(bytes|jpegThumbnail|thumbnailDirectPath|thumbnailEncSha256|thumbnailSha256|mediaKey|fileSha256|fileEncSha256|streamingSidecar|directPath)$/i.test(key)) continue;
+    const safe = sanitizeAntiValue(item, depth + 1, seen);
+    if (safe !== undefined) output[key] = safe;
+  }
+  return output;
+}
 async function emitInbound(runtime, message) {
   if (trafficPaused) return;
   const key = message?.key ?? {};
@@ -762,6 +779,8 @@ async function emitInbound(runtime, message) {
     : undefined;
   const inboundMedia = directMedia ?? quotedMedia;
   const senderJid = key.fromMe ? (runtime.socket.user?.id ?? remoteJid) : (key.participantAlt ?? key.remoteJidAlt ?? key.participant ?? remoteJid);
+  const safeMessage = sanitizeAntiValue(normalized);
+  const safeKey = sanitizeAntiValue(key);
   const eventPayload = {
     workspaceId: runtime.workspaceId,
     sessionId: runtime.sessionId,
@@ -769,6 +788,8 @@ async function emitInbound(runtime, message) {
     remoteJid,
     senderJid,
     text: interactionId ? "" : text,
+    ...(safeMessage && typeof safeMessage === "object" && !Array.isArray(safeMessage) ? { message: safeMessage } : {}),
+    ...(safeKey && typeof safeKey === "object" && !Array.isArray(safeKey) ? { rawKey: safeKey } : {}),
     ...(interactionId ? { interactionId } : {}),
     ...(quotedText ? { quotedText } : {}),
     ...(quotedSenderJid ? { quotedSenderJid } : {}),
@@ -1552,6 +1573,15 @@ async function register() {
   matrix.lastError = "none";
   renderMatrix(true);
 }
+function syncReadySessionStatuses() {
+  const now = Date.now();
+  if (now - lastReadySessionStatusSyncAt < 60_000) return;
+  lastReadySessionStatusSyncAt = now;
+  const ready = [...runtimes.values()].filter((runtime) => runtime.ready);
+  if (!ready.length) return;
+  void Promise.all(ready.map((runtime) => reportSessionStatus(runtime, "ACTIVE", "VALID")))
+    .catch(() => undefined);
+}
 async function heartbeat() {
   const result = await control("/workload/heartbeat", {
     workerVersion: WORKER_VERSION,
@@ -1566,6 +1596,7 @@ async function heartbeat() {
   for (const sessionId of restoredSessionIds) assignedSessions.add(sessionId);
   if (typeof result.workspaceId === "string" && result.workspaceId) credentialState.workspaceId = result.workspaceId;
   await saveWorkerState();
+  syncReadySessionStatuses();
   if (credentialState.workspaceId) {
     for (const sessionId of restoredSessionIds) {
       if (!runtimes.has(sessionId) && !intentionallyStopped.has(sessionId)) {

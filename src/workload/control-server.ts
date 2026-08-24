@@ -531,6 +531,8 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
           ? { quotedMessageKey: input.quotedMessageKey as Record<string, unknown> }
           : {}),
         ...(Array.isArray(input.mentionedJids) ? { mentionedJids: input.mentionedJids.filter((item): item is string => typeof item === "string").slice(0, 100) } : {}),
+        ...(input.message && typeof input.message === "object" && !Array.isArray(input.message) ? { message: input.message as Record<string, unknown> } : {}),
+        ...(input.rawKey && typeof input.rawKey === "object" && !Array.isArray(input.rawKey) ? { rawKey: input.rawKey as Record<string, unknown> } : {}),
         ...(inboundMedia ? { media: inboundMedia } : {}),
         ...(input.fromMe === true ? { fromMe: true } : {}),
       } satisfies WorkloadInboundEvent;

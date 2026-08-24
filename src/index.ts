@@ -20,6 +20,7 @@ import {
   waitForWhatsAppSessionReady,
 } from "./whatsapp/session-manager.js";
 import {
+  getSession,
   hydrateSessionRegistry,
   listAllSessions,
   updateSession,
@@ -44,6 +45,7 @@ import { closeBroadcastProgress } from "./workload/broadcast-progress.js";
 import { closeCanonicalPreview } from "./whatsapp/baileys-native-preview.js";
 import { closeSessionLockRedis } from "./core/session-lock.js";
 import { routeWhatsAppText, type WhatsAppReply } from "./whatsapp/message-router.js";
+import { runAntiChecks } from "./whatsapp/anti-system/engine.js";
 import { callAssignedWorkloadTransport } from "./whatsapp/workload-transport.js";
 import { setWorkloadInboundEventHandler } from "./workload/events.js";
 import type { WorkloadInboundEvent, WorkloadInboundResult } from "./workload/types.js";
@@ -129,6 +131,31 @@ async function main(): Promise<void> {
       if (cached && cached.expiresAt > Date.now()) return cached.result;
       if (cached) inboundDedupe.delete(key!);
       const processInbound = async (): Promise<WorkloadInboundResult> => {
+      if (!event.interactionId && event.remoteJid.endsWith("@g.us") && !event.fromMe) {
+        let sessionPrefix = "";
+        try {
+          sessionPrefix = getSession(event.workspaceId, event.sessionId).prefix ?? "";
+        } catch {
+          // The authenticated workload assignment was already checked by the control server.
+        }
+        void runAntiChecks({
+          workspaceId: event.workspaceId,
+          sessionId: event.sessionId,
+          groupJid: event.remoteJid,
+          ...(event.messageId ? { messageId: event.messageId } : {}),
+          senderJid: event.senderJid,
+          text: event.text,
+          prefix: sessionPrefix,
+          ...(event.quotedText ? { quotedText: event.quotedText } : {}),
+          ...(event.mentionedJids?.length ? { mentionedJids: event.mentionedJids } : {}),
+          ...(event.message ? { message: event.message } : {}),
+          ...(event.rawKey ? { rawKey: event.rawKey } : {}),
+          ...(event.media ? { mediaKind: event.media.kind, ...(event.media.ptt !== undefined ? { mediaPtt: event.media.ptt } : {}) } : {}),
+        }).catch((error) => {
+          if (process.env.PAPPY_DEBUG_WA_ANTI === "1")
+            console.warn(`[pappy-omega-mini] isolated panel Anti System check failed session=${event.sessionId}:`, error);
+        });
+      }
       const reply = await routeWhatsAppText({
         workspaceId: event.workspaceId,
         sessionId: event.sessionId,
