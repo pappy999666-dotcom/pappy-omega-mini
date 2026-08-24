@@ -266,15 +266,17 @@ export async function applyModerationConfirmation(ctx: CommandContext, action: "
 }
 
 export async function createPoll(ctx: CommandContext): Promise<string> {
-  if (!ctx.chatJid?.endsWith("@g.us")) return commandUsageCard({ title: "Poll Command", command: ".poll", commandSyntax: ".poll Question | Option 1 | Option 2", note: "This command can only be used inside a WhatsApp group." });
-  if (!ctx.sendCurrentGroupPoll) return "WhatsApp poll transport is unavailable.";
-  const fullText = [ctx.rawPayload ?? ctx.args.join(" "), ctx.quotedText ?? ""].join(" ").trim();
-  const parts = fullText.split("|").map((value) => value.trim()).filter(Boolean);
-  if (parts.length < 3) return commandUsageCard({ title: "Poll Command", command: ".poll", commandSyntax: ".poll Question | Option 1 | Option 2", howToUse: ["Separate the question and options with |.", "Provide at least two options."], note: "Example: .poll Choose a day | Monday | Friday" });
-  const question = parts[0]!.slice(0, 300);
-  const options = parts.slice(1, 13).map((value) => value.slice(0, 100));
-  await ctx.sendCurrentGroupPoll({ question, options });
-  return formatModerationMessage("POLL CREATED", [["Question", question], ["Options", String(options.length)]]);
+  try {
+    const { groupJid } = await freshGroup(ctx, "Poll");
+    if (!ctx.sendCurrentGroupPoll) return "WhatsApp poll transport is unavailable.";
+    const fullText = [ctx.rawPayload ?? ctx.args.join(" "), ctx.quotedText ?? ""].join(" ").trim();
+    const parts = fullText.split("|").map((value) => value.trim()).filter(Boolean);
+    if (parts.length < 3) return commandUsageCard({ title: "Poll Command", command: ".poll", commandSyntax: ".poll Question | Option 1 | Option 2", howToUse: ["Separate the question and options with |.", "Provide at least two options."], note: "Example: .poll Choose a day | Monday | Friday" });
+    const question = parts[0]!.slice(0, 300);
+    const options = parts.slice(1, 13).map((value) => value.slice(0, 100));
+    await ctx.sendCurrentGroupPoll({ question, options });
+    return formatModerationMessage("POLL CREATED", [["Question", question], ["Options", String(options.length)], ["Scope", groupJid]]);
+  } catch (error) { return error instanceof Error ? error.message : String(error); }
 }
 
 export async function filterCountry(ctx: CommandContext): Promise<string> {

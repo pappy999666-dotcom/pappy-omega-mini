@@ -86,7 +86,30 @@ export interface EnqueueGroupControlResult {
 }
 
 const MAX_GROUP_CONTROL_PARTICIPANTS = 1_000;
+const MODERATION_COMMAND_NAMES = new Set([
+  "kick", "promote", "demote", "dnkick", "block", "unblock", "ban", "unban", "banlist",
+  "warn", "unwarn", "warns", "mute", "unmute", "filter", "filterout", "poll", "blockall",
+  "dlt", "deleteall", "kickall", "kickamt", "kickcountry",
+]);
+const ANTI_CONTROL_NAMES = new Set([
+  "spamlimit", "silentactions", "linkpermit", "rmlinkpermit", "botpermit", "rmbotpermit",
+  "spampermit", "rmspampermit", "picpermit", "rmpicpermit", "vidpermit", "rmvidpermit",
+  "audpermit", "rmaudpermit", "vnpermit", "rmvnpermit", "emojipermit", "rmemojipermit",
+  "sticpermit", "rmsticpermit", "nsfwpermit", "rmnsfwpermit", "mentionpermit", "rmmentionpermit",
+  "gmpermit", "rmgmpermit", "pollpermit", "rmpollpermit", "fwdpermit", "rmfwdpermit",
+  "chanpermit", "rmchanpermit",
+]);
 const playSessionTails = new Map<string, Promise<void>>();
+
+function isProtectedGroupCommand(name: string): boolean {
+  return MODERATION_COMMAND_NAMES.has(name) || name.startsWith("anti") || ANTI_CONTROL_NAMES.has(name);
+}
+
+function protectedCommandFailure(error: unknown): string {
+  const detail = (error instanceof Error ? error.message : String(error ?? "")).replace(/[\r\n\t]+/g, " ").trim();
+  if (detail && detail.length <= 420) return `Moderation could not be completed: ${detail}`;
+  return "Moderation could not be completed because the WhatsApp permission or transport check failed. No further action was applied.";
+}
 
 async function withSessionPlaySlot<T>(ctx: CommandContext, task: () => Promise<T>): Promise<T> {
   const key = `${ctx.workspaceId}:${ctx.sessionId}`;
@@ -1775,8 +1798,13 @@ export async function executeCommand(
   ctx: CommandContext,
 ): Promise<string | WhatsAppCommandReply> {
   const normalizedRaw = raw.trim();
-  if (/^group-control:(?:confirm|cancel):[a-z0-9]+$/iu.test(normalizedRaw))
-    return (await handleGroupControlInteraction(normalizedRaw, ctx)) ?? "This interaction is no longer available.";
+  if (/^group-control:(?:confirm|cancel):[a-z0-9]+$/iu.test(normalizedRaw)) {
+    try {
+      return (await handleGroupControlInteraction(normalizedRaw, ctx)) ?? "This interaction is no longer available.";
+    } catch (error) {
+      return protectedCommandFailure(error);
+    }
+  }
   const commandMatch = /^(\S+)(?:\s+|$)/.exec(normalizedRaw);
   const name = commandMatch?.[1] ?? "";
   const payloadStart = commandMatch?.[0]?.length ?? normalizedRaw.length;
@@ -1801,10 +1829,15 @@ export async function executeCommand(
         : command.name === "pfp" && invokedName === "removepfp"
           ? ["remove", ...args]
           : args;
-  return command.run({
-    ...ctx,
-    invokedName,
-    args: normalizedArgs,
-    rawPayload,
-  });
+  try {
+    return await command.run({
+      ...ctx,
+      invokedName,
+      args: normalizedArgs,
+      rawPayload,
+    });
+  } catch (error) {
+    if (isProtectedGroupCommand(command.name)) return protectedCommandFailure(error);
+    throw error;
+  }
 }

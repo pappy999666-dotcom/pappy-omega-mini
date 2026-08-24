@@ -97,9 +97,9 @@ describe("Omega-V1 Anti System parity surface", () => {
 
   it("requires a group and fresh group-admin permission for Anti configuration", async () => {
     const direct = context({ chatJid: "2348012345678@s.whatsapp.net" });
-    await expect(executeCommand(createCommandRegistry(), "antilink delete", direct)).rejects.toThrow(/inside a WhatsApp group/);
+    expect(await executeCommand(createCommandRegistry(), "antilink delete", direct)).toContain("inside a WhatsApp group");
     mockedSnapshot.mockResolvedValueOnce({ isAdmin: false } as never);
-    await expect(executeCommand(createCommandRegistry(), "antilink delete", context())).rejects.toThrow(/not an administrator/);
+    expect(await executeCommand(createCommandRegistry(), "antilink delete", context())).toContain("not an administrator");
   });
 
   it("supports custom messages, permits, AntiWords, and silent actions", async () => {

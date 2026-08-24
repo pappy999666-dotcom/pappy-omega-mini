@@ -73,6 +73,22 @@ describe("WhatsApp remaining group moderation", () => {
     expect(String(result)).not.toContain("unknown@lid");
   });
 
+  it("denies moderation and poll actions to non-administrators without throwing", async () => {
+    const nonAdmin = context({ isOwner: false, senderJid: "2348022222222@s.whatsapp.net" });
+    expect(await executeCommand(createCommandRegistry(), "kick 2348022222222", nonAdmin)).toContain("Only the group owner");
+    expect(await executeCommand(createCommandRegistry(), "poll Question | Yes | No", nonAdmin)).toContain("Only the group owner");
+    expect(await executeCommand(createCommandRegistry(), "kickall", nonAdmin)).toContain("restricted to the session owner");
+  });
+
+  it("returns a safe moderation failure when a confirmed bulk action cannot be queued", async () => {
+    const enqueueGroupControlJob = vi.fn(async () => { throw new Error("queue unavailable"); });
+    const ctx = context({ enqueueGroupControlJob });
+    const preview = await executeCommand(createCommandRegistry(), "kickall", ctx);
+    const result = await confirmPreview(preview, ctx);
+    expect(String(result)).toContain("Moderation could not be completed");
+    expect(String(result)).toContain("queue unavailable");
+  });
+
   it("requires native confirmation for kick, fresh membership, and one durable job", async () => {
     const ctx = context();
     const preview = await executeCommand(createCommandRegistry(), "kick 2348022222222", ctx);
