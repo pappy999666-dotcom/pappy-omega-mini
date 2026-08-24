@@ -43,7 +43,7 @@ export function selectWhatsappMenuMedia(
 }
 
 export function clearWhatsappMenuMedia(workspaceId: string): string {
-  setWhatsappMenuMedia(workspaceId, undefined);
+  setWhatsappMenuMedia(workspaceId, null);
   return "WhatsApp menu media cleared. The menu will render in text mode.";
 }
 

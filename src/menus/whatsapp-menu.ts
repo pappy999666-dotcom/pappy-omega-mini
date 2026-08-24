@@ -46,14 +46,9 @@ export async function buildWhatsappMenuPayload(
       }
     | undefined;
   const configuredId = configuration.whatsappMenuMediaId;
-  const candidateIds = [
-    ...new Set(
-      [
-        configuredId,
-        ...listMenuMedia(session.workspaceId).map((item) => item.mediaId),
-      ].filter((value): value is string => Boolean(value)),
-    ),
-  ];
+  // An explicit clear means text mode. Never auto-select another uploaded
+  // image after the administrator removes the active selection.
+  const candidateIds = configuredId ? [configuredId] : [];
   for (const mediaId of candidateIds) {
     try {
       const candidate = getMenuMedia(session.workspaceId, mediaId);
@@ -65,7 +60,7 @@ export async function buildWhatsappMenuPayload(
         mime_type: candidate.mimeType,
         width: 1080,
         height: 620,
-        inline: true,
+        inline: false,
       };
       break;
     } catch (error) {
