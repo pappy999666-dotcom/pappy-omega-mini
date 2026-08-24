@@ -39,7 +39,7 @@ import {
   resolveMediaPayload,
 } from "./quoted-payload-resolver.js";
 import { phoneJidFromIdentity } from "./identity-normalization.js";
-import { trackInboundMessage } from "./moderation-message-tracker.js";
+import { trackInboundMessage, trackOutboundResult } from "./moderation-message-tracker.js";
 import { createAssignedWorkloadSocket, callAssignedWorkloadTransport } from "./workload-transport.js";
 import {
   queueWorkloadCommand,
@@ -430,10 +430,11 @@ async function openWhatsAppSession(
       const richMenu = content?.richMenu as Record<string, unknown> | undefined;
       const richMenuSender = (socket as unknown as { richMenu?: (target: string, value: Record<string, unknown>) => Promise<unknown> }).richMenu;
       const mentions = Array.isArray(content?.mentions) ? content.mentions.filter((value: unknown): value is string => typeof value === "string") : [];
+      let sendResult: unknown;
       if (richMenu && typeof richMenuSender === "function") {
-        await richMenuSender(jid, richMenu);
+        sendResult = await richMenuSender(jid, richMenu);
       } else if (nativeTable && typeof socket.sendInteractiveTable === "function") {
-        await socket.sendInteractiveTable(jid, nativeTable, mentions.length ? { mentions } : {});
+        sendResult = await socket.sendInteractiveTable(jid, nativeTable, mentions.length ? { mentions } : {});
       } else {
         const { nativeTable: _nativeTable, richMenu: _richMenu, ...safeContent } = content ?? {};
         const text =
@@ -448,8 +449,9 @@ async function openWhatsAppSession(
           socket,
           cacheScope: `${workspaceId}:${sessionId}`,
         });
-        await socket.sendMessage(jid, outbound);
+        sendResult = await socket.sendMessage(jid, outbound);
       }
+      trackOutboundResult(workspaceId, sessionId, jid, (socket as unknown as { user?: { id?: string } }).user?.id, sendResult);
       const sentAt = noteOutboundMessage(key);
       updateSession(workspaceId, sessionId, {
         lastOutboundMessageAt: sentAt,

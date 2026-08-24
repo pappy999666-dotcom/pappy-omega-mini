@@ -7,6 +7,7 @@ import {
 import { createGroupStatusDesign } from "./status-design.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { isPanelAssignedSession } from "./workload-transport.js";
+import { trackOutboundResult } from "./moderation-message-tracker.js";
 
 export type TransportCapability =
   | "profileName"
@@ -32,6 +33,16 @@ function socketFor(workspaceId: string, sessionId: string): WASocket {
 }
 function ownJid(socket: WASocket): string {
   return (socket as WASocket & { user?: { id?: string } }).user?.id ?? "me";
+}
+
+function rememberGroupMessage(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  socket: WASocket,
+  result: unknown,
+): void {
+  trackOutboundResult(workspaceId, sessionId, groupJid, ownJid(socket), result);
 }
 
 function jidVariants(value: unknown): Set<string> {
@@ -751,7 +762,8 @@ export async function sendGroupPoll(
 ): Promise<void> {
   const send = method(socketFor(workspaceId, sessionId), "sendMessage");
   if (!send) throw new Error("Unsupported capability: sendMessage");
-  await send(groupJid, { poll: { name: question, values: options, selectableCount: 1 } });
+  const result = await send(groupJid, { poll: { name: question, values: options, selectableCount: 1 } });
+  rememberGroupMessage(workspaceId, sessionId, groupJid, socketFor(workspaceId, sessionId), result);
 }
 
 /** Delete one inbound WhatsApp message using its original Baileys key. */
@@ -924,7 +936,7 @@ export async function sendGroupText(
     ...messagePayload(text, media),
     ...(mentions?.length ? { mentions } : {}),
   };
-  await send(
+  const result = await send(
     jid,
     await prepareCanonicalPreviewContent({
       text,
@@ -933,6 +945,7 @@ export async function sendGroupText(
       cacheScope: `${workspaceId}:${sessionId}`,
     }),
   );
+  rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
 }
 
 export async function sendGroupStatus(
@@ -950,7 +963,8 @@ export async function sendGroupStatus(
   const native = method(socket, "sendGroupStatus");
   const text = payload.text ?? "";
   if (native && !payload.media && !/https?:\/\/\S+/i.test(text)) {
-    await native(jid, payload);
+    const result = await native(jid, payload);
+    rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
     return;
   }
   const send = method(socket, "sendMessage");
@@ -964,10 +978,11 @@ export async function sendGroupStatus(
       socket,
       cacheScope: `${workspaceId}:${sessionId}`,
     });
-    await send(jid, {
+    const result = await send(jid, {
       ...preparedMedia,
       groupStatus: true,
     });
+    rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
     return;
   }
   const { media: _media, ...statusPayload } = payload;
@@ -982,7 +997,8 @@ export async function sendGroupStatus(
     socket,
     cacheScope: `${workspaceId}:${sessionId}`,
   });
-  await send(jid, prepared);
+  const result = await send(jid, prepared);
+  rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
 }
 
 export async function sendPersonalStatus(
@@ -1069,11 +1085,8 @@ export async function sendGroupColorStatus(
     backgroundColor: design.backgroundColor,
     font: design.font,
   };
-  if (payload.media) {
-    await send(jid, { ...prepared, groupStatus: true }, sendOptions);
-  } else {
-    await send(jid, { ...prepared, groupStatus: true }, sendOptions);
-  }
+  const result = await send(jid, { ...prepared, groupStatus: true }, sendOptions);
+  rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
 }
 
 export async function updateWhatsAppGroupSubject(
@@ -1177,7 +1190,7 @@ export async function sendGroupHidetag(
   const participants = await getGroupParticipants(workspaceId, sessionId, jid);
   if (!participants.length)
     throw new Error("No phone-number JIDs were available for this group.");
-  await send(
+  const result = await send(
     jid,
     await prepareCanonicalPreviewContent({
       text,
@@ -1186,6 +1199,7 @@ export async function sendGroupHidetag(
       cacheScope: `${workspaceId}:${sessionId}`,
     }),
   );
+  rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
 }
 
 export async function sendGroupMentions(
@@ -1206,7 +1220,7 @@ export async function sendGroupMentions(
   );
   // Keep the body plain and pass recipients only through hidden mention
   // metadata; the shared pipeline handles URL preview preparation.
-  await send(
+  const result = await send(
     jid,
     await prepareCanonicalPreviewContent({
       text,
@@ -1215,6 +1229,7 @@ export async function sendGroupMentions(
       cacheScope: `${workspaceId}:${sessionId}`,
     }),
   );
+  rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
 }
 
 export async function validateInviteLink(

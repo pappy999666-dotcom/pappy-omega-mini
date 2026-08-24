@@ -3,6 +3,7 @@ import { rm } from "node:fs/promises";
 import { createSession } from "../src/core/session-registry.js";
 import { createCommandRegistry, executeCommand, type WhatsAppCommandReply } from "../src/whatsapp/command-registry.js";
 import { getGroupModerationSnapshot, setGroupChatMode, updateParticipantBlockStatus, deleteWhatsAppMessage } from "../src/whatsapp/transport-adapter.js";
+import { trackOutboundMessage } from "../src/whatsapp/moderation-message-tracker.js";
 
 vi.mock("../src/whatsapp/transport-adapter.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/whatsapp/transport-adapter.js")>();
@@ -212,6 +213,28 @@ describe("WhatsApp remaining group moderation", () => {
     await confirmPreview(preview, ctx);
     expect(mockedDelete).not.toHaveBeenCalled();
     expect(String(await executeCommand(createCommandRegistry(), "deleteall", context({ chatJid: "120363000000000000@s.whatsapp.net" })))).toContain("inside a WhatsApp group");
+  });
+
+  it("deletes one quoted message and reviews all cached bot messages for deleteall", async () => {
+    const ctx = context({ quotedMessageKey: { remoteJid: groupJid, id: "quoted-bot-message", fromMe: true } });
+    const dltResult = await executeCommand(createCommandRegistry(), "dlt", ctx);
+    expect(dltResult).toContain("MESSAGE DELETED");
+    expect(mockedDelete).toHaveBeenCalledWith(ctx.workspaceId, ctx.sessionId, groupJid, expect.objectContaining({ id: "quoted-bot-message", remoteJid: groupJid }));
+
+    const cacheCtx = context();
+    trackOutboundMessage(cacheCtx.workspaceId, cacheCtx.sessionId, groupJid, "2348012345678@s.whatsapp.net", { remoteJid: groupJid, id: "cached-bot-message", fromMe: true });
+    const preview = await executeCommand(createCommandRegistry(), "deleteall", cacheCtx);
+    expect((preview as WhatsAppCommandReply).text).toContain("No action queued");
+    await confirmPreview(preview, cacheCtx);
+    expect(mockedDelete).toHaveBeenCalledWith(cacheCtx.workspaceId, cacheCtx.sessionId, groupJid, expect.objectContaining({ id: "cached-bot-message", remoteJid: groupJid, fromMe: true }));
+  });
+
+  it("revokes a quoted member message before confirmed kick", async () => {
+    const ctx = context({ args: ["2348022222222"], quotedMessageKey: { remoteJid: groupJid, id: "member-offense", participant: "2348022222222@s.whatsapp.net" } });
+    const preview = await executeCommand(createCommandRegistry(), "kick 2348022222222", ctx);
+    await confirmPreview(preview, ctx);
+    expect(mockedDelete).toHaveBeenCalledWith(ctx.workspaceId, ctx.sessionId, groupJid, expect.objectContaining({ id: "member-offense", remoteJid: groupJid }));
+    expect(ctx.enqueueGroupControlJob).toHaveBeenCalled();
   });
 
   it("does not register welcome or goodbye automation in the moderation surface", () => {

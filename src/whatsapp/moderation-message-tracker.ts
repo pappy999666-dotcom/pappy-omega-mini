@@ -5,6 +5,7 @@ interface TrackedMessage {
   senderPhone: string;
   key: Record<string, unknown>;
   trackedAt: number;
+  source: "inbound" | "outbound";
 }
 
 const MAX_PER_SESSION = 5_000;
@@ -29,6 +30,23 @@ function prune(store: Map<string, TrackedMessage>, now = Date.now()): void {
   }
 }
 
+function trackMessage(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  senderIdentity: unknown,
+  key: Record<string, unknown>,
+  source: TrackedMessage["source"],
+): void {
+  if (!groupJid.endsWith("@g.us") || typeof key.id !== "string" || !key.id) return;
+  const senderPhone = firstVerifiedPhone(senderIdentity);
+  if (!senderPhone) return;
+  const store = storeFor(workspaceId, sessionId);
+  const trackedAt = Date.now();
+  store.set(`${groupJid}:${key.id}:${senderPhone}`, { groupJid, senderPhone, key: { ...key }, trackedAt, source });
+  prune(store, trackedAt);
+}
+
 export function trackInboundMessage(
   workspaceId: string,
   sessionId: string,
@@ -36,13 +54,37 @@ export function trackInboundMessage(
   senderIdentity: unknown,
   key: Record<string, unknown>,
 ): void {
-  if (!groupJid.endsWith("@g.us") || typeof key.id !== "string" || !key.id) return;
-  const senderPhone = firstVerifiedPhone(senderIdentity);
-  if (!senderPhone) return;
-  const store = storeFor(workspaceId, sessionId);
-  const trackedAt = Date.now();
-  store.set(`${groupJid}:${key.id}:${senderPhone}`, { groupJid, senderPhone, key: { ...key }, trackedAt });
-  prune(store, trackedAt);
+  trackMessage(workspaceId, sessionId, groupJid, senderIdentity, key, "inbound");
+}
+
+export function trackOutboundMessage(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  senderIdentity: unknown,
+  key: Record<string, unknown>,
+): void {
+  trackMessage(workspaceId, sessionId, groupJid, senderIdentity, key, "outbound");
+}
+
+export function trackOutboundResult(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  senderIdentity: unknown,
+  result: unknown,
+): void {
+  if (!groupJid.endsWith("@g.us") || !result || typeof result !== "object") return;
+  const value = result as Record<string, unknown>;
+  const candidate = value.key && typeof value.key === "object" && !Array.isArray(value.key)
+    ? value.key as Record<string, unknown>
+    : value;
+  if (typeof candidate.id !== "string" || !candidate.id) return;
+  trackOutboundMessage(workspaceId, sessionId, groupJid, senderIdentity, {
+    ...candidate,
+    remoteJid: typeof candidate.remoteJid === "string" ? candidate.remoteJid : groupJid,
+    fromMe: true,
+  });
 }
 
 export function listTrackedMessages(
@@ -55,6 +97,20 @@ export function listTrackedMessages(
   prune(store);
   return [...store.values()]
     .filter((value) => value.groupJid === groupJid && value.senderPhone === senderPhone)
+    .sort((left, right) => left.trackedAt - right.trackedAt)
+    .map((value) => ({ ...value.key }));
+}
+
+export function listTrackedOutboundMessages(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  senderPhone: string,
+): Array<Record<string, unknown>> {
+  const store = storeFor(workspaceId, sessionId);
+  prune(store);
+  return [...store.values()]
+    .filter((value) => value.source === "outbound" && value.groupJid === groupJid && value.senderPhone === senderPhone)
     .sort((left, right) => left.trackedAt - right.trackedAt)
     .map((value) => ({ ...value.key }));
 }

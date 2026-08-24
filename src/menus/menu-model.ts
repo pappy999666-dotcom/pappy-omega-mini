@@ -118,7 +118,8 @@ export function buildSessionMenu(
     { id: "filterout", label: "Filter out", command: "filterout", description: "Bounded native-confirmed removal by country prefix." },
     { id: "poll", label: "Poll", command: "poll", description: "Create a native group poll." },
     { id: "blockall", label: "Block all review", command: "blockall", description: "Bounded native confirmation for eligible non-admin members." },
-    { id: "deleteall", label: "Delete recent member messages", command: "deleteall", description: "Bounded native confirmation for recent tracked messages." },
+    { id: "dlt", label: "Delete message", command: "dlt", description: "Delete one quoted message from this group." },
+    { id: "deleteall", label: "Delete all bot cache", command: "deleteall", description: "Delete all recent bot-authored messages retained for this group." },
     { id: "purge", label: "Purge", command: "purge", description: "Permanently remove this session.", ownerOnly: true },
     ...ANTI_MENU_COMMANDS.map((command) => ({ id: `anti-${command}`, label: command, command, description: `Omega-V1 Anti System control: .${command}` })),
   ];
@@ -155,7 +156,7 @@ export function renderAsciiMenu(model: SessionMenuModel): string {
   const sessionSet = new Set(["autojoin", "join", "targetgs", "setprefix", "pfp", "setgpp", "setname", "setbio", "groups", "creategroup"]);
   const localSet = new Set(["pstatus", "gstatus", "dgstatus", "tag", "stag"]);
   const ownerSet = new Set(["pair", "previewdebug", "broadcastdelay", "allstatus", "dallstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "stopstag", "iggc", "setsudo", "pendingjoin", "approveall", "approveamt", "approvecountry", "rejectall", "rejectamt", "rejectcountry", "reqamt", "kickall", "kickamt", "kickcountry"]);
-  const moderationSet = new Set(["kick", "promote", "demote", "dnkick", "block", "unblock", "ban", "unban", "banlist", "warn", "unwarn", "warns", "mute", "unmute", "filter", "filterout", "poll", "blockall", "deleteall"]);
+  const moderationSet = new Set(["kick", "promote", "demote", "dnkick", "block", "unblock", "ban", "unban", "banlist", "warn", "unwarn", "warns", "mute", "unmute", "filter", "filterout", "poll", "blockall", "dlt", "deleteall"]);
   const antiSet = new Set<string>(ANTI_MENU_COMMANDS);
   const commandIndent = "︎ ".repeat(15);
   const renderSection = (title: string, icon: string, set: Set<string>): string[] => {

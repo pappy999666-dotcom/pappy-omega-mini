@@ -45,6 +45,7 @@ import {
   unbanMember,
   unblockMember,
   warnMember,
+  deleteSingleMessage,
 } from "./group-moderation-commands.js";
 import {
   createWhatsAppGroup,
@@ -59,6 +60,7 @@ import {
   getGroupInviteCode,
   getGroupModerationSnapshot,
   listGroupJoinRequests,
+  deleteWhatsAppMessage,
 } from "./transport-adapter.js";
 
 export interface EnqueueJobResult {
@@ -311,6 +313,7 @@ async function memberConfirmationReply(
     operation: "participant",
     participantAction,
     participants: participants.map((participant) => firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id)).filter((phone): phone is string => Boolean(phone)).map((phone) => phoneJidFromIdentity(phone)).filter((jid): jid is string => Boolean(jid)),
+    ...(ctx.quotedMessageKey ? { quotedMessageKey: ctx.quotedMessageKey } : {}),
     table: {
       title: `Member Control · ${participantAction.toUpperCase()} Confirmation`,
       headers: ["Member", "Selection"],
@@ -784,9 +787,15 @@ export function createCommandRegistry(): RegisteredCommand[] {
       run: async (ctx) => blockAll(ctx),
     },
     {
+      name: "dlt",
+      aliases: ["del", "delete"],
+      description: "Delete one quoted message from the current WhatsApp group.",
+      run: async (ctx) => deleteSingleMessage(ctx),
+    },
+    {
       name: "deleteall",
       aliases: [],
-      description: "Review bounded deletion of recent tracked messages from one verified member.",
+      description: "Without a target, review deletion of all recent cached bot messages in this group; with a target, review that member’s tracked messages.",
       run: async (ctx) => deleteAllMember(ctx),
     },
     {
@@ -1728,7 +1737,7 @@ export async function handleGroupControlInteraction(
   if (!pending) return "This confirmation expired, was cancelled, or belongs to another WhatsApp identity.";
   if (action === "cancel") return "✅ Group operation cancelled. No batch job was queued.";
   if (pending.operation === "moderation") {
-    return applyModerationConfirmation(ctx, pending.moderationAction ?? "unmute", pending.participants[0]);
+    return applyModerationConfirmation(ctx, pending.moderationAction ?? "unmute", pending.participants[0], pending.quotedMessageKey);
   }
   if (pending.operation === "participant") {
     const freshGroup = await getGroupModerationSnapshot(ctx.workspaceId, ctx.sessionId, pending.groupJid, { fresh: true });
@@ -1739,6 +1748,8 @@ export async function handleGroupControlInteraction(
       return Boolean(phone && currentPhones.has(phone));
     });
     if (!stillMembers.length) return "No confirmed verified-phone target remains in this group; the action was not queued.";
+    if (pending.quotedMessageKey && ["remove", "block", "demote-remove"].includes(pending.participantAction ?? ""))
+      await Promise.resolve(deleteWhatsAppMessage(ctx.workspaceId, ctx.sessionId, pending.groupJid, { ...pending.quotedMessageKey, remoteJid: pending.groupJid })).catch(() => undefined);
     return queueMemberOperation(ctx, pending.groupJid, pending.participantAction ?? "remove", stillMembers);
   }
   const fresh = await pendingApprovalRequests(ctx);

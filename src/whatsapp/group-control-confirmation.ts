@@ -25,6 +25,7 @@ export interface PendingGroupControl {
   participantAction?: "promote" | "demote" | "remove" | "block" | "demote-remove";
   moderationAction?: "ban" | "unban" | "mute" | "unmute" | "deleteall" | "warn-kick";
   participants: string[];
+  quotedMessageKey?: Record<string, unknown>;
   table: GroupControlTable;
   createdAt: number;
   expiresAt: number;

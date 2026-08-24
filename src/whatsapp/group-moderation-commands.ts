@@ -6,7 +6,7 @@ import { registerGroupControlConfirmation } from "./group-control-confirmation.j
 import { isPhoneBanned, listBannedPhones, setPhoneBanned, getManualWarning, incrementManualWarning, resetManualWarning } from "./group-moderation-state.js";
 import { buildModerationActionResponse, buildModerationWarningResponse, formatModerationMessage, realMention, withMentions } from "./moderation-response.js";
 import { banUsageCard, commandUsageCard } from "./response-cards.js";
-import { listTrackedMessages, forgetTrackedMessage } from "./moderation-message-tracker.js";
+import { listTrackedMessages, listTrackedOutboundMessages, forgetTrackedMessage } from "./moderation-message-tracker.js";
 import { deleteWhatsAppMessage } from "./transport-adapter.js";
 
 interface Target {
@@ -44,7 +44,7 @@ async function targetOf(ctx: CommandContext, label: string): Promise<{ groupJid:
   }
 }
 
-function moderationReply(ctx: CommandContext, action: "ban" | "unban" | "mute" | "unmute" | "deleteall" | "warn-kick", groupJid: string, target?: Target): WhatsAppCommandReply {
+function moderationReply(ctx: CommandContext, action: "ban" | "unban" | "mute" | "unmute" | "deleteall" | "warn-kick", groupJid: string, target?: Target, scopeLabel?: string): WhatsAppCommandReply {
   const pending = registerGroupControlConfirmation({
     workspaceId: ctx.workspaceId,
     sessionId: ctx.sessionId,
@@ -53,10 +53,11 @@ function moderationReply(ctx: CommandContext, action: "ban" | "unban" | "mute" |
     operation: "moderation",
     moderationAction: action,
     participants: target ? [target.jid] : [],
+    ...(ctx.quotedMessageKey ? { quotedMessageKey: ctx.quotedMessageKey } : {}),
     table: {
       title: `Moderation · ${action.toUpperCase()} Confirmation`,
       headers: ["Action", "Scope"],
-      rows: [[action.toUpperCase(), target?.phone ? realMention(target.phone) : "Current group"]],
+      rows: [[action.toUpperCase(), target?.phone ? realMention(target.phone) : (scopeLabel ?? "Current group")]],
       buttons: [],
       footer: "No action is queued until Confirm is tapped. This preview expires in 90 seconds.",
     },
@@ -78,6 +79,7 @@ function targetReply(ctx: CommandContext, action: "remove" | "promote" | "demote
     operation: "participant",
     participantAction: action,
     participants: [target.jid],
+    ...(ctx.quotedMessageKey ? { quotedMessageKey: ctx.quotedMessageKey } : {}),
     table: {
       title: `Member Control · ${action.toUpperCase()} Confirmation`,
       headers: ["Member", "Action"],
@@ -175,17 +177,57 @@ export async function muteGroup(ctx: CommandContext, muted: boolean): Promise<st
   } catch (error) { return error instanceof Error ? error.message : String(error); }
 }
 
+export async function deleteSingleMessage(ctx: CommandContext): Promise<string> {
+  try {
+    const { groupJid, snapshot } = await freshGroup(ctx, "Dlt");
+    const key = ctx.quotedMessageKey;
+    if (!key || typeof key.id !== "string" || !key.id)
+      return commandUsageCard({ title: "Delete Message Command", command: ".dlt", commandSyntax: ".dlt (reply to a message)", note: "Reply to the message that should be revoked. Only this group is affected." });
+    if (typeof key.remoteJid === "string" && key.remoteJid !== groupJid)
+      return "The quoted message belongs to another chat; no message was deleted.";
+    await deleteWhatsAppMessage(ctx.workspaceId, ctx.sessionId, groupJid, { ...key, remoteJid: groupJid });
+    forgetTrackedMessage(ctx.workspaceId, ctx.sessionId, groupJid, key);
+    return buildModerationActionResponse({ title: "MESSAGE DELETED", action: "Quoted message revoked", groupName: snapshot.subject, note: "The deletion was limited to the quoted message in this group." }).text;
+  } catch (error) { return error instanceof Error ? error.message : String(error); }
+}
+
 export async function deleteAllMember(ctx: CommandContext): Promise<string | WhatsAppCommandReply> {
+  if (!ctx.args.length) {
+    try {
+      const { groupJid } = await freshGroup(ctx, "DeleteAll");
+      const botPhone = firstVerifiedPhone(getSession(ctx.workspaceId, ctx.sessionId).phoneNumber);
+      if (!botPhone) return "The session phone identity is unavailable; no bot-message cache was changed.";
+      const count = listTrackedOutboundMessages(ctx.workspaceId, ctx.sessionId, groupJid, botPhone).length;
+      if (!count) return buildModerationActionResponse({ title: "DELETEALL", action: "No cached bot messages found", groupName: "This group only", note: "Only messages sent by this bot instance and retained in its bounded cache are eligible." }).text;
+      return moderationReply(ctx, "deleteall", groupJid, undefined, `${count} cached bot message(s) · this group only`);
+    } catch (error) { return error instanceof Error ? error.message : String(error); }
+  }
   const resolved = await targetOf(ctx, "DeleteAll");
   if ("error" in resolved) return resolved.error;
   return moderationReply(ctx, "deleteall", resolved.groupJid, resolved.target);
 }
 
-export async function applyModerationConfirmation(ctx: CommandContext, action: "ban" | "unban" | "mute" | "unmute" | "deleteall" | "warn-kick", participant?: string): Promise<string | WhatsAppCommandReply> {
+export async function applyModerationConfirmation(ctx: CommandContext, action: "ban" | "unban" | "mute" | "unmute" | "deleteall" | "warn-kick", participant?: string, quotedMessageKey?: Record<string, unknown>): Promise<string | WhatsAppCommandReply> {
   const { groupJid, snapshot } = await freshGroup(ctx, action);
   if (action === "mute" || action === "unmute") {
     await setGroupChatMode(ctx.workspaceId, ctx.sessionId, groupJid, action === "mute");
     return buildModerationActionResponse({ title: action === "mute" ? "GROUP MUTED" : "GROUP UNMUTED", action: action === "mute" ? "Administrators only" : "All members may send", groupName: "This group only", note: "This is a group-wide WhatsApp announcement mode change." });
+  }
+  if (action === "deleteall" && !participant) {
+    const botPhone = firstVerifiedPhone(getSession(ctx.workspaceId, ctx.sessionId).phoneNumber);
+    if (!botPhone) return "The session phone identity is unavailable; no bot-message cache was changed.";
+    const messages = listTrackedOutboundMessages(ctx.workspaceId, ctx.sessionId, groupJid, botPhone);
+    let deleted = 0;
+    for (const key of messages) {
+      try {
+        await deleteWhatsAppMessage(ctx.workspaceId, ctx.sessionId, groupJid, key);
+        forgetTrackedMessage(ctx.workspaceId, ctx.sessionId, groupJid, key);
+        deleted += 1;
+      } catch {
+        // Continue through the bounded cache; the response reports successful revocations.
+      }
+    }
+    return buildModerationActionResponse({ title: "DELETEALL COMPLETE", action: `${deleted} cached bot message(s) deleted`, groupName: snapshot.subject, note: "Only this bot instance’s recent bounded cache was eligible; member messages and other groups were not touched." });
   }
   const phone = firstVerifiedPhone(participant);
   if (!phone) return "The confirmation did not retain a verified phone identity; no action was applied.";
@@ -193,7 +235,7 @@ export async function applyModerationConfirmation(ctx: CommandContext, action: "
   if (action === "ban" && (!current || current.admin)) return "The confirmed target is no longer an eligible regular member; no local ban was applied.";
   if (action === "warn-kick") {
     if (!current || current.admin) return "The confirmed warning target is no longer an eligible regular member; no removal was applied.";
-    if (ctx.quotedMessageKey) await deleteWhatsAppMessage(ctx.workspaceId, ctx.sessionId, groupJid, ctx.quotedMessageKey).catch(() => undefined);
+    if (quotedMessageKey) await deleteWhatsAppMessage(ctx.workspaceId, ctx.sessionId, groupJid, quotedMessageKey).catch(() => undefined);
     try {
       await updateGroupParticipantRole(ctx.workspaceId, ctx.sessionId, groupJid, phoneJidFromIdentity(phone)!, "remove");
     } catch {
@@ -217,6 +259,8 @@ export async function applyModerationConfirmation(ctx: CommandContext, action: "
     }
     return buildModerationActionResponse({ title: "DELETEALL COMPLETE", action: `${deleted} recent message(s) deleted`, groupName: snapshot.subject, targetPhone: phone, note: "Only recent tracked messages were eligible; maximum 200." });
   }
+  if (action === "ban" && quotedMessageKey)
+    await deleteWhatsAppMessage(ctx.workspaceId, ctx.sessionId, groupJid, quotedMessageKey).catch(() => undefined);
   setPhoneBanned(ctx.workspaceId, ctx.sessionId, groupJid, phone, action === "ban");
   return buildModerationActionResponse({ title: action === "ban" ? "BAN ENABLED" : "BAN REMOVED", action: action === "ban" ? "Incoming group messages deleted" : "Normal messaging restored", groupName: snapshot.subject, targetPhone: phone, note: action === "ban" ? "This local restriction affects only this group." : "The local restriction is removed for this group." });
 }
