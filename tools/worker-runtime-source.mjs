@@ -527,13 +527,13 @@ async function reportSessionStatus(runtime, status, authHealth, reason) {
     ...(reason ? { reason: String(reason).slice(0, 240) } : {}),
   }, credentialState.credential).catch((error) => noteError(error, "session status failed"));
 }
-async function startSession(workspaceId, sessionId, waitForReady = true) {
+async function startSession(workspaceId, sessionId, waitForReady = true, readyTimeoutMs = 90_000) {
   if (terminalSessions.has(sessionId)) throw new Error("Session is logged out; a new pairing request is required.");
   intentionallyStopped.delete(sessionId);
   const existing = runtimes.get(sessionId);
   if (existing && !waitForReady) return existing;
   if (existing && waitForReady) {
-    const deadline = Date.now() + 90_000;
+    const deadline = Date.now() + readyTimeoutMs;
     while (Date.now() < deadline) {
       const current = runtimes.get(sessionId);
       if (current?.ready) return current;
@@ -1500,7 +1500,7 @@ async function execute(command) {
   }
   if (command.kind === "bridge.command") {
     const method = String(command.payload.method ?? "");
-    const runtime = await startSession(command.workspaceId, command.sessionId, method !== "requestPairingCode");
+    const runtime = await startSession(command.workspaceId, command.sessionId, method !== "requestPairingCode", method === "bridge.command" ? 3_000 : 90_000);
     if (method === "requestPairingCode") {
       runtime.pairingNoticePending = true;
       await runtime.pairingReady;
