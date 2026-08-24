@@ -6,7 +6,8 @@ import sharp from "sharp";
 import { env } from "../config/env.js";
 import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
 
-const PREVIEW_CACHE_VERSION = "v8";
+// v9 invalidates records created when destination-group metadata was incorrectly used as URL preview metadata.
+const PREVIEW_CACHE_VERSION = "v9";
 const PREVIEW_TTL_SECONDS = 7 * 24 * 60 * 60;
 const PREVIEW_FAILURE_TTL_SECONDS = 60;
 const FETCH_TIMEOUT_MS = 8_000;
@@ -221,6 +222,7 @@ function isPrivateIp(value: string): boolean {
 async function fetchSafe(
   initialUrl: string,
   accept: "html" | "image",
+  userAgent = "pappy-omega-mini-preview/4",
 ): Promise<{ response: Response; finalUrl: string }> {
   let currentUrl = await assertSafeNetworkUrl(initialUrl);
   for (let redirect = 0; ; redirect += 1) {
@@ -230,7 +232,7 @@ async function fetchSafe(
           accept === "html"
             ? "text/html,application/xhtml+xml;q=0.9"
             : "image/avif,image/webp,image/jpeg,image/png,image/*;q=0.8",
-        "user-agent": "pappy-omega-mini-preview/4",
+        "user-agent": userAgent,
       },
       redirect: "manual",
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -271,8 +273,11 @@ async function retryPreview<T>(operation: () => Promise<T>, attempts = 2): Promi
   throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Preview operation failed."));
 }
 
-async function readHtml(url: string): Promise<{ html: string; finalUrl: string }> {
-  const { response, finalUrl } = await fetchSafe(url, "html");
+async function readHtml(
+  url: string,
+  userAgent?: string,
+): Promise<{ html: string; finalUrl: string }> {
+  const { response, finalUrl } = await fetchSafe(url, "html", userAgent);
   if (!response.ok) throw new Error(`Preview page returned HTTP ${response.status}.`);
   const type = contentType(response);
   if (type && !type.includes("html") && type !== "text/plain")
@@ -500,15 +505,90 @@ function groupInviteCode(url: string): string | undefined {
   return url.match(/^https?:\/\/chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/i)?.[1];
 }
 
-function publicInviteMetadataUrl(canonicalUrl: string): string {
+type PublicInviteMetadataCandidate = {
+  url: string;
+  userAgent?: string;
+  format: "html" | "markdown";
+};
+
+function publicInviteMetadataCandidates(
+  canonicalUrl: string,
+): PublicInviteMetadataCandidate[] {
+  const candidates: PublicInviteMetadataCandidate[] = [];
   try {
-    const url = new URL(canonicalUrl);
-    if (url.hostname.toLowerCase() === "chat.whatsapp.com" && !url.search)
-      url.search = "s=cl&p=a&mlu=4";
-    return url.toString();
+    const parsed = new URL(canonicalUrl);
+    const code = groupInviteCode(canonicalUrl);
+    if (parsed.hostname.toLowerCase() === "chat.whatsapp.com" && code) {
+      const direct = new URL(parsed.toString());
+      if (!direct.search) direct.search = "s=cl&p=a&mlu=4";
+      candidates.push({ url: direct.toString(), format: "html" });
+      candidates.push({
+        url: `https://chat.whatsapp.com/invite/${code}`,
+        userAgent: "WhatsApp/2.24.2",
+        format: "html",
+      });
+      candidates.push({
+        url: `https://chat.whatsapp.com/invite/${code}?s=cl&p=a&mlu=4`,
+        userAgent: "WhatsApp/2.24.2",
+        format: "html",
+      });
+      candidates.push({
+        url: `https://r.jina.ai/http://chat.whatsapp.com/invite/${code}`,
+        format: "markdown",
+      });
+    } else {
+      candidates.push({ url: canonicalUrl, format: "html" });
+    }
   } catch {
-    return canonicalUrl;
+    candidates.push({ url: canonicalUrl, format: "html" });
   }
+  return candidates;
+}
+
+function parseRelayInviteMetadata(
+  markdown: string,
+  sourceUrl: string,
+): ReturnType<typeof parsePageMetadata> {
+  const title = markdown.match(/^###\s+([^\n]+)$/m)?.[1]?.trim();
+  const description = markdown.match(/^####\s+([^\n]+)$/m)?.[1]?.trim();
+  const imageValue = markdown.match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)(?:\s+"[^"]*")?\)/i)?.[1];
+  const images: ImageCandidate[] = [];
+  if (imageValue) {
+    try {
+      const url = canonicalizePreviewUrl(imageValue);
+      assertSafePreviewUrl(url);
+      images.push({ url, priority: 120, width: 0, height: 0 });
+    } catch {
+      // Unsafe relay image candidates are discarded.
+    }
+  }
+  return {
+    ...(title ? { title } : {}),
+    ...(description ? { description } : {}),
+    canonicalUrl: sourceUrl,
+    images,
+  };
+}
+
+async function readPublicInviteMetadata(
+  canonicalUrl: string,
+): Promise<ReturnType<typeof parsePageMetadata>> {
+  let lastError: unknown;
+  for (const candidate of publicInviteMetadataCandidates(canonicalUrl)) {
+    try {
+      const page = await readHtml(candidate.url, candidate.userAgent);
+      const metadata = candidate.format === "markdown"
+        ? parseRelayInviteMetadata(page.html, canonicalUrl)
+        : parsePageMetadata(page.html, page.finalUrl);
+      if (metadata.title || metadata.description || metadata.images.length) return metadata;
+      lastError = new Error("WhatsApp invite metadata response was empty.");
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("WhatsApp invite metadata was unavailable.");
 }
 
 function socketCandidate(value: unknown): PreviewSocket | undefined {
@@ -597,8 +677,7 @@ async function resolveRecord(
       let image = await resolveImageCandidates(candidates);
       if (!image) {
         try {
-          const page = await retryPreview(() => readHtml(publicInviteMetadataUrl(canonicalUrl)));
-          const metadata = parsePageMetadata(page.html, page.finalUrl);
+          const metadata = await retryPreview(() => readPublicInviteMetadata(canonicalUrl));
           for (const candidate of metadata.images.slice(0, 8)) {
             image = await resolveImageCandidates([candidate.url]);
             if (image) break;
@@ -621,8 +700,9 @@ async function resolveRecord(
   }
 
   try {
-    const page = await retryPreview(() => readHtml(groupInviteCode(canonicalUrl) ? publicInviteMetadataUrl(canonicalUrl) : canonicalUrl));
-    const metadata = parsePageMetadata(page.html, page.finalUrl);
+    const metadata = await retryPreview(() => groupInviteCode(canonicalUrl)
+      ? readPublicInviteMetadata(canonicalUrl)
+      : readHtml(canonicalUrl).then((page) => parsePageMetadata(page.html, page.finalUrl)));
     let image: Pick<CanonicalPreviewRecord, "selectedImageUrl" | "imageData" | "imageMimeType" | "sourceWidth" | "sourceHeight"> | undefined;
     for (const candidate of metadata.images.slice(0, 8)) {
       image = await resolveImageCandidates([candidate.url]);
@@ -630,9 +710,11 @@ async function resolveRecord(
     }
     if (!metadata.title && !metadata.description && !image && !groupInviteCode(canonicalUrl)) return undefined;
     const inviteImage = groupInviteCode(canonicalUrl) && !image ? await getFallbackInviteImage() : undefined;
-    const resolvedCanonical = metadata.canonicalUrl
-      ? canonicalizePreviewUrl(new URL(metadata.canonicalUrl, page.finalUrl).toString())
-      : canonicalUrl;
+    const resolvedCanonical = groupInviteCode(canonicalUrl)
+      ? canonicalUrl
+      : metadata.canonicalUrl
+        ? canonicalizePreviewUrl(new URL(metadata.canonicalUrl, canonicalUrl).toString())
+        : canonicalUrl;
     return {
       schemaVersion: 4,
       canonicalUrl: resolvedCanonical,
@@ -655,12 +737,19 @@ function cacheKey(scope: string | undefined, canonicalUrl: string): string {
   return `pappy-omega-mini:preview:${PREVIEW_CACHE_VERSION}:${digest}`;
 }
 
-async function readCached(key: string): Promise<CanonicalPreviewRecord | undefined> {
+async function readCached(
+  key: string,
+  expectedCanonicalUrl: string,
+): Promise<CanonicalPreviewRecord | undefined> {
   try {
     const raw = await getRedis().get(key);
     if (!raw) return undefined;
     const value = JSON.parse(raw) as CanonicalPreviewRecord;
     if (value.schemaVersion !== 4 || value.expiresAt <= Date.now()) return undefined;
+    if (value.canonicalUrl !== expectedCanonicalUrl) {
+      await getRedis().del(key).catch(() => undefined);
+      return undefined;
+    }
     return value;
   } catch {
     return undefined;
@@ -684,33 +773,43 @@ async function resolveCached(
   const canonicalUrl = canonicalizePreviewUrl(url);
   const key = cacheKey(scope, canonicalUrl);
   const local = localPreviewCache.get(key);
-  if (local && local.expiresAt > Date.now()) {
+  if (local && local.canonicalUrl === canonicalUrl && local.expiresAt > Date.now()) {
     rememberLocalPreview(key, local);
     return { record: local, cache: "HIT" };
   }
   if (local) localPreviewCache.delete(key);
-  const cached = await readCached(key);
-  if (cached) {
-    rememberLocalPreview(key, cached);
-    return { record: cached, cache: "HIT" };
-  }
+
+  // Coalesce before any asynchronous Redis lookup. Otherwise two callers can
+  // both miss Redis, then each create a resolver and fetch the same URL.
   const runningKey = `${scope ?? "global"}:${canonicalUrl}`;
   const running = inFlight.get(runningKey);
   if (running) return { record: await running, cache: "MISS" };
-  const promise = withPreviewSlot(() => resolveRecord(canonicalUrl, socket)).finally(() => {
-    if (inFlight.get(runningKey) === promise) inFlight.delete(runningKey);
-  });
+
+  let cacheResult: "HIT" | "MISS" = "MISS";
+  const promise = (async (): Promise<CanonicalPreviewRecord> => {
+    const cached = await readCached(key, canonicalUrl);
+    if (cached) {
+      cacheResult = "HIT";
+      rememberLocalPreview(key, cached);
+      return cached;
+    }
+    const record = await withPreviewSlot(() => resolveRecord(canonicalUrl, socket));
+    const cachedRecord: CanonicalPreviewRecord = record ?? {
+      schemaVersion: 4,
+      canonicalUrl,
+      fetchedAt: Date.now(),
+      expiresAt: Date.now() + PREVIEW_FAILURE_TTL_SECONDS * 1000,
+    };
+    rememberLocalPreview(key, cachedRecord);
+    await writeCached(key, cachedRecord);
+    return cachedRecord;
+  })();
   inFlight.set(runningKey, promise);
+  promise.finally(() => {
+    if (inFlight.get(runningKey) === promise) inFlight.delete(runningKey);
+  }).catch(() => undefined);
   const record = await promise;
-  const cachedRecord: CanonicalPreviewRecord = record ?? {
-    schemaVersion: 4,
-    canonicalUrl,
-    fetchedAt: Date.now(),
-    expiresAt: Date.now() + PREVIEW_FAILURE_TTL_SECONDS * 1000,
-  };
-  rememberLocalPreview(key, cachedRecord);
-  await writeCached(key, cachedRecord);
-  return { record: cachedRecord, cache: "MISS" };
+  return { record, cache: cacheResult };
 }
 
 function readText(content: Record<string, unknown>): string | undefined {
@@ -744,6 +843,16 @@ function readExistingPreview(content: Record<string, unknown>): Record<string, u
     return content.linkPreview as Record<string, unknown>;
   if (content.richPreview === true) return content;
   return undefined;
+}
+
+function previewMatchesUrl(preview: Record<string, unknown>, url: string): boolean {
+  const candidate = preview["canonical-url"] ?? preview.canonicalUrl ?? preview["matched-text"];
+  if (typeof candidate !== "string" || !candidate.trim()) return false;
+  try {
+    return canonicalizePreviewUrl(candidate) === canonicalizePreviewUrl(url);
+  } catch {
+    return candidate.trim() === url.trim();
+  }
 }
 
 async function nativeLinkPreview(
@@ -822,7 +931,7 @@ export async function prepareCanonicalPreviewContent(
   if (
     !text ||
     !url ||
-    (existing && isCompletePreview(existing))
+    (existing && isCompletePreview(existing) && previewMatchesUrl(existing, url))
  ||
     (hasMedia(content) && !mediaCaptionCanCarryPreview(content))
   )

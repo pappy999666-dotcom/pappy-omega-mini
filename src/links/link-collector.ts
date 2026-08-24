@@ -1,5 +1,6 @@
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
+import { attachRedisErrorHandler } from "../core/redis-events.js";
 import { LinkBucketStore } from "./link-bucket-store.js";
 import {
   canonicalizeHttpUrl,
@@ -8,7 +9,10 @@ import {
 
 export { isWhatsAppGroupInviteUrl };
 
-const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
+const redis = attachRedisErrorHandler(
+  new Redis(env.REDIS_URL, { maxRetriesPerRequest: null }),
+  "link-collector",
+);
 const buckets = new LinkBucketStore(redis);
 
 export function extractUrls(text: string): string[] {

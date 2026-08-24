@@ -48,3 +48,17 @@ A mirrored fetch trace executed on the VPS using the preview user-agent `pappy-o
 ## Important next investigation
 
 The local test behavior indicates `publicInviteMetadataUrl()` is not being used in the active compiled/test path or the test is hitting a different branch. Inspect the current source around both `readHtml` replacements and `groupInviteCode(canonicalUrl)` conditions. Remove the temporary console log, fix the test/mock or implementation as appropriate, rerun typecheck and all tests, then deploy a new release only after the exact invite URL produces `linkPreview` metadata and thumbnail through the paired panel worker.
+
+## Follow-up URL and listener audit — 2026-08-22
+
+- Active normal session used for live URL tests: `a4b646f9-8aa5-4a02-a786-463662bfb829`; it later logged out because WhatsApp returned `401 conflict device_removed`, unrelated to preview parsing.
+- `https://pappywapfpchanger.duckdns.org` completed through the normal session with native preview fields, title, description, 83,254-byte JPEG thumbnail, and high-quality thumbnail.
+- TikTok `https://vt.tiktok.com/ZSV5kDvDQ/` produced native title `TikTok - Make Your Day`, but the first delivery failed because the session connection closed during the send; the payload had no thumbnail. VPS HTML inspection found TikTok image URLs embedded in JSON as `https:\u002F\u002F...`, not ordinary OG tags.
+- Local fix added JSON-escaped image URL extraction for TikTok-style pages and a regression test. The passive listener was also load-shed: session `lastMessageReceivedAt` persistence is throttled to 5 seconds; normal non-command text is not persisted as a full trace, not logged, and not sent to command routing; only prefixed commands and WhatsApp group invite links remain actionable. Automatic invite collection still runs for non-command messages containing WhatsApp group links.
+- Full local suite after these changes: 131/131 tests, 14 files passed. Release 1.2.29 deployed with control plane and panel service ACTIVE; HTTPS health returned packageVersion 1.2.29.
+- Important architecture result: Baileys still receives inbound events for all groups the account is a member of. The bot passively observes them for session heartbeat and invite-link collection, but it only executes/replies to commands after prefix/owner gates. It does not send replies to ordinary group messages.
+- Live measurement before load-shedding deploy showed control-plane Node around 71% CPU and panel worker around 5%; stale standalone debug processes were found and terminated. The listed 71% sample was not a proof that group traffic alone caused the load; it was during diagnostic/reconnect activity.
+
+## TikTok command-preview follow-up — 2026-08-22
+
+The exact short URL `https://vt.tiktok.com/ZSV5kDvDQ/` returned HTTP 200 and an HTML document of about 385,824 bytes from the production VPS. The page contains many unrelated TikTok CDN assets, including model `.bytenn` files and old `p16.muscdn.com` `~noop.webp` assets, before the signed poster candidates. The prior embedded-image parser allowed any TikTok CDN URL with an image extension and could therefore exhaust its candidate cap on unrelated assets; some of those HTTP image fetches failed. The parser was tightened to exclude TikTok CDN assets unless their paths match TikTok poster patterns such as `~tplv-` or `/tos-`, allowing signed video poster URLs to be selected. This affects WhatsApp command-generated previews only; Telegram rendering is not involved.

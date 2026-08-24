@@ -6,6 +6,7 @@ import {
 } from "./baileys-native-preview.js";
 import { createGroupStatusDesign } from "./status-design.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
+import { isPanelAssignedSession } from "./workload-transport.js";
 
 export type TransportCapability =
   | "profileName"
@@ -22,6 +23,8 @@ export interface GroupSummary {
   subject: string;
   participantCount: number;
   inviteLink?: string;
+  /** True only when the logged-in WhatsApp identity is an admin/owner in the group. */
+  isAdmin?: boolean;
 }
 
 function socketFor(workspaceId: string, sessionId: string): WASocket {
@@ -29,6 +32,52 @@ function socketFor(workspaceId: string, sessionId: string): WASocket {
 }
 function ownJid(socket: WASocket): string {
   return (socket as WASocket & { user?: { id?: string } }).user?.id ?? "me";
+}
+
+function jidVariants(value: unknown): Set<string> {
+  if (typeof value !== "string") return new Set();
+  const normalized = value.trim().toLowerCase().replace(/:\\d+(?=@)/, "");
+  if (!normalized) return new Set();
+  const variants = new Set([normalized]);
+  const [user, server] = normalized.split("@");
+  const baseUser = user?.split(":")[0] ?? user;
+  if (user && server) variants.add(`${user}@${server}`);
+  if (baseUser && server) variants.add(`${baseUser}@${server}`);
+  if (baseUser) variants.add(baseUser);
+  return variants;
+}
+
+function socketIdentityVariants(socket: WASocket): Set<string> {
+  const user = (socket as WASocket & {
+    user?: { id?: string; jid?: string; lid?: string };
+  }).user;
+  return new Set(
+    [user?.id, user?.jid, user?.lid]
+      .flatMap((value) => [...jidVariants(value)])
+      .filter(Boolean),
+  );
+}
+
+function participantValues(source: unknown): unknown[] {
+  if (Array.isArray(source)) return source;
+  if (source instanceof Map) return [...source.values()];
+  if (source && typeof source === "object") return Object.values(source);
+  return [];
+}
+
+function participantIsAdmin(participant: unknown, identities: Set<string>): boolean {
+  if (!participant || typeof participant !== "object") return false;
+  const value = participant as Record<string, unknown>;
+  const role = String(value.admin ?? value.role ?? "").toLowerCase();
+  if (role !== "admin" && role !== "superadmin" && value.isAdmin !== true && value.isSuperAdmin !== true)
+    return false;
+  return [value.id, value.jid, value.phoneNumber, value.pn, value.lid]
+    .flatMap((candidate) => [...jidVariants(candidate)])
+    .some((candidate) => identities.has(candidate));
+}
+
+function metadataHasOwnAdminRole(metadata: GroupInventoryRecord, identities: Set<string>): boolean {
+  return participantValues(metadata.participants).some((participant) => participantIsAdmin(participant, identities));
 }
 
 function statusContactValues(source: unknown): unknown[] {
@@ -127,6 +176,18 @@ export async function getProfilePictureUrl(
   return typeof result === "string" ? result : undefined;
 }
 
+export async function getGroupProfilePictureUrl(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+): Promise<string | undefined> {
+  const socket = socketFor(workspaceId, sessionId);
+  const get = method(socket, "profilePictureUrl");
+  if (!get) throw new Error("Unsupported capability: groupProfilePicture");
+  const result = await get(groupJid, "image");
+  return typeof result === "string" ? result : undefined;
+}
+
 export async function updateProfilePicture(
   workspaceId: string,
   sessionId: string,
@@ -179,6 +240,7 @@ export async function createWhatsAppGroup(
   const socket = socketFor(workspaceId, sessionId);
   const create = method(socket, "groupCreate");
   if (!create) throw new Error("Unsupported capability: groupCreate");
+  const panelAssigned = isPanelAssignedSession(workspaceId, sessionId);
   const normalizedParticipants = participants
     .map((value) => value.trim())
     .filter(Boolean)
@@ -189,12 +251,31 @@ export async function createWhatsAppGroup(
     })
     .filter(Boolean);
   const self = ownJid(socket);
-  if (!normalizedParticipants.length && self && !self.endsWith("@lid"))
-    normalizedParticipants.push(self);
-  const result = (await create(subject.trim(), normalizedParticipants)) as {
-    id?: string;
-    gid?: { user?: string; server?: string } | string;
-  };
+  const selfParticipant = panelAssigned ? "me" : self;
+  if (!normalizedParticipants.length && selfParticipant && self !== "me")
+    normalizedParticipants.push(selfParticipant);
+  else if (panelAssigned && self) {
+    const selfVariants = socketIdentityVariants(socket);
+    for (let index = 0; index < normalizedParticipants.length; index += 1) {
+      if ([...jidVariants(normalizedParticipants[index])].some((candidate) => selfVariants.has(candidate))) normalizedParticipants[index] = "me";
+    }
+  }
+  const cleanSubject = subject.trim();
+  if (!cleanSubject) throw new Error("A non-empty WhatsApp group name is required.");
+  if (cleanSubject.length > 100) throw new Error("The WhatsApp group name must be 100 characters or fewer.");
+  let result: { id?: string; gid?: { user?: string; server?: string } | string };
+  try {
+    result = (await create(cleanSubject, normalizedParticipants)) as {
+      id?: string;
+      gid?: { user?: string; server?: string } | string;
+    };
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : String(error);
+    if (/bad.?request|400/i.test(raw)) {
+      throw new Error("WhatsApp rejected group creation. Confirm the session is fully connected, keep the name within 100 characters, and provide at least one valid international participant number; then retry.");
+    }
+    throw new Error(`WhatsApp group creation failed: ${raw}`);
+  }
   if (typeof result.id === "string" && result.id) return result.id;
   if (typeof result.gid === "string" && result.gid) return result.gid;
   if (
@@ -258,7 +339,8 @@ export async function updateProfileBio(
 }
 
 const GROUP_INVENTORY_TIMEOUT_MS = 15_000;
-const GROUP_INVENTORY_CACHE_MS = 10_000;
+// Group inventory is expensive on large accounts; mutation paths still fetch fresh group metadata.
+const GROUP_INVENTORY_CACHE_MS = 60_000;
 const GROUP_INVENTORY_INFLIGHT_TIMEOUT_MS = 20_000;
 const GROUP_PARTICIPANT_CACHE_MS = 30_000;
 type GroupInventoryRecord = { subject?: string; participants?: unknown[] };
@@ -281,6 +363,8 @@ function transientGroupInventoryError(error: unknown): boolean {
 
 async function loadGroupInventory(
   fetchGroups: (...args: unknown[]) => Promise<unknown>,
+  identities: Set<string>,
+  timeoutMs = GROUP_INVENTORY_TIMEOUT_MS,
 ): Promise<GroupSummary[]> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -290,14 +374,15 @@ async function loadGroupInventory(
         new Promise<never>((_, reject) =>
           setTimeout(
             () => reject(new Error("WhatsApp group inventory timed out. Retry after the session is fully connected.")),
-            GROUP_INVENTORY_TIMEOUT_MS,
+            timeoutMs,
           ),
         ),
       ])) as Record<string, GroupInventoryRecord>;
       return Object.entries(result).map(([jid, metadata]) => ({
         jid,
         subject: metadata.subject ?? jid,
-        participantCount: metadata.participants?.length ?? 0,
+        participantCount: participantValues(metadata.participants).length,
+        isAdmin: metadataHasOwnAdminRole(metadata, identities),
       }));
     } catch (error) {
       lastError = error;
@@ -340,17 +425,18 @@ export async function listGroups(
   const fetchSummaries = method(socket, "listGroupSummaries");
   const fetchGroups = method(socket, "groupFetchAllParticipating");
   if (!fetchSummaries && !fetchGroups) throw new Error("Unsupported capability: groupMetadata");
+  const identities = socketIdentityVariants(socket);
   const loadPanelSummaries = async (): Promise<GroupSummary[]> => {
-    if (!fetchSummaries) return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>);
+    if (!fetchSummaries) return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>, identities);
     try {
       const result = await Promise.race([
-        fetchSummaries(),
+        fetchSummaries(ownJid(socket)),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("WhatsApp group inventory timed out. Retry after the session is fully connected.")), GROUP_INVENTORY_TIMEOUT_MS),
         ),
       ]);
       if (!Array.isArray(result)) throw new Error("Panel returned an invalid group inventory.");
-      return result.filter((item): item is GroupSummary => {
+      const summaries = result.filter((item): item is GroupSummary => {
         if (!item || typeof item !== "object") return false;
         const value = item as Record<string, unknown>;
         return typeof value.jid === "string";
@@ -360,12 +446,19 @@ export async function listGroups(
           jid: value.jid as string,
           subject: typeof value.subject === "string" ? value.subject : String(value.jid),
           participantCount: typeof value.participantCount === "number" ? value.participantCount : 0,
+          ...(typeof value.isAdmin === "boolean" ? { isAdmin: value.isAdmin } : {}),
         };
       });
+      // Older workloads do not include role metadata. Recompute from full metadata
+      // instead of showing a misleading empty Admin Groups screen until auto-update.
+      if (fetchGroups && summaries.length > 0 && !summaries.some((group) => group.isAdmin === true)) {
+        return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>, identities, 60_000).catch(() => summaries);
+      }
+      return summaries;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       if (fetchGroups && /method is unavailable:\s*listGroupSummaries/i.test(reason))
-        return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>);
+        return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>, identities);
       throw error;
     }
   };
@@ -388,6 +481,368 @@ export async function listGroups(
     });
   groupInventoryInflight.set(cacheKey, request);
   return (await request).map((group) => ({ ...group }));
+}
+
+export function filterAdminGroupSummaries(groups: GroupSummary[]): GroupSummary[] {
+  return groups
+    .filter((group) => group.isAdmin === true)
+    .map((group) => ({ ...group }));
+}
+
+export async function listAdminGroups(
+  workspaceId: string,
+  sessionId: string,
+): Promise<GroupSummary[]> {
+  return filterAdminGroupSummaries(await listGroups(workspaceId, sessionId));
+}
+
+export interface GroupParticipantSummary {
+  id: string;
+  admin?: string;
+  phoneNumber?: string;
+  jid?: string;
+}
+
+export interface GroupModerationSnapshot {
+  jid: string;
+  subject: string;
+  description?: string;
+  participantCount: number;
+  participants: GroupParticipantSummary[];
+  isAdmin: boolean;
+  joinApprovalMode?: boolean;
+  memberAddMode?: boolean;
+}
+
+const GROUP_METADATA_CACHE_MS = 30_000;
+const groupMetadataCache = new Map<string, { expiresAt: number; snapshot: GroupModerationSnapshot }>();
+const groupMetadataInflight = new Map<string, Promise<GroupModerationSnapshot>>();
+
+export async function getGroupModerationSnapshot(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  options: { fresh?: boolean } = {},
+): Promise<GroupModerationSnapshot> {
+  const cacheKey = `${workspaceId}:${sessionId}:${groupJid}`;
+  if (!options.fresh) {
+    const cached = groupMetadataCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cloneGroupModerationSnapshot(cached.snapshot);
+    const inflight = groupMetadataInflight.get(cacheKey);
+    if (inflight) return cloneGroupModerationSnapshot(await inflight);
+  }
+  const socket = socketFor(workspaceId, sessionId);
+  const metadata = method(socket, "groupMetadata");
+  if (!metadata) throw new Error("Unsupported capability: groupMetadata");
+  const request = (async () => {
+    const raw = (await metadata(groupJid)) as Record<string, unknown>;
+    const participants = participantValues(raw.participants).flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const value = item as Record<string, unknown>;
+        const id = typeof value.id === "string" ? value.id : typeof value.jid === "string" ? value.jid : "";
+        if (!id) return [];
+        return [{
+          id,
+          ...(typeof value.admin === "string" ? { admin: value.admin } : {}),
+          ...(typeof value.phoneNumber === "string" ? { phoneNumber: value.phoneNumber } : {}),
+          ...(typeof value.jid === "string" ? { jid: value.jid } : {}),
+        }];
+      });
+    const snapshot = {
+      jid: groupJid,
+      subject: typeof raw.subject === "string" ? raw.subject : groupJid,
+      ...(typeof raw.desc === "string" ? { description: raw.desc } : {}),
+      participantCount: participants.length,
+      participants,
+      isAdmin: metadataHasOwnAdminRole(raw as GroupInventoryRecord, socketIdentityVariants(socket)),
+      ...(typeof raw.joinApprovalMode === "boolean" ? { joinApprovalMode: raw.joinApprovalMode } : {}),
+      ...(typeof raw.memberAddMode === "boolean" ? { memberAddMode: raw.memberAddMode } : {}),
+    } satisfies GroupModerationSnapshot;
+    groupMetadataCache.set(cacheKey, { expiresAt: Date.now() + GROUP_METADATA_CACHE_MS, snapshot });
+    return snapshot;
+  })();
+  if (options.fresh) return cloneGroupModerationSnapshot(await request);
+  groupMetadataInflight.set(cacheKey, request);
+  try {
+    return cloneGroupModerationSnapshot(await request);
+  } finally {
+    if (groupMetadataInflight.get(cacheKey) === request) groupMetadataInflight.delete(cacheKey);
+  }
+}
+
+function cloneGroupModerationSnapshot(snapshot: GroupModerationSnapshot): GroupModerationSnapshot {
+  return {
+    ...snapshot,
+    participants: snapshot.participants.map((participant) => ({ ...participant })),
+  };
+}
+
+export interface ParticipantOperationResult {
+  attempted: number;
+  succeeded: number;
+  succeededJids: string[];
+  failed: number;
+  failures: Array<{ jid?: string; status: string }>;
+}
+
+function classifyParticipantOperationResult(
+  result: unknown,
+  attempted: number,
+  expectedParticipants: string[] = [],
+): ParticipantOperationResult {
+  if (!Array.isArray(result))
+    return { attempted, succeeded: attempted, succeededJids: [...expectedParticipants], failed: 0, failures: [] };
+  const succeededJids = result.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const value = item as Record<string, unknown>;
+    const status = String(value.status ?? value.error ?? "200");
+    return (status === "200" || status === "0") && typeof value.jid === "string"
+      ? [value.jid]
+      : [];
+  });
+  const failures = result.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const value = item as Record<string, unknown>;
+    const status = String(value.status ?? value.error ?? "200");
+    return status === "200" || status === "0"
+      ? []
+      : [{
+          ...(typeof value.jid === "string" ? { jid: value.jid } : {}),
+          status,
+        }];
+  });
+  const returnedJids = new Set(
+    result.flatMap((item) =>
+      item && typeof item === "object" && typeof (item as Record<string, unknown>).jid === "string"
+        ? [String((item as Record<string, unknown>).jid)]
+        : [],
+    ),
+  );
+  const missing = expectedParticipants.length
+    ? expectedParticipants.filter((jid) => !returnedJids.has(jid) && !failures.some((failure) => failure.jid === jid))
+    : Array.from({ length: Math.max(0, attempted - result.length) }, () => undefined);
+  const missingFailures = missing.map((jid) => ({
+    ...(jid ? { jid } : {}),
+    status: "not-returned",
+  }));
+  const allFailures = [...failures, ...missingFailures];
+  const succeeded = Math.max(0, result.length - failures.length);
+  return {
+    attempted,
+    succeeded,
+    succeededJids,
+    failed: allFailures.length,
+    failures: allFailures,
+  };
+}
+
+export async function updateGroupParticipantBatch(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  participants: string[],
+  action: "promote" | "demote" | "remove",
+  throwOnFailure = true,
+): Promise<ParticipantOperationResult> {
+  const update = method(socketFor(workspaceId, sessionId), "groupParticipantsUpdate");
+  if (!update) throw new Error("Unsupported capability: groupParticipantsUpdate");
+  const uniqueParticipants = [...new Set(participants)].filter(Boolean);
+  const result = classifyParticipantOperationResult(
+    await update(groupJid, uniqueParticipants, action),
+    uniqueParticipants.length,
+    uniqueParticipants,
+  );
+  if (throwOnFailure && result.failed)
+    throw new Error(`WhatsApp rejected ${result.failed} participant operation(s): ${result.failures.map((failure) => failure.status).join(", ")}`);
+  return result;
+}
+
+export async function updateGroupParticipantRole(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  participantJid: string,
+  action: "promote" | "demote" | "remove",
+): Promise<ParticipantOperationResult> {
+  return updateGroupParticipantBatch(
+    workspaceId,
+    sessionId,
+    groupJid,
+    [participantJid],
+    action,
+  );
+}
+
+export async function setGroupJoinApprovalMode(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  enabled: boolean,
+): Promise<void> {
+  const update = method(socketFor(workspaceId, sessionId), "groupJoinApprovalMode");
+  if (!update) throw new Error("Unsupported capability: groupJoinApprovalMode");
+  await update(groupJid, enabled ? "on" : "off");
+}
+
+export async function setGroupMemberAddMode(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  allMembers: boolean,
+): Promise<void> {
+  const update = method(socketFor(workspaceId, sessionId), "groupMemberAddMode");
+  if (!update) throw new Error("Unsupported capability: groupMemberAddMode");
+  await update(groupJid, allMembers ? "all_member_add" : "admin_add");
+}
+
+export async function setGroupChatMode(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  adminsOnly: boolean,
+): Promise<void> {
+  const update = method(socketFor(workspaceId, sessionId), "groupSettingUpdate");
+  if (!update) throw new Error("Unsupported capability: groupSettingUpdate");
+  await update(groupJid, adminsOnly ? "announcement" : "not_announcement");
+}
+
+export async function setGroupInfoMode(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  adminsOnly: boolean,
+): Promise<void> {
+  const update = method(socketFor(workspaceId, sessionId), "groupSettingUpdate");
+  if (!update) throw new Error("Unsupported capability: groupSettingUpdate");
+  await update(groupJid, adminsOnly ? "locked" : "unlocked");
+}
+
+export async function setGroupEphemeral(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  seconds: number,
+): Promise<void> {
+  const update = method(socketFor(workspaceId, sessionId), "groupToggleEphemeral");
+  if (!update) throw new Error("Unsupported capability: groupToggleEphemeral");
+  if (![0, 86_400, 604_800, 7_776_000].includes(seconds)) throw new Error("Unsupported disappearing-message duration.");
+  await update(groupJid, seconds);
+}
+
+export async function revokeGroupInvite(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+): Promise<void> {
+  const revoke = method(socketFor(workspaceId, sessionId), "groupRevokeInvite");
+  if (!revoke) throw new Error("Unsupported capability: groupRevokeInvite");
+  await revoke(groupJid);
+}
+
+export async function updateParticipantBlockStatus(
+  workspaceId: string,
+  sessionId: string,
+  participantJid: string,
+  blocked: boolean,
+): Promise<void> {
+  const update = method(socketFor(workspaceId, sessionId), "updateBlockStatus");
+  if (!update) throw new Error("Unsupported capability: updateBlockStatus");
+  await update(participantJid, blocked ? "block" : "unblock");
+}
+
+/** Send a native WhatsApp poll to a group. */
+export async function sendGroupPoll(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  question: string,
+  options: string[],
+): Promise<void> {
+  const send = method(socketFor(workspaceId, sessionId), "sendMessage");
+  if (!send) throw new Error("Unsupported capability: sendMessage");
+  await send(groupJid, { poll: { name: question, values: options, selectableCount: 1 } });
+}
+
+/** Delete one inbound WhatsApp message using its original Baileys key. */
+export async function deleteWhatsAppMessage(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  messageKey: Record<string, unknown>,
+): Promise<void> {
+  const send = method(socketFor(workspaceId, sessionId), "sendMessage");
+  if (!send) throw new Error("Unsupported capability: sendMessage");
+  await send(groupJid, { delete: messageKey });
+}
+
+export interface GroupJoinRequest {
+  jid: string;
+  phoneNumber?: string;
+  addedBy?: string;
+}
+
+function digitsFromIdentity(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const digits = value.replace(/\D/g, "");
+  return digits.length >= 7 ? digits : undefined;
+}
+
+async function verifiedRequestPhone(socket: WASocket, jid: string, provided?: string): Promise<string | undefined> {
+  const direct = digitsFromIdentity(provided) ?? (jid.endsWith("@lid") || jid.endsWith("@hosted.lid") ? undefined : digitsFromIdentity(jid));
+  if (direct) return direct;
+  if (!jid.endsWith("@lid") && !jid.endsWith("@hosted.lid")) return undefined;
+  const mapping = (socket as WASocket & { signalRepository?: { lidMapping?: { getPNForLID?: (lid: string) => Promise<string | null> } } }).signalRepository?.lidMapping;
+  try {
+    const resolved = await mapping?.getPNForLID?.(jid);
+    return digitsFromIdentity(resolved);
+  } catch {
+    return undefined;
+  }
+}
+
+export async function listGroupJoinRequests(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+): Promise<GroupJoinRequest[]> {
+  const socket = socketFor(workspaceId, sessionId);
+  const list = method(socket, "groupRequestParticipantsList");
+  if (!list) throw new Error("Unsupported capability: groupRequestParticipantsList");
+  const result = await list(groupJid);
+  if (!Array.isArray(result)) return [];
+  const requests = await Promise.all(result.map(async (item) => {
+    if (!item || typeof item !== "object") return undefined;
+    const value = item as Record<string, unknown>;
+    const jid = typeof value.jid === "string" ? value.jid : typeof value.id === "string" ? value.id : "";
+    if (!jid) return undefined;
+    const phoneNumber = await verifiedRequestPhone(socket, jid, typeof value.phoneNumber === "string" ? value.phoneNumber : undefined);
+    return {
+      jid,
+      ...(phoneNumber ? { phoneNumber } : {}),
+      ...(typeof value.addedBy === "string" ? { addedBy: value.addedBy } : {}),
+    } satisfies GroupJoinRequest;
+  }));
+  return requests.filter((request): request is GroupJoinRequest => Boolean(request));
+}
+
+export async function updateGroupJoinRequests(
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  participants: string[],
+  action: "approve" | "reject",
+  throwOnFailure = true,
+): Promise<ParticipantOperationResult> {
+  const update = method(socketFor(workspaceId, sessionId), "groupRequestParticipantsUpdate");
+  if (!update) throw new Error("Unsupported capability: groupRequestParticipantsUpdate");
+  const result = classifyParticipantOperationResult(
+    await update(groupJid, participants, action),
+    participants.length,
+    participants,
+  );
+  if (throwOnFailure && result.failed)
+    throw new Error(`WhatsApp rejected ${result.failed} join request operation(s): ${result.failures.map((failure) => failure.status).join(", ")}`);
+  return result;
 }
 
 export async function sendDirectText(
@@ -445,11 +900,15 @@ export async function sendGroupText(
   jid: string,
   text: string,
   media?: GroupMediaPayload,
+  mentions?: string[],
 ): Promise<void> {
   const socket = socketFor(workspaceId, sessionId);
   const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: sendMessage");
-  const content = messagePayload(text, media);
+  const content = {
+    ...messagePayload(text, media),
+    ...(mentions?.length ? { mentions } : {}),
+  };
   await send(
     jid,
     await prepareCanonicalPreviewContent({
@@ -761,8 +1220,12 @@ export async function validateInviteLink(
         size?: number;
         participantsCount?: number;
       };
+      const jid = typeof result.id === "string" && /@g\.us$/.test(result.id)
+        ? result.id
+        : undefined;
+      if (!jid) throw new Error("Invite validation returned incomplete group metadata.");
       return {
-        ...(result.id ? { jid: result.id } : {}),
+        jid,
         ...(result.subject ? { subject: result.subject } : {}),
         ...((result.participantsCount ?? result.size) !== undefined
           ? { participantCount: result.participantsCount ?? result.size }

@@ -4,10 +4,14 @@ import { env } from "../config/env.js";
 import type { User, WhatsAppSession, Workspace } from "../types/domain.js";
 import type { AuditEvent, EmergencyState } from "../types/v2.js";
 import type { MenuMedia } from "../types/domain.js";
-import type { AutoPromoteConfig, AutoPromoteRun } from "../autopromote/types.js";
+import type {
+  AutoPromoteConfig,
+  AutoPromoteRun,
+} from "../autopromote/types.js";
 import type {
   WorkloadAssignmentRecord,
   WorkloadCommandRecord,
+  WorkloadShareRecord,
   WorkloadEnrollmentRecord,
   WorkloadEventRecord,
   WorkloadWorkerRecord,
@@ -82,6 +86,11 @@ interface ScheduleDocument extends mongoose.Document {
   updatedAt: number;
 }
 interface EmergencyDocument extends EmergencyState, mongoose.Document {}
+interface GlobalWorkloadModeDocument extends mongoose.Document {
+  key: string;
+  value: "ON" | "OFF";
+  updatedAt: number;
+}
 export interface ModeratorGroupRecord {
   groupId: string;
   title?: string;
@@ -150,11 +159,18 @@ interface PairingRequestDocument extends mongoose.Document {
   sessionId?: string;
   updatedAt: number;
 }
-interface WorkloadWorkerDocument extends WorkloadWorkerRecord, mongoose.Document {}
-interface WorkloadEnrollmentDocument extends WorkloadEnrollmentRecord, mongoose.Document {}
-interface WorkloadAssignmentDocument extends WorkloadAssignmentRecord, mongoose.Document {}
-interface WorkloadCommandDocument extends WorkloadCommandRecord, mongoose.Document {}
-interface WorkloadEventDocument extends WorkloadEventRecord, mongoose.Document {}
+interface WorkloadWorkerDocument
+  extends WorkloadWorkerRecord, mongoose.Document {}
+interface WorkloadEnrollmentDocument
+  extends WorkloadEnrollmentRecord, mongoose.Document {}
+interface WorkloadAssignmentDocument
+  extends WorkloadAssignmentRecord, mongoose.Document {}
+interface WorkloadShareDocument
+  extends WorkloadShareRecord, mongoose.Document {}
+interface WorkloadCommandDocument
+  extends WorkloadCommandRecord, mongoose.Document {}
+interface WorkloadEventDocument
+  extends WorkloadEventRecord, mongoose.Document {}
 
 const whatsappMessageTraceSchema =
   new mongoose.Schema<WhatsAppMessageTraceDocument>(
@@ -243,7 +259,12 @@ const workspaceSchema = new mongoose.Schema<WorkspaceDocument>(
     workspaceId: { type: String, required: true, unique: true, index: true },
     ownerTelegramUserId: { type: String, required: true, index: true },
     globalSudoList: { type: [String], default: [] },
-    workloadMode: { type: String, enum: ["ON", "OFF"], default: "ON", index: true },
+    workloadMode: {
+      type: String,
+      enum: ["ON", "OFF"],
+      default: "ON",
+      index: true,
+    },
     createdAt: { type: Number, required: true },
   },
   { collection: "workspaces", versionKey: false },
@@ -274,33 +295,64 @@ const workloadWorkerSchema = new mongoose.Schema<WorkloadWorkerDocument>(
 );
 workloadWorkerSchema.index({ workspaceId: 1, status: 1, updatedAt: -1 });
 
-const workloadEnrollmentSchema = new mongoose.Schema<WorkloadEnrollmentDocument>(
+const workloadEnrollmentSchema =
+  new mongoose.Schema<WorkloadEnrollmentDocument>(
+    {
+      enrollmentId: { type: String, required: true, unique: true, index: true },
+      workspaceId: { type: String, required: true, index: true },
+      ownerTelegramUserId: { type: String, required: true, index: true },
+      workerName: { type: String, index: true },
+      tokenHash: { type: String, required: true, unique: true },
+      expiresAt: { type: Number, required: true, index: true },
+      consumedAt: Number,
+      createdAt: { type: Number, required: true, index: true },
+    },
+    { collection: "workload_enrollments", versionKey: false },
+  );
+
+const workloadShareSchema = new mongoose.Schema<WorkloadShareDocument>(
   {
-    enrollmentId: { type: String, required: true, unique: true, index: true },
-    workspaceId: { type: String, required: true, index: true },
+    shareId: { type: String, required: true, unique: true, index: true },
+    workerId: { type: String, required: true, index: true },
+    ownerWorkspaceId: { type: String, required: true, index: true },
     ownerTelegramUserId: { type: String, required: true, index: true },
-    workerName: { type: String, index: true },
+    recipientWorkspaceId: { type: String, index: true },
+    recipientTelegramUserId: { type: String, index: true },
+    recipientDisplayName: String,
+    recipientUsername: String,
     tokenHash: { type: String, required: true, unique: true },
+    status: { type: String, required: true, index: true },
     expiresAt: { type: Number, required: true, index: true },
     consumedAt: Number,
     createdAt: { type: Number, required: true, index: true },
-  },
-  { collection: "workload_enrollments", versionKey: false },
-);
-
-const workloadAssignmentSchema = new mongoose.Schema<WorkloadAssignmentDocument>(
-  {
-    assignmentId: { type: String, required: true, unique: true, index: true },
-    workspaceId: { type: String, required: true, index: true },
-    sessionId: { type: String, required: true, unique: true, index: true },
-    workerId: { type: String, required: true, index: true },
-    status: { type: String, required: true, index: true },
-    assignedAt: { type: Number, required: true },
     updatedAt: { type: Number, required: true, index: true },
-    lastError: String,
+    revokedAt: Number,
+    blockedAt: Number,
+    unblockedAt: Number,
   },
-  { collection: "workload_assignments", versionKey: false },
+  { collection: "workload_shares", versionKey: false },
 );
+workloadShareSchema.index({
+  recipientWorkspaceId: 1,
+  status: 1,
+  updatedAt: -1,
+});
+workloadShareSchema.index({ workerId: 1, status: 1, updatedAt: -1 });
+
+const workloadAssignmentSchema =
+  new mongoose.Schema<WorkloadAssignmentDocument>(
+    {
+      assignmentId: { type: String, required: true, unique: true, index: true },
+      workspaceId: { type: String, required: true, index: true },
+      sessionId: { type: String, required: true, unique: true, index: true },
+      workerId: { type: String, required: true, index: true },
+      status: { type: String, required: true, index: true },
+      assignedAt: { type: Number, required: true },
+      updatedAt: { type: Number, required: true, index: true },
+      lastError: String,
+    },
+    { collection: "workload_assignments", versionKey: false },
+  );
 workloadAssignmentSchema.index({ workerId: 1, status: 1, updatedAt: -1 });
 
 const workloadCommandSchema = new mongoose.Schema<WorkloadCommandDocument>(
@@ -386,6 +438,7 @@ const sessionSchema = new mongoose.Schema<SessionDocument>(
     validatorRetireReason: String,
     validatorFailureCount: Number,
     validatorRateLimitCount: Number,
+    validatorConsecutiveRateLimitCount: Number,
     validatorLastSuccessAt: Number,
   },
   { collection: "whatsapp_sessions", versionKey: false },
@@ -425,12 +478,21 @@ const scheduleSchema = new mongoose.Schema<ScheduleDocument>(
 const autoPromoteConfigSchema = new mongoose.Schema<AutoPromoteConfigDocument>(
   {
     id: { type: String, required: true, unique: true, index: true },
-    scope: { type: String, enum: ["SESSION", "USER", "GLOBAL"], required: true, index: true },
+    scope: {
+      type: String,
+      enum: ["SESSION", "USER", "GLOBAL"],
+      required: true,
+      index: true,
+    },
     ownerTelegramUserId: { type: String, required: true, index: true },
     ownerWorkspaceId: String,
     sessionId: String,
     targetSessionIds: { type: [String], default: [] },
-    command: { type: String, enum: ["allstatus", "allchat", "allstatusx"], required: true },
+    command: {
+      type: String,
+      enum: ["allstatus", "allstatusd", "allchat", "allstatusx"],
+      required: true,
+    },
     payload: { type: mongoose.Schema.Types.Mixed, required: true },
     days: { type: Number, required: true },
     timesPerDay: { type: Number, required: true },
@@ -448,7 +510,11 @@ const autoPromoteConfigSchema = new mongoose.Schema<AutoPromoteConfigDocument>(
   },
   { collection: "auto_promote_configs", versionKey: false },
 );
-autoPromoteConfigSchema.index({ ownerTelegramUserId: 1, enabled: 1, updatedAt: -1 });
+autoPromoteConfigSchema.index({
+  ownerTelegramUserId: 1,
+  enabled: 1,
+  updatedAt: -1,
+});
 autoPromoteConfigSchema.index({ scope: 1, sessionId: 1, enabled: 1 });
 const autoPromoteRunSchema = new mongoose.Schema<AutoPromoteRunDocument>(
   {
@@ -494,6 +560,15 @@ const auditSchema = new mongoose.Schema<AuditDocument>(
   },
   { collection: "audit_events", versionKey: false },
 );
+const globalWorkloadModeSchema =
+  new mongoose.Schema<GlobalWorkloadModeDocument>(
+    {
+      key: { type: String, required: true, unique: true, index: true },
+      value: { type: String, enum: ["ON", "OFF"], required: true },
+      updatedAt: { type: Number, required: true },
+    },
+    { collection: "global_workload_mode", versionKey: false },
+  );
 const emergencySchema = new mongoose.Schema<EmergencyDocument>(
   {
     enabled: { type: Boolean, required: true },
@@ -601,14 +676,18 @@ let AuditModel: Model<AuditDocument> | undefined;
 let ScheduleModel: Model<ScheduleDocument> | undefined;
 let MediaModel: Model<MediaDocument> | undefined;
 let AutoPromoteConfigModel: Model<AutoPromoteConfigDocument> | undefined;
+const sessionPersistenceQueues = new Map<string, Promise<void>>();
+const deletedPersistedSessionIds = new Set<string>();
 let AutoPromoteRunModel: Model<AutoPromoteRunDocument> | undefined;
 let EmergencyModel: Model<EmergencyDocument> | undefined;
+let GlobalWorkloadModeModel: Model<GlobalWorkloadModeDocument> | undefined;
 let ModeratorGroupModel: Model<ModeratorGroupDocument> | undefined;
 let ModeratorWarningModel: Model<ModeratorWarningDocument> | undefined;
 let ModeratorEventModel: Model<ModeratorEventDocument> | undefined;
 let WorkloadWorkerModel: Model<WorkloadWorkerDocument> | undefined;
 let WorkloadEnrollmentModel: Model<WorkloadEnrollmentDocument> | undefined;
 let WorkloadAssignmentModel: Model<WorkloadAssignmentDocument> | undefined;
+let WorkloadShareModel: Model<WorkloadShareDocument> | undefined;
 let WorkloadCommandModel: Model<WorkloadCommandDocument> | undefined;
 let WorkloadEventModel: Model<WorkloadEventDocument> | undefined;
 
@@ -675,17 +754,31 @@ function scheduleModel(): Model<ScheduleDocument> {
 function autoPromoteConfigModel(): Model<AutoPromoteConfigDocument> {
   return (AutoPromoteConfigModel ??=
     mongoose.models.AutoPromoteConfig ??
-    mongoose.model<AutoPromoteConfigDocument>("AutoPromoteConfig", autoPromoteConfigSchema));
+    mongoose.model<AutoPromoteConfigDocument>(
+      "AutoPromoteConfig",
+      autoPromoteConfigSchema,
+    ));
 }
 function autoPromoteRunModel(): Model<AutoPromoteRunDocument> {
   return (AutoPromoteRunModel ??=
     mongoose.models.AutoPromoteRun ??
-    mongoose.model<AutoPromoteRunDocument>("AutoPromoteRun", autoPromoteRunSchema));
+    mongoose.model<AutoPromoteRunDocument>(
+      "AutoPromoteRun",
+      autoPromoteRunSchema,
+    ));
 }
 function auditModel(): Model<AuditDocument> {
   return (AuditModel ??=
     mongoose.models.AuditEvent ??
     mongoose.model<AuditDocument>("AuditEvent", auditSchema));
+}
+function globalWorkloadModeModel(): Model<GlobalWorkloadModeDocument> {
+  return (GlobalWorkloadModeModel ??=
+    mongoose.models.GlobalWorkloadMode ??
+    mongoose.model<GlobalWorkloadModeDocument>(
+      "GlobalWorkloadMode",
+      globalWorkloadModeSchema,
+    ));
 }
 function emergencyModel(): Model<EmergencyDocument> {
   return (EmergencyModel ??=
@@ -727,27 +820,50 @@ function pairingRequestModel(): Model<PairingRequestDocument> {
 function workloadWorkerModel(): Model<WorkloadWorkerDocument> {
   return (WorkloadWorkerModel ??=
     mongoose.models.WorkloadWorker ??
-    mongoose.model<WorkloadWorkerDocument>("WorkloadWorker", workloadWorkerSchema));
+    mongoose.model<WorkloadWorkerDocument>(
+      "WorkloadWorker",
+      workloadWorkerSchema,
+    ));
 }
 function workloadEnrollmentModel(): Model<WorkloadEnrollmentDocument> {
   return (WorkloadEnrollmentModel ??=
     mongoose.models.WorkloadEnrollment ??
-    mongoose.model<WorkloadEnrollmentDocument>("WorkloadEnrollment", workloadEnrollmentSchema));
+    mongoose.model<WorkloadEnrollmentDocument>(
+      "WorkloadEnrollment",
+      workloadEnrollmentSchema,
+    ));
+}
+function workloadShareModel(): Model<WorkloadShareDocument> {
+  return (WorkloadShareModel ??=
+    mongoose.models.WorkloadShare ??
+    mongoose.model<WorkloadShareDocument>(
+      "WorkloadShare",
+      workloadShareSchema,
+    ));
 }
 function workloadAssignmentModel(): Model<WorkloadAssignmentDocument> {
   return (WorkloadAssignmentModel ??=
     mongoose.models.WorkloadAssignment ??
-    mongoose.model<WorkloadAssignmentDocument>("WorkloadAssignment", workloadAssignmentSchema));
+    mongoose.model<WorkloadAssignmentDocument>(
+      "WorkloadAssignment",
+      workloadAssignmentSchema,
+    ));
 }
 function workloadCommandModel(): Model<WorkloadCommandDocument> {
   return (WorkloadCommandModel ??=
     mongoose.models.WorkloadCommand ??
-    mongoose.model<WorkloadCommandDocument>("WorkloadCommand", workloadCommandSchema));
+    mongoose.model<WorkloadCommandDocument>(
+      "WorkloadCommand",
+      workloadCommandSchema,
+    ));
 }
 function workloadEventModel(): Model<WorkloadEventDocument> {
   return (WorkloadEventModel ??=
     mongoose.models.WorkloadEvent ??
-    mongoose.model<WorkloadEventDocument>("WorkloadEvent", workloadEventSchema));
+    mongoose.model<WorkloadEventDocument>(
+      "WorkloadEvent",
+      workloadEventSchema,
+    ));
 }
 
 export async function ensureMongoIndexes(): Promise<void> {
@@ -765,11 +881,13 @@ export async function ensureMongoIndexes(): Promise<void> {
     autoPromoteRunModel().createIndexes(),
     mediaModel().createIndexes(),
     emergencyModel().createIndexes(),
+    globalWorkloadModeModel().createIndexes(),
     moderatorGroupModel().createIndexes(),
     moderatorWarningModel().createIndexes(),
     moderatorEventModel().createIndexes(),
     workloadWorkerModel().createIndexes(),
     workloadEnrollmentModel().createIndexes(),
+    workloadShareModel().createIndexes(),
     workloadAssignmentModel().createIndexes(),
     workloadCommandModel().createIndexes(),
     workloadEventModel().createIndexes(),
@@ -1173,15 +1291,34 @@ export async function setUserStatus(
 }
 
 export async function deletePersistedSession(sessionId: string): Promise<void> {
+  deletedPersistedSessionIds.add(sessionId);
+  const pending = sessionPersistenceQueues.get(sessionId);
+  if (pending) await pending.catch(() => undefined);
   await connectMongo();
   await sessionModel().deleteOne({ sessionId }).exec();
+  if (sessionPersistenceQueues.get(sessionId) === pending)
+    sessionPersistenceQueues.delete(sessionId);
 }
 
 export async function persistSession(session: WhatsAppSession): Promise<void> {
-  await connectMongo();
-  await sessionModel().replaceOne({ sessionId: session.sessionId }, session, {
-    upsert: true,
-  });
+  if (deletedPersistedSessionIds.has(session.sessionId)) return;
+  const previous = sessionPersistenceQueues.get(session.sessionId) ?? Promise.resolve();
+  const current = previous
+    .catch(() => undefined)
+    .then(async () => {
+      if (deletedPersistedSessionIds.has(session.sessionId)) return;
+      await connectMongo();
+      await sessionModel().replaceOne({ sessionId: session.sessionId }, session, {
+        upsert: true,
+      });
+    });
+  sessionPersistenceQueues.set(session.sessionId, current);
+  try {
+    await current;
+  } finally {
+    if (sessionPersistenceQueues.get(session.sessionId) === current)
+      sessionPersistenceQueues.delete(session.sessionId);
+  }
 }
 export async function hydrateRegistry(): Promise<{
   users: User[];
@@ -1267,34 +1404,39 @@ export async function closeMongo(): Promise<void> {
   if (mongoose.connection.readyState !== 0) await mongoose.disconnect();
 }
 
-
 export async function saveAutoPromoteConfig(
   config: AutoPromoteConfig,
 ): Promise<void> {
   await connectMongo();
-  await autoPromoteConfigModel().replaceOne(
-    { id: config.id },
-    config,
-    { upsert: true },
-  ).exec();
+  await autoPromoteConfigModel()
+    .replaceOne({ id: config.id }, config, { upsert: true })
+    .exec();
 }
 
 export async function getAutoPromoteConfig(
   id: string,
 ): Promise<AutoPromoteConfig | undefined> {
   await connectMongo();
-  return (await autoPromoteConfigModel().findOne({ id }).lean<AutoPromoteConfig>().exec()) ?? undefined;
+  return (
+    (await autoPromoteConfigModel()
+      .findOne({ id })
+      .lean<AutoPromoteConfig>()
+      .exec()) ?? undefined
+  );
 }
 
-export async function listAutoPromoteConfigs(input: {
-  ownerTelegramUserId?: string;
-  scope?: AutoPromoteConfig["scope"];
-  enabled?: boolean;
-  limit?: number;
-} = {}): Promise<AutoPromoteConfig[]> {
+export async function listAutoPromoteConfigs(
+  input: {
+    ownerTelegramUserId?: string;
+    scope?: AutoPromoteConfig["scope"];
+    enabled?: boolean;
+    limit?: number;
+  } = {},
+): Promise<AutoPromoteConfig[]> {
   await connectMongo();
   const filter: Record<string, unknown> = {};
-  if (input.ownerTelegramUserId) filter.ownerTelegramUserId = input.ownerTelegramUserId;
+  if (input.ownerTelegramUserId)
+    filter.ownerTelegramUserId = input.ownerTelegramUserId;
   if (input.scope) filter.scope = input.scope;
   if (input.enabled !== undefined) filter.enabled = input.enabled;
   return autoPromoteConfigModel()
@@ -1322,38 +1464,57 @@ export async function deleteAutoPromoteConfig(id: string): Promise<void> {
   await autoPromoteConfigModel().deleteOne({ id }).exec();
 }
 
+export async function deleteAutoPromoteRunsForSession(
+  sessionId: string,
+): Promise<number> {
+  await connectMongo();
+  const result = await autoPromoteRunModel().deleteMany({ sessionId }).exec();
+  return result.deletedCount ?? 0;
+}
+
 export async function saveAutoPromoteRun(run: AutoPromoteRun): Promise<void> {
   await connectMongo();
-  await autoPromoteRunModel().replaceOne(
-    { id: run.id },
-    run,
-    { upsert: true },
-  ).exec();
+  await autoPromoteRunModel()
+    .replaceOne({ id: run.id }, run, { upsert: true })
+    .exec();
 }
 
 export async function getAutoPromoteRun(
   id: string,
 ): Promise<AutoPromoteRun | undefined> {
   await connectMongo();
-  return (await autoPromoteRunModel().findOne({ id }).lean<AutoPromoteRun>().exec()) ?? undefined;
+  return (
+    (await autoPromoteRunModel()
+      .findOne({ id })
+      .lean<AutoPromoteRun>()
+      .exec()) ?? undefined
+  );
 }
 
 export async function getAutoPromoteRunByOccurrence(
   occurrenceId: string,
 ): Promise<AutoPromoteRun | undefined> {
   await connectMongo();
-  return (await autoPromoteRunModel().findOne({ occurrenceId }).lean<AutoPromoteRun>().exec()) ?? undefined;
+  return (
+    (await autoPromoteRunModel()
+      .findOne({ occurrenceId })
+      .lean<AutoPromoteRun>()
+      .exec()) ?? undefined
+  );
 }
 
-export async function listAutoPromoteRuns(input: {
-  ownerTelegramUserId?: string;
-  configId?: string;
-  sessionId?: string;
-  limit?: number;
-} = {}): Promise<AutoPromoteRun[]> {
+export async function listAutoPromoteRuns(
+  input: {
+    ownerTelegramUserId?: string;
+    configId?: string;
+    sessionId?: string;
+    limit?: number;
+  } = {},
+): Promise<AutoPromoteRun[]> {
   await connectMongo();
   const filter: Record<string, unknown> = {};
-  if (input.ownerTelegramUserId) filter.ownerTelegramUserId = input.ownerTelegramUserId;
+  if (input.ownerTelegramUserId)
+    filter.ownerTelegramUserId = input.ownerTelegramUserId;
   if (input.configId) filter.configId = input.configId;
   if (input.sessionId) filter.sessionId = input.sessionId;
   return autoPromoteRunModel()
@@ -1370,7 +1531,15 @@ export async function listRecoverableAutoPromoteRuns(
   await connectMongo();
   return autoPromoteRunModel()
     .find({
-      status: { $in: ["SCHEDULED", "QUEUED", "WAITING_FOR_SESSION", "RUNNING", "COOLDOWN"] },
+      status: {
+        $in: [
+          "SCHEDULED",
+          "QUEUED",
+          "WAITING_FOR_SESSION",
+          "RUNNING",
+          "COOLDOWN",
+        ],
+      },
       scheduledAt: { $lte: now },
     })
     .sort({ scheduledAt: 1 })
@@ -1384,18 +1553,25 @@ export async function claimAutoPromoteOccurrence(
   run: AutoPromoteRun,
 ): Promise<AutoPromoteRun | undefined> {
   await connectMongo();
-  const existing = await autoPromoteRunModel().findOne({ occurrenceId }).lean<AutoPromoteRun>().exec();
+  const existing = await autoPromoteRunModel()
+    .findOne({ occurrenceId })
+    .lean<AutoPromoteRun>()
+    .exec();
   if (existing) return existing;
   try {
     await autoPromoteRunModel().create(run);
     return run;
   } catch (error) {
     if (error instanceof Error && /duplicate|E11000/i.test(error.message))
-      return (await autoPromoteRunModel().findOne({ occurrenceId }).lean<AutoPromoteRun>().exec()) ?? undefined;
+      return (
+        (await autoPromoteRunModel()
+          .findOne({ occurrenceId })
+          .lean<AutoPromoteRun>()
+          .exec()) ?? undefined
+      );
     throw error;
   }
 }
-
 
 export async function setAutoPromoteConfigState(
   id: string,
@@ -1408,6 +1584,37 @@ export async function setAutoPromoteConfigState(
     .exec();
 }
 
+const GLOBAL_WORKLOAD_MODE_KEY = "global-workload-mode";
+
+export async function getGlobalWorkloadMode(): Promise<
+  "ON" | "OFF" | undefined
+> {
+  await connectMongo();
+  const record = await globalWorkloadModeModel()
+    .findOne({ key: GLOBAL_WORKLOAD_MODE_KEY })
+    .lean<{ value?: unknown }>()
+    .exec();
+  return record?.value === "ON" || record?.value === "OFF"
+    ? record.value
+    : undefined;
+}
+
+export async function setGlobalWorkloadMode(mode: "ON" | "OFF"): Promise<void> {
+  await connectMongo();
+  await globalWorkloadModeModel()
+    .updateOne(
+      { key: GLOBAL_WORKLOAD_MODE_KEY },
+      {
+        $set: {
+          key: GLOBAL_WORKLOAD_MODE_KEY,
+          value: mode,
+          updatedAt: Date.now(),
+        },
+      },
+      { upsert: true },
+    )
+    .exec();
+}
 
 export async function getWorkspaceWorkloadMode(
   workspaceId: string,
@@ -1443,7 +1650,11 @@ export async function getWorkloadEnrollmentByTokenHash(
 ): Promise<WorkloadEnrollmentRecord | undefined> {
   await connectMongo();
   const record = await workloadEnrollmentModel()
-    .findOne({ tokenHash, consumedAt: { $exists: false }, expiresAt: { $gt: Date.now() } })
+    .findOne({
+      tokenHash,
+      consumedAt: { $exists: false },
+      expiresAt: { $gt: Date.now() },
+    })
     .lean<WorkloadEnrollmentRecord>()
     .exec();
   return record ?? undefined;
@@ -1455,13 +1666,175 @@ export async function consumeWorkloadEnrollment(
   await connectMongo();
   const updated = await workloadEnrollmentModel()
     .findOneAndUpdate(
-      { enrollmentId, consumedAt: { $exists: false }, expiresAt: { $gt: Date.now() } },
+      {
+        enrollmentId,
+        consumedAt: { $exists: false },
+        expiresAt: { $gt: Date.now() },
+      },
       { $set: { consumedAt: Date.now() } },
       { new: true },
     )
     .lean<WorkloadEnrollmentRecord>()
     .exec();
   return Boolean(updated);
+}
+
+export async function createWorkloadShare(
+  record: WorkloadShareRecord,
+): Promise<void> {
+  await connectMongo();
+  await workloadShareModel().create(record);
+}
+
+export async function getPendingWorkloadShareByTokenHash(
+  tokenHash: string,
+): Promise<WorkloadShareRecord | undefined> {
+  await connectMongo();
+  const record = await workloadShareModel()
+    .findOne({ tokenHash, status: "PENDING", expiresAt: { $gt: Date.now() } })
+    .lean<WorkloadShareRecord>()
+    .exec();
+  return record ?? undefined;
+}
+
+export async function redeemWorkloadShare(
+  shareId: string,
+  recipientWorkspaceId: string,
+  recipientTelegramUserId: string,
+  recipientIdentity?: { displayName?: string; username?: string },
+): Promise<WorkloadShareRecord | undefined> {
+  await connectMongo();
+  const now = Date.now();
+  const record = await workloadShareModel()
+    .findOneAndUpdate(
+      { shareId, status: "PENDING", expiresAt: { $gt: now } },
+      {
+        $set: {
+          recipientWorkspaceId,
+          recipientTelegramUserId,
+          ...(recipientIdentity?.displayName
+            ? {
+                recipientDisplayName: recipientIdentity.displayName.slice(
+                  0,
+                  160,
+                ),
+              }
+            : {}),
+          ...(recipientIdentity?.username
+            ? { recipientUsername: recipientIdentity.username.slice(0, 80) }
+            : {}),
+          status: "ACTIVE",
+          consumedAt: now,
+          updatedAt: now,
+        },
+      },
+      { new: true },
+    )
+    .lean<WorkloadShareRecord>()
+    .exec();
+  return record ?? undefined;
+}
+
+export async function listActiveWorkloadSharesForWorkspace(
+  recipientWorkspaceId: string,
+): Promise<WorkloadShareRecord[]> {
+  await connectMongo();
+  return workloadShareModel()
+    .find({ recipientWorkspaceId, status: "ACTIVE" })
+    .sort({ updatedAt: -1 })
+    .lean<WorkloadShareRecord[]>()
+    .exec();
+}
+
+export async function getWorkloadShareById(
+  shareId: string,
+  ownerWorkspaceId: string,
+): Promise<WorkloadShareRecord | undefined> {
+  await connectMongo();
+  const record = await workloadShareModel()
+    .findOne({ shareId, ownerWorkspaceId })
+    .lean<WorkloadShareRecord>()
+    .exec();
+  return record ?? undefined;
+}
+
+export async function updateWorkloadShareAccess(
+  shareId: string,
+  ownerWorkspaceId: string,
+  status: "ACTIVE" | "BLOCKED",
+): Promise<WorkloadShareRecord | undefined> {
+  await connectMongo();
+  const now = Date.now();
+  const record = await workloadShareModel()
+    .findOneAndUpdate(
+      { shareId, ownerWorkspaceId, status: { $in: ["ACTIVE", "BLOCKED"] } },
+      {
+        $set: {
+          status,
+          updatedAt: now,
+          ...(status === "BLOCKED" ? { blockedAt: now } : { unblockedAt: now }),
+        },
+      },
+      { new: true },
+    )
+    .lean<WorkloadShareRecord>()
+    .exec();
+  return record ?? undefined;
+}
+
+export async function listWorkloadSharesForWorker(
+  workerId: string,
+  ownerWorkspaceId?: string,
+): Promise<WorkloadShareRecord[]> {
+  await connectMongo();
+  return workloadShareModel()
+    .find({
+      workerId,
+      ...(ownerWorkspaceId ? { ownerWorkspaceId } : {}),
+      status: { $ne: "REVOKED" },
+    })
+    .sort({ updatedAt: -1 })
+    .lean<WorkloadShareRecord[]>()
+    .exec();
+}
+
+export async function revokeWorkloadShare(
+  shareId: string,
+  ownerWorkspaceId: string,
+): Promise<WorkloadShareRecord | undefined> {
+  await connectMongo();
+  const record = await workloadShareModel()
+    .findOneAndUpdate(
+      { shareId, ownerWorkspaceId, status: { $ne: "REVOKED" } },
+      {
+        $set: {
+          status: "REVOKED",
+          revokedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+      { new: true },
+    )
+    .lean<WorkloadShareRecord>()
+    .exec();
+  return record ?? undefined;
+}
+
+export async function revokeWorkloadShareForRecipient(
+  shareId: string,
+  recipientWorkspaceId: string,
+): Promise<WorkloadShareRecord | undefined> {
+  await connectMongo();
+  const now = Date.now();
+  const record = await workloadShareModel()
+    .findOneAndUpdate(
+      { shareId, recipientWorkspaceId, status: "ACTIVE" },
+      { $set: { status: "REVOKED", revokedAt: now, updatedAt: now } },
+      { new: true },
+    )
+    .lean<WorkloadShareRecord>()
+    .exec();
+  return record ?? undefined;
 }
 
 export async function createWorkloadWorker(
@@ -1498,7 +1871,10 @@ export async function getWorkloadWorkerByWorkloadCode(
 ): Promise<WorkloadWorkerRecord | undefined> {
   await connectMongo();
   const record = await workloadWorkerModel()
-    .findOne({ workloadCode: workloadCode.trim().toLowerCase(), status: { $ne: "REVOKED" } })
+    .findOne({
+      workloadCode: workloadCode.trim().toLowerCase(),
+      status: { $ne: "REVOKED" },
+    })
     .lean<WorkloadWorkerRecord>()
     .exec();
   return record ?? undefined;
@@ -1520,7 +1896,11 @@ export async function listWorkloadWorkers(
 ): Promise<WorkloadWorkerRecord[]> {
   await connectMongo();
   return workloadWorkerModel()
-    .find(workspaceId ? { workspaceId, status: { $ne: "REVOKED" } } : { status: { $ne: "REVOKED" } })
+    .find(
+      workspaceId
+        ? { workspaceId, status: { $ne: "REVOKED" } }
+        : { status: { $ne: "REVOKED" } },
+    )
     .sort({ updatedAt: -1 })
     .lean<WorkloadWorkerRecord[]>()
     .exec();
@@ -1532,10 +1912,17 @@ export async function updateWorkloadWorker(
 ): Promise<WorkloadWorkerRecord | undefined> {
   await connectMongo();
   const { lastError, ...setPatch } = patch;
-  const update: { $set: Record<string, unknown>; $unset?: Record<string, number> } = {
+  const update: {
+    $set: Record<string, unknown>;
+    $unset?: Record<string, number>;
+  } = {
     $set: { ...setPatch, updatedAt: Date.now() },
   };
-  if (lastError === undefined && Object.prototype.hasOwnProperty.call(patch, "lastError")) update.$unset = { lastError: 1 };
+  if (
+    lastError === undefined &&
+    Object.prototype.hasOwnProperty.call(patch, "lastError")
+  )
+    update.$unset = { lastError: 1 };
   else if (lastError !== undefined) update.$set.lastError = lastError;
   const updated = await workloadWorkerModel()
     .findOneAndUpdate({ workerId }, update, { new: true })
@@ -1550,9 +1937,13 @@ export async function deleteWorkloadWorker(workerId: string): Promise<boolean> {
   return (result.deletedCount ?? 0) > 0;
 }
 
-export async function deleteRevokedWorkloadWorkers(workspaceId?: string): Promise<number> {
+export async function deleteRevokedWorkloadWorkers(
+  workspaceId?: string,
+): Promise<number> {
   await connectMongo();
-  const result = await workloadWorkerModel().deleteMany({ ...(workspaceId ? { workspaceId } : {}), status: "REVOKED" }).exec();
+  const result = await workloadWorkerModel()
+    .deleteMany({ ...(workspaceId ? { workspaceId } : {}), status: "REVOKED" })
+    .exec();
   return result.deletedCount ?? 0;
 }
 
@@ -1596,16 +1987,34 @@ export async function listWorkloadAssignments(
     .exec();
 }
 
+export async function listWorkloadAssignmentsForWorker(
+  workerId: string,
+): Promise<WorkloadAssignmentRecord[]> {
+  await connectMongo();
+  return workloadAssignmentModel()
+    .find({ workerId })
+    .sort({ updatedAt: -1 })
+    .lean<WorkloadAssignmentRecord[]>()
+    .exec();
+}
+
 export async function updateWorkloadAssignment(
   assignmentId: string,
   patch: Partial<WorkloadAssignmentRecord>,
 ): Promise<WorkloadAssignmentRecord | undefined> {
   await connectMongo();
   const { lastError, ...setPatch } = patch;
-  const update: { $set: Record<string, unknown>; $unset?: Record<string, number> } = {
+  const update: {
+    $set: Record<string, unknown>;
+    $unset?: Record<string, number>;
+  } = {
     $set: { ...setPatch, updatedAt: Date.now() },
   };
-  if (lastError === undefined && Object.prototype.hasOwnProperty.call(patch, "lastError")) update.$unset = { lastError: 1 };
+  if (
+    lastError === undefined &&
+    Object.prototype.hasOwnProperty.call(patch, "lastError")
+  )
+    update.$unset = { lastError: 1 };
   else if (lastError !== undefined) update.$set.lastError = lastError;
   const updated = await workloadAssignmentModel()
     .findOneAndUpdate({ assignmentId }, update, { new: true })
@@ -1632,13 +2041,52 @@ export async function getWorkloadCommand(
   return record ?? undefined;
 }
 
+export async function expireStaleWorkloadCommands(
+  workerId: string,
+  now = Date.now(),
+  limit = 500,
+): Promise<number> {
+  await connectMongo();
+  const stale = await workloadCommandModel()
+    .find({
+      workerId,
+      status: { $in: ["QUEUED", "LEASED"] },
+      expiresAt: { $lte: now },
+    })
+    .sort({ expiresAt: 1 })
+    .limit(Math.max(1, Math.min(limit, 2_000)))
+    .select({ commandId: 1 })
+    .lean<{ commandId: string }[]>()
+    .exec();
+  if (!stale.length) return 0;
+  const result = await workloadCommandModel().updateMany(
+    {
+      commandId: { $in: stale.map((item) => item.commandId) },
+      status: { $in: ["QUEUED", "LEASED"] },
+    },
+    {
+      $set: {
+        status: "EXPIRED",
+        error: "Workload command expired before execution.",
+        completedAt: now,
+      },
+      $unset: { leasedAt: 1 },
+    },
+  );
+  return result.modifiedCount;
+}
+
 export async function requeueStaleWorkloadCommands(
   workerId: string,
   leaseTimeoutMs = 90_000,
 ): Promise<number> {
   await connectMongo();
   const result = await workloadCommandModel().updateMany(
-    { workerId, status: "LEASED", leasedAt: { $lt: Date.now() - leaseTimeoutMs } },
+    {
+      workerId,
+      status: "LEASED",
+      leasedAt: { $lt: Date.now() - leaseTimeoutMs },
+    },
     { $set: { status: "QUEUED" }, $unset: { leasedAt: 1 } },
   );
   return result.modifiedCount;
@@ -1651,7 +2099,14 @@ export async function cancelWorkloadCommandsForWorker(
   await connectMongo();
   const result = await workloadCommandModel().updateMany(
     { workerId, status: { $in: ["QUEUED", "LEASED"] } },
-    { $set: { status: "FAILED", error: reason.slice(0, 500), completedAt: Date.now() }, $unset: { leasedAt: 1 } },
+    {
+      $set: {
+        status: "FAILED",
+        error: reason.slice(0, 500),
+        completedAt: Date.now(),
+      },
+      $unset: { leasedAt: 1 },
+    },
   );
   return result.modifiedCount;
 }
@@ -1684,12 +2139,19 @@ export async function completeWorkloadCommand(
   await connectMongo();
   const updated = await workloadCommandModel()
     .findOneAndUpdate(
-      { commandId: input.commandId, requestId: input.requestId, status: "LEASED" },
+      {
+        commandId: input.commandId,
+        requestId: input.requestId,
+        status: "LEASED",
+        expiresAt: { $gt: Date.now() },
+      },
       {
         $set: {
           status: input.ok ? "COMPLETED" : "FAILED",
           completedAt: Date.now(),
-          ...(input.ok ? { result: input.result } : { error: input.error ?? "Worker command failed." }),
+          ...(input.ok
+            ? { result: input.result }
+            : { error: input.error ?? "Worker command failed." }),
         },
       },
       { new: true },
@@ -1730,6 +2192,7 @@ export async function ensureWorkloadIndexes(): Promise<void> {
   await Promise.all([
     workloadWorkerModel().createIndexes(),
     workloadEnrollmentModel().createIndexes(),
+    workloadShareModel().createIndexes(),
     workloadAssignmentModel().createIndexes(),
     workloadCommandModel().createIndexes(),
     workloadEventModel().createIndexes(),

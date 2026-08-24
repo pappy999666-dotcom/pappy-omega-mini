@@ -1,10 +1,14 @@
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
+import { attachRedisErrorHandler } from "../core/redis-events.js";
 import type { WorkloadBroadcastProgress } from "./types.js";
 
 const PREFIX = "pappy-omega-mini:broadcast-progress:";
 const TTL_SECONDS = 60 * 60 * 24 * 30;
-const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
+const redis = attachRedisErrorHandler(
+  new Redis(env.REDIS_URL, { maxRetriesPerRequest: null }),
+  "broadcast-progress",
+);
 
 function key(workspaceId: string, jobId: string): string {
   return `${PREFIX}${workspaceId}:${jobId}`;
@@ -14,6 +18,10 @@ export async function saveBroadcastProgress(
   progress: WorkloadBroadcastProgress & { workspaceId: string },
 ): Promise<void> {
   await redis.set(key(progress.workspaceId, progress.jobId), JSON.stringify(progress), "EX", TTL_SECONDS);
+}
+
+export async function closeBroadcastProgress(): Promise<void> {
+  await redis.quit().catch(() => undefined);
 }
 
 export async function getBroadcastProgress(

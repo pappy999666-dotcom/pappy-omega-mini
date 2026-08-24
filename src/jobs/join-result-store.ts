@@ -6,6 +6,14 @@ export type JoinResultOutcome =
   | "JOINED"
   | "REQUESTED"
   | "ALREADY_JOINED"
+  | "INVALID_LINK"
+  | "LINK_EXPIRED"
+  | "GROUP_UNAVAILABLE"
+  | "PERMISSION_DENIED"
+  | "WHATSAPP_RESTRICTED"
+  | "NETWORK_ERROR"
+  | "TIMEOUT"
+  | "INTERNAL_ERROR"
   | "DEAD"
   | "RESTRICTED"
   | "TEMPORARY_ERROR"
@@ -102,18 +110,29 @@ export function joinOutcomeFromClassification(
       return "REQUESTED";
     case "already-member":
       return "ALREADY_JOINED";
-    case "dead-link":
     case "invalid-invite":
-      return "DEAD";
+      return "INVALID_LINK";
+    case "dead-link":
+    case "expired":
+      return "LINK_EXPIRED";
+    case "group-unavailable":
+      return "GROUP_UNAVAILABLE";
     case "forbidden":
+    case "permission-denied":
+      return "PERMISSION_DENIED";
+    case "rate-limit":
     case "restricted":
-      return "RESTRICTED";
+      return "WHATSAPP_RESTRICTED";
+    case "timeout":
+      return "TIMEOUT";
     case "transport":
+    case "network-error":
     case "temporary-error":
-      return "TEMPORARY_ERROR";
+      return "NETWORK_ERROR";
     case "failed":
+    case "internal-error":
     case "error":
-      return "ERROR";
+      return "INTERNAL_ERROR";
     default:
       return "UNKNOWN";
   }

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
 import { env, isWorkerProcess, workerSessionIds } from "../config/env.js";
 import { getSession } from "../core/session-registry.js";
+import { attachRedisErrorHandler } from "../core/redis-events.js";
 import type { IncomingTextMessage, WhatsAppReply } from "./message-router.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 
@@ -22,7 +23,10 @@ let subscriber: Redis | undefined;
 let responderStarted = false;
 
 function redisConnection(): Redis {
-  return new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
+  return attachRedisErrorHandler(
+    new Redis(env.REDIS_URL, { maxRetriesPerRequest: null }),
+    "remote-bridge",
+  );
 }
 
 function serializeMedia(media: WhatsAppMediaPayload): SerializedMedia {

@@ -79,6 +79,157 @@ describe("canonical Baileys-native preview pipeline", () => {
     }
   });
 
+  it("uses the WhatsApp invite endpoint when direct group metadata is rate-limited", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; userAgent: string }> = [];
+    const image = await sharp({ create: { width: 12, height: 12, channels: 3, background: { r: 25, g: 211, b: 102 } } }).jpeg().toBuffer();
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      requests.push({ url, userAgent: new Headers(init?.headers).get("user-agent") ?? "" });
+      if (url.includes("/invite/")) {
+        return new Response(
+          '<html><head><meta property="og:title" content="Source Group" /><meta property="og:description" content="WhatsApp Group Invite" /><meta property="og:image" content="https://source.test/group.jpg" /></head></html>',
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url === "https://source.test/group.jpg")
+        return new Response(image, { status: 200, headers: { "content-type": "image/jpeg" } });
+      return new Response(null, { status: 429 });
+    }) as typeof fetch;
+    try {
+      const source = "https://chat.whatsapp.com/KbDjI6Amhs38wh2nRz4pkN";
+      const content = await prepareCanonicalPreviewContent({
+        text: source,
+        content: { text: source },
+        socket: { groupGetInviteInfo: async () => { throw new Error("not-authorized"); } },
+        cacheScope: `alternate-invite-endpoint-${Date.now()}-${Math.random()}`,
+      });
+      expect(content.linkPreview).toMatchObject({
+        "matched-text": source,
+        "canonical-url": source,
+        title: "Source Group",
+        description: "WhatsApp Group Invite",
+      });
+      expect((content.linkPreview as Record<string, unknown>).jpegThumbnail).toBeInstanceOf(Buffer);
+      expect(requests.some((request) => request.url === source || request.url.includes("s=cl&p=a&mlu=4"))).toBe(true);
+      const alternate = requests.find((request) => request.url === "https://chat.whatsapp.com/invite/KbDjI6Amhs38wh2nRz4pkN");
+      expect(alternate?.userAgent).toBe("WhatsApp/2.24.2");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses the source-only relay when WhatsApp edge requests are rate-limited", async () => {
+    const originalFetch = globalThis.fetch;
+    const image = await sharp({ create: { width: 16, height: 16, channels: 3, background: { r: 25, g: 211, b: 102 } } }).jpeg().toBuffer();
+    const requests: string[] = [];
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.startsWith("https://r.jina.ai/")) {
+        return new Response(
+          "Title: WhatsApp Group Invite\n\n### Relay Source Group\n#### Group chat invite\n![Image](https://source.test/relay.jpg)",
+          { status: 200, headers: { "content-type": "text/plain" } },
+        );
+      }
+      if (url === "https://source.test/relay.jpg")
+        return new Response(image, { status: 200, headers: { "content-type": "image/jpeg" } });
+      return new Response(null, { status: 429 });
+    }) as typeof fetch;
+    try {
+      const source = "https://chat.whatsapp.com/RELAY_SOURCE";
+      const content = await prepareCanonicalPreviewContent({
+        text: source,
+        content: { text: source },
+        socket: { groupGetInviteInfo: async () => { throw new Error("not-authorized"); } },
+        cacheScope: `relay-invite-${Date.now()}-${Math.random()}`,
+      });
+      expect(content.linkPreview).toMatchObject({
+        "matched-text": source,
+        "canonical-url": source,
+        title: "Relay Source Group",
+        description: "Group chat invite",
+      });
+      expect((content.linkPreview as Record<string, unknown>).jpegThumbnail).toBeInstanceOf(Buffer);
+      expect(requests.some((url) => url.startsWith("https://r.jina.ai/http://chat.whatsapp.com/invite/RELAY_SOURCE"))).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps source invite previews isolated for different URLs in one execution group", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response(null, { status: 404 })) as typeof fetch;
+    try {
+      const titles: Record<string, string> = {
+        KbDjI6Amhs38wh2nRz4pkN: "Source Invite Group",
+        BnoEtMaigLaGeq05113OhM: "Execution Group",
+      };
+      const socket = {
+        groupGetInviteInfo: async (code: string) => ({
+          id: `${code}@g.us`,
+          subject: titles[code] ?? `Unknown ${code}`,
+          size: code === "KbDjI6Amhs38wh2nRz4pkN" ? 777 : 28,
+        }),
+      };
+      const scope = `same-destination-${Date.now()}-${Math.random()}`;
+      const source = "https://chat.whatsapp.com/KbDjI6Amhs38wh2nRz4pkN";
+      const destination = "https://chat.whatsapp.com/BnoEtMaigLaGeq05113OhM";
+      const first = await prepareCanonicalPreviewContent({
+        text: source,
+        content: { text: source },
+        socket,
+        cacheScope: scope,
+      });
+      const second = await prepareCanonicalPreviewContent({
+        text: destination,
+        content: { text: destination },
+        socket,
+        cacheScope: scope,
+      });
+      const [parallelSource, parallelDestination] = await Promise.all([
+        prepareCanonicalPreviewContent({ text: source, content: { text: source }, socket, cacheScope: `${scope}-parallel` }),
+        prepareCanonicalPreviewContent({ text: destination, content: { text: destination }, socket, cacheScope: `${scope}-parallel` }),
+      ]);
+      expect(first.linkPreview).toMatchObject({ "matched-text": source, "canonical-url": source, title: "Source Invite Group" });
+      expect(second.linkPreview).toMatchObject({ "matched-text": destination, "canonical-url": destination, title: "Execution Group" });
+      expect(parallelSource.linkPreview).toMatchObject({ "matched-text": source, "canonical-url": source, title: "Source Invite Group" });
+      expect(parallelDestination.linkPreview).toMatchObject({ "matched-text": destination, "canonical-url": destination, title: "Execution Group" });
+      expect((first.linkPreview as Record<string, unknown>).title).not.toBe((second.linkPreview as Record<string, unknown>).title);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not preserve a complete preview belonging to another URL", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response(null, { status: 404 })) as typeof fetch;
+    try {
+      const source = "https://chat.whatsapp.com/KbDjI6Amhs38wh2nRz4pkN";
+      const destination = "https://chat.whatsapp.com/BnoEtMaigLaGeq05113OhM";
+      const content = await prepareCanonicalPreviewContent({
+        text: source,
+        content: {
+          text: source,
+          linkPreview: {
+            "matched-text": destination,
+            "canonical-url": destination,
+            title: "Execution Group",
+            description: "28 members · WhatsApp Group",
+            jpegThumbnail: Buffer.from("stale-preview"),
+          },
+        },
+        socket: {
+          groupGetInviteInfo: async () => ({ id: "source@g.us", subject: "Source Invite Group", size: 777 }),
+        },
+        cacheScope: `stale-existing-${Date.now()}-${Math.random()}`,
+      });
+      expect(content.linkPreview).toMatchObject({ "matched-text": source, "canonical-url": source, title: "Source Invite Group" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("negative-caches failed group invite metadata", async () => {
     const originalFetch = globalThis.fetch;
     let calls = 0;
@@ -510,6 +661,8 @@ describe("canonical Baileys-native preview pipeline", () => {
     const content = {
       text: "https://example.com/article",
       linkPreview: {
+        "matched-text": "https://example.com/article",
+        "canonical-url": "https://example.com/article",
         title: "Complete",
         description: "Already built",
         jpegThumbnail: Buffer.from("jpeg"),

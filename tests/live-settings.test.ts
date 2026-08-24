@@ -25,7 +25,7 @@ describe("live workspace settings", () => {
 
     expect(settings.defaultAutoJoinEnabled).toBe(true);
     expect(getWorkspaceDefaults(workspaceId).defaultPrefix).toBe("!");
-    expect(getWorkspaceDefaults(workspaceId).defaultBroadcastDelayMs).toBe(20000);
+    expect(getWorkspaceDefaults(workspaceId).defaultBroadcastDelayMs).toBe(10000);
     expect(
       updateWorkspaceDefaults(workspaceId, { defaultBroadcastDelayMs: 60000 })
         .defaultBroadcastDelayMs,

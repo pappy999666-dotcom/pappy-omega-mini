@@ -1,0 +1,1146 @@
+# Telegram Handler Source Report
+
+Generated 2026-08-22T15:38:05.069Z.
+
+## Omega-V1
+
+### `bot.ts`
+
+- `131: async function fetchTelegramBuffer(url: string | URL, maxBytes = TELEGRAM_MEDIA_MAX_BYTES): Promise<Buffer> {`
+- `164: function mapTelegramUploadError(error: unknown): string {`
+- `231: function storeGcJid(sessionId: string, gcJid: string): string {`
+- `240: function resolveGcJid(sessionId: string, key: string): string | undefined {`
+- `311: function resetOnboarding(ctx: BotContext): void {`
+- `315: function sessionOwner(ctx: BotContext, sessionId: string): string {`
+- `320: function sessionAccess(ctx: BotContext, sessionId: string): { ownerId: string; meta: ReturnType<typeof loadSessionMeta> } | null {`
+- `330: function makeDraftSessionId(telegramId: string, phone: string): string {`
+- `334: function onboardingNameCard(): string {`
+- `343: function onboardingPhoneCard(label: string): string {`
+- `352: function onboardingMethodCard(label: string, phone: string): string {`
+- `361: function helpText(isOwner: boolean): string {`
+- `367: function sleep(ms: number): Promise<void> {`
+- `371: function buildBulkProgressText(op: string, done: number, remaining: number, failed: number): string {`
+- `383: function buildBulkCompleteText(op: string, done: number, failed: number): string {`
+- `394: function buildApproveProgressText(approved: number, remaining: number, failed: number): string {`
+- `409: async function doCreateGroup(`
+- `455: [btn('🔙 Back', 'session:${sessionId}:menu', 'primary')],`
+- `468: export function createBot(): Telegraf<BotContext> {`
+- `486: bot.command('start', async (ctx) => {`
+- `494: bot.command('sessions', async (ctx) => {`
+- `498: bot.command('bucket', async (ctx) => {`
+- `502: bot.command('admin', ownerOnly() as never, async (ctx) => {`
+- `507: bot.command('jid', async (ctx) => {`
+- `546: bot.command('omni', ownerOnly() as never, async (ctx) => {`
+- `561: bot.command('unbind', async (ctx) => {`
+- `569: bot.command('help', async (ctx) => {`
+- `574: bot.action(/^help:cat:(.+)$/, async (ctx) => {`
+- `585: bot.action('idea:submit', async (ctx) => {`
+- `589: bot.action(/^admin:ideas:(\d+)$/, ownerOnly() as never, async (ctx) => {`
+- `593: bot.action(/^admin:idea:([^:]+)$/, ownerOnly() as never, async (ctx) => {`
+- `597: bot.action(/^admin:idea:([^:]+):delete$/, ownerOnly() as never, async (ctx) => {`
+- `601: bot.action(/^admin:idea:([^:]+):complete$/, ownerOnly() as never, async (ctx) => {`
+- `605: bot.action(/^admin:idea:([^:]+):reply$/, ownerOnly() as never, async (ctx) => {`
+- `609: bot.action('admin:release:menu', ownerOnly() as never, async (ctx) => {`
+- `613: bot.action('admin:release:setuser', ownerOnly() as never, async (ctx) => {`
+- `617: bot.action('admin:release:toggle:on', ownerOnly() as never, async (ctx) => {`
+- `621: bot.action('admin:release:toggle:off', ownerOnly() as never, async (ctx) => {`
+- `626: bot.action('admin:tutorials', ownerOnly() as never, async (ctx) => {`
+- `630: bot.action('admin:tutorials:add', ownerOnly() as never, async (ctx) => {`
+- `634: bot.action(/^admin:tutorials:type:(image|video)$/, ownerOnly() as never, async (ctx) => {`
+- `638: bot.action(/^admin:tutorials:preview:([a-z0-9_-]+)$/, ownerOnly() as never, async (ctx) => {`
+- `642: bot.action(/^admin:tutorials:del:([a-z0-9_-]+)$/, ownerOnly() as never, async (ctx) => {`
+- `646: bot.action(/^admin:tutorials:delconfirm:([a-z0-9_-]+)$/, ownerOnly() as never, async (ctx) => {`
+- `653: bot.on(['photo', 'video', 'audio', 'document'], async (ctx, next) => {`
+- `661: bot.on('message', async (ctx, next) => {`
+- `666: bot.on('text', async (ctx) => {`
+- `1674: bot.on('photo', async (ctx) => {`
+- `1787: bot.on('video', async (ctx) => {`
+- `1810: bot.on('document', async (ctx) => {`
+- `1910: bot.on('callback_query', async (ctx) => {`
+- `1982: bot.action('verify:joined', async (ctx) => {`
+- `2009: function clearAllAwaitingStates(ctx: BotContext): void {`
+- `2057: async function routeCallback(`
+- `2311: btn('${manifest.enabled ? '⏸ Disable' : '▶️ Enable'} ${manifest.id}', 'session:${sessionId}:plugin:${manifest.enabled ? 'disable' : 'enable'}:${manifest.id}', manifest.enabled ? 'danger' : 'success'),`
+- `2312: btn('🔄 Reload', 'session:${sessionId}:plugin:reload:${manifest.id}', 'primary'),`
+- `2313: ], [btn('🗑 Remove', 'session:${sessionId}:plugin:remove:${manifest.id}', 'danger')]]);`
+- `2320: [btn('📥 Install .js / .ts', 'session:${sessionId}:plugin:install', 'success')],`
+- `2322: [btn('🔙 Back', 'session:${sessionId}:menu', 'primary')],`
+- `2608: if (page > 0) nav.push(btn('◀ Prev', 'session:${sessionId}:groups:${page - 1}', 'primary'));`
+- `2609: if ((page + 1) * PAGE_SIZE < total) nav.push(btn('Next ▶', 'session:${sessionId}:groups:${page + 1}', 'primary'));`
+- `2613: [btn('🔙 Back', 'session:${sessionId}:menu', 'primary')],`
+- `2754: const linkButtons = links.map((_, i) => [btn('🗑 Remove #${i + 1}', 'session:${sessionId}:autopromo:rm:${i}', 'danger')]);`
+- `2758: ...(links.length < 24 ? [[btn('➕ Add Link', 'session:${sessionId}:autopromo:set', 'success')]] : []),`
+- `2760: ...(job ? [[btn('❌ Cancel All', 'session:${sessionId}:autopromo:cancel', 'danger')]] : []),`
+- `2761: [btn('🔙 Back', 'session:${sessionId}:menu', 'primary')],`
+- `2863: if (page > 0) nav.push(btn('◀ Prev', 'session:${sessionId}:mygroups:${page - 1}', 'primary'));`
+- `2864: if ((page + 1) * PAGE < total) nav.push(btn('Next ▶', 'session:${sessionId}:mygroups:${page + 1}', 'primary'));`
+- `2874: [btn('🔙 Back', 'session:${sessionId}:menu', 'primary')],`
+- `2956: [btn('🔙 Back', 'session:${sessionId}:mygroups', 'primary')],`
+- `3663: rows.push([btn('🧩 ${entry.label ?? entry.phone} · ${manifests.length}', 'session:${entry.sessionId}:plugins', 'primary')]);`
+- `3673: [btn('🔙 Back', 'admin:panel', 'primary')],`
+- `3768: const rmButtons = links.map((_: string, i: number) => [btn('🗑 Remove Slot ${i+1}', 'admin:autopromo:rm:${i}', 'danger')]);`
+- `3772: ...(links.length < 4 ? [[btn('➕ Add Link', 'admin:autopromo:set', 'success')]] : []),`
+- `3774: ...(job ? [[btn('❌ Clear All', 'admin:autopromo:clear', 'danger')]] : []),`
+- `3775: [btn('🔙 Back', 'admin:panel', 'primary')],`
+- `3796: if (page > 0) nav.push(btn('◄ Prev', 'admin:allsessions:${page - 1}', 'primary'));`
+- `3797: if ((page + 1) * PAGE_SIZE < all.length) nav.push(btn('Next ►', 'admin:allsessions:${page + 1}', 'primary'));`
+- `3806: [btn('🔙 Back', 'admin:panel', 'primary')],`
+- `4022: async function handleSudoMenu(ctx: BotContext, sessionId: string): Promise<void> {`
+- `4040: [btn('➕ Add Number', 'session:${sessionId}:sudo:add', 'success')],`
+- `4041: ...numbers.map((n, i) => [btn('🗑 Remove +${n}', 'session:${sessionId}:sudo:del:${i}', 'danger')]),`
+- `4042: [btn('🔙 Back', 'session:${sessionId}:menu', 'primary')],`
+- `4049: async function handleSudoAdd(ctx: BotContext, sessionId: string): Promise<void> {`
+- `4057: async function handleSudoDel(ctx: BotContext, sessionId: string, indexStr: string | undefined): Promise<void> {`
+- `4073: export function createAlertSender(`
+
+### `handlers/admin.ts`
+
+- `42: export async function handleGlobalSudoPanel(ctx: Context & { telegramId: string }): Promise<void> {`
+- `66: export async function handleOmniOwnerPanel(ctx: Context & { telegramId: string }): Promise<void> {`
+- `90: export async function handlePermissionInput(`
+- `132: export async function handleAdminPanel(ctx: Context): Promise<void> {`
+- `236: export async function handleSessionDefaultsPanel(`
+- `264: [btn('Response Mode: ${defaults.responseMode ?? 'txt'}', 'admin:defaults:mode', 'primary')],`
+- `265: [btn('✏️ Set Prefix', 'admin:defaults:prefix', 'primary'), btn('🌍 Set Timezone', 'admin:defaults:timezone', 'primary')],`
+- `266: [btn('🔙 Back', 'admin:panel', 'primary')],`
+- `274: export async function handleAdminUsers(ctx: Context, page = 0): Promise<void> {`
+- `294: export async function handleAdminUserMenu(ctx: Context, telegramId: string): Promise<void> {`
+- `312: export async function handleBanUser(`
+- `336: export async function handleInspectUser(ctx: Context & { telegramId?: string }, targetId: string): Promise<void> {`
+- `373: export async function handlePurgeUserSessions(`
+- `389: export async function handlePurgeConfirm(ctx: Context, targetId: string): Promise<void> {`
+- `400: export async function handleMasterBucket(ctx: Context): Promise<void> {`
+- `426: export async function handleOmniBridge(ctx: Context & { telegramId: string }): Promise<void> {`
+- `451: function omniStateLabel(state: OmniSessionState, detail?: string): string {`
+- `468: async function withOmniTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {`
+- `478: async function waitForQueueJobResult(`
+- `497: async function runAllStatusChildJob(`
+- `524: export async function executeOmniCommand(`
+- `661: export async function handleGlobalPause(ctx: Context, paused: boolean): Promise<void> {`
+- `670: export async function handleMaintenanceToggle(ctx: Context, enabled: boolean): Promise<void> {`
+- `681: export async function handlePlatformStats(ctx: Context): Promise<void> {`
+- `739: export async function handleClearDeadSessions(ctx: Context): Promise<void> {`
+- `758: export async function handleClearAllSessionsConfirm(ctx: Context): Promise<void> {`
+- `771: export async function handleClearAllSessionsExecute(ctx: Context): Promise<void> {`
+- `788: function humanUptime(): string {`
+- `800: export async function handleReleaseMenu(ctx: any): Promise<void> {`
+- `816: [btn('✏️ Set Username', 'admin:release:setuser', 'primary')],`
+- `818: ? btn('🚫 Disable Auto-Post', 'admin:release:toggle:off', 'danger')`
+- `819: : btn('✅ Enable Auto-Post', 'admin:release:toggle:on', 'success')],`
+- `820: [btn('🔙 Back', 'admin:panel', 'primary')],`
+- `826: export async function handleReleaseToggle(ctx: any, enabled: boolean): Promise<void> {`
+- `832: export async function handleSetReleaseUsername(ctx: any): Promise<void> {`
+- `840: export async function processReleaseUsername(ctx: Context & { session: any; telegramId: string }): Promise<void> {`
+- `865: export async function handleUpdateBot(ctx: Context & { telegramId: string }): Promise<void> {`
+- `951: export async function handleLogStream(ctx: Context & { telegramId: string }): Promise<void> {`
+- `990: export function stopLogStream(_telegramId: string): void { }`
+- `994: export async function handleRestartBot(ctx: Context & { telegramId: string }): Promise<void> {`
+- `1066: export async function handleAdminMenuUrlManager(ctx: Context): Promise<void> {`
+- `1087: export async function handleAdminMenuUrlEdit(ctx: Context, buttonId: string): Promise<void> {`
+- `1110: export async function handleAdminMenuUrlToggle(ctx: Context, buttonId: string): Promise<void> {`
+- `1121: export async function handleAdminMenuUrlDelete(ctx: Context, buttonId: string): Promise<void> {`
+- `1131: export async function handleAdminMenuUrlMove(ctx: Context, buttonId: string, direction: 'up' | 'down'): Promise<void> {`
+
+### `handlers/bucket.ts`
+
+- `51: export function stopValidationLiveLog(telegramId: string): void {`
+- `59: function hubText(telegramId: string): string {`
+- `63: export async function handleBucketStatus(ctx: TelegramHubContext): Promise<void> {`
+- `80: function scheduleLiveEdit(subscription: {`
+- `105: export async function handleLiveMonitor(ctx: TelegramHubContext): Promise<void> {`
+- `146: export async function handleStopLiveLog(ctx: TelegramHubContext): Promise<void> {`
+- `152: export async function handleBucketView(`
+- `179: export async function handleAddLinks(ctx: TelegramHubContext, rawText: string): Promise<void> {`
+- `197: export async function handleStartFilter(ctx: TelegramHubContext): Promise<void> {`
+- `202: export async function handleStopFilter(ctx: TelegramHubContext): Promise<void> {`
+- `207: export async function handleExportBucket(`
+- `230: export async function handlePurgeErrorPrompt(ctx: TelegramHubContext): Promise<void> {`
+- `247: export async function handlePurgeErrorConfirm(ctx: TelegramHubContext): Promise<void> {`
+- `254: export async function handlePurgeMasterPrompt(ctx: TelegramHubContext): Promise<void> {`
+- `273: export async function handlePurgeMasterConfirm(ctx: TelegramHubContext): Promise<void> {`
+- `280: export async function handleMergeToMain(ctx: TelegramHubContext): Promise<void> {`
+- `288: export async function handlePurgeDead(ctx: TelegramHubContext): Promise<void> {`
+
+### `handlers/feedback.ts`
+
+- `14: export async function handleIdeaSubmit(ctx: Context & { telegramId: string }): Promise<void> {`
+- `23: export async function processTelegramIdea(ctx: Context & { telegramId: string }): Promise<void> {`
+- `54: export async function handleAdminIdeas(ctx: Context, page = 0): Promise<void> {`
+- `63: export async function handleAdminIdeaView(ctx: Context, ideaId: string): Promise<void> {`
+- `114: export async function handleAdminIdeaDelete(ctx: Context, ideaId: string): Promise<void> {`
+- `120: export async function handleAdminIdeaComplete(ctx: Context, ideaId: string): Promise<void> {`
+- `126: export async function handleAdminIdeaReply(ctx: any, ideaId: string): Promise<void> {`
+- `134: export async function processAdminIdeaReply(ctx: Context & { session: any }): Promise<void> {`
+
+### `handlers/group-bridge.ts`
+
+- `16: export function setGroupBridge(`
+- `25: export function getGroupBridge(telegramId: string): GroupBridgeState | undefined {`
+- `29: export function clearGroupBridge(telegramId: string): void {`
+- `33: export function isGroupBridgeActive(telegramId: string): boolean {`
+
+### `handlers/promotion.ts`
+
+- `51: function watchPromotionDashboard(ctx: PromotionContext, workspaceId: string, sessionId: string, jobId: string): void {`
+- `79: function stopWatchingPromotionDashboard(workspaceId: string, jobId: string): void {`
+- `88: function wizardFor(ctx: PromotionContext): PromotionWizard | undefined {`
+- `92: function setWizard(ctx: PromotionContext, wizard: PromotionWizard | undefined): void {`
+- `98: function sessionLabel(sessionId: string): string {`
+- `102: function workspaceFor(ctx: PromotionContext, sessionId: string): string | undefined {`
+- `108: function jobSummary(job: ReturnType<typeof getPromotionJob>): string {`
+- `125: export async function handlePromotionMenu(ctx: PromotionContext, sessionId: string): Promise<void> {`
+- `155: export async function beginPromotionWizard(ctx: PromotionContext, sessionId: string, mode: PromotionMode): Promise<void> {`
+- `172: async function createWizardJob(ctx: PromotionContext, wizard: PromotionWizard, content: import('../../types/index.js').PromotionContent): Promise<boolean> {`
+- `198: export async function handlePromotionWizardMedia(ctx: PromotionContext): Promise<boolean> {`
+- `239: export async function handlePromotionWizardInput(ctx: PromotionContext, text: string): Promise<boolean> {`
+- `307: async function waitForPromotionStop(workspaceId: string, jobId: string, timeoutMs = 5_000): Promise<ReturnType<typeof getPromotionJob>> {`
+- `317: export async function handlePromotionAction(`
+
+### `handlers/session.ts`
+
+- `57: function makeSessionId(telegramId: string, sessionName: string): string {`
+- `75: async function fetchWAProfile(`
+- `109: export async function handleSessionsList(`
+- `152: export async function handleNewSession(`
+- `231: export async function handlePairingCode(`
+- `349: export async function handleSessionInfo(`
+- `385: export async function handleFreezeSession(`
+- `397: export async function handleUnfreezeSession(`
+- `411: export async function handleReinitSession(`
+- `437: export async function handlePurgeSession(`
+- `453: export async function handlePurgeConfirm(`
+- `469: export async function handleLinkCollection(`
+- `496: function joinManagerUiKey(telegramId: string, sessionId: string): string {`
+- `500: export function clearJoinManagerSub(telegramId: string, sessionId?: string): void {`
+- `515: export async function handleJoinManager(`
+- `663: export function getBridgeSession(telegramId: string): string | null {`
+- `667: export async function handleBridgeSession(`
+- `682: export function handleBridgeExit(telegramId: string): void {`
+
+### `handlers/tutorials.ts`
+
+- `39: async function acknowledgeCallback(ctx: Context, text?: string): Promise<void> {`
+- `45: async function editOrReply(`
+- `65: export async function handleTutorialsMenu(ctx: Context, acknowledge = true): Promise<void> {`
+- `96: btn('${t.type === 'video' ? '🎞' : '🖼'} ${t.command}', 'admin:tutorials:del:${t.command}', 'danger'),`
+- `98: rows.push([btn('➕ Add Tutorial', 'admin:tutorials:add', 'primary')]);`
+- `99: if (tutorials.some((tutorial) => tutorial.command === 'gameapi')) rows.push([btn('👁 Preview Game API', 'admin:tutorials:preview:gameapi', 'primary')]);`
+- `100: rows.push([btn('🔙 Back', 'admin:panel', 'primary')]);`
+- `108: export async function handleTutorialAdd(ctx: TutorialContext): Promise<void> {`
+- `132: export async function processTutorialCommand(ctx: TutorialContext): Promise<void> {`
+- `174: [btn('🖼 Image', 'admin:tutorials:type:image', 'primary'), btn('🎞 Video', 'admin:tutorials:type:video', 'primary')],`
+- `175: [btn('🔙 Back', 'admin:tutorials', 'primary')],`
+- `183: export async function handleTutorialType(ctx: TutorialContext, type: TutorialMediaType): Promise<void> {`
+- `212: export async function saveTutorialUpload(`
+- `272: function cardSuccess(ctx: Context, command: string, type: TutorialMediaType): string {`
+- `288: export async function handleTutorialPreview(ctx: Context, command: string): Promise<void> {`
+- `314: export async function handleTutorialDelete(ctx: Context, command: string): Promise<void> {`
+- `333: export async function handleTutorialDeleteConfirm(ctx: Context, command: string): Promise<void> {`
+
+### `middlewares/auth.ts`
+
+- `23: export function setMaintenanceMode(enabled: boolean): void {`
+- `27: export function setGlobalPause(paused: boolean): void {`
+- `31: export function isGlobalPaused(): boolean {`
+- `35: export function isMaintenanceMode(): boolean {`
+- `48: export function authMiddleware(): MiddlewareFn<Context> {`
+- `99: export function forceJoinMiddleware(): MiddlewareFn<Context> {`
+- `159: export function ownerOnly(): MiddlewareFn<Context> {`
+
+### `renderer.ts`
+
+- `18: export function normalizeTelegramNewlines(value: string): string {`
+- `28: function flattenBlockquotes(text: string): string {`
+- `33: export function renderTelegramBlockquote(value: string, expandable = false): string {`
+- `39: export function renderTelegramPlainText(value: string): string {`
+- `44: export function renderTelegramHtml(value: string): string {`
+- `48: function renderedExtra(extra?: TelegramTextExtra): TelegramTextExtra {`
+- `52: function renderText(value: string, extra?: TelegramTextExtra): string {`
+- `63: export function installTelegramRenderer(telegram: {`
+
+### `rich-messages.ts`
+
+- `15: function htmlEscape(value: unknown): string {`
+- `23: export function richTableHtml(table: RichTable): string {`
+- `29: export function richTablesHtml(tables: RichTable[], intro = ''): string {`
+- `33: export async function sendTelegramRichMessage(`
+- `54: export async function editTelegramRichMessage(`
+
+### `ui/keyboards.ts`
+
+- `15: export function btn(text: string, callback_data: string, style: ButtonStyle = 'primary'): IKB {`
+- `15: export function btn(text: string, callback_data: string, style: ButtonStyle = 'primary'): IKB {`
+- `19: export function urlBtn(text: string, url: string, style: ButtonStyle = 'primary'): IKB {`
+- `23: export function copyBtn(text: string, copy_text: string, style: ButtonStyle = 'primary'): IKB {`
+- `28: export function backKeyboard(callback = 'menu:main'): InlineKeyboardMarkup {`
+- `29: return { inline_keyboard: [[btn('🔙 Back', callback, 'primary')]] };`
+- `32: export function bridgeExitKeyboard(): InlineKeyboardMarkup {`
+- `36: export function groupBridgeActiveKeyboard(sessionId: string, gcKey: string): InlineKeyboardMarkup {`
+- `44: export function helpKeyboard(): InlineKeyboardMarkup {`
+- `53: rows.push([btn('🔙 Back', 'menu:main', 'primary')]);`
+- `57: export function helpCategoryKeyboard(): InlineKeyboardMarkup {`
+- `65: export function statusKeyboard(): InlineKeyboardMarkup {`
+- `69: [btn('🔙 Back', 'menu:main', 'primary')],`
+- `74: export function stickerMacrosKeyboard(): InlineKeyboardMarkup {`
+- `78: [btn('🔙 Back', 'settings:menu', 'primary')],`
+- `85: export function mainMenuKeyboard(isOwner: boolean): InlineKeyboardMarkup {`
+- `87: [btn('Pair Number', 'session:new', 'success'), btn('Sessions', 'sessions:list', 'primary')],`
+- `88: [btn('Validator Hub', 'bucket:status', 'primary'), btn('Global Bridge', 'bridge:global', 'primary')],`
+- `89: [btn('Sleep Mode', 'sleep:menu', 'primary'), btn('Settings', 'settings:menu', 'primary')],`
+- `90: [btn('Support', 'support:menu', 'primary'), btn('Help', 'help:main', 'primary')],`
+- `91: [btn('💡 Send Idea', 'idea:submit', 'success')],`
+- `95: rows.push([btn('👑 Admin Panel', 'admin:panel', 'primary')]);`
+- `103: export function sessionsListKeyboard(`
+- `119: return [btn('${statusIcon} ${s.label || s.phone}', 'session:${s.id}:menu', 'primary')];`
+- `128: rows.push([btn('➕ New Session', 'session:new', 'success'), btn('🔙 Back', 'menu:main', 'primary')]);`
+- `133: export function gameApiKeyboard(sessionId: string, configured: boolean): InlineKeyboardMarkup {`
+- `136: [btn(configured ? '✅ Current Status' : '📊 Current Status', 'session:${sessionId}:gameapi', 'primary')],`
+- `137: [btn(configured ? '🔄 Change API Key' : '🔑 Setup API Key', 'session:${sessionId}:gameapi:setup', 'success')],`
+- `138: [btn('🧪 Test API', 'session:${sessionId}:gameapi:test', 'primary'), btn('📚 Tutorial', 'session:${sessionId}:gameapi:tutorial', 'primary')],`
+- `139: [btn('🔙 Back', 'session:${sessionId}:menu', 'primary')],`
+- `144: function aiGroupToken(jid: string): string {`
+- `148: export function aiGroupListKeyboard(sessionId: string, groups: Array<{ jid: string; subject: string }>): InlineKeyboardMarkup {`
+- `150: btn('🤖 ${group.subject || group.jid}', 'session:${sessionId}:aigroup:select:${aiGroupToken(group.jid)}', 'primary'),`
+- `152: rows.push([btn('🔄 Refresh Groups', 'session:${sessionId}:aigroup', 'primary')]);`
+- `153: rows.push([btn('🔙 Back', 'session:${sessionId}:menu', 'primary')]);`
+- `157: export function aiGroupKeyboard(sessionId: string, groupJid: string): InlineKeyboardMarkup {`
+- `161: [btn('📊 Status', 'session:${sessionId}:aigroup:status:${token}', 'primary'), btn('🤖 Add AI Bot', 'session:${sessionId}:aigroup:bot:${token}', 'success')],`
+- `162: [btn('🔗 Invite', 'session:${sessionId}:aigroup:invite:${token}', 'primary'), btn('♻️ Revoke Invite', 'session:${sessionId}:aigroup:revoke:${token}', 'danger')],`
+- `163: [btn('👥 Add Member', 'session:${sessionId}:aigroup:add:${token}', 'primary'), btn('🚪 Leave AI Group', 'session:${sessionId}:aigroup:leave:${token}', 'danger')],`
+- `164: [btn('🔙 Choose Group', 'session:${sessionId}:aigroup', 'primary'), btn('◀ Session', 'session:${sessionId}:menu', 'primary')],`
+- `169: export function sessionMenuKeyboard(sessionId: string, status?: string): InlineKeyboardMarkup {`
+- `175: [btn('📊 Info', 'session:${sessionId}:info', 'primary'), btn('📋 Groups', 'session:${sessionId}:groups', 'primary')],`
+- `177: ? [btn('🔥 Resume', 'session:${sessionId}:unfreeze', 'success')]`
+- `178: : [btn('❄️ Freeze', 'session:${sessionId}:freeze', 'danger'), btn('🔄 Force Reconnect', 'session:${sessionId}:reinit', 'primary')],`
+- `179: [btn('🗑 Purge', 'session:${sessionId}:purge', 'danger'), btn('🔄 Refresh Status', 'session:${sessionId}:info', 'primary')],`
+- `180: [btn('🔗 Link Collection', 'session:${sessionId}:collect', 'primary'), btn('🚪 Join Manager', 'session:${sessionId}:joinmgr', 'primary')],`
+- `181: [btn('🖼 Set PFP', 'session:${sessionId}:pfp:set', 'primary'), btn('📸 Get PFP', 'session:${sessionId}:pfp:get', 'primary'), btn('🗑 Remove PFP', 'session:${sessionId}:pfp:remove', 'danger')],`
+- `182: [btn('✏️ Set Name', 'session:${sessionId}:setname', 'primary'), btn('📝 Set Bio', 'session:${sessionId}:setbio', 'primary')],`
+- `183: [btn('🔍 WA Info', 'session:${sessionId}:wainfo', 'primary'), btn('👥 Create GC', 'session:${sessionId}:creategc', 'success')],`
+- `184: [btn('🚪 Leave GC', 'session:${sessionId}:leavegc', 'danger'), btn('📋 My Groups', 'session:${sessionId}:mygroups', 'primary')],`
+- `185: [btn('🛡 Sudo List', 'session:${sessionId}:sudo', 'primary'), btn('🌉 Bridge', 'session:${sessionId}:bridge', 'primary')],`
+- `186: [btn('📅 Auto-Promote', 'session:${sessionId}:autopromo', 'primary')],`
+- `187: [btn('🚀 Smart Promotion', 'session:${sessionId}:smartpromo', 'success')],`
+- `188: [btn('🎮 Game API', 'session:${sessionId}:gameapi', 'primary')],`
+- `189: [btn('🧩 Plugins', 'session:${sessionId}:plugins', 'primary')],`
+- `195: export function linkCollectionKeyboard(sessionId: string): InlineKeyboardMarkup {`
+- `197: [btn('📊 Refresh Statistics', 'session:${sessionId}:collect', 'success')],`
+- `198: [btn('Back', 'session:${sessionId}:menu', 'primary')],`
+- `202: export function joinManagerKeyboard(sessionId: string, status: string): InlineKeyboardMarkup {`
+- `204: if (status === 'running') controls.push(btn('⏸ Pause', 'session:${sessionId}:join:pause', 'danger'));`
+- `205: else controls.push(btn(status === 'paused' ? '▶️ Resume' : '▶️ Start', 'session:${sessionId}:join:start', 'success'));`
+- `206: if (status === 'running' || status === 'paused') controls.push(btn('⏹ Stop', 'session:${sessionId}:join:stop', 'danger'));`
+- `209: ? [btn('🔙 Back (keeps running)', 'session:${sessionId}:menu', 'primary')]`
+- `211: btn('🎯 Set Target Groups', 'session:${sessionId}:join:setlimit', 'primary'),`
+- `212: btn('⏱ Set Delay', 'session:${sessionId}:join:setdelay', 'primary'),`
+- `216: if (status !== 'running') rows.push([btn('🔁 Batch Cycles', 'session:${sessionId}:join:setbatch', 'primary')]);`
+- `217: rows.push([btn('🔄 Refresh', 'session:${sessionId}:joinmgr', 'primary')]);`
+- `218: if (status !== 'running') rows.push([btn('🔙 Back', 'session:${sessionId}:menu', 'primary')]);`
+- `222: export function sessionPairKeyboard(sessionId: string): InlineKeyboardMarkup {`
+- `225: [btn('📷 QR Code', 'pair:qr:${sessionId}', 'primary'), btn('🔑 Pairing Code', 'pair:code:${sessionId}', 'primary')],`
+- `226: [btn('❌ Cancel', 'session:new:cancel', 'danger')],`
+- `231: export function sessionWizardKeyboard(): InlineKeyboardMarkup {`
+- `233: inline_keyboard: [[btn('❌ Cancel Setup', 'session:new:cancel', 'danger')]],`
+- `239: export function pairingCodeKeyboard(code: string): InlineKeyboardMarkup {`
+- `250: export function bucketMenuKeyboard(): InlineKeyboardMarkup {`
+- `253: [btn('📡 Live Log', 'bucket:live', 'success'), btn('🔄 Refresh', 'bucket:refresh', 'primary')],`
+- `254: [btn('📦 Master / Main', 'bucket:view:main'), btn('✅ Active', 'bucket:view:active')],`
+- `255: [btn('💀 Dead', 'bucket:view:dead'), btn('⚠️ Error', 'bucket:view:error')],`
+- `256: [btn('🔀 Merge Active + Error → Main', 'bucket:merge:main', 'success')],`
+- `257: [btn('⬇️ Downloads', 'bucket:downloads', 'primary')],`
+- `258: [btn('🗑️ Purge Dead Links', 'bucket:purge:dead', 'danger'), btn('🗑️ Purge Error', 'bucket:purge:error', 'danger')],`
+- `259: [btn('🗑️ Purge All Buckets', 'bucket:purge:master', 'danger')],`
+- `260: [btn('🔙 Back', 'menu:main', 'primary')],`
+- `265: export function liveValidationKeyboard(): InlineKeyboardMarkup {`
+- `268: [btn('⏹ Stop Feed', 'bucket:live:stop', 'danger'), btn('🔄 Refresh', 'bucket:live:refresh', 'primary')],`
+- `269: [btn('← Dashboard', 'bucket:live:back', 'primary')],`
+- `274: export function purgeMasterConfirmKeyboard(): InlineKeyboardMarkup {`
+- `276: inline_keyboard: [[btn('🗑️ Purge Everything', 'bucket:purge:master:confirm', 'danger'), btn('Cancel', 'bucket:status', 'primary')]],`
+- `280: export function purgeErrorConfirmKeyboard(): InlineKeyboardMarkup {`
+- `282: inline_keyboard: [[btn('🗑️ Purge Error Links', 'bucket:purge:error:confirm', 'danger'), btn('Cancel', 'bucket:status', 'primary')]],`
+- `286: export function smartPromotionKeyboard(sessionId: string): InlineKeyboardMarkup {`
+- `289: [btn('✨ New Smart Job', 'session:${sessionId}:smartpromo:new:smart', 'success')],`
+- `290: [btn('📝 New Manual Job', 'session:${sessionId}:smartpromo:new:manual', 'primary')],`
+- `291: [btn('📋 Active Jobs', 'session:${sessionId}:smartpromo:jobs', 'primary')],`
+- `292: [btn('🔙 Back', 'session:${sessionId}:menu', 'primary')],`
+- `297: export function promotionJobsKeyboard(`
+- `302: btn('📄 #${job.id.slice(-8)} · ${job.status}', 'session:${sessionId}:smartpromo:job:${job.id}', 'primary'),`
+- `303: btn('🗑 Delete Active Job', 'session:${sessionId}:smartpromo:delete:${job.id}', 'danger'),`
+- `305: rows.push([btn('🔄 Refresh', 'session:${sessionId}:smartpromo:jobs', 'primary')]);`
+- `306: rows.push([btn('🔙 Promotion Menu', 'session:${sessionId}:smartpromo', 'primary')]);`
+- `310: export function promotionJobKeyboard(sessionId: string, jobId: string, status: string): InlineKeyboardMarkup {`
+- `313: rows.push([btn('▶️ Run Now', 'session:${sessionId}:smartpromo:run:${jobId}', 'success')]);`
+- `316: rows.push([btn('⏸ Pause', 'session:${sessionId}:smartpromo:pause:${jobId}', 'primary'), btn('🛑 Stop', 'session:${sessionId}:smartpromo:stop:${jobId}', 'danger')]);`
+- `318: rows.push([btn('▶️ Resume', 'session:${sessionId}:smartpromo:resume:${jobId}', 'success'), btn('🛑 Stop', 'session:${sessionId}:smartpromo:stop:${jobId}', 'danger')]);`
+- `320: rows.push([btn('🔄 Refresh', 'session:${sessionId}:smartpromo:job:${jobId}', 'primary')]);`
+- `321: rows.push([btn('🗑 Delete Active Job', 'session:${sessionId}:smartpromo:delete:${jobId}', 'danger')]);`
+- `322: rows.push([btn('🔙 Promotion Menu', 'session:${sessionId}:smartpromo', 'primary')]);`
+- `326: export function promotionJobDeleteConfirmKeyboard(sessionId: string, jobId: string): InlineKeyboardMarkup {`
+- `329: [btn('🗑️ Confirm Delete', 'session:${sessionId}:smartpromo:delete-confirm:${jobId}', 'danger')],`
+- `330: [btn('Cancel', 'session:${sessionId}:smartpromo:job:${jobId}', 'primary')],`
+- `335: export function validationDownloadsKeyboard(): InlineKeyboardMarkup {`
+- `338: [btn('📦 Master', 'bucket:downloads:main'), btn('✅ Active', 'bucket:downloads:active')],`
+- `339: [btn('💀 Dead', 'bucket:downloads:dead'), btn('⚠️ Error', 'bucket:downloads:error')],`
+- `340: [btn('🔙 Back', 'bucket:status', 'primary')],`
+- `345: export function validationBucketDownloadKeyboard(bucket: 'main' | 'active' | 'dead' | 'error'): InlineKeyboardMarkup {`
+- `349: [btn('⬇️ ${label} HTML', 'bucket:export:${bucket}:html', 'primary')],`
+- `350: [btn('⬇️ ${label} TXT', 'bucket:export:${bucket}:txt', 'primary')],`
+- `351: [btn('⬇️ ${label} Merged TXT', 'bucket:export:${bucket}:merge', 'primary')],`
+- `352: [btn('🔙 Back', 'bucket:downloads', 'primary')],`
+- `357: export function bucketViewKeyboard(`
+- `364: if (page > 0) nav.push(btn('◀ Prev', 'bucket:page:${bucket}:${page - 1}', 'primary'));`
+- `365: if ((page + 1) * pageSize < total) nav.push(btn('Next ▶', 'bucket:page:${bucket}:${page + 1}', 'primary'));`
+- `369: [btn('🔙 Back', 'bucket:status', 'primary')],`
+- `377: export function adminPanelKeyboard(paused = false, maintenance = false): InlineKeyboardMarkup {`
+- `380: [btn('👥 Users', 'admin:users:0', 'primary'), btn('🌐 Master Bucket', 'admin:master:bucket', 'primary')],`
+- `381: [btn('🔐 Force Join', 'admin:forcejoin', 'primary'), btn('📣 Broadcast', 'admin:broadcast', 'primary')],`
+- `383: btn('📡 Omni-Bridge', 'admin:omni', 'primary'),`
+- `385: ? btn('▶️ Resume Traffic', 'admin:pause:off', 'success')`
+- `386: : btn('⏸ Global Pause', 'admin:pause:on', 'danger'),`
+- `390: ? btn('✅ End Maintenance', 'admin:maintenance:off', 'success')`
+- `391: : btn('🔧 Maintenance', 'admin:maintenance:on', 'danger'),`
+- `392: btn('📊 Platform Stats', 'admin:stats', 'primary'),`
+- `394: [btn('📋 All Sessions', 'admin:allsessions', 'primary'), btn('🔗 Menu URL', 'admin:menuurl', 'primary')],`
+- `395: [btn('📢 Release Settings', 'admin:release:menu', 'primary')],`
+- `396: [btn('📅 Auto-Promote (All)', 'admin:autopromo', 'primary'), btn('🔄 Update Bot', 'admin:update', 'success')],`
+- `397: [btn('⚙️ New Session Defaults', 'admin:defaults', 'primary')],`
+- `400: [btn('🛡 Omni Owner (Bot-wide)', 'admin:omniowner', 'primary')],`
+- `401: [btn('💡 Idea Inbox', 'admin:ideas:0', 'primary'), btn('📋 Logs', 'admin:logs', 'primary')],`
+- `402: [btn('🎬 Tutorial Content', 'admin:tutorials', 'primary')],`
+- `403: [btn('🧩 Plugin Registry', 'admin:plugins', 'primary')],`
+- `404: [btn('🔙 Back', 'menu:main', 'primary')],`
+- `409: export function adminUsersKeyboard(`
+- `421: return [btn(label, 'admin:user:${u.telegramId}', u.isBanned ? 'danger' : 'primary')];`
+- `425: if (page > 0) nav.push(btn('◀ Prev', 'admin:users:${page - 1}', 'primary'));`
+- `426: if (start + pageSize < users.length) nav.push(btn('Next ▶', 'admin:users:${page + 1}', 'primary'));`
+- `429: rows.push([btn('🔙 Back', 'admin:panel', 'primary')]);`
+- `433: export function adminUserKeyboard(telegramId: string, isBanned: boolean): InlineKeyboardMarkup {`
+- `438: ? btn('✅ Unban', 'admin:unban:${telegramId}', 'success')`
+- `439: : btn('🚫 Ban', 'admin:ban:${telegramId}', 'danger'),`
+- `440: btn('🔍 Inspect', 'admin:inspect:${telegramId}', 'primary'),`
+- `442: [btn('🗑 Purge Sessions', 'admin:purge_sessions:${telegramId}', 'danger')],`
+- `443: [btn('🔙 Back', 'admin:users:0', 'primary')],`
+- `448: export function adminIdeasKeyboard(`
+- `459: return [btn(label, 'admin:idea:${i.id}', 'primary')];`
+- `463: if (page > 0) nav.push(btn('◀ Prev', 'admin:ideas:${page - 1}', 'primary'));`
+- `464: if (start + pageSize < ideas.length) nav.push(btn('Next ▶', 'admin:ideas:${page + 1}', 'primary'));`
+- `467: rows.push([btn('🔙 Back', 'admin:panel', 'primary')]);`
+- `471: export function adminIdeaViewKeyboard(ideaId: string, status: string): InlineKeyboardMarkup {`
+- `473: [btn('📩 Reply', 'admin:idea:${ideaId}:reply', 'success')],`
+- `477: rows.push([btn('✅ Mark Completed', 'admin:idea:${ideaId}:complete', 'primary')]);`
+- `480: rows.push([btn('🗑 Delete', 'admin:idea:${ideaId}:delete', 'danger')]);`
+- `481: rows.push([btn('🔙 Back', 'admin:ideas:0', 'primary')]);`
+- `488: export function confirmKeyboard(`
+- `499: export function settingsKeyboard(`
+- `504: [btn('Change Prefix', 'settings:prefix', 'primary'), btn('Sticker Macros', 'settings:macros', 'primary')],`
+- `507: [btn('👑 Global Sudo', 'settings:globalsudo', 'primary')],`
+- `508: [btn('Notifications: ${config?.notificationsEnabled === false ? 'Off' : 'On'}', 'settings:notifications', 'primary')],`
+- `509: [btn('Validation Hub', 'bucket:status', 'success')],`
+- `510: [btn('Back', 'menu:main', 'primary')],`
+- `515: export function sleepKeyboard(sleeping: boolean): InlineKeyboardMarkup {`
+- `517: [sleeping ? btn('Resume All Sessions', 'sleep:off', 'success') : btn('Sleep All Sessions', 'sleep:on', 'danger')],`
+- `518: [btn('Back', 'menu:main', 'primary')],`
+- `522: export function supportKeyboard(): InlineKeyboardMarkup {`
+- `523: return { inline_keyboard: [[btn('Start Support Message', 'support:start', 'success')], [btn('Back', 'menu:main', 'primary')]] };`
+- `530: export function permissionPanelKeyboard(`
+- `543: export function adminMenuUrlManagerKeyboard(buttons: MenuButton[]): InlineKeyboardMarkup {`
+- `547: btn('${statusIcon} ${b.name}', 'admin:menuurl:edit:${b.id}', 'primary'),`
+- `548: btn('⬆️', 'admin:menuurl:up:${b.id}', 'primary'),`
+- `549: btn('⬇️', 'admin:menuurl:down:${b.id}', 'primary'),`
+- `553: rows.push([btn('➕ Add Button', 'admin:menuurl:add', 'success')]);`
+- `554: rows.push([btn('🔙 Back', 'admin:panel', 'primary')]);`
+- `559: export function adminMenuUrlEditKeyboard(buttonId: string, enabled: boolean): InlineKeyboardMarkup {`
+- `564: ? btn('❌ Disable', 'admin:menuurl:toggle:${buttonId}', 'danger')`
+- `565: : btn('✅ Enable', 'admin:menuurl:toggle:${buttonId}', 'success'),`
+- `566: btn('🗑 Delete', 'admin:menuurl:delete:${buttonId}', 'danger'),`
+- `568: [btn('✏️ Rename', 'admin:menuurl:rename:${buttonId}', 'primary'), btn('🔗 Change URL', 'admin:menuurl:changeurl:${buttonId}', 'primary')],`
+- `569: [btn('🔙 Back', 'admin:menuurl:manage', 'primary')],`
+
+## PAPPY
+
+### `bot.ts`
+
+- `374: function stopJobLiveLoop(loopKey: string): void {`
+- `381: function startJobLiveLoop(`
+- `414: function clearPendingInputs(userId: string): void {`
+- `443: function beginExclusiveInput(userId: string): void {`
+- `447: export function isAutoPromoteWizardContinuation(callbackData: string): boolean {`
+- `461: async function registerTelegramCommandSuggestions(`
+- `494: export function createTelegramBot(): Telegraf<Context> {`
+- `661: bot.action("group:start:refresh", async (ctx) => {`
+- `687: bot.action("group:start:rules", async (ctx) => {`
+- `715: keyboard([[btn(ui.back, "group:start:refresh")]]),`
+- `718: bot.action("group:start:moderation", async (ctx) => {`
+- `731: bot.command("help", async (ctx) =>`
+- `734: reply_markup: keyboard([[btn(ui.back, "menu:main")]]),`
+- `737: bot.command("menu", async (ctx) => {`
+- `744: bot.command("pair", async (ctx) =>`
+- `747: bot.command("sessions", async (ctx) => sendSessions(ctx, 0));`
+- `748: bot.command("adminmedia", async (ctx) => {`
+- `752: bot.command("autopromote", async (ctx) => {`
+- `767: bot.on("text", async (ctx) => {`
+- `828: [btn("⚙ Join Settings", 'session:${session.sessionId}:join:settings')],`
+- `829: [btn("‹ Join Manager", 'session:${session.sessionId}:joinmgr')],`
+- `852: reply_markup: keyboard([[btn("✖ Cancel", 'session:${session.sessionId}:join:settings')] ]),`
+- `880: [btn("⚙ More Settings", 'session:${session.sessionId}:join:settings')],`
+- `881: [btn("‹ Join Manager", 'session:${session.sessionId}:joinmgr')],`
+- `993: [btn("Cancel", 'session:${groupLeave.sessionId}:action:groups')],`
+- `1054: { parse_mode: "HTML", reply_markup: keyboard([[btn("Cancel", "settings:menu")]]) },`
+- `1069: { parse_mode: "HTML", reply_markup: keyboard([[btn("‹ Settings", "settings:menu")]]) },`
+- `1113: [btn("‹ Session", 'session:${sessionSetting.sessionId}:menu')],`
+- `1159: [btn("‹ Sudo", 'session:${sessionSudo.sessionId}:sudo:list')],`
+- `1160: [btn("‹ Session", 'session:${sessionSudo.sessionId}:menu')],`
+- `1388: [btn("↻ Run Another Command", "admin:bridge:command", "primary")],`
+- `1389: [btn("‹ Admin Global Bridge", "admin:bridge")],`
+- `1397: [btn("↻ Run Another Command", "admin:bridge:command", "primary")],`
+- `1398: [btn("‹ Admin Global Bridge", "admin:bridge")],`
+- `1472: [btn("‹ Admin Bridge", "admin:bridge")],`
+- `1500: reply_markup: keyboard([[btn("‹ Admin Bridge", "admin:bridge")]]),`
+- `1535: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `1590: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `1625: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `1649: reply_markup: keyboard([[btn("‹ Back", "menu:main")]]),`
+- `1848: bot.on("document", async (ctx) => {`
+- `1990: bot.on("photo", async (ctx) => {`
+- `2088: bot.on("video", async (ctx) => {`
+- `2133: bot.on("audio", async (ctx) => {`
+- `2154: bot.action("menu:main", async (ctx) => {`
+- `2162: bot.action("home", async (ctx) => {`
+- `2170: bot.action("help:main", async (ctx) => {`
+- `2172: await edit(ctx, helpText(), keyboard([[btn(ui.back, "menu:main")]]));`
+- `2174: bot.action("ui:help", async (ctx) => {`
+- `2176: await edit(ctx, helpText(), keyboard([[btn(ui.back, "menu:main")]]));`
+- `2179: bot.action("session:new", async (ctx) => {`
+- `2183: bot.action(/^pair:workload:(.+)$/, async (ctx) => {`
+- `2191: await edit(ctx, pageText("Pairing", dangerResponse("Workload is not ready", "Choose an ACTIVE workload with a fresh heartbeat.")), keyboard([[btn("◌ Workload", "workload:menu")], [btn(ui.back, "menu:main")]]));`
+- `2198: bot.action("pair:local", async (ctx) => {`
+- `2202: await edit(ctx, pageText("Pairing", dangerResponse("Central workload is OFF", "Deploy or select an external panel workload to pair this WhatsApp session. Your existing sessions are preserved.")), keyboard([[btn("◌ Workload Panels", "workload:menu")], [btn(ui.back, "menu:main")]]));`
+- `2208: bot.action(/^pair:number:([^:]+)$/, async (ctx) => {`
+- `2227: keyboard([[btn(ui.back, 'session:${session.sessionId}:menu')]]),`
+- `2231: bot.action(/^sessions:list(?::(\d+))?$/, async (ctx) => {`
+- `2235: bot.action(/^sessions:page:(\d+)$/, async (ctx) => {`
+- `2240: bot.action(/^session:([^:]+):groups(?::(\d+))?$/, async (ctx) => {`
+- `2247: bot.action(/^session:([^:]+):menu$/, async (ctx) => {`
+- `2257: bot.action(`
+- `2330: bot.action(/^session:view:([^:]+)$/, async (ctx) => {`
+- `2340: bot.action(/^session:([^:]+):purge:confirm$/, async (ctx) => {`
+- `2396: keyboard([[btn("‹ Session", 'session:${session.sessionId}:menu')]]),`
+- `2400: bot.action(/^session:([^:]+):pfp:(get|remove|change)$/, async (ctx) => {`
+- `2423: [btn("✎ Change URL", 'session:${session.sessionId}:pfp:change')],`
+- `2431: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `2443: keyboard([[btn("‹ Session", 'session:${session.sessionId}:menu')]]),`
+- `2459: keyboard([[btn("Cancel", 'session:${session.sessionId}:action:pfp')]]),`
+- `2471: keyboard([[btn("‹ Session", 'session:${session.sessionId}:menu')]]),`
+- `2475: bot.action(/^session:([^:]+):group:view:(\d+)$/, async (ctx) => {`
+- `2510: [btn("‹ My Groups", 'session:${session.sessionId}:section:groups')],`
+- `2524: [btn("‹ My Groups", 'session:${session.sessionId}:section:groups')],`
+- `2529: bot.action(/^session:([^:]+):group:invite:(\d+)$/, async (ctx) => {`
+- `2573: [btn("‹ My Groups", 'session:${session.sessionId}:section:groups')],`
+- `2578: bot.action(/^session:([^:]+):group:picture:(\d+)$/, async (ctx) => {`
+- `2602: [btn("Cancel", 'session:${session.sessionId}:group:view:${index}')],`
+- `2606: bot.action(/^session:([^:]+):group:leave:(\d+)$/, async (ctx) => {`
+- `2637: [btn("Cancel", 'session:${session.sessionId}:group:view:${index}')],`
+- `2641: bot.action(/^session:([^:]+):group:leave:confirm$/, async (ctx) => {`
+- `2672: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `2685: keyboard([[btn("‹ Session", 'session:${session.sessionId}:menu')]]),`
+- `2689: bot.action(/^session:([^:]+):group:leave$/, async (ctx) => {`
+- `2706: keyboard([[btn("Cancel", 'session:${session.sessionId}:action:groups')]]),`
+- `2709: bot.action(/^session:([^:]+):sudo:(list|add|remove)$/, async (ctx) => {`
+- `2742: [btn("↻ Refresh", 'session:${session.sessionId}:sudo:list')],`
+- `2743: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `2762: [btn("Cancel", 'session:${session.sessionId}:sudo:list')],`
+- `2763: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `2767: bot.action(/^session:([^:]+):auto:(collect|validate)$/, async (ctx) => {`
+- `2783: bot.action(/^session:([^:]+):action:([^:]+)$/, async (ctx) => {`
+- `2800: keyboard([[btn("‹ Session", 'session:${session.sessionId}:menu')]]),`
+- `2823: [btn("↻ Try Reconnect Again", 'session:${session.sessionId}:action:reconnect', "primary")],`
+- `2824: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `2838: [btn("↻ Try Again", 'session:${session.sessionId}:action:reconnect', "primary")],`
+- `2839: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `2861: keyboard([[btn("Cancel", 'session:${session.sessionId}:menu')]]),`
+- `2876: btn("PFP", 'session:${session.sessionId}:action:pfp'),`
+- `2877: btn("Name", 'session:${session.sessionId}:action:name'),`
+- `2880: btn("Bio", 'session:${session.sessionId}:action:bio'),`
+- `2881: btn("Prefix", 'session:${session.sessionId}:action:prefix'),`
+- `2883: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `2903: keyboard([[btn("Cancel", 'session:${session.sessionId}:menu')]]),`
+- `2919: keyboard([[btn("‹ Session", 'session:${session.sessionId}:menu')]]),`
+- `2935: btn("◉ List", 'session:${session.sessionId}:sudo:list'),`
+- `2949: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `2965: btn("◉ Get", 'session:${session.sessionId}:pfp:get', "primary"),`
+- `2979: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `2999: btn("Cancel", 'session:${session.sessionId}:menu'),`
+- `3000: btn("‹ Session", 'session:${session.sessionId}:menu'),`
+- `3023: [btn("Cancel", 'session:${session.sessionId}:menu')],`
+- `3036: [btn("↻ Session", 'session:${session.sessionId}:menu')],`
+- `3042: bot.action("bridge:global", async (ctx) => {`
+- `3047: bot.action("ui:bridge", async (ctx) => {`
+- `3052: bot.action("bridge:global:select", async (ctx) => {`
+- `3066: bot.action("bridge:global:select:all", async (ctx) => {`
+- `3078: bot.action(/^bridge:global:toggle:([^:]+)$/, async (ctx) => {`
+- `3097: bot.action("bridge:global:clear", async (ctx) => {`
+- `3102: bot.action("bridge:global:command", async (ctx) => {`
+- `3128: bot.action(action, async (ctx) => {`
+- `3138: bot.action("bucket:user:active", async (ctx) => {`
+- `3151: [btn("⬇ Active · TXT", "bucket:user:download:active:txt")],`
+- `3152: [btn("⬇ Active · HTML", "bucket:user:download:active:html")],`
+- `3153: [btn(ui.back, "menu:main")],`
+- `3157: bot.action(/^bucket:user:download:active:(txt|html)$/, async (ctx) => {`
+- `3181: bot.action("bucket:status", async (ctx) => {`
+- `3186: bot.action("bucket:validate", async (ctx) => {`
+- `3207: bot.action("ui:validator", async (ctx) => {`
+- `3212: bot.action("bucket:live", async (ctx) => {`
+- `3217: bot.action("bucket:live:on", async (ctx) => {`
+- `3222: bot.action("bucket:live:off", async (ctx) => {`
+- `3227: bot.action("bucket:live:refresh", async (ctx) => {`
+- `3232: bot.action("bucket:downloads", async (ctx) => {`
+- `3246: btn("Main · TXT", "bucket:download:main:txt"),`
+- `3247: btn("Main · HTML", "bucket:download:main:html"),`
+- `3250: btn("Validating · TXT", "bucket:download:validating:txt"),`
+- `3251: btn("Validating · HTML", "bucket:download:validating:html"),`
+- `3254: btn("Active · TXT", "bucket:download:active:txt"),`
+- `3255: btn("Active · HTML", "bucket:download:active:html"),`
+- `3258: btn("Dead · TXT", "bucket:download:dead:txt"),`
+- `3259: btn("Dead · HTML", "bucket:download:dead:html"),`
+- `3262: btn("Error · TXT", "bucket:download:error:txt"),`
+- `3263: btn("Error · HTML", "bucket:download:error:html"),`
+- `3265: [btn("‹ Validator Hub", "bucket:status")],`
+- `3269: bot.action(`
+- `3315: bot.action(/^bucket:view:(main|validating|active|dead|error)$/, async (ctx) => {`
+- `3341: btn("⬇ TXT", 'bucket:download:${bucket}:txt'),`
+- `3342: btn("⬇ HTML", 'bucket:download:${bucket}:html'),`
+- `3344: [btn("↻ Refresh", 'bucket:view:${bucket}')],`
+- `3345: [btn("‹ Validator Hub", "bucket:status")],`
+- `3362: bot.action("bucket:merge:main", async (ctx) => {`
+- `3400: bot.action(/^bucket:purge:(dead|error)$/, async (ctx) => {`
+- `3414: [btn('⚠ Purge ${bucket}', 'bucket:purge:confirm:${bucket}', "danger")],`
+- `3415: [btn("Cancel", "bucket:status")],`
+- `3419: bot.action(/^bucket:purge:confirm:(dead|error)$/, async (ctx) => {`
+- `3459: bot.action(/^session:([^:]+):collect$/, async (ctx) => {`
+- `3476: bot.action(/^session:([^:]+):collect:live$/, async (ctx) => {`
+- `3483: bot.action("jobs:live:open", async (ctx) => {`
+- `3508: keyboard([[btn("‹ Back", "menu:main")]]),`
+- `3511: bot.action(/^job:live:([A-Z0-9]+)$/i, async (ctx) => {`
+- `3526: bot.action("jobs:list", async (ctx) => {`
+- `3530: bot.action("schedule:new:validation", async (ctx) => {`
+- `3548: bot.action(/^schedule:disable:([^:]+)$/, async (ctx) => {`
+- `3560: bot.action("settings:menu", async (ctx) => {`
+- `3569: bot.action("settings:autojoin:toggle", async (ctx) => {`
+- `3582: bot.action("settings:broadcastdelay:set", async (ctx) => {`
+- `3592: keyboard([[btn("Cancel", "settings:menu")]]),`
+- `3595: bot.action("settings:broadcastdelay:cycle", async (ctx) => {`
+- `3612: bot.action("settings:prefix:cycle", async (ctx) => {`
+- `3629: bot.action("settings:delay:cycle", async (ctx) => {`
+- `3644: bot.action("settings:joinmode:cycle", async (ctx) => {`
+- `3659: bot.action("support:menu", async (ctx) => {`
+- `3675: keyboard([[btn("Cancel", "menu:main", "danger")]]),`
+- `3678: bot.action("admin:support", async (ctx) => {`
+- `3683: bot.action(/^admin:support:reply:([a-f0-9-]+)$/, async (ctx) => {`
+- `3699: keyboard([[btn("Cancel", "admin:support", "danger")]]),`
+- `3702: bot.action(/^admin:support:close:([a-f0-9-]+)$/, async (ctx) => {`
+- `3708: bot.action("ui:schedule", async (ctx) => {`
+- `3712: bot.action("ui:settings", async (ctx) => {`
+- `3721: bot.action("ui:support", async (ctx) => {`
+- `3737: keyboard([[btn("Cancel", "menu:main", "danger")]]),`
+- `3740: bot.action("ui:join", async (ctx) => {`
+- `3745: bot.action(/^session:([^:]+):bridge:command$/, async (ctx) => {`
+- `3773: [btn("✖ Cancel Input", 'session:${session.sessionId}:bridge:stop')],`
+- `3777: bot.action(/^session:([^:]+):bridge:(start|stop)$/, async (ctx) => {`
+- `3806: [btn(ui.back, 'session:${session.sessionId}:menu')],`
+- `3811: bot.action(/^session:([^:]+):joinmgr$/, async (ctx) => {`
+- `3815: bot.action(`
+- `3858: [btn("✖ Cancel", 'session:${session.sessionId}:join:settings')],`
+- `3863: bot.action(`
+- `3965: btn("🎯 Edit Target", 'session:${session.sessionId}:join:edit:target'),`
+- `3966: btn("⏱ Edit Delay", 'session:${session.sessionId}:join:edit:delay'),`
+- `3979: btn("🔁 Edit Batch", 'session:${session.sessionId}:join:edit:batch'),`
+- `3980: btn("↻ Edit Retries", 'session:${session.sessionId}:join:edit:retry'),`
+- `4002: [btn("⇄ Edit Join Mode", 'session:${session.sessionId}:join:edit:mode')],`
+- `4003: [btn("‹ Join Manager", 'session:${session.sessionId}:joinmgr')],`
+- `4224: [btn("‹ Join Manager", 'session:${session.sessionId}:joinmgr')],`
+- `4232: bot.action("autopromote:user", async (ctx) => {`
+- `4237: bot.action(/^session:([^:]+):autopromote$/, async (ctx) => {`
+- `4256: bot.action("admin:autopromote", async (ctx) => {`
+- `4262: bot.action("admin:autopromote:new", async (ctx) => {`
+- `4291: bot.action("admin:autopromote:targets:refresh", async (ctx) => {`
+- `4310: bot.action(/^autopromote:global:toggle:([^:]+)$/, async (ctx) => {`
+- `4324: bot.action("autopromote:global:all", async (ctx) => {`
+- `4336: bot.action("autopromote:global:ready", async (ctx) => {`
+- `4366: bot.action(/^autopromote:scope:SESSION:([^:]+)$/, async (ctx) => {`
+- `4375: bot.action("autopromote:scope:USER", async (ctx) => {`
+- `4382: bot.action(/^autopromote:command:(allstatus|allstatusd|allchat|allstatusx)$/, async (ctx) => {`
+- `4407: bot.action(/^autopromote:days:(\d+)$/, async (ctx) => {`
+- `4416: bot.action(/^autopromote:times:([1-5])$/, async (ctx) => {`
+- `4426: bot.action(/^autopromote:posts:(\d+)$/, async (ctx) => {`
+- `4435: bot.action("autopromote:confirm", async (ctx) => {`
+- `4461: bot.action("autopromote:edit", async (ctx) => {`
+- `4469: bot.action("autopromote:cancel", async (ctx) => {`
+- `4472: await edit(ctx, pageText("Auto Promote", infoResponse("Cancelled", "No Auto Promote configuration was created.")), keyboard([[btn(ui.back, "menu:main")]]));`
+- `4474: bot.action("autopromote:new", async (ctx) => {`
+- `4494: bot.action(/^autopromote:view:([^:]+)$/, async (ctx) => {`
+- `4507: bot.action(/^autopromote:(pause|resume):([^:]+)$/, async (ctx) => {`
+- `4524: bot.action(/^autopromote:disable:([^:]+)$/, async (ctx) => {`
+- `4536: bot.action(/^autopromote:delete:([^:]+)$/, async (ctx) => {`
+- `4558: bot.action(/^autopromote:delete:confirm:([^:]+)$/, async (ctx) => {`
+- `4575: bot.action("workload:menu", async (ctx) => {`
+- `4584: bot.action("workload:status", async (ctx) => {`
+- `4593: bot.action("workload:list", async (ctx) => {`
+- `4617: bot.action("workload:add", async (ctx) => {`
+- `4631: bot.action("workload:share:add", async (ctx) => {`
+- `4638: bot.action("workload:enroll", async (ctx) => {`
+- `4642: bot.action("workload:guide", async (ctx) => {`
+- `4646: bot.action("workload:download", async (ctx) => {`
+- `4650: bot.action(/^workload:select:(.+)$/, async (ctx) => {`
+- `4663: bot.action(/^workload:share:users:(.+)$/, async (ctx) => {`
+- `4681: bot.action(/^workload:share:(block|unblock):([^:]+)$/, async (ctx) => {`
+- `4694: bot.action(/^workload:share:([^:]+)$/, async (ctx) => {`
+- `4712: bot.action(/^workload:logger:(refresh:)?(.+)$/, async (ctx) => {`
+- `4730: bot.action(/^workload:use:(.+)$/, async (ctx) => {`
+- `4743: await edit(ctx, pageText("Workload", successResponse("Workload selected", 'New pairing will use <code>${escapeHtml(code)}</code>. Tap Pair Number when ready.')), keyboard([[btn("⚡ Pair Number", "session:new", "success")], [btn(ui.back, "workload:menu")]]));`
+- `4745: bot.action(/^workload:share:remove:(.+)$/, async (ctx) => {`
+- `4760: bot.action(/^workload:remove:(.+)$/, async (ctx) => {`
+- `4771: bot.action("admin:workload", async (ctx) => {`
+- `4778: bot.action("admin:workload:toggle", async (ctx) => {`
+- `4789: bot.action(/^admin:workload:worker:([^:]+)$/, async (ctx) => {`
+- `4795: await edit(ctx, pageText("Admin · Workload", dangerResponse("Worker not found", "Refresh the registry and try again.")), keyboard([[btn(ui.back, "admin:workload")]]));`
+- `4800: bot.action(/^admin:workload:worker:toggle:([^:]+)$/, async (ctx) => {`
+- `4810: bot.action(/^admin:workload:worker:check:([^:]+)$/, async (ctx) => {`
+- `4818: bot.action("admin:panel", async (ctx) => {`
+- `4833: bot.action("admin:inceptor", async (ctx) => {`
+- `4838: bot.action("admin:inceptor:run", async (ctx) => {`
+- `4854: bot.action("admin:home", async (ctx) => {`
+- `4869: bot.action(/^admin:users(?::(\d+))?$/, async (ctx) => {`
+- `4874: bot.action(/^admin:user:(ban|unban):(.+)$/, async (ctx) => {`
+- `4891: bot.action("admin:bucket", async (ctx) => {`
+- `4899: bot.action("admin:bridge", async (ctx) => {`
+- `4910: bot.action("admin:bridge:clear", async (ctx) => {`
+- `4922: bot.action("admin:bridge:all", async (ctx) => {`
+- `4936: bot.action(/^admin:bridge:toggle:([A-Z0-9]+)$/, async (ctx) => {`
+- `4959: bot.action("admin:bridge:command", async (ctx) => {`
+- `4994: keyboard([[btn("✖ Cancel Input", "admin:bridge")]]),`
+- `4997: bot.action(/^admin:bridge:open:([A-Z0-9]+)$/, async (ctx) => {`
+- `5015: [btn("✉ Send Command", 'admin:bridge:send:${token}', "success")],`
+- `5016: [btn("‹ Admin Global Bridge", "admin:bridge", "primary")],`
+- `5020: bot.action(/^admin:bridge:send:([A-Z0-9]+)$/, async (ctx) => {`
+- `5048: keyboard([[btn("✖ Cancel", "admin:bridge")]]),`
+- `5051: bot.action(/^admin:bridge:command:([^:]+):([^:]+)$/, async (ctx) => {`
+- `5084: keyboard([[btn("✖ Cancel", "admin:bridge")]]),`
+- `5087: bot.action(/^admin:bridge:session:([^:]+):([^:]+)$/, async (ctx) => {`
+- `5121: [btn("↻ Back to Global Bridge", "admin:bridge", "primary")],`
+- `5125: bot.action("admin:audit", async (ctx) => {`
+- `5131: bot.action("admin:forcejoin", async (ctx) => {`
+- `5139: bot.action("admin:forcejoin:add", async (ctx) => {`
+- `5157: keyboard([[btn("Cancel", "admin:forcejoin", "danger")]]),`
+- `5160: bot.action(/^admin:forcejoin:toggle:([^:]+)$/, async (ctx) => {`
+- `5179: bot.action(/^admin:forcejoin:remove:([^:]+)$/, async (ctx) => {`
+- `5193: bot.action(/^forcejoin:open:([^:]+)$/, async (ctx) => {`
+- `5211: bot.action("forcejoin:status", async (ctx) => {`
+- `5221: keyboard([[btn(ui.back, "menu:main")]]),`
+- `5225: bot.action("forcejoin:check", async (ctx) => {`
+- `5236: bot.action("admin:media", async (ctx) => {`
+- `5241: bot.action("admin:jobs", async (ctx) => {`
+- `5246: bot.action("admin:jobs:refresh", async (ctx) => {`
+- `5251: bot.action("admin:jobs:clear", async (ctx) => {`
+- `5264: [btn("🗑 Confirm Clear All Jobs", "admin:jobs:clear:confirm", "danger")],`
+- `5265: [btn("Cancel", "admin:jobs")],`
+- `5269: bot.action("admin:jobs:clear:confirm", async (ctx) => {`
+- `5278: keyboard([[btn("‹ Admin Panel", "admin:panel")]]),`
+- `5300: [btn("↻ View Jobs", "admin:jobs", "primary")],`
+- `5301: [btn("‹ Admin Panel", "admin:panel")],`
+- `5305: bot.action(/^admin:jobs:cancel:([^:]+)$/, async (ctx) => {`
+- `5320: bot.action(/^admin:media:add:(image|video)$/, async (ctx) => {`
+- `5337: keyboard([[btn(ui.back, "admin:media")]]),`
+- `5340: bot.action("admin:safe", async (ctx) => {`
+- `5382: [btn(ui.back, "admin:panel")],`
+- `5386: bot.action("admin:media:select", async (ctx) => {`
+- `5406: bot.action(/^admin:media:pick:([^:]+)$/, async (ctx) => {`
+- `5427: bot.action("admin:media:clear", async (ctx) => {`
+- `5433: bot.action("admin:media:caption", async (ctx) => {`
+- `5448: keyboard([[btn("Cancel", "admin:media", "danger")]]),`
+- `5451: bot.action("admin:broadcast", async (ctx) => {`
+- `5466: keyboard([[btn("Cancel", "admin:panel", "danger")]]),`
+- `5469: bot.action("admin:broadcast:cancel", async (ctx) => {`
+- `5476: bot.action("admin:broadcast:confirm", async (ctx) => {`
+- `5514: keyboard([[btn("‹ Admin Panel", "admin:panel")]]),`
+- `5524: function savePendingPairing(`
+- `5541: function clearPendingPairing(telegramUserId: string): void {`
+- `5546: async function startPairing(`
+- `5557: await sendOrEdit(ctx, pageText("Pairing", warningResponse("Central workload is OFF", "New WhatsApp sessions cannot use your VPS while Admin Workload is OFF. Deploy or select an external panel workload instead. Existing sessions are preserved.")), keyboard([[btn("▣ Workload Panels", "workload:menu")], [btn(ui.back, "menu:main")]]));`
+- `5567: await sendOrEdit(ctx, pageText("Pairing", dangerResponse("Selected panel is offline", "Check the panel status or choose another panel before pairing.")), keyboard([[btn("◌ Workload", "workload:menu")], [btn(ui.back, "menu:main")]]));`
+- `5581: keyboard([[btn(ui.back, "menu:main")]]),`
+- `5594: await sendOrEdit(ctx, pageText("Pairing", dangerResponse("Panel assignment failed", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn("◌ Workload", "workload:menu")], [btn(ui.back, "menu:main")]]));`
+- `5612: keyboard([[btn(ui.close, "menu:main", "danger")]]),`
+- `5616: async function beginPairingWizard(ctx: Context, workloadSelected = false): Promise<void> {`
+- `5627: return [btn('${ready ? label : "⛔"} · ${worker.workerName ?? "Panel"} · ${state}', 'pair:workload:${code}', ready ? "success" : "danger")];`
+- `5629: if (workloadMode === "ON") rows.push([btn("▣ Use Central Workload", "pair:local")]);`
+- `5631: await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn("⬇ Download Panel Worker", "workload:download")], [btn(ui.back, "menu:main")]]));`
+- `5634: rows.push([btn(ui.close, "menu:main", "danger")]);`
+- `5658: keyboard([[btn(ui.close, "menu:main", "danger")]]),`
+- `5662: async function handlePairingText(`
+- `5696: keyboard([[btn(ui.close, "menu:main", "danger")]]),`
+- `5727: [btn("↻ Session Status", 'session:${session.sessionId}:menu')],`
+- `5750: [btn("↻ Retry Phone Number", 'pair:number:${sessionId}', "success")],`
+- `5764: async function sendSessions(ctx: Context, page: number): Promise<void> {`
+- `5786: async function showAdminPanel(ctx: Context): Promise<void> {`
+- `5800: async function showAdminUsers(ctx: Context, page: number): Promise<void> {`
+- `5818: async function showAdminForceJoin(ctx: Context): Promise<void> {`
+- `5823: function inferForceJoinType(`
+- `5839: async function handleForceJoinTargetInput(`
+- `5852: keyboard([[btn("↻ Try Target Again", "admin:forcejoin:add", "success")]]),`
+- `5868: keyboard([[btn("Cancel", "admin:forcejoin", "danger")]]),`
+- `5872: async function handleForceJoinNameInput(`
+- `5882: keyboard([[btn("↻ Try Name Again", "admin:forcejoin:add", "success")]]),`
+- `5897: keyboard([[btn("Cancel", "admin:forcejoin", "danger")]]),`
+- `5901: async function handleForceJoinButtonInput(`
+- `5911: keyboard([[btn("↻ Try Button Again", "admin:forcejoin:add", "success")]]),`
+- `5945: async function handleMenuCaptionInput(ctx: Context, text: string): Promise<void> {`
+- `5954: keyboard([[btn("↻ Try Again", "admin:media:caption", "success")]]),`
+- `5966: async function showSessionHealth(`
+- `5996: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `6001: async function getSessionGroupAt(`
+- `6012: async function showSessionGroups(`
+- `6042: pageControls.push(btn("‹ Previous", 'session:${session.sessionId}:groups:${safePage - 1}'));`
+- `6044: pageControls.push(btn("Next ›", 'session:${session.sessionId}:groups:${safePage + 1}'));`
+- `6076: [btn("‹ Session Control", 'session:${session.sessionId}:menu')],`
+- `6090: [btn("↻ Retry Groups", 'session:${session.sessionId}:groups:0', "primary")],`
+- `6091: [btn("‹ Session", 'session:${session.sessionId}:menu')],`
+- `6097: async function showSchedulePanel(ctx: Context): Promise<void> {`
+- `6131: [btn(ui.back, "menu:main")],`
+- `6136: async function handleScheduleInput(`
+- `6180: async function handleSupportInput(`
+- `6197: keyboard([[btn("Try Again", "support:menu", "primary")]]),`
+- `6228: keyboard([[btn("‹ Dashboard", "menu:main")]]),`
+- `6232: async function showAdminSupport(ctx: Context): Promise<void> {`
+- `6248: btn("↩ Reply", 'admin:support:reply:${ticket.ticketId}', "success"),`
+- `6249: btn("Close", 'admin:support:close:${ticket.ticketId}', "danger"),`
+- `6254: [btn("↻ Refresh", "admin:support", "primary")],`
+- `6255: [btn(ui.back, "admin:panel")],`
+- `6264: async function handleSupportReply(`
+- `6284: [btn("Try Again", 'admin:support:reply:${ticketId}', "primary")],`
+- `6329: keyboard([[btn("‹ Support Inbox", "admin:support")]]),`
+- `6333: async function handleAdminBroadcastDraft(`
+- `6349: keyboard([[btn("↻ Compose Again", "admin:broadcast", "primary")]]),`
+- `6368: [btn("✅ Confirm Broadcast", "admin:broadcast:confirm", "danger")],`
+- `6369: [btn("✎ Edit", "admin:broadcast", "primary")],`
+- `6370: [btn("Cancel", "admin:broadcast:cancel", "danger")],`
+- `6375: async function getForceJoinGate(ctx: Context): Promise<{`
+- `6406: function telegramChatReference(value: string): string | undefined {`
+- `6414: async function showAdminJobs(ctx: Context): Promise<void> {`
+- `6419: async function showValidatorHub(ctx: Context): Promise<void> {`
+- `6437: function validatorSessionView(`
+- `6496: async function showValidatorLiveLog(`
+- `6582: function stopValidatorLiveLoops(workspaceId: string): void {`
+- `6591: async function showGlobalBridge(ctx: Context): Promise<void> {`
+- `6608: async function showSessionBridge(`
+- `6643: [btn(ui.back, 'session:${session.sessionId}:menu')],`
+- `6648: async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {`
+- `6795: function jobStateToJoinStatus(`
+- `6805: async function sendAdminMedia(ctx: Context): Promise<void> {`
+- `6816: async function showFeature(`
+- `6825: keyboard([[btn(ui.back, "menu:main")]]),`
+- `6829: async function deliverWorkloadPairingCode(ctx: Context, workerName: string): Promise<void> {`
+- `6857: async function sendOrEdit(`
+- `6866: async function edit(`
+- `6898: export function mergeTelegramQuotedText(primary: string, quotedText?: string): string {`
+- `6902: export async function resolveTelegramQuotedMedia(`
+- `6962: function resolveTelegramUser(ctx: Context) {`
+- `6971: function ownedSession(ctx: Context, sessionId: string) {`
+- `6979: function isBridgeReadySession(session: ReturnType<typeof listAllSessions>[number]): boolean {`
+- `6983: function normalizeBridgeCommand(input: string, sessionPrefix: string): string {`
+- `6994: function activeWorkspaceSessions(workspaceId: string) {`
+- `6998: function activeAllSessions() {`
+- `7002: function globalBridgeSessions(ctx: Context) {`
+- `7008: async function refreshSessionRegistryForUi(): Promise<void> {`
+- `7017: function isAdmin(ctx: Context): boolean {`
+- `7021: function requireAdmin(ctx: Context): boolean {`
+- `7031: function deny(ctx: Context): void {`
+- `7041: function parseJoinSetting(`
+- `7128: function escapeHtml(value: string): string {`
+- `7135: async function enqueueValidatorJobs(`
+- `7151: async function showOwnerAutoPromoteDashboard(ctx: Context): Promise<void> {`
+- `7159: async function showAutoPromoteDashboard(`
+- `7171: function autoPromoteWizardSummary(state: AutoPromoteWizard): string {`
+- `7197: async function renderSessionOverview(`
+
+### `moderator.ts`
+
+- `43: function getProtectionRedis(): Redis {`
+- `62: function commandMessage(ctx: Context): CommandMessage | undefined {`
+- `67: function groupId(ctx: Context): string | undefined {`
+- `72: function actorId(ctx: Context): string | undefined {`
+- `76: function args(ctx: Context): string[] {`
+- `81: function targetId(ctx: Context): string | undefined {`
+- `87: async function ensureGroup(`
+- `122: async function requireModerator(ctx: Context): Promise<boolean> {`
+- `142: async function recordEvent(`
+- `169: async function restrict(`
+- `187: async function restore(ctx: Context, target: string): Promise<boolean> {`
+- `214: async function reconcileModeratorExpiries(`
+- `276: export function startModeratorReconciliation(bot: Telegraf<Context>): void {`
+- `286: export function stopModeratorReconciliation(): void {`
+- `291: export async function closeModeratorProtectionRedis(): Promise<void> {`
+- `298: export function installModeratorProtection(bot: Telegraf<Context>): void {`
+- `299: bot.on("new_chat_members", async (ctx, next) => {`
+- `358: bot.on("message", async (ctx, next) => {`
+- `459: async function moderatorDashboardText(`
+- `488: function moderatorDashboardKeyboard(group: ModeratorGroupRecord) {`
+- `526: [btn(ui.close, "menu:main")],`
+- `530: async function editModeratorDashboard(`
+- `550: async function callbackModerator(`
+- `557: export async function openModeratorDashboard(ctx: Context): Promise<void> {`
+- `564: function callbackMessageId(ctx: Context): number | undefined {`
+- `569: function scheduleDelete(`
+- `581: function createDestructiveConfirmation(`
+- `606: function consumeDestructiveConfirmation(`
+- `626: export function installModeratorCommands(bot: Telegraf<Context>): void {`
+- `627: bot.command("moderation", async (ctx) => {`
+- `641: bot.action("mod:refresh", async (ctx) => {`
+- `647: bot.action(`
+- `677: bot.action("mod:quick-protect", async (ctx) => {`
+- `703: bot.action("mod:view:setup", async (ctx) => {`
+- `733: bot.action("mod:view:rules", async (ctx) => {`
+- `752: bot.action("mod:view:filters", async (ctx) => {`
+- `773: bot.action("mod:view:warnings", async (ctx) => {`
+- `795: bot.action("mod:view:logs", async (ctx) => {`
+- `817: bot.command("mute", async (ctx) => {`
+- `880: bot.command("tagall", async (ctx) => {`
+- `925: bot.command("ban", async (ctx) => {`
+- `969: bot.action(`
+- `1072: reply_markup: keyboard([[btn(ui.close, "menu:main")]]),`
+- `1091: bot.action(/^mod:cancel:([a-f0-9-]+)$/, async (ctx) => {`
+- `1133: bot.command("unban", async (ctx) => {`
+- `1165: bot.command("unmute", async (ctx) => {`
+- `1222: bot.command("warn", async (ctx) => {`
+- `1286: bot.command("warns", showWarnings);`
+- `1287: bot.command("warnlist", showWarnings);`
+- `1289: bot.command("warnlimit", async (ctx) => {`
+- `1308: bot.command("resetwarn", async (ctx) => {`
+- `1355: bot.command("rules", async (ctx) => {`
+- `1361: bot.command("setrules", async (ctx) => {`
+- `1393: bot.action(/^mod:rules:(publish|cancel):(-?\\d+)$/, async (ctx) => {`
+- `1447: bot.command("staff", async (ctx) => {`
+- `1475: bot.command("trusted", async (ctx) => {`
+- `1507: bot.command("whitelist", async (ctx) => {`
+- `1558: bot.command("welcome", (ctx) => updateGreeting(ctx, "welcome"));`
+- `1559: bot.command("goodbye", (ctx) => updateGreeting(ctx, "goodbye"));`
+- `1561: bot.command("filter", async (ctx) => {`
+- `1604: bot.on("new_chat_members", async (ctx) => {`
+- `1622: bot.on("left_chat_member", async (ctx) => {`
+- `1639: bot.command("settings", async (ctx) => {`
+- `1648: bot.command("protection", async (ctx) => {`
+- `1661: bot.command("antilink", async (ctx) => {`
+- `1674: bot.command("logs", async (ctx) => {`
+
+### `renderer.ts`
+
+- `7: export function normalizeTelegramNewlines(value: string): string {`
+- `16: export function renderTelegramBlockquote(`
+- `27: export function renderTelegramPlainText(value: string): string {`
+- `31: export function renderTelegramHtml(value: string): string {`
+- `35: export function successResponse(title: string, detail = ""): string {`
+- `39: export function dangerResponse(title: string, detail = ""): string {`
+- `43: export function warningResponse(title: string, detail = ""): string {`
+- `47: export function infoResponse(title: string, detail = ""): string {`
+- `51: export function escapeHtml(value: string): string {`
+
+### `ui.ts`
+
+- `27: export function btn(`
+- `35: export function copyBtn(`
+- `43: export function urlBtn(`
+- `51: export function keyboard(rows: Button[][]): InlineKeyboardMarkup {`
+- `55: export function groupStartKeyboard(isModerator: boolean): InlineKeyboardMarkup {`
+- `57: [btn("📜 Group Rules", "group:start:rules")],`
+- `58: [btn("🔄 Refresh", "group:start:refresh")],`
+- `62: btn("🛡 Moderator Controls", "group:start:moderation", "success"),`
+- `67: export function groupStartText(`
+- `85: export function dashboardKeyboard(isAdmin: boolean): InlineKeyboardMarkup {`
+- `88: btn("⚡ Pair Number", "session:new", "success"),`
+- `92: ...(isAdmin ? [btn("⌁ Validator Hub", "bucket:status")] : []),`
+- `101: [btn("⚙ Settings", "settings:menu")],`
+- `102: [btn("◌ Support", "support:menu"), btn("▤ Help", "help:main")],`
+- `104: if (isAdmin) rows.push([btn("♛ Admin Panel", "admin:panel")]);`
+- `108: export function sessionsKeyboard(`
+- `128: rows.push([btn("➕ New Session", "session:new", "success")]);`
+- `129: if (isAdmin) rows.push([btn("♛ Admin Panel", "admin:panel")]);`
+- `130: rows.push([btn(ui.back, "menu:main")]);`
+- `134: export function globalBridgeKeyboard(`
+- `139: [btn("➕ Add WhatsApp Session", "session:new", "success")],`
+- `147: [btn(ui.back, "menu:main")],`
+- `150: export function globalBridgeText(selected = 0, active = false): string {`
+- `160: export function globalBridgeResultText(`
+- `180: export function bridgeSessionPicker(`
+- `199: export function sessionKeyboard(`
+- `206: btn("◉ Overview", 'session:${id}:section:overview', "success"),`
+- `207: btn("🧰 WhatsApp Tools", 'session:${id}:section:tools'),`
+- `210: btn("👥 My Groups", 'session:${id}:groups'),`
+- `211: btn("🌉 Session Bridge", 'session:${id}:section:bridge'),`
+- `214: btn("⚡ Auto Promote", 'session:${id}:autopromote', "primary"),`
+- `216: [btn("🛠 Join Manager", 'session:${id}:section:join')],`
+- `218: btn("🩺 Health & Jobs", 'session:${id}:section:health'),`
+- `219: btn("⚙ Session Settings", 'session:${id}:section:settings'),`
+- `221: [btn("↻ Reconnect WhatsApp", 'session:${id}:action:reconnect', "primary")],`
+- `224: rows.push([btn("🔐 Access / Sudo", 'session:${id}:section:access')]);`
+- `225: rows.push([btn("⚠ Purge Session", 'session:${id}:action:purge', "danger")]);`
+- `227: btn("↻ Refresh", 'session:${id}:menu'),`
+- `233: export function sessionToolsKeyboard(sessionId: string): InlineKeyboardMarkup {`
+- `236: btn("🪪 Profile", 'session:${sessionId}:action:profile'),`
+- `237: btn("🖼 PFP", 'session:${sessionId}:action:pfp'),`
+- `240: btn("✎ Name", 'session:${sessionId}:action:name'),`
+- `241: btn("✎ Bio", 'session:${sessionId}:action:bio'),`
+- `249: btn("▣ Group Picture", 'session:${sessionId}:action:gpp'),`
+- `251: [btn("‹ Session Control", 'session:${sessionId}:menu')],`
+- `255: export function sessionSettingsKeyboard(`
+- `266: btn("Prefix", 'session:${sessionId}:action:prefix'),`
+- `268: [btn("‹ Session Control", 'session:${sessionId}:menu')],`
+- `272: export function sessionAccessKeyboard(sessionId: string): InlineKeyboardMarkup {`
+- `274: [btn("◉ List Sudo", 'session:${sessionId}:sudo:list')],`
+- `276: btn("＋ Add Sudo", 'session:${sessionId}:sudo:add', "success"),`
+- `277: btn("− Remove Sudo", 'session:${sessionId}:sudo:remove', "danger"),`
+- `279: [btn("‹ Session Control", 'session:${sessionId}:menu')],`
+- `283: export function sessionValidatorKeyboard(`
+- `286: return keyboard([[btn("‹ Session Control", 'session:${sessionId}:menu')]]);`
+- `289: export function linkCollectionKeyboard(`
+- `293: [btn("↻ Refresh Shared Statistics", 'session:${sessionId}:collect', "success")],`
+- `294: [btn("📥 Download Active Links", "bucket:user:active", "success")],`
+- `295: [btn(ui.back, 'session:${sessionId}:menu')],`
+- `299: export function validatorDashboardText(snapshot: {`
+- `321: export function validatorLiveText(`
+- `399: export function validatorLiveKeyboard(active = false): InlineKeyboardMarkup {`
+- `408: [btn("↻ Refresh Live Log", "bucket:live:refresh")],`
+- `409: [btn("‹ Validator Hub", "bucket:status")],`
+- `410: [btn(ui.back, "menu:main")],`
+- `414: export function bucketKeyboard(): InlineKeyboardMarkup {`
+- `417: btn("▶ Open Live Log", "bucket:live", "success"),`
+- `418: btn("↻ Refresh Dashboard", "bucket:status", "primary"),`
+- `421: btn("📥 Main", "bucket:view:main"),`
+- `422: btn("◌ Validating", "bucket:view:validating"),`
+- `423: btn("✅ Active", "bucket:view:active"),`
+- `425: [btn("💀 Dead", "bucket:view:dead"), btn("↻ Retryable", "bucket:view:error")],`
+- `426: [btn("↻ Requeue Retryable Errors", "bucket:merge:main", "success")],`
+- `427: [btn("⬇️ Downloads", "bucket:downloads")],`
+- `429: btn("🗑 Purge Dead", "bucket:purge:dead", "danger"),`
+- `430: btn("🗑 Purge Retryable", "bucket:purge:error", "danger"),`
+- `432: [btn(ui.back, "menu:main")],`
+- `436: export function joinManagerKeyboard(`
+- `442: controls.push(btn("⏸ Pause", 'session:${sessionId}:join:pause', "danger"));`
+- `452: controls.push(btn("⏹ Stop", 'session:${sessionId}:join:stop', "danger"));`
+- `456: btn("🎯 Edit Target", 'session:${sessionId}:join:edit:target'),`
+- `457: btn("⏱ Edit Delay", 'session:${sessionId}:join:edit:delay'),`
+- `460: rows.push([btn("🔁 Edit Batch Cycles", 'session:${sessionId}:join:edit:batch')]);`
+- `462: btn("⚙ Full Join Settings", 'session:${sessionId}:join:settings'),`
+- `463: btn("🔄 Refresh Live View", 'session:${sessionId}:joinmgr'),`
+- `474: export function workspaceSettingsKeyboard(settings: {`
+- `498: btn("Set exact", "settings:broadcastdelay:set", "primary"),`
+- `501: [btn("↻ Refresh", "settings:menu")],`
+- `502: [btn(ui.back, "menu:main")],`
+- `517: export function forceJoinText(`
+- `540: function forceJoinUrl(value: string): string {`
+- `551: export function forceJoinKeyboard(`
+- `561: export function adminForceJoinText(targets: ForceJoinTargetView[]): string {`
+- `579: export function adminForceJoinKeyboard(`
+- `588: btn("✕ Remove", 'admin:forcejoin:remove:${target.targetId}', "danger"),`
+- `590: rows.push([btn("＋ Add Target", "admin:forcejoin:add", "success")]);`
+- `591: rows.push([btn("↻ Refresh", "admin:forcejoin", "primary")]);`
+- `592: rows.push([btn(ui.back, "admin:panel")]);`
+- `606: export function adminUsersText(users: AdminUserView[], page: number): string {`
+- `624: export function adminUsersKeyboard(`
+- `637: ? [btn("‹ Previous", 'admin:users:${page - 1}', "primary")]`
+- `639: btn("Next ›", 'admin:users:${page + 1}', "primary"),`
+- `641: rows.push([btn("↻ Refresh", 'admin:users:${page}', "primary")]);`
+- `642: rows.push([btn(ui.back, "admin:panel")]);`
+- `646: export function adminBucketText(snapshot: {`
+- `675: export function adminBucketKeyboard(): InlineKeyboardMarkup {`
+- `677: [btn("↻ Refresh Bucket", "admin:bucket", "primary")],`
+- `678: [btn(ui.back, "admin:panel")],`
+- `682: export function adminBridgeText(sessions: WhatsAppSession[]): string {`
+- `700: export function adminBridgeTargetToken(`
+- `712: export function adminBridgeKeyboard(`
+- `727: rows.push([btn("＋ Pair Session", "session:new", "success")]);`
+- `729: rows.push([btn("☑ Select All ACTIVE", "admin:bridge:all", "primary")]);`
+- `730: rows.push([btn("✉ Send Command", "admin:bridge:command", "success")]);`
+- `732: rows.push([btn("↻ Refresh", "admin:bridge", "primary")]);`
+- `733: rows.push([btn(ui.back, "admin:panel")]);`
+- `746: export function adminAuditText(events: AdminAuditView[]): string {`
+- `764: export function adminAuditKeyboard(): InlineKeyboardMarkup {`
+- `766: [btn("↻ Refresh Audit", "admin:audit", "primary")],`
+- `767: [btn(ui.back, "admin:panel")],`
+- `771: export function adminInceptorText(snapshot?: InceptorSnapshot): string {`
+- `797: export function adminInceptorKeyboard(): InlineKeyboardMarkup {`
+- `799: [btn("↻ Run Inceptor Sweep", "admin:inceptor:run", "primary")],`
+- `800: [btn(ui.back, "admin:panel")],`
+- `804: export function adminKeyboard(): InlineKeyboardMarkup {`
+- `806: [btn("⚙ Force Join", "admin:forcejoin"), btn("⚡ Global Auto Promote", "admin:autopromote")],`
+- `807: [btn("◉ Users", "admin:users")],`
+- `809: btn("▣ Media", "admin:media"),`
+- `810: btn("🌉 Global Bridge Ops", "admin:bridge"),`
+- `812: [btn("◌ Workload", "admin:workload", "success")],`
+- `814: btn("◷ Global Jobs", "admin:jobs"),`
+- `815: btn("⌁ Validator Hub", "bucket:status"),`
+- `817: [btn("🛡 Inceptor", "admin:inceptor")],`
+- `818: [btn("🗑 Clear All Jobs", "admin:jobs:clear", "danger")],`
+- `820: btn("▥ Broadcast", "admin:broadcast"),`
+- `821: btn("◌ Support Inbox", "admin:support"),`
+- `823: [btn("▤ Audit Log", "admin:audit")],`
+- `824: [btn("⚠ Emergency Mode", "admin:safe", "danger")],`
+- `825: [btn(ui.back, "menu:main")],`
+- `847: export function adminJobsText(jobs: AdminJobView[]): string {`
+- `871: function liveProgressBar(completed: number, total?: number): string {`
+- `877: export function jobLiveText(job: JobRecord | undefined): string {`
+- `922: export function jobLiveKeyboard(`
+- `933: export function adminJobsKeyboard(`
+- `961: rows.push([btn("🗑 Clear All Jobs", "admin:jobs:clear", "danger")]);`
+- `962: rows.push([btn("↻ Refresh Jobs", "admin:jobs:refresh", "primary")]);`
+- `963: rows.push([btn(ui.back, "admin:panel")]);`
+- `967: export function mediaKeyboard(): InlineKeyboardMarkup {`
+- `970: btn("＋ Add Image", "admin:media:add:image", "success"),`
+- `971: btn("＋ Add Video", "admin:media:add:video", "success"),`
+- `973: [btn("▣ Choose Menu Media", "admin:media:select")],`
+- `974: [btn("✎ Set Menu Caption", "admin:media:caption")],`
+- `975: [btn("▢ Clear Menu Media", "admin:media:clear", "danger")],`
+- `976: [btn(ui.back, "admin:panel")],`
+- `980: export function menuMediaPickerKeyboard(`
+- `991: rows.push([btn("▢ Clear Selection", "admin:media:clear", "danger")]);`
+- `992: rows.push([btn("✎ Set Shared Caption", "admin:media:caption")]);`
+- `993: rows.push([btn(ui.back, "admin:media")]);`
+- `1005: export function sessionText(`
+- `1022: export function workspaceSettingsText(settings: {`
+- `1036: export function dashboardText(isAdmin: boolean): string {`
+- `1043: export function helpText(): string {`
+- `1050: export function pageText(title: string, body: string): string {`
+- `1054: export function featureText(title: string, body: string): string {`
+- `1058: function jobStatusIcon(state: string): string {`
+- `1070: function statusIcon(status: WhatsAppSession["status"]): string {`
+- `1080: function escapeHtml(value: string): string {`
+- `1088: export function autoPromoteScopeKeyboard(`
+- `1100: [btn(ui.back, sessionId ? 'session:${sessionId}:menu' : "menu:main")],`
+- `1104: export function autoPromoteCommandKeyboard(): InlineKeyboardMarkup {`
+- `1114: export function autoPromoteDaysKeyboard(): InlineKeyboardMarkup {`
+- `1123: export function autoPromoteTimesKeyboard(): InlineKeyboardMarkup {`
+- `1130: export function autoPromotePostsKeyboard(): InlineKeyboardMarkup {`
+- `1138: export function autoPromoteConfirmKeyboard(): InlineKeyboardMarkup {`
+- `1145: export function autoPromoteDashboardKeyboard(`
+- `1161: export function autoPromoteText(`
+- `1209: export function autoPromoteGlobalTargetsKeyboard(`
+- `1222: rows.push([btn("↻ Refresh ACTIVE Sessions", "admin:autopromote:targets:refresh", "primary")]);`
+- `1228: export function workloadKeyboard(hasWorker: boolean): InlineKeyboardMarkup {`
+- `1236: [btn(ui.back, "menu:main")],`
+- `1240: export function workloadText(`
+- `1260: export function workloadPanelText(`
+- `1272: export function workloadPanelKeyboard(workloadCode: string, shared = false): InlineKeyboardMarkup {`
+- `1285: export function workloadShareUsersText(`
+- `1306: export function workloadShareUsersKeyboard(`
+- `1319: export function workloadLoggerText(snapshot: {`
+- `1344: export function workloadLoggerKeyboard(workloadCode: string): InlineKeyboardMarkup {`
+- `1352: export function workloadGuideText(controlUrl?: string): string {`
+- `1362: export function adminWorkloadText(`
+- `1378: export function adminWorkloadKeyboard(mode: "ON" | "OFF", workers: Array<{ workerId: string; displayKey: string; status: string }>): InlineKeyboardMarkup {`
+- `1380: [btn(mode === "ON" ? "⚪ Turn Workload OFF" : "🟢 Turn Workload ON", "admin:workload:toggle", mode === "ON" ? "danger" : "success")],`
+- `1381: ...workers.map((worker) => [btn('${worker.status === "DISABLED" ? "▶ Resume traffic" : "⏸ Pause traffic"} · ${worker.displayKey}', 'admin:workload:worker:${worker.workerId}')]),`
+- `1382: [btn("↻ Refresh", "admin:workload")],`
+- `1383: [btn(ui.back, "admin:panel")],`
+- `1387: export function adminWorkloadWorkerText(worker: { workerId: string; workerName?: string; workloadCode?: string; displayKey: string; status: string; ownerTelegramUserId: string; workerVersion: string; assignedSessionIds: string[]; lastHeartbeatAt?: number; lastError?: string | undefined }): string {`
+- `1397: export function adminWorkloadWorkerKeyboard(workerId: string, disabled: boolean): InlineKeyboardMarkup {`
+- `1399: [btn(disabled ? "▶ Resume Traffic" : "⏸ Pause Traffic", 'admin:workload:worker:toggle:${workerId}', disabled ? "success" : "danger")],`
+- `1400: [btn("↻ Refresh Registry", 'admin:workload:worker:check:${workerId}')],`
+- `1401: [btn(ui.back, "admin:workload")],`

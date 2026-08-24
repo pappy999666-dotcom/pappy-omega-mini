@@ -77,10 +77,22 @@ export function createAssignedWorkloadSocket(
     "groupMetadata",
     "groupGetInviteInfo",
     "groupAcceptInvite",
+    "groupRequestJoin",
+    "groupParticipantsUpdate",
+    "groupRequestParticipantsList",
+    "groupRequestParticipantsUpdate",
+    "groupSettingUpdate",
+    "groupMemberAddMode",
+    "groupJoinApprovalMode",
+    "groupToggleEphemeral",
+    "groupRevokeInvite",
+    "updateBlockStatus",
     "requestPairingCode",
   ];
+  const session = getSession(workspaceId, sessionId);
+  const phone = session.phoneNumber?.replace(/\D/g, "");
   const target: Record<string, unknown> = {
-    user: { id: "me" },
+    user: { id: phone ? `${phone}@s.whatsapp.net` : "me" },
     ev: { on: () => undefined },
     __pappyAssignedWorkload: true,
     waUploadToServer: remotePreviewUpload(workspaceId, sessionId),
@@ -91,7 +103,7 @@ export function createAssignedWorkloadSocket(
       if (property === "then") return undefined;
       if (typeof property !== "string") return Reflect.get(current, property, receiver);
       if (property in current) return Reflect.get(current, property, receiver);
-      if (!/^[A-Za-z][A-Za-z0-9]*$/.test(property)) return undefined;
+      if (!methods.includes(property)) return undefined;
       return remoteMethod(workspaceId, sessionId, property);
     },
   }) as unknown as WASocket;

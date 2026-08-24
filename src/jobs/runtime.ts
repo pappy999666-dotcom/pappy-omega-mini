@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
+import { attachRedisErrorHandler } from "../core/redis-events.js";
 import type { JobProgress, WorkerContext } from "./job-contracts.js";
 import {
   LinkBucketStore,
@@ -20,18 +21,28 @@ import {
   queueWorkloadCommand,
   waitForWorkloadCommand,
 } from "../workload/service.js";
-import { getBroadcastProgress, requestBroadcastCancellation } from "../workload/broadcast-progress.js";
+import {
+  getBroadcastProgress,
+  requestBroadcastCancellation,
+} from "../workload/broadcast-progress.js";
 import {
   getSession,
   getSessionJoinSettings,
   listAllSessions,
   listSessions,
+  refreshSessionRegistry,
   updateSession,
 } from "../core/session-registry.js";
 import {
   listGroups,
+  getGroupModerationSnapshot,
+  updateGroupParticipantRole,
+  updateGroupParticipantBatch,
+  updateGroupJoinRequests,
+  updateParticipantBlockStatus,
   sendGroupMentions,
   sendGroupStatus,
+  sendGroupColorStatus,
   sendGroupText,
   sendDirectText,
   type GroupMediaPayload,
@@ -50,6 +61,7 @@ import { JobOrchestrator } from "./job-orchestrator.js";
 import { getInceptor, startInceptor } from "./inceptor.js";
 import { joinWhatsAppInvite } from "./join-operation.js";
 import {
+  purgeAutoPromoteSession,
   recordAutoPromoteChildCompletion,
   recordAutoPromoteProgress,
 } from "../autopromote/service.js";
@@ -70,12 +82,23 @@ interface LinkValidationPayload {
   validationLeaseToken?: string;
 }
 
+interface GroupControlPayload {
+  groupJid: string;
+  operation: "approve" | "reject" | "participant";
+  participants: string[];
+  participantAction?: "promote" | "demote" | "remove" | "block" | "demote-remove";
+}
+
 type JoinFailureClass =
   | "already-member"
   | "invalid-invite"
-  | "forbidden"
+  | "expired"
+  | "group-unavailable"
+  | "permission-denied"
   | "rate-limit"
-  | "transport";
+  | "timeout"
+  | "network-error"
+  | "internal-error";
 function isConfirmedInaccessibleGroupError(message: string): boolean {
   const lower = message.toLowerCase();
   return [
@@ -102,39 +125,32 @@ function classifyJoinFailure(error: unknown): {
 } {
   const message = error instanceof Error ? error.message : String(error);
   const lower = message.toLowerCase();
-  if (
-    lower.includes("already") ||
-    lower.includes("participant") ||
-    lower.includes("409")
-  )
+  const statusCode =
+    typeof error === "object" && error !== null && "statusCode" in error
+      ? Number((error as { statusCode?: unknown }).statusCode)
+      : undefined;
+  if (lower.includes("already") || lower.includes("409"))
     return { classification: "already-member", retryable: false, message };
-  if (
-    lower.includes("invalid") ||
-    lower.includes("not found") ||
-    lower.includes("invite")
-  )
+  if (/expired|revoked|invite.*expired/.test(lower))
+    return { classification: "expired", retryable: false, message };
+  if (/invalid invite|invalid group|group (?:is )?not found|group does not exist/.test(lower))
     return { classification: "invalid-invite", retryable: false, message };
-  if (
-    lower.includes("forbidden") ||
-    lower.includes("not allowed") ||
-    lower.includes("unauthorized")
-  )
-    return { classification: "forbidden", retryable: false, message };
-  if (/rate.?limit|too many requests|\b429\b|flood|throttl|temporarily banned|try again later|spam.?limit/i.test(lower))
-    return { classification: "rate-limit", retryable: true, message };
-  if (
-    lower.includes("timeout") ||
-    lower.includes("tempor") ||
-    lower.includes("network")
-  )
-    return { classification: "transport", retryable: true, message };
-  return { classification: "transport", retryable: true, message };
+  if (/group unavailable|group locked|group banned|not a participant|kicked|removed/.test(lower))
+    return { classification: "group-unavailable", retryable: false, message };
+  if (statusCode === 401 || statusCode === 403 || /forbidden|not allowed|unauthorized|permission denied/.test(lower))
+    return { classification: "permission-denied", retryable: false, message };
+  if (/rate.?limit|too many requests|\b429\b|flood|throttl|temporarily banned|try again later|spam.?limit/.test(lower))
+    return { classification: "rate-limit", retryable: false, message };
+  if (statusCode === 408 || statusCode === 504 || /timeout|timed out/.test(lower))
+    return { classification: "timeout", retryable: true, message };
+  if (/network|econn|socket|closed|not connected|dns|fetch failed/.test(lower))
+    return { classification: "network-error", retryable: true, message };
+  return { classification: "internal-error", retryable: false, message };
 }
 
 let activeRuntime: JobOrchestrator | undefined;
 let jobCompletionNotifier:
-  | ((job: import("./job-contracts.js").JobRecord) => Promise<void>)
-  | undefined;
+  ((job: import("./job-contracts.js").JobRecord) => Promise<void>) | undefined;
 let activeBuckets: LinkBucketStore | undefined;
 let activeJoinResults: JoinResultStore | undefined;
 let validatorSweepTimer: NodeJS.Timeout | undefined;
@@ -142,14 +158,22 @@ let validatorGuardTimer: NodeJS.Timeout | undefined;
 let validatorGuardBusy = false;
 const VALIDATOR_GUARD_INTERVAL_MS = 15_000;
 const VALIDATOR_RETIRE_MS = 15 * 60_000;
+// validatorRetiredUntil: Date.now() + VALIDATOR_RETIRE_MS
 const VALIDATING_STALE_MS = 10 * 60_000;
+const validatorGuardStartedAt = Date.now();
 
 function isInviteValidationRateLimited(message: string): boolean {
-  return /growth[- ]locked|rate.?limit|429|flood|throttl|spam.?limit|temporarily banned|try again later/i.test(message);
+  return /growth[- ]locked|rate.?limit|429|flood|throttl|spam.?limit|temporarily banned|try again later/i.test(
+    message,
+  );
 }
 
 function isInviteValidationPermanentFailure(message: string): boolean {
-  return /not[- ]authorized|invalid whatsapp group invite|not found|expired|revoked|unknown invite|group not found|gone/i.test(message);
+  // Only link-specific, confirmed invalidity may enter Dead. Generic
+  // authorization, network, timeout, and session errors remain retryable.
+  return /invalid whatsapp group invite|unknown invite|group not found|invite not found|expired invite|revoked invite|gone/i.test(
+    message,
+  );
 }
 
 export function getWorkerRuntime(): JobOrchestrator | undefined {
@@ -178,20 +202,36 @@ export function setJobCompletionNotifier(
 export async function purgeRuntimeSessionData(
   workspaceId: string,
   sessionId: string,
-): Promise<{ jobs: number; links: number }> {
+): Promise<{
+  jobs: number;
+  links: number;
+  autoPromoteConfigs: number;
+  autoPromoteRuns: number;
+}> {
   const jobs = activeRuntime
     ? await activeRuntime.purgeSession(workspaceId, sessionId)
     : 0;
   const links = activeBuckets
     ? await activeBuckets.removeSourceSession(workspaceId, sessionId)
     : 0;
-  return { jobs, links };
+  const autoPromote = await purgeAutoPromoteSession(
+    sessionId,
+    activeRuntime ?? undefined,
+  );
+  return {
+    jobs,
+    links,
+    autoPromoteConfigs: autoPromote.configs,
+    autoPromoteRuns: autoPromote.runs,
+  };
 }
 
 export function startWorkerRuntime(): JobOrchestrator {
   if (activeRuntime) return activeRuntime;
   const orchestrator = new JobOrchestrator(
-    env.PROCESS_ROLE === "worker" ? env.WORKER_CONCURRENCY : env.QUEUE_CONCURRENCY,
+    env.PROCESS_ROLE === "worker"
+      ? env.WORKER_CONCURRENCY
+      : env.QUEUE_CONCURRENCY,
   );
   activeRuntime = orchestrator;
   orchestrator.addCompletionHook(async (job) => {
@@ -203,7 +243,10 @@ export function startWorkerRuntime(): JobOrchestrator {
     });
     if (jobCompletionNotifier) await jobCompletionNotifier(job);
   });
-  const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
+  const redis = attachRedisErrorHandler(
+    new Redis(env.REDIS_URL, { maxRetriesPerRequest: null }),
+    "job-runtime",
+  );
   const buckets = new LinkBucketStore(redis);
   const markBroadcastDelivered = async (
     jobId: string,
@@ -225,7 +268,9 @@ export function startWorkerRuntime(): JobOrchestrator {
     repeatIndex: number,
   ): Promise<void> => {
     const key = `pappy-omega-mini:broadcast-done:${jobId}:${kind}:${encodeURIComponent(jid)}:${repeatIndex}`;
-    await redis.set(key, "done", "EX", 60 * 60 * 24 * 30).catch(() => undefined);
+    await redis
+      .set(key, "done", "EX", 60 * 60 * 24 * 30)
+      .catch(() => undefined);
   };
   const notifyBroadcastReady = async (
     context: WorkerContext,
@@ -235,20 +280,27 @@ export function startWorkerRuntime(): JobOrchestrator {
     delayMs: number,
   ): Promise<void> => {
     const payload = context.job.payload as { sourceChatJid?: unknown };
-    const sourceChatJid = typeof payload.sourceChatJid === "string" ? payload.sourceChatJid : "";
+    const sourceChatJid =
+      typeof payload.sourceChatJid === "string" ? payload.sourceChatJid : "";
     const code = context.job.jobCode;
     if (!sourceChatJid || !code || !context.job.sessionId) return;
     const marker = `pappy-omega-mini:broadcast-ready:${context.job.jobId}`;
-    const claimed = await redis.set(marker, "1", "EX", 60 * 60 * 24 * 30, "NX").catch(() => null);
+    const claimed = await redis
+      .set(marker, "1", "EX", 60 * 60 * 24 * 30, "NX")
+      .catch(() => null);
     if (claimed !== "OK") return;
     const expectedPosts = totalGroups * repeat;
-    const expectedSeconds = Math.max(0, Math.ceil(Math.max(0, expectedPosts - 1) * delayMs / 1000));
+    const expectedSeconds = Math.max(
+      0,
+      Math.ceil((Math.max(0, expectedPosts - 1) * delayMs) / 1000),
+    );
     const minutes = Math.floor(expectedSeconds / 60);
     const seconds = expectedSeconds % 60;
     const label = kind === "allstatus" ? "ALL-STATUS" : "ALL-CHAT";
-    const action = kind === "allstatus"
-      ? "Status delivery is now posting to every resolved group."
-      : "Hidden-member mention delivery is now posting to every resolved group.";
+    const action =
+      kind === "allstatus"
+        ? "Status delivery is now posting to every resolved group."
+        : "Hidden-member mention delivery is now posting to every resolved group.";
     void sendDirectText(
       context.job.workspaceId,
       context.job.sessionId,
@@ -284,10 +336,14 @@ export function startWorkerRuntime(): JobOrchestrator {
   orchestrator.register("link-validation", async (context) => {
     const payload = context.job.payload as LinkValidationPayload;
     const urls = payload.urls ?? [];
+    let stopBatchForRateLimit = false;
     return runBoundedBatch({
       items: urls,
-      concurrency: env.QUEUE_CONCURRENCY,
+      // One validation request at a time per WhatsApp socket. Separate
+      // sessions are isolated by their independent validator jobs.
+      concurrency: 1,
       context,
+      shouldStop: () => stopBatchForRateLimit,
       processItem: async (url) => {
         const raw = url.trim();
         await context.report({
@@ -302,19 +358,27 @@ export function startWorkerRuntime(): JobOrchestrator {
           const inviteCode = canonicalUrl.match(
             /chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/,
           )?.[1];
-          if (!inviteCode) throw new Error("Invalid WhatsApp group invite link.");
+          if (!inviteCode)
+            throw new Error("Invalid WhatsApp group invite link.");
           const candidates = listHealthyWhatsAppSessions(
             context.job.workspaceId,
             payload.sourceSessionId,
           );
-          const sourceSession = candidates[0] ?? selectHealthyWhatsAppSession(
-            context.job.workspaceId,
-            payload.sourceSessionId,
+          const sourceSession =
+            candidates[0] ??
+            selectHealthyWhatsAppSession(
+              context.job.workspaceId,
+              payload.sourceSessionId,
+              canonicalUrl,
+            );
+          if (!sourceSession)
+            throw new Error(
+              "No healthy WhatsApp validation session is available yet.",
+            );
+          const existing = await buckets.get(
+            GLOBAL_VALIDATOR_SCOPE,
             canonicalUrl,
           );
-          if (!sourceSession)
-            throw new Error("No healthy WhatsApp validation session is available yet.");
-          const existing = await buckets.get(GLOBAL_VALIDATOR_SCOPE, canonicalUrl);
           if (!existing || existing.bucket !== "validating")
             return { status: "skipped" as const };
           const leaseToken = payload.validationLeaseToken;
@@ -322,25 +386,34 @@ export function startWorkerRuntime(): JobOrchestrator {
           if (
             existing.metadata?.validationLeaseToken &&
             payload.validationLeaseToken &&
-            existing.metadata.validationLeaseToken !== payload.validationLeaseToken
+            existing.metadata.validationLeaseToken !==
+              payload.validationLeaseToken
           )
             return { status: "skipped" as const };
           if (existing.metadata?.validationLeaseToken !== leaseToken) {
-            await buckets.move(GLOBAL_VALIDATOR_SCOPE, canonicalUrl, "validating", {
-              sourceSessionId: sourceSession.sessionId,
-              metadata: {
-                ...(existing.metadata ?? {}),
-                inviteCode,
-                validationLeaseToken: leaseToken,
-                needsValidation: false,
-                validationState: "validating",
+            await buckets.move(
+              GLOBAL_VALIDATOR_SCOPE,
+              canonicalUrl,
+              "validating",
+              {
+                sourceSessionId: sourceSession.sessionId,
+                metadata: {
+                  ...(existing.metadata ?? {}),
+                  inviteCode,
+                  validationLeaseToken: leaseToken,
+                  needsValidation: false,
+                  validationState: "validating",
+                },
               },
-            });
+            );
           }
-          let metadata: Awaited<ReturnType<typeof validateInviteLink>> | undefined;
+          let metadata:
+            Awaited<ReturnType<typeof validateInviteLink>> | undefined;
           let sourceSessionId: string | undefined;
           let lastValidationError: unknown;
-          for (const candidate of candidates.length ? candidates : [sourceSession]) {
+          for (const candidate of candidates.length
+            ? candidates
+            : [sourceSession]) {
             try {
               metadata = await validateInviteLink(
                 context.job.workspaceId,
@@ -351,14 +424,24 @@ export function startWorkerRuntime(): JobOrchestrator {
               break;
             } catch (error) {
               lastValidationError = error;
-              const validationMessage = error instanceof Error ? error.message : String(error);
+              const validationMessage =
+                error instanceof Error ? error.message : String(error);
               if (isInviteValidationRateLimited(validationMessage)) {
-                const currentSession = getSession(context.job.workspaceId, candidate.sessionId);
+                const currentSession = getSession(
+                  context.job.workspaceId,
+                  candidate.sessionId,
+                );
+                const consecutiveRateLimitCount =
+                  (currentSession.validatorConsecutiveRateLimitCount ?? 0) + 1;
                 updateSession(context.job.workspaceId, candidate.sessionId, {
-                  validatorFailureCount: (currentSession.validatorFailureCount ?? 0) + 1,
-                  validatorRateLimitCount: (currentSession.validatorRateLimitCount ?? 0) + 1,
-                  validatorRetiredUntil: Date.now() + VALIDATOR_RETIRE_MS,
-                  validatorRetireReason: "rate-limited during invite validation",
+                  validatorFailureCount:
+                    (currentSession.validatorFailureCount ?? 0) + 1,
+                  validatorRateLimitCount:
+                    (currentSession.validatorRateLimitCount ?? 0) + 1,
+                  validatorConsecutiveRateLimitCount: consecutiveRateLimitCount,
+                  validatorRetiredUntil: Date.now() - 1,
+                  validatorRetireReason:
+                    "per-link rate-limit; session retained for validation",
                 });
               }
               if (isInviteValidationPermanentFailure(validationMessage)) break;
@@ -368,7 +451,10 @@ export function startWorkerRuntime(): JobOrchestrator {
             throw lastValidationError instanceof Error
               ? lastValidationError
               : new Error("Invite validation failed on all healthy sessions.");
-          const currentRecord = await buckets.get(GLOBAL_VALIDATOR_SCOPE, canonicalUrl);
+          const currentRecord = await buckets.get(
+            GLOBAL_VALIDATOR_SCOPE,
+            canonicalUrl,
+          );
           if (
             !currentRecord ||
             currentRecord.bucket !== "validating" ||
@@ -407,6 +493,11 @@ export function startWorkerRuntime(): JobOrchestrator {
           updateSession(context.job.workspaceId, sourceSessionId, {
             validatedLinkCount: (currentSession.validatedLinkCount ?? 0) + 1,
             lastLinkValidatedAt: Date.now(),
+            validatorConsecutiveRateLimitCount: 0,
+            validatorLastSuccessAt: Date.now(),
+            validatorRetiredUntil: Date.now() - 1,
+            validatorRetireReason:
+              "recovered after successful invite validation",
           });
           await context.report({
             currentLink: canonicalUrl,
@@ -460,29 +551,64 @@ export function startWorkerRuntime(): JobOrchestrator {
             lastResult: message.slice(0, 240),
           });
           const lower = message.toLowerCase();
+          const isRateLimited = isInviteValidationRateLimited(lower);
           const isDead = isInviteValidationPermanentFailure(lower);
+          if (isRateLimited) {
+            stopBatchForRateLimit = true;
+            await Promise.all(
+              urls
+                .filter((batchUrl) => batchUrl.trim() !== raw)
+                .map(async (batchUrl) => {
+                  const batchCanonical = (() => {
+                    try {
+                      return canonicalizeHttpUrl(batchUrl);
+                    } catch {
+                      return batchUrl.trim();
+                    }
+                  })();
+                  const batchRecord = await buckets.get(
+                    GLOBAL_VALIDATOR_SCOPE,
+                    batchCanonical,
+                  );
+                  if (
+                    batchRecord?.bucket === "validating" &&
+                    batchRecord.metadata?.validationLeaseToken ===
+                      payload.validationLeaseToken
+                  )
+                    await buckets.move(
+                      GLOBAL_VALIDATOR_SCOPE,
+                      batchCanonical,
+                      "error",
+                      {
+                        validationError: message.slice(0, 240),
+                        metadata: {
+                          ...(batchRecord.metadata ?? {}),
+                          needsValidation: false,
+                          validationState: "retryable-error",
+                        },
+                      },
+                    );
+                }),
+            );
+          }
           const existing = await buckets.get(GLOBAL_VALIDATOR_SCOPE, parsed);
           if (
             !existing ||
             existing.bucket !== "validating" ||
             !payload.validationLeaseToken ||
-            existing.metadata?.validationLeaseToken !== payload.validationLeaseToken
+            existing.metadata?.validationLeaseToken !==
+              payload.validationLeaseToken
           )
             return { status: "skipped" as const };
           await buckets
-            .move(
-              GLOBAL_VALIDATOR_SCOPE,
-              parsed,
-              isDead ? "dead" : "main",
-              {
-                validationError: message.slice(0, 240),
-                metadata: {
-                  ...(existing?.metadata ?? {}),
-                  needsValidation: !isDead,
-                  validationState: isDead ? "dead" : "retryable-error",
-                },
+            .move(GLOBAL_VALIDATOR_SCOPE, parsed, isDead ? "dead" : "error", {
+              validationError: message.slice(0, 240),
+              metadata: {
+                ...(existing?.metadata ?? {}),
+                needsValidation: false,
+                validationState: isDead ? "dead" : "retryable-error",
               },
-            )
+            })
             .catch(() => undefined);
           return { status: "failed" as const };
         }
@@ -520,6 +646,263 @@ export function startWorkerRuntime(): JobOrchestrator {
         }
       },
     });
+  });
+
+  orchestrator.register("group-control", async (context) => {
+    const sessionId = context.job.sessionId;
+    if (!sessionId) throw new Error("Group Control requires a selected WhatsApp session.");
+    const payload = context.job.payload as Partial<GroupControlPayload>;
+    const groupJid = typeof payload.groupJid === "string" ? payload.groupJid : "";
+    const operation = payload.operation;
+    const participants = Array.isArray(payload.participants)
+      ? payload.participants.filter((value): value is string => typeof value === "string" && value.length > 0)
+      : [];
+    if (!groupJid || !operation || participants.length === 0)
+      throw new Error("Group Control payload is incomplete.");
+    if (operation === "participant" && !payload.participantAction)
+      throw new Error("Participant Group Control requires an action.");
+    const participantAction = payload.participantAction;
+    await waitForWhatsAppSessionReady(context.job.workspaceId, sessionId, 90_000);
+    const snapshot = await getGroupModerationSnapshot(
+      context.job.workspaceId,
+      sessionId,
+      groupJid,
+    );
+    if (!snapshot.isAdmin)
+      throw new Error("This WhatsApp identity is no longer an administrator in the selected group.");
+    let completed = 0;
+    let failed = 0;
+    await context.report({
+      total: participants.length,
+      currentGroup: groupJid,
+      currentAction: `processing ${operation} batch`,
+      lastResult: `Admin access confirmed for ${snapshot.subject}.`,
+    });
+    if (operation === "approve" || operation === "reject") {
+      let remaining = [...participants];
+      let batchAttempts = 0;
+      while (remaining.length > 0 && !context.isCancellationRequested()) {
+        await context.waitIfPaused();
+        try {
+          const result = await updateGroupJoinRequests(
+            context.job.workspaceId,
+            sessionId,
+            groupJid,
+            remaining,
+            operation,
+            false,
+          );
+          const returnedSuccessful = new Set(result.succeededJids);
+          const returnedFailed = new Set(
+            result.failures
+              .map((failure) => failure.jid)
+              .filter((jid): jid is string => Boolean(jid)),
+          );
+          const nextRemaining = remaining.filter(
+            (jid) => !returnedSuccessful.has(jid) && !returnedFailed.has(jid),
+          );
+          completed += result.succeeded;
+          failed += result.failures.filter((failure) => failure.status !== "not-returned").length;
+          remaining = nextRemaining;
+          batchAttempts += 1;
+          await context.report({
+            completed: completed + failed,
+            success: completed,
+            failed,
+            currentAction: `${operation} batch progress`,
+            lastResult: `${completed}/${participants.length} requests confirmed; ${remaining.length} remaining.`,
+          });
+          if (remaining.length === 0) break;
+          if (batchAttempts >= 2) {
+            // Some deployed Baileys/WhatsApp combinations return only the
+            // first participant from a multi-participant action. Preserve the
+            // one-command/batch UX, but finish the unreturned tail safely.
+            for (const participant of remaining) {
+              if (context.isCancellationRequested()) break;
+              try {
+                const single = await updateGroupJoinRequests(
+                  context.job.workspaceId,
+                  sessionId,
+                  groupJid,
+                  [participant],
+                  operation,
+                  false,
+                );
+                completed += single.succeeded;
+                failed += single.failed;
+                await context.report({
+                  completed: completed + failed,
+                  success: completed,
+                  failed,
+                  currentAction: `${operation} batch completion`,
+                  lastResult: `${completed}/${participants.length} requests confirmed; finishing the remaining batch tail.`,
+                });
+              } catch (error) {
+                failed += 1;
+                await context.report({
+                  completed: completed + failed,
+                  success: completed,
+                  failed,
+                  currentAction: `${operation} batch partial failure`,
+                  lastResult: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+            remaining = [];
+          }
+        } catch (error) {
+          batchAttempts += 1;
+          if (batchAttempts >= 2) {
+            failed += remaining.length;
+            remaining = [];
+          }
+          await context.report({
+            completed: completed + failed,
+            success: completed,
+            failed,
+            currentAction: `${operation} batch retry`,
+            lastResult: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    } else if (participantAction === "demote-remove") {
+      for (const participant of participants) {
+        await context.waitIfPaused();
+        if (context.isCancellationRequested()) break;
+        try {
+          await updateGroupParticipantRole(context.job.workspaceId, sessionId, groupJid, participant, "demote");
+          await updateGroupParticipantRole(context.job.workspaceId, sessionId, groupJid, participant, "remove");
+          completed += 1;
+        } catch (error) {
+          failed += 1;
+          await context.report({
+            completed: completed + failed,
+            success: completed,
+            failed,
+            currentAction: "demote-remove partial failure",
+            lastResult: error instanceof Error ? error.message : String(error),
+          });
+        }
+        await context.report({
+          completed: completed + failed,
+          success: completed,
+          failed,
+          currentAction: "demote-remove progress",
+          lastResult: `${completed + failed}/${participants.length} administrator target(s) processed sequentially.`,
+        });
+      }
+    } else if (participantAction === "block") {
+      for (const participant of participants) {
+        await context.waitIfPaused();
+        if (context.isCancellationRequested()) break;
+        try {
+          await updateParticipantBlockStatus(
+            context.job.workspaceId,
+            sessionId,
+            participant,
+            true,
+          );
+          completed += 1;
+        } catch (error) {
+          failed += 1;
+          await context.report({
+            completed: completed + failed,
+            success: completed,
+            failed,
+            currentAction: `${operation} partial failure`,
+            lastResult: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    } else {
+      const action = participantAction as "promote" | "demote" | "remove";
+      let remaining = [...participants];
+      let batchAttempts = 0;
+      while (remaining.length > 0 && !context.isCancellationRequested()) {
+        await context.waitIfPaused();
+        try {
+          const result = await updateGroupParticipantBatch(
+            context.job.workspaceId,
+            sessionId,
+            groupJid,
+            remaining,
+            action,
+            false,
+          );
+          const returnedSuccessful = new Set(result.succeededJids);
+          const returnedFailed = new Set(
+            result.failures
+              .map((failure) => failure.jid)
+              .filter((jid): jid is string => Boolean(jid)),
+          );
+          const nextRemaining = remaining.filter(
+            (jid) => !returnedSuccessful.has(jid) && !returnedFailed.has(jid),
+          );
+          completed += result.succeeded;
+          failed += result.failures.filter((failure) => failure.status !== "not-returned").length;
+          remaining = nextRemaining;
+          batchAttempts += 1;
+          await context.report({
+            completed: completed + failed,
+            success: completed,
+            failed,
+            currentAction: `${action} batch progress`,
+            lastResult: `${completed}/${participants.length} members confirmed; ${remaining.length} remaining.`,
+          });
+          if (!remaining.length) break;
+          if (batchAttempts >= 2) {
+            const tail = remaining;
+            remaining = [];
+            for (let offset = 0; offset < tail.length; offset += 100) {
+              if (context.isCancellationRequested()) {
+                remaining = tail.slice(offset);
+                break;
+              }
+              const chunk = tail.slice(offset, offset + 100);
+              try {
+                const chunkResult = await updateGroupParticipantBatch(
+                  context.job.workspaceId,
+                  sessionId,
+                  groupJid,
+                  chunk,
+                  action,
+                  false,
+                );
+                completed += chunkResult.succeeded;
+                failed += chunkResult.failed;
+              } catch {
+                failed += chunk.length;
+              }
+              await context.report({
+                completed: completed + failed,
+                success: completed,
+                failed,
+                currentAction: `${action} batch completion`,
+                lastResult: `${completed}/${participants.length} members confirmed; processed batch chunk ${Math.min(offset + 100, tail.length)}/${tail.length}.`,
+              });
+            }
+          }
+        } catch (error) {
+          batchAttempts += 1;
+          if (batchAttempts >= 2) {
+            failed += remaining.length;
+            remaining = [];
+          }
+          await context.report({
+            completed: completed + failed,
+            success: completed,
+            failed,
+            currentAction: `${action} batch retry`,
+            lastResult: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+    return {
+      success: completed,
+      failed,
+      skipped: Math.max(0, participants.length - completed - failed),
+    };
   });
 
   orchestrator.register("join-manager", async (context) => {
@@ -626,13 +1009,16 @@ export function startWorkerRuntime(): JobOrchestrator {
     const immediateMode = payload.requestMode === "immediate";
     const fallbackDelay = immediateMode
       ? 0
-      : Math.max(0, Math.min(600000, Number(payload.delayMs ?? 0)));
+      : Math.max(1000, Math.min(60000, Number(payload.delayMs ?? 5000)));
     const minDelayMs = immediateMode
       ? 0
-      : Math.max(0, Math.min(600000, Number(payload.minDelayMs ?? fallbackDelay)));
+      : Math.max(
+          1000,
+          Math.min(60000, Number(payload.minDelayMs ?? fallbackDelay)),
+        );
     const maxDelayMs = Math.max(
       minDelayMs,
-      Math.min(600000, Number(payload.maxDelayMs ?? minDelayMs)),
+      Math.min(60000, Number(payload.maxDelayMs ?? minDelayMs)),
     );
     const retryLimit = Math.max(
       0,
@@ -646,17 +1032,18 @@ export function startWorkerRuntime(): JobOrchestrator {
       0,
       Math.min(3600000, Number(payload.sessionCooldownMs ?? 30000)),
     );
-    const restrictionThreshold = Math.max(
-      1,
-      Math.min(20, Number(payload.restrictionThreshold ?? 5)),
-    );
     return runBoundedBatch({
       items: workItems,
-      // One invite attempt at a time is deliberate: it makes the five-real-rate-limit
-      // stop threshold exact and avoids parallel Baileys join bursts on one socket.
-      concurrency: 1,
+      // Concurrency is bounded per Join Manager job and never shared globally.
+      // The default remains one invite at a time to avoid socket bursts.
+      concurrency: Math.max(
+        1,
+        Math.min(3, Number(payload.maxConcurrency ?? 1)),
+      ),
       context,
-      shouldStop: () => rateLimitHits >= restrictionThreshold,
+      // A genuine WhatsApp restriction stops this job after the affected link;
+      // no arbitrary application threshold is used to reject healthy sessions.
+      shouldStop: () => rateLimitHits > 0,
       processItem: async (workItem, signal) => {
         const { record, cycle } = workItem;
         const prior = await joinResults.get(
@@ -832,14 +1219,11 @@ export function startWorkerRuntime(): JobOrchestrator {
           await context.report({
             retrying: (context.job.progress.retrying ?? 0) + 1,
             rateLimitHits,
-            rateLimitStopAt: restrictionThreshold,
-            lastResult: `Rate limited after ${rateLimitHits} attempt(s)`,
-            currentAction:
-              rateLimitHits >= restrictionThreshold
-                ? "stopped at rate limit"
-                : "cooling down",
+            rateLimitStopAt: 1,
+            lastResult: `WhatsApp restriction reported after ${rateLimitHits} attempt(s)`,
+            currentAction: "cooling down after WhatsApp restriction",
           });
-          if (sessionCooldownMs && rateLimitHits < restrictionThreshold)
+          if (sessionCooldownMs)
             await new Promise((resolve) =>
               setTimeout(resolve, sessionCooldownMs),
             );
@@ -849,16 +1233,17 @@ export function startWorkerRuntime(): JobOrchestrator {
           await buckets.move(
             GLOBAL_VALIDATOR_SCOPE,
             record.canonicalUrl,
-            "main",
+            "dead",
             {
-              validationError: "Join Manager returned the link to shared Main for Guard revalidation.",
+              validationError:
+                "Join Manager confirmed the Active invite is invalid or unavailable.",
               lastCheckedAt: Date.now(),
               metadata: {
                 ...metadata,
                 joinClassification: "dead-link",
-                joinRetryable: true,
-                needsValidation: true,
-                validationState: "pending",
+                joinRetryable: false,
+                needsValidation: false,
+                validationState: "dead",
               },
             },
           );
@@ -869,23 +1254,26 @@ export function startWorkerRuntime(): JobOrchestrator {
           });
           await context.report({
             deadLinks,
-            lastResult: `Dead-looking link returned to shared Main: ${record.canonicalUrl}`,
-            currentAction: "returned to main for revalidation",
+            lastResult: `Confirmed inaccessible link moved to Dead: ${record.canonicalUrl}`,
+            currentAction: "marked dead",
           });
         } else {
+          const deadLink = ["invalid-invite", "expired", "group-unavailable"].includes(
+            classified.classification,
+          );
           const retryable = classified.retryable || classified.classification === "rate-limit";
           await buckets.move(
             GLOBAL_VALIDATOR_SCOPE,
             record.canonicalUrl,
-            retryable ? "main" : "dead",
+            deadLink ? "dead" : "active",
             {
               validationError: classified.message.slice(0, 240),
               metadata: {
                 ...metadata,
                 joinClassification: classified.classification,
                 joinRetryable: retryable,
-                needsValidation: retryable,
-                ...(retryable ? { validationState: "pending" as const } : {}),
+                needsValidation: false,
+                validationState: deadLink ? "dead" : "active",
               },
               lastCheckedAt: Date.now(),
             },
@@ -922,7 +1310,8 @@ export function startWorkerRuntime(): JobOrchestrator {
           void context
             .report({
               currentAction: "waiting for WhatsApp session",
-              lastResult: "The session is reconnecting; this broadcast will resume when transport is ACTIVE.",
+              lastResult:
+                "The session is reconnecting; this broadcast will resume when transport is ACTIVE.",
             })
             .catch(() => undefined);
         }, 5_000);
@@ -934,7 +1323,9 @@ export function startWorkerRuntime(): JobOrchestrator {
             90_000,
           );
           if (!ready)
-            throw new Error("WhatsApp session is not ready yet; broadcast retry is scheduled.");
+            throw new Error(
+              "WhatsApp session is not ready yet; broadcast retry is scheduled.",
+            );
         } finally {
           clearInterval(readinessHeartbeat);
         }
@@ -944,10 +1335,16 @@ export function startWorkerRuntime(): JobOrchestrator {
         kind === "gstatus" || kind === "allstatus" || kind === "allchat"
           ? Math.max(1, Math.min(20, Number(payload.count ?? 1)))
           : 1;
-      const delayMs = Math.max(1500, Math.min(120000, Number(payload.delayMs ?? 2500)));
+      const delayMs = Math.max(
+        1500,
+        Math.min(120000, Number(payload.delayMs ?? 10000)),
+      );
       if (!text.trim() && !payload.media)
         throw new Error(`${kind} requires text or media payload.`);
-      if ((kind === "allstatus" || kind === "allchat") && payload.workerLocal === true) {
+      if (
+        (kind === "allstatus" || kind === "allchat") &&
+        payload.workerLocal === true
+      ) {
         const startCommand = await queueWorkloadCommand(
           context.job.workspaceId,
           sessionId,
@@ -963,24 +1360,44 @@ export function startWorkerRuntime(): JobOrchestrator {
           },
           10 * 60_000,
         );
-        const accepted = await waitForWorkloadCommand(startCommand.commandId, 120_000);
+        const accepted = await waitForWorkloadCommand(
+          startCommand.commandId,
+          120_000,
+        );
         const result = accepted.result as { totalGroups?: unknown } | undefined;
         const totalGroups = Math.max(0, Number(result?.totalGroups ?? 0));
         await context.report({
           ...(totalGroups > 0 ? { total: totalGroups * repeat } : {}),
-          currentAction: totalGroups > 0 ? `${kind} worker-local delivery started` : `${kind} worker-local dispatch started`,
+          currentAction:
+            totalGroups > 0
+              ? `${kind} worker-local delivery started`
+              : `${kind} worker-local dispatch started`,
           nextActionAt: Date.now(),
-          lastResult: totalGroups > 0
-            ? `Panel resolved ${totalGroups} WhatsApp group(s); delivery remains on the owning worker.`
-            : `Panel accepted the broadcast; group inventory is resolving on the owning worker while delivery starts independently.`,
+          lastResult:
+            totalGroups > 0
+              ? `Panel accepted ${totalGroups} WhatsApp group target(s); delivery remains on the owning worker.`
+              : `Panel accepted the broadcast; the delivery runner is active and will publish its target total when ready.`,
         });
-        if (totalGroups > 0 && (context.job.payload as { sourceTransport?: unknown }).sourceTransport !== "whatsapp")
-          await notifyBroadcastReady(context, kind, totalGroups, repeat, delayMs);
+        if (
+          totalGroups > 0 &&
+          (context.job.payload as { sourceTransport?: unknown })
+            .sourceTransport !== "whatsapp"
+        )
+          await notifyBroadcastReady(
+            context,
+            kind,
+            totalGroups,
+            repeat,
+            delayMs,
+          );
         let cancelSent = false;
         while (true) {
           if (context.isCancellationRequested() && !cancelSent) {
             cancelSent = true;
-            await requestBroadcastCancellation(context.job.workspaceId, context.job.jobId).catch(() => undefined);
+            await requestBroadcastCancellation(
+              context.job.workspaceId,
+              context.job.jobId,
+            ).catch(() => undefined);
             const cancelCommand = await queueWorkloadCommand(
               context.job.workspaceId,
               sessionId,
@@ -988,9 +1405,16 @@ export function startWorkerRuntime(): JobOrchestrator {
               { jobId: context.job.jobId },
               60_000,
             ).catch(() => undefined);
-            if (cancelCommand) await waitForWorkloadCommand(cancelCommand.commandId, 20_000).catch(() => undefined);
+            if (cancelCommand)
+              await waitForWorkloadCommand(
+                cancelCommand.commandId,
+                20_000,
+              ).catch(() => undefined);
           }
-          const progress = await getBroadcastProgress(context.job.workspaceId, context.job.jobId);
+          const progress = await getBroadcastProgress(
+            context.job.workspaceId,
+            context.job.jobId,
+          );
           if (progress) {
             await context.report({
               total: progress.totalGroups * repeat,
@@ -998,45 +1422,66 @@ export function startWorkerRuntime(): JobOrchestrator {
               success: progress.completed,
               failed: progress.failed,
               skipped: progress.skipped,
-              ...(progress.currentGroup ? { currentGroup: progress.currentGroup } : {}),
-              ...(progress.nextActionAt ? { nextActionAt: progress.nextActionAt } : {}),
-              currentAction: progress.state.toLowerCase(),
-              lastResult: progress.error ?? `Worker-local ${kind} progress: ${progress.completed}/${progress.totalGroups * repeat}.`,
+              ...(progress.currentGroup
+                ? { currentGroup: progress.currentGroup }
+                : {}),
+              ...(progress.nextActionAt
+                ? { nextActionAt: progress.nextActionAt }
+                : {}),
+              currentAction:
+                progress.currentAction ??
+                (progress.state === "WAITING_FOR_SESSION"
+                  ? "waiting for WhatsApp reconnect"
+                  : progress.state.toLowerCase()),
+              lastResult:
+                progress.lastResult ??
+                progress.error ??
+                `Worker-local ${kind} progress: ${progress.completed}/${progress.totalGroups * repeat}.`,
             });
-            if (["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(progress.state))
-              return { success: progress.completed, failed: progress.failed, skipped: progress.skipped };
+            if (
+              ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(
+                progress.state,
+              )
+            )
+              return {
+                success: progress.completed,
+                failed: progress.failed,
+                skipped: progress.skipped,
+              };
           }
           await new Promise((resolve) => setTimeout(resolve, 2_000));
         }
       }
       let baseGroups: string[];
       if (kind === "gstatus") {
-        baseGroups = [payload.groups?.[0]].filter(
-          (jid): jid is string => Boolean(jid),
+        baseGroups = [payload.groups?.[0]].filter((jid): jid is string =>
+          Boolean(jid),
         );
       } else if (payload.groups?.length) {
         baseGroups = payload.groups;
       } else {
         await context.report({
-          currentAction: "resolving group inventory",
-          lastResult: "The worker is fetching the current WhatsApp group list.",
+          currentAction: "starting delivery",
+          lastResult:
+            "The broadcast worker is loading the active WhatsApp group targets.",
         });
         const inventoryHeartbeat = setInterval(() => {
           void context
             .report({
-              currentAction: "resolving group inventory",
-              lastResult: "Still fetching the current WhatsApp group list…",
+              currentAction: "starting delivery",
+              lastResult:
+                "The broadcast worker is still loading the active WhatsApp group targets.",
             })
             .catch(() => undefined);
         }, 5_000);
         inventoryHeartbeat.unref?.();
         try {
-          baseGroups = (await listGroups(
-            context.job.workspaceId,
-            sessionId,
-          )).map((group) => group.jid);
+          baseGroups = (
+            await listGroups(context.job.workspaceId, sessionId)
+          ).map((group) => group.jid);
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           await context.report({
             currentAction: "group inventory failed",
             lastResult: message,
@@ -1055,10 +1500,8 @@ export function startWorkerRuntime(): JobOrchestrator {
         throw new Error("No WhatsApp groups were returned for this session.");
       }
       const uniqueGroups = [...new Set(baseGroups)];
-      const ignoredLinks = getSession(
-        context.job.workspaceId,
-        sessionId,
-      ).ignoredGroupLinks ?? [];
+      const ignoredLinks =
+        getSession(context.job.workspaceId, sessionId).ignoredGroupLinks ?? [];
       const ignoredJids = new Set<string>();
       await Promise.all(
         ignoredLinks.map(async (link) => {
@@ -1072,7 +1515,9 @@ export function startWorkerRuntime(): JobOrchestrator {
           if (resolved?.jid) ignoredJids.add(resolved.jid);
         }),
       );
-      const deliverableGroups = uniqueGroups.filter((jid) => !ignoredJids.has(jid));
+      const deliverableGroups = uniqueGroups.filter(
+        (jid) => !ignoredJids.has(jid),
+      );
       const resolvedPayload = {
         ...payload,
         groups: deliverableGroups,
@@ -1121,13 +1566,18 @@ export function startWorkerRuntime(): JobOrchestrator {
             return "sent";
           } catch (error) {
             lastError = error;
-            const message = error instanceof Error ? error.message : String(error);
-            if (isConfirmedInaccessibleGroupError(message)) return "inaccessible";
+            const message =
+              error instanceof Error ? error.message : String(error);
+            if (isConfirmedInaccessibleGroupError(message))
+              return "inaccessible";
             if (attempt < 3) {
               await context.report({
                 currentGroup: targetJid,
                 currentAction: `retrying ${kind} delivery (${attempt + 1}/3)`,
-                lastResult: `${kind} transient failure: ${message}`.slice(0, 400),
+                lastResult: `${kind} transient failure: ${message}`.slice(
+                  0,
+                  400,
+                ),
               });
               await waitWithHeartbeat(context, Math.min(5000, 1500 * attempt), {
                 currentGroup: targetJid,
@@ -1136,14 +1586,19 @@ export function startWorkerRuntime(): JobOrchestrator {
             }
           }
         }
-        throw lastError instanceof Error ? lastError : new Error(String(lastError));
+        throw lastError instanceof Error
+          ? lastError
+          : new Error(String(lastError));
       };
       let lastPostAt = 0;
       let completedDeliveries = 0;
       let failedDeliveries = 0;
-      const autoPromoteRunId = typeof (context.job.payload as { autoPromoteRunId?: unknown }).autoPromoteRunId === "string"
-        ? (context.job.payload as { autoPromoteRunId: string }).autoPromoteRunId
-        : undefined;
+      const autoPromoteRunId =
+        typeof (context.job.payload as { autoPromoteRunId?: unknown })
+          .autoPromoteRunId === "string"
+          ? (context.job.payload as { autoPromoteRunId: string })
+              .autoPromoteRunId
+          : undefined;
       return await runBoundedBatch({
         items: deliveries,
         concurrency: 1,
@@ -1192,7 +1647,8 @@ export function startWorkerRuntime(): JobOrchestrator {
               await context.report({
                 currentGroup: jid,
                 currentAction: "waiting for session operation lock",
-                lastResult: "Another operation is using this WhatsApp session; retrying this group without blocking other jobs.",
+                lastResult:
+                  "Another operation is using this WhatsApp session; retrying this group without blocking other jobs.",
               });
               await waitWithHeartbeat(context, 500, {
                 currentGroup: jid,
@@ -1201,23 +1657,32 @@ export function startWorkerRuntime(): JobOrchestrator {
             }
           }
           if (!sessionLock)
-            throw new Error("Broadcast session operation busy; retry scheduled.");
+            throw new Error(
+              "Broadcast session operation busy; retry scheduled.",
+            );
           lastPostAt = Date.now();
           try {
             const deliveryOutcome = await deliverWithRetries(jid, () =>
-              kind === "gstatus" || kind === "allstatus"
-                ? sendGroupStatus(context.job.workspaceId, sessionId, jid, {
-                    text,
-                    ...(media ? { media } : {}),
-                  })
-                : sendGroupMentions(
-                    context.job.workspaceId,
-                    sessionId,
-                    jid,
-                    text,
-                    undefined,
-                    media,
-                  ),
+              kind === "allstatus" && payload.styled === true
+                ? sendGroupColorStatus(context.job.workspaceId, sessionId, jid,
+                    {
+                      text,
+                      ...(media ? { media } : {}),
+                    },
+                  )
+                : kind === "gstatus" || kind === "allstatus"
+                  ? sendGroupStatus(context.job.workspaceId, sessionId, jid, {
+                      text,
+                      ...(media ? { media } : {}),
+                    })
+                  : sendGroupMentions(
+                      context.job.workspaceId,
+                      sessionId,
+                      jid,
+                      text,
+                      undefined,
+                      media,
+                    ),
             );
             if (deliveryOutcome === "inaccessible") {
               await context.report({
@@ -1249,12 +1714,15 @@ export function startWorkerRuntime(): JobOrchestrator {
             await context.report({
               currentGroup: jid,
               currentAction: remainingDeliveries ? "posted" : "completed",
-              nextActionAt: remainingDeliveries ? Date.now() + delayMs : Date.now(),
+              nextActionAt: remainingDeliveries
+                ? Date.now() + delayMs
+                : Date.now(),
               lastResult: `${kind} posted to ${jid}${repeat > 1 ? ` · repeat ${repeatIndex}/${repeat}` : ""}`,
             });
             return { status: "success" as const };
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
+            const message =
+              error instanceof Error ? error.message : String(error);
             failedDeliveries += 1;
             if (autoPromoteRunId)
               void recordAutoPromoteProgress({
@@ -1272,17 +1740,14 @@ export function startWorkerRuntime(): JobOrchestrator {
               currentGroup: jid,
               currentAction: "soft failure",
               lastResult:
-                `${kind} delivery failed for ${jid}: ${message}`.slice(
-                  0,
-                  500,
-                ),
+                `${kind} delivery failed for ${jid}: ${message}`.slice(0, 500),
             });
             return { status: "failed" as const };
           } finally {
             await sessionLock.release();
           }
         },
-        });
+      });
     });
   }
 
@@ -1306,9 +1771,19 @@ export function startWorkerRuntime(): JobOrchestrator {
       error instanceof Error ? error.message : String(error),
     );
   });
-  void buckets.reconcileGlobalIndexes()
-    .then((result) => console.info(`[pappy-omega-mini] Validator index reconciled removed=${result.removed} restored=${result.restored}`))
-    .catch((error) => console.error("[pappy-omega-mini] Validator index reconciliation failed:", error));
+  void buckets
+    .reconcileGlobalIndexes()
+    .then((result) =>
+      console.info(
+        `[pappy-omega-mini] Validator index reconciled removed=${result.removed} restored=${result.restored}`,
+      ),
+    )
+    .catch((error) =>
+      console.error(
+        "[pappy-omega-mini] Validator index reconciliation failed:",
+        error,
+      ),
+    );
   void sweepPendingMainValidation(orchestrator, buckets);
   void runValidatorGuard(orchestrator, buckets, redis);
   validatorSweepTimer = setInterval(
@@ -1324,7 +1799,6 @@ export function startWorkerRuntime(): JobOrchestrator {
   return orchestrator;
 }
 
-
 async function runValidatorGuard(
   orchestrator: JobOrchestrator,
   buckets: LinkBucketStore,
@@ -1336,9 +1810,14 @@ async function runValidatorGuard(
     const now = Date.now();
     if (now - lastValidatorIndexReconcileAt >= 60_000) {
       lastValidatorIndexReconcileAt = now;
-      await buckets.reconcileGlobalIndexes().catch((error) =>
-        console.error("[pappy-omega-mini] periodic Validator index reconciliation failed:", error),
-      );
+      await buckets
+        .reconcileGlobalIndexes()
+        .catch((error) =>
+          console.error(
+            "[pappy-omega-mini] periodic Validator index reconciliation failed:",
+            error,
+          ),
+        );
     }
     const activeValidationJobs = (await orchestrator.listRecent(1000)).filter(
       (job) =>
@@ -1355,18 +1834,33 @@ async function runValidatorGuard(
     );
     let cursor = 0;
     do {
-      const page = await buckets.list(GLOBAL_VALIDATOR_SCOPE, "validating", cursor, 500);
+      const page = await buckets.list(
+        GLOBAL_VALIDATOR_SCOPE,
+        "validating",
+        cursor,
+        500,
+      );
       for (const record of page.records) {
         const checkedAt = record.lastCheckedAt ?? record.firstSeenAt;
-        if (leasedUrls.has(record.canonicalUrl) || now - checkedAt <= VALIDATING_STALE_MS) continue;
-        await buckets.move(GLOBAL_VALIDATOR_SCOPE, record.canonicalUrl, "main", {
-          validationError: "Validator Guard recycled a stale validation claim.",
-          metadata: {
-            ...(record.metadata ?? {}),
-            needsValidation: true,
-            validationState: "pending",
-          },
-        });
+        if (
+          leasedUrls.has(record.canonicalUrl) ||
+          now - checkedAt <= VALIDATING_STALE_MS
+        )
+          continue;
+          await buckets.move(
+            GLOBAL_VALIDATOR_SCOPE,
+            record.canonicalUrl,
+            "error",
+            {
+              validationError:
+                "Validator Guard expired a stale validation claim; explicit requeue is required.",
+              metadata: {
+                ...(record.metadata ?? {}),
+                needsValidation: false,
+                validationState: "retryable-error",
+              },
+            },
+          );
       }
       cursor = page.nextCursor;
     } while (cursor !== 0);
@@ -1378,6 +1872,7 @@ async function runValidatorGuard(
         Boolean(job.sessionId) &&
         ["COMPLETED", "PARTIAL", "FAILED"].includes(job.state) &&
         Boolean(job.completedAt) &&
+        (job.completedAt ?? now) >= validatorGuardStartedAt - 60_000 &&
         now - (job.completedAt ?? now) <= 60 * 60_000,
     );
     for (const job of jobs) {
@@ -1391,10 +1886,19 @@ async function runValidatorGuard(
       );
       if (!session) continue;
       const progress = job.progress;
-      const resultText = `${job.error ?? ""} ${progress.lastResult ?? ""} ${progress.currentAction ?? ""}`.toLowerCase();
+      const resultText =
+        `${job.error ?? ""} ${progress.lastResult ?? ""} ${progress.currentAction ?? ""}`.toLowerCase();
       const rateLimited = isInviteValidationRateLimited(resultText);
-      const transportFailure = /timeout|network|closed|not connected|decrypt|bad mac|session|no healthy|heartbeat/.test(resultText);
-      const successful = job.state === "COMPLETED" && (progress.success ?? 0) > 0;
+      // “No healthy validation session” is an admission/scheduler result, not
+      // evidence that the bound socket failed. Counting it here creates a
+      // self-lock: the session is retired, then every queued batch reports no
+      // healthy session and extends the retirement indefinitely.
+      const transportFailure =
+        /timeout|network|closed|not connected|decrypt|bad mac|session|heartbeat/.test(
+          resultText,
+        ) && !/no healthy(?: whatsapp)? validation session/.test(resultText);
+      const successful =
+        job.state === "COMPLETED" && (progress.success ?? 0) > 0;
       if (successful) {
         updateSession(session.workspaceId, session.sessionId, {
           validatorFailureCount: 0,
@@ -1407,19 +1911,27 @@ async function runValidatorGuard(
       }
       if (!rateLimited && !transportFailure && job.state !== "FAILED") continue;
       const failureCount = (session.validatorFailureCount ?? 0) + 1;
-      const rateLimitCount = (session.validatorRateLimitCount ?? 0) + (rateLimited ? 1 : 0);
-      const retire = rateLimited || failureCount >= 3;
+      const rateLimitCount =
+        (session.validatorRateLimitCount ?? 0) + (rateLimited ? 1 : 0);
+      const consecutiveRateLimitCount = rateLimited
+        ? (session.validatorConsecutiveRateLimitCount ?? 0) + 1
+        : 0;
+      const retire = !rateLimited && failureCount >= 3;
       updateSession(session.workspaceId, session.sessionId, {
         validatorFailureCount: failureCount,
         validatorRateLimitCount: rateLimitCount,
+        validatorConsecutiveRateLimitCount: consecutiveRateLimitCount,
         ...(retire
           ? {
               validatorRetiredUntil: now + VALIDATOR_RETIRE_MS,
-              validatorRetireReason: rateLimited
-                ? "rate-limited during validation"
-                : "repeated validation transport failure",
+              validatorRetireReason: "repeated validation transport failure",
             }
-          : {}),
+          : {
+              validatorRetiredUntil: now - 1,
+              validatorRetireReason: rateLimited
+                ? "per-link rate-limit; session retained for validation"
+                : "transient validation failure; cooldown not applied",
+            }),
       });
     }
   } catch (error) {
@@ -1442,10 +1954,18 @@ async function sweepPendingMainValidation(
   if (validatorSweepBusy) return;
   validatorSweepBusy = true;
   try {
+    await refreshSessionRegistry().catch((error) =>
+      console.error(
+        "[pappy-omega-mini] Validator session registry refresh failed:",
+        error instanceof Error ? error.message : String(error),
+      ),
+    );
     await buckets.migrateLegacyWorkspacesToGlobal().catch(() => 0);
     const allSessions = listAllSessions();
     const healthySessionKeys = new Set<string>();
-    for (const workspaceId of new Set(allSessions.map((session) => session.workspaceId))) {
+    for (const workspaceId of new Set(
+      allSessions.map((session) => session.workspaceId),
+    )) {
       for (const session of listHealthyWhatsAppSessions(workspaceId))
         healthySessionKeys.add(`${session.workspaceId}:${session.sessionId}`);
     }
@@ -1470,7 +1990,12 @@ async function sweepPendingMainValidation(
     const records: LinkRecord[] = [];
     let cursor = 0;
     do {
-      const page = await buckets.list(GLOBAL_VALIDATOR_SCOPE, "main", cursor, 500);
+      const page = await buckets.list(
+        GLOBAL_VALIDATOR_SCOPE,
+        "main",
+        cursor,
+        500,
+      );
       records.push(...page.records);
       cursor = page.nextCursor;
     } while (cursor !== 0);
@@ -1483,12 +2008,18 @@ async function sweepPendingMainValidation(
       )
       .sort(
         (left, right) =>
-          (right.firstSeenAt - left.firstSeenAt) ||
+          right.firstSeenAt - left.firstSeenAt ||
           left.canonicalUrl.localeCompare(right.canonicalUrl),
       );
     if (!pending.length) return;
-    const validatorBatchSize = 1;
-    const admitted = pending.slice(0, availableSessions.length);
+    // Keep admission small enough to isolate a bad link, but feed each
+    // available session a five-link batch so large imports can finish within
+    // the operational target without creating a per-session burst.
+    const validatorBatchSize = 5;
+    const admitted = pending.slice(
+      0,
+      availableSessions.length * validatorBatchSize,
+    );
     const chunks = availableSessions.map(() => [] as string[]);
     admitted.forEach((record, index) => {
       chunks[index % chunks.length]?.push(record.canonicalUrl);
@@ -1526,10 +2057,11 @@ async function sweepPendingMainValidation(
           })
           .catch(async (error) => {
             for (const url of batch)
-              await buckets.move(GLOBAL_VALIDATOR_SCOPE, url, "main", {
+              await buckets.move(GLOBAL_VALIDATOR_SCOPE, url, "error", {
+                validationError: error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240),
                 metadata: {
-                  needsValidation: true,
-                  validationState: "pending",
+                  needsValidation: false,
+                  validationState: "retryable-error",
                   validationLeaseToken,
                 },
               });
@@ -1565,7 +2097,10 @@ async function withTimeout<T>(
 async function waitWithHeartbeat(
   context: WorkerContext,
   waitMs: number,
-  progress: Pick<JobProgress, "currentGroup" | "currentAction" | "nextActionAt">,
+  progress: Pick<
+    JobProgress,
+    "currentGroup" | "currentAction" | "nextActionAt"
+  >,
 ): Promise<void> {
   const nextActionAt = progress.nextActionAt ?? Date.now() + waitMs;
   let remaining = Math.max(0, nextActionAt - Date.now());

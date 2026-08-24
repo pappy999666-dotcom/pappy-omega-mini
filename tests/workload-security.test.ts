@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDisplayKey, hashCredential, isFreshRequest, verifyCredential } from "../src/workload/security.js";
-import { workloadGuideText } from "../src/telegram/ui.js";
+import { workloadGuideText, workloadText } from "../src/telegram/ui.js";
 
 describe("hybrid workload security primitives", () => {
   it("hashes and verifies worker credentials without accepting mutations", () => {
@@ -20,6 +20,13 @@ describe("hybrid workload security primitives", () => {
     expect(isFreshRequest(now, now)).toBe(true);
     expect(isFreshRequest(now - 89_000, now)).toBe(true);
     expect(isFreshRequest(now - 91_000, now)).toBe(false);
+  });
+
+  it("renders the central VPS workload mode explicitly for users", () => {
+    const text = workloadText("OFF", []);
+    expect(text).toContain("Central VPS workload");
+    expect(text).toContain("OFF");
+    expect(text).toContain("New sessions currently require an ACTIVE workload.");
   });
 
   it("keeps central secrets out of the noob-friendly worker guide", () => {

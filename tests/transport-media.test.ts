@@ -31,12 +31,24 @@ vi.mock("../src/whatsapp/session-manager.js", () => ({
 }));
 
 import {
+  filterAdminGroupSummaries,
   sendGroupMentions,
   sendGroupStatus,
   sendGroupColorStatus,
   sendGroupText,
   sendPersonalStatus,
 } from "../src/whatsapp/transport-adapter.js";
+
+describe("administrator group inventory", () => {
+  it("keeps only groups where the WhatsApp identity is an administrator", () => {
+    const groups = filterAdminGroupSummaries([
+      { jid: "1@g.us", subject: "Admin group", participantCount: 10, isAdmin: true },
+      { jid: "2@g.us", subject: "Member group", participantCount: 20, isAdmin: false },
+      { jid: "3@g.us", subject: "Unknown group", participantCount: 30 },
+    ]);
+    expect(groups.map((group) => group.jid)).toEqual(["1@g.us"]);
+  });
+});
 
 const mediaCases = [
   { kind: "image", key: "image", mimeType: "image/jpeg" },

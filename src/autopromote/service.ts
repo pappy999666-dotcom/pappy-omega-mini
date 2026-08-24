@@ -11,8 +11,9 @@ import {
   saveAutoPromoteConfig,
   saveAutoPromoteRun,
   setAutoPromoteConfigState,
+  deleteAutoPromoteRunsForSession,
 } from "../persistence/mongo.js";
-import { getWorkspaceOwnerTelegramUserId, listAllSessions } from "../core/session-registry.js";
+import { getWorkspaceOwnerTelegramUserId, listAllSessions, refreshSessionRegistry } from "../core/session-registry.js";
 import type { JobOrchestrator } from "../jobs/job-orchestrator.js";
 import {
   DEFAULT_AUTOPROMOTE_SLOT_TIMES,
@@ -40,19 +41,65 @@ function priority(scope: AutoPromoteScope): number {
   return scope === "SESSION" ? 0 : scope === "USER" ? 1 : 2;
 }
 
-function resolveTargetSessionIds(config: AutoPromoteConfig): string[] {
-  const sessions = listAllSessions().filter(
-    (session) => session.status === "ACTIVE" && session.authHealth !== "INVALID",
+export function resolveTargetSessionIds(
+  config: AutoPromoteConfig,
+  sessionSnapshot = listAllSessions(),
+): string[] {
+  const sessions = sessionSnapshot.filter(
+    (session) => session.status === "ACTIVE" && session.authHealth === "VALID",
   );
   if (config.scope === "SESSION")
-    return config.sessionId ? [config.sessionId] : [];
+    return config.sessionId && sessions.some((session) => session.sessionId === config.sessionId)
+      ? [config.sessionId]
+      : [];
   if (config.scope === "USER")
     return sessions
       .filter((session) => getWorkspaceOwnerTelegramUserId(session.workspaceId) === config.ownerTelegramUserId)
       .map((session) => session.sessionId);
-  // Global owner configurations follow the live session registry. Newly paired
-  // eligible sessions join on the next occurrence without recreating the config.
+  // A fixed global target list is honored; an omitted list means ALL ACTIVE +
+  // future sessions. Removed or degraded sessions are never recreated.
+  if (config.targetSessionIds?.length) {
+    const targets = new Set(config.targetSessionIds);
+    return sessions
+      .filter((session) => targets.has(session.sessionId))
+      .map((session) => session.sessionId);
+  }
   return sessions.map((session) => session.sessionId);
+}
+
+export async function purgeAutoPromoteSession(
+  sessionId: string,
+  runtime?: Pick<JobOrchestrator, "cancel">,
+): Promise<{ configs: number; runs: number }> {
+  const configs = await listAutoPromoteConfigs({ limit: 5_000 }).catch(() => []);
+  const sessionRunCount = (await listAutoPromoteRuns({ sessionId, limit: 5_000 }).catch(() => [])).length;
+  const sessionConfigs = configs.filter(
+    (config) => config.scope === "SESSION" && config.sessionId === sessionId,
+  );
+  let removedConfigs = 0;
+  for (const config of sessionConfigs) {
+    await deleteAutoPromoteConfig(config.id, runtime);
+    removedConfigs += 1;
+  }
+
+  const remainingRuns = await listAutoPromoteRuns({ sessionId, limit: 5_000 }).catch(() => []);
+  for (const run of remainingRuns) {
+    if (run.jobId) await runtime?.cancel(run.jobId).catch(() => undefined);
+  }
+  await deleteAutoPromoteRunsForSession(sessionId).catch(() => 0);
+
+  // Fixed USER/GLOBAL target lists must not retain a terminal session. An
+  // all-future schedule has no target list and is intentionally left intact.
+  for (const config of configs) {
+    if (config.scope === "SESSION" || !config.targetSessionIds?.includes(sessionId)) continue;
+    const targets = config.targetSessionIds.filter((target) => target !== sessionId);
+    if (!targets.length) {
+      await disableAutoPromoteConfig(config.id);
+      continue;
+    }
+    await saveAutoPromoteConfig({ ...config, targetSessionIds: targets, updatedAt: Date.now() });
+  }
+  return { configs: removedConfigs, runs: sessionRunCount };
 }
 
 function newRun(
@@ -252,6 +299,7 @@ export async function dispatchAutoPromoteDueRuns(
       ...(config.command === "allstatusx"
         ? { count: config.allstatusxPostsPerGroup ?? 1 }
         : {}),
+      ...(config.command === "allstatusd" ? { styled: true } : {}),
       autoPromoteRunId: run.id,
       autoPromoteConfigId: config.id,
       autoPromoteScope: config.scope,
@@ -294,6 +342,7 @@ export class AutoPromoteScheduler {
     if (this.running) return;
     this.running = true;
     try {
+      await refreshSessionRegistry();
       await ensureAutoPromoteOccurrences(now);
       await dispatchAutoPromoteDueRuns(this.orchestrator, now);
     } finally {

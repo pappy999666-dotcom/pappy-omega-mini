@@ -6,29 +6,42 @@ import {
   createWorkloadCommand,
   cancelWorkloadCommandsForWorker,
   createWorkloadEnrollment,
+  createWorkloadShare,
   createWorkloadWorker,
   deleteRevokedWorkloadWorkers,
   deleteWorkloadWorker,
   getWorkloadAssignment,
   getWorkloadAssignmentBySession,
   getWorkloadEnrollmentByTokenHash,
+  getGlobalWorkloadMode,
+  setGlobalWorkloadMode,
   getWorkspaceWorkloadMode,
   getWorkloadWorker,
   getWorkloadWorkerByCredentialHash,
   getWorkloadWorkerByDisplayKey,
   getWorkloadWorkerByWorkloadCode,
+  getPendingWorkloadShareByTokenHash,
+  getWorkloadShareById,
   getWorkloadCommand,
+  expireStaleWorkloadCommands,
   listWorkloadAssignments,
+  listWorkloadAssignmentsForWorker,
   listWorkloadWorkers,
   listWorkloadEvents,
+  listActiveWorkloadSharesForWorkspace,
+  listWorkloadSharesForWorker,
+  updateWorkloadShareAccess,
   leaseWorkloadCommands,
   requeueStaleWorkloadCommands,
   completeWorkloadCommand as persistWorkloadCommandCompletion,
   updateWorkloadWorker,
   updateWorkloadAssignment,
+  redeemWorkloadShare,
+  revokeWorkloadShare,
+  revokeWorkloadShareForRecipient,
   persistSession,
 } from "../persistence/mongo.js";
-import { getSession, updateSession, updateWorkspaceWorkloadMode } from "../core/session-registry.js";
+import { getSession, refreshSessionRegistry, updateSession, updateWorkspaceWorkloadMode } from "../core/session-registry.js";
 import { env } from "../config/env.js";
 import { isWorkloadWorkerReady } from "./readiness.js";
 import {
@@ -52,6 +65,7 @@ import type {
   WorkloadRegistrationResponse,
   WorkloadWorkerRecord,
   WorkloadEventRecord,
+  WorkloadShareRecord,
 } from "./types.js";
 
 export interface WorkloadEnrollmentResult {
@@ -66,12 +80,39 @@ export interface WorkloadPairingCodeResult {
   expiresAt: number;
 }
 
+export interface WorkloadShareCodeResult {
+  shareId: string;
+  shareCode: string;
+  expiresAt: number;
+  workerName: string;
+  workloadCode: string;
+}
+
+export type AccessibleWorkloadWorker = WorkloadWorkerRecord & {
+  shared: boolean;
+  shareId?: string;
+};
+
+export interface WorkloadShareRecipientSummary {
+  shareId: string;
+  workerId: string;
+  workerName: string;
+  workloadCode: string;
+  recipientWorkspaceId: string;
+  recipientTelegramUserId: string;
+  recipientDisplayName: string;
+  recipientUsername?: string;
+  status: "ACTIVE" | "BLOCKED";
+  updatedAt: number;
+}
+
 export interface AuthenticatedWorkloadWorker {
   worker: WorkloadWorkerRecord;
   credential: string;
 }
 
 const workloadCommandWaiters = new Map<string, Set<() => void>>();
+const workloadCommandCompletionWaiters = new Map<string, Set<() => void>>();
 
 export type WorkloadNotificationState = "CONNECTED" | "RECOVERED" | "OFFLINE" | "UNREACHABLE" | "ERROR";
 export interface WorkloadNotification {
@@ -145,6 +186,33 @@ async function waitForWorkloadCommandSignal(workerId: string, timeoutMs: number)
   });
 }
 
+async function waitForWorkloadCommandCompletionSignal(commandId: string, timeoutMs: number): Promise<void> {
+  if (timeoutMs <= 0) return;
+  await new Promise<void>((resolve) => {
+    const waiters = workloadCommandCompletionWaiters.get(commandId) ?? new Set<() => void>();
+    const timer = setTimeout(() => {
+      waiters.delete(wake);
+      if (!waiters.size) workloadCommandCompletionWaiters.delete(commandId);
+      resolve();
+    }, Math.min(timeoutMs, 1_000));
+    const wake = () => {
+      clearTimeout(timer);
+      waiters.delete(wake);
+      if (!waiters.size) workloadCommandCompletionWaiters.delete(commandId);
+      resolve();
+    };
+    waiters.add(wake);
+    workloadCommandCompletionWaiters.set(commandId, waiters);
+  });
+}
+
+function notifyWorkloadCommandCompletion(commandId: string): void {
+  const waiters = workloadCommandCompletionWaiters.get(commandId);
+  if (!waiters) return;
+  workloadCommandCompletionWaiters.delete(commandId);
+  for (const wake of waiters) wake();
+}
+
 function normalizeWorkerName(input?: string): string {
   const normalized = String(input ?? "panel")
     .trim()
@@ -183,6 +251,176 @@ export async function createWorkloadPairingCode(
   };
   await createWorkloadEnrollment(record);
   return { enrollmentId: record.enrollmentId, pairingCode, expiresAt: record.expiresAt };
+}
+
+export async function revokeSharedWorkloadAccess(
+  recipientWorkspaceId: string,
+  shareId: string,
+): Promise<void> {
+  const revoked = await revokeWorkloadShareForRecipient(shareId, recipientWorkspaceId);
+  if (!revoked) throw new Error("Shared panel access was not found.");
+  for (const assignment of (await listWorkloadAssignments(recipientWorkspaceId)).filter((item) => item.workerId === revoked.workerId && item.status !== "REVOKED")) {
+    await updateWorkloadAssignment(assignment.assignmentId, { status: "REVOKED", lastError: "Shared panel access removed." });
+  }
+}
+
+export async function createWorkloadShareCode(
+  ownerWorkspaceId: string,
+  ownerTelegramUserId: string,
+  workerId: string,
+): Promise<WorkloadShareCodeResult> {
+  const worker = await getWorkloadWorker(workerId);
+  if (!worker || worker.workspaceId !== ownerWorkspaceId || worker.ownerTelegramUserId !== ownerTelegramUserId)
+    throw new Error("Only the panel owner can create a share code.");
+  if (["REVOKED", "DISABLED"].includes(worker.status))
+    throw new Error("This workload cannot be shared while it is disabled or revoked.");
+  const shareCode = `PAPPY-SHARE-${crypto.randomBytes(9).toString("base64url").replace(/[^a-zA-Z0-9]/g, "").slice(0, 12).toUpperCase()}`;
+  const now = Date.now();
+  const record: WorkloadShareRecord = {
+    shareId: crypto.randomUUID(),
+    workerId,
+    ownerWorkspaceId,
+    ownerTelegramUserId,
+    tokenHash: hashCredential(shareCode),
+    status: "PENDING",
+    expiresAt: now + 24 * 60 * 60 * 1000,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await createWorkloadShare(record);
+  return { shareId: record.shareId, shareCode, expiresAt: record.expiresAt, workerName: worker.workerName, workloadCode: worker.workloadCode ?? worker.displayKey };
+}
+
+export async function redeemWorkloadShareCode(
+  recipientWorkspaceId: string,
+  recipientTelegramUserId: string,
+  shareCode: string,
+  recipientIdentity?: { displayName?: string; username?: string },
+): Promise<AccessibleWorkloadWorker> {
+  const normalized = shareCode.trim().toUpperCase().replace(/\s+/g, "");
+  const pending = await getPendingWorkloadShareByTokenHash(hashCredential(normalized));
+  if (!pending) throw new Error("Share code is invalid, expired, or already used.");
+  if (pending.ownerWorkspaceId === recipientWorkspaceId)
+    throw new Error("A panel cannot be shared back into its owner workspace.");
+  const worker = await getWorkloadWorker(pending.workerId);
+  if (!worker || worker.workspaceId !== pending.ownerWorkspaceId || worker.status === "REVOKED")
+    throw new Error("The shared panel is no longer available.");
+  const redeemed = await redeemWorkloadShare(pending.shareId, recipientWorkspaceId, recipientTelegramUserId, recipientIdentity);
+  if (!redeemed) throw new Error("Share code was already claimed. Ask the panel owner for a new code.");
+  return { ...worker, shared: true, shareId: redeemed.shareId };
+}
+
+export async function listOwnerWorkloadShareRecipients(
+  ownerWorkspaceId: string,
+  workerId: string,
+): Promise<WorkloadShareRecipientSummary[]> {
+  const worker = await getWorkloadWorker(workerId);
+  if (!worker || worker.workspaceId !== ownerWorkspaceId)
+    throw new Error("Only the panel owner can manage shared users.");
+  const shares = (await listWorkloadSharesForWorker(workerId, ownerWorkspaceId)).filter(
+    (share) => Boolean(
+      share.recipientWorkspaceId &&
+      share.recipientTelegramUserId &&
+      ["ACTIVE", "BLOCKED"].includes(share.status),
+    ),
+  );
+  return shares.map((share) => ({
+    shareId: share.shareId,
+    workerId,
+    workerName: worker.workerName,
+    workloadCode: worker.workloadCode ?? worker.displayKey,
+    recipientWorkspaceId: share.recipientWorkspaceId!,
+    recipientTelegramUserId: share.recipientTelegramUserId!,
+    recipientDisplayName: share.recipientDisplayName ?? "Telegram user",
+    ...(share.recipientUsername ? { recipientUsername: share.recipientUsername } : {}),
+    status: share.status as "ACTIVE" | "BLOCKED",
+    updatedAt: share.updatedAt,
+  }));
+}
+
+export async function setOwnerSharedUserAccess(
+  ownerWorkspaceId: string,
+  workerId: string,
+  shareId: string,
+  status: "ACTIVE" | "BLOCKED",
+): Promise<WorkloadShareRecipientSummary> {
+  const worker = await getWorkloadWorker(workerId);
+  if (!worker || worker.workspaceId !== ownerWorkspaceId)
+    throw new Error("Only the panel owner can manage shared users.");
+  const updated = await updateWorkloadShareAccess(shareId, ownerWorkspaceId, status);
+  if (!updated?.recipientWorkspaceId || !updated.recipientTelegramUserId || !["ACTIVE", "BLOCKED"].includes(updated.status))
+    throw new Error("Shared user was not found for this panel.");
+  const assignments = (await listWorkloadAssignments(updated.recipientWorkspaceId)).filter(
+    (assignment) => assignment.workerId === workerId && assignment.status !== "REVOKED",
+  );
+  for (const assignment of assignments) {
+    if (status === "BLOCKED")
+      await updateWorkloadAssignment(assignment.assignmentId, { status: "OFFLINE", lastError: "Shared panel access blocked by owner." });
+    else if (assignment.status === "OFFLINE" && assignment.lastError === "Shared panel access blocked by owner.")
+      await updateWorkloadAssignment(assignment.assignmentId, { status: "ASSIGNED", lastError: undefined });
+  }
+  return {
+    shareId: updated.shareId,
+    workerId,
+    workerName: worker.workerName,
+    workloadCode: worker.workloadCode ?? worker.displayKey,
+    recipientWorkspaceId: updated.recipientWorkspaceId,
+    recipientTelegramUserId: updated.recipientTelegramUserId,
+    recipientDisplayName: updated.recipientDisplayName ?? "Telegram user",
+    ...(updated.recipientUsername ? { recipientUsername: updated.recipientUsername } : {}),
+    status,
+    updatedAt: updated.updatedAt,
+  };
+}
+
+export async function setOwnerSharedUserAccessByShare(
+  ownerWorkspaceId: string,
+  shareId: string,
+  status: "ACTIVE" | "BLOCKED",
+): Promise<WorkloadShareRecipientSummary> {
+  const share = await getWorkloadShareById(shareId, ownerWorkspaceId);
+  if (!share || !share.recipientWorkspaceId || !share.recipientTelegramUserId)
+    throw new Error("Shared user was not found.");
+  return setOwnerSharedUserAccess(ownerWorkspaceId, share.workerId, shareId, status);
+}
+
+export async function listAccessibleWorkspaceWorkloadWorkers(
+  workspaceId: string,
+): Promise<AccessibleWorkloadWorker[]> {
+  const [owned, shares] = await Promise.all([
+    listWorkspaceWorkloadWorkers(workspaceId),
+    listActiveWorkloadSharesForWorkspace(workspaceId),
+  ]);
+  const ownedIds = new Set(owned.map((worker) => worker.workerId));
+  const shared = (await Promise.all(shares.map(async (share) => {
+    if (ownedIds.has(share.workerId)) return undefined;
+    const worker = await getWorkloadWorker(share.workerId);
+    if (!worker || worker.status === "REVOKED" || worker.workspaceId !== share.ownerWorkspaceId) return undefined;
+    return { ...worker, shared: true, shareId: share.shareId } satisfies AccessibleWorkloadWorker;
+  }))).filter((worker): worker is NonNullable<typeof worker> => worker !== undefined);
+  return [...owned.map((worker) => ({ ...worker, shared: false as const })), ...shared];
+}
+
+export async function getAccessibleWorkspaceWorkloadWorkerByCode(
+  workspaceId: string,
+  workloadCode: string,
+): Promise<AccessibleWorkloadWorker | undefined> {
+  const worker = await getWorkloadWorkerByWorkloadCode(workloadCode.trim().toLowerCase());
+  if (!worker || worker.status === "REVOKED") return undefined;
+  if (worker.workspaceId === workspaceId) return { ...worker, shared: false };
+  const share = (await listActiveWorkloadSharesForWorkspace(workspaceId)).find((item) => item.workerId === worker.workerId);
+  return share ? { ...worker, shared: true, shareId: share.shareId } : undefined;
+}
+
+export async function getAccessibleWorkspaceWorkloadWorkerByDisplayKey(
+  workspaceId: string,
+  displayKey: string,
+): Promise<AccessibleWorkloadWorker | undefined> {
+  const worker = await getWorkloadWorkerByDisplayKey(displayKey.trim());
+  if (!worker || worker.status === "REVOKED") return undefined;
+  if (worker.workspaceId === workspaceId) return { ...worker, shared: false };
+  const share = (await listActiveWorkloadSharesForWorkspace(workspaceId)).find((item) => item.workerId === worker.workerId);
+  return share ? { ...worker, shared: true, shareId: share.shareId } : undefined;
 }
 
 export async function createWorkloadEnrollmentToken(
@@ -278,8 +516,9 @@ export async function recordWorkloadSessionStatus(
   input: { workspaceId: string; sessionId: string; status: "PAIRING" | "ACTIVE" | "RECONNECTING" | "DEGRADED" | "ERROR" | "LOGGED_OUT"; authHealth?: "UNKNOWN" | "VALID" | "INVALID" | "DEGRADED"; phoneNumber?: string; reason?: string },
 ): Promise<void> {
   const worker = await getWorkloadWorker(workerId);
-  if (!worker || worker.workspaceId !== input.workspaceId) throw new Error("Workload worker workspace mismatch.");
+  if (!worker) throw new Error("Workload worker not found.");
   const assignment = await getAuthorizedWorkloadAssignment(workerId, input.sessionId);
+  if (assignment.workspaceId !== input.workspaceId) throw new Error("Workload session workspace mismatch.");
   updateSession(input.workspaceId, input.sessionId, {
     status: input.status,
     ...(input.authHealth ? { authHealth: input.authHealth } : {}),
@@ -292,6 +531,19 @@ export async function recordWorkloadSessionStatus(
     ...(input.reason ? { lastError: input.reason.slice(0, 500) } : input.status === "ACTIVE" ? { lastError: undefined } : {}),
   });
   await appendWorkloadEvent({ workspaceId: input.workspaceId, workerId, sessionId: input.sessionId, kind: "worker.status", metadata: { status: input.status, authHealth: input.authHealth } });
+  if (input.status === "LOGGED_OUT") {
+    try {
+      const { purgeWhatsAppSession } = await import("../whatsapp/session-manager.js");
+      await purgeWhatsAppSession(input.workspaceId, input.sessionId);
+    } catch (error) {
+      // The periodic control-plane cleanup remains the retry path if Mongo,
+      // Redis, or the panel is unavailable during this status callback.
+      console.error(
+        `[pappy-omega-mini] logged-out workload session cleanup deferred session=${input.sessionId}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
 }
 
 export interface WorkloadLoggerSnapshot {
@@ -347,16 +599,50 @@ export async function recordWorkloadHeartbeat(
   const { worker } = await authenticateWorkloadWorker(credential, { allowDisabled: true });
   if (input.workerVersion < env.WORKLOAD_MIN_WORKER_VERSION)
     throw new Error(`Worker version ${input.workerVersion} is incompatible.`);
+  // A panel may be enrolled or assigned after the control process starts. Merge
+  // those persisted records before filtering durable assignments, otherwise a
+  // healthy external session can be treated as historical and dropped.
+  await refreshSessionRegistry();
   const now = Date.now();
   const previousStatus = worker.status;
-  const durableSessionIds = (await listWorkloadAssignments(worker.workspaceId))
+  const activeSharedWorkspaceIds = new Set(
+    (await listWorkloadSharesForWorker(worker.workerId))
+      .filter((share) => share.status === "ACTIVE" && share.recipientWorkspaceId)
+      .map((share) => share.recipientWorkspaceId!),
+  );
+  const durableAssignments = (await listWorkloadAssignmentsForWorker(worker.workerId))
     .filter((assignment) => {
       if (assignment.workerId !== worker.workerId || !["ASSIGNED", "RUNNING", "DEGRADED", "OFFLINE"].includes(assignment.status)) return false;
-      const session = getSession(worker.workspaceId, assignment.sessionId);
-      return session?.status !== "LOGGED_OUT" && session?.authHealth !== "INVALID";
-    })
-    .map((assignment) => assignment.sessionId);
-  const assignedSessionIds = [...new Set([...input.assignedSessionIds, ...durableSessionIds])].slice(0, 100);
+      if (assignment.workspaceId !== worker.workspaceId && !activeSharedWorkspaceIds.has(assignment.workspaceId)) return false;
+      try {
+        const session = getSession(assignment.workspaceId, assignment.sessionId);
+        return session.status !== "LOGGED_OUT" && session.authHealth !== "INVALID";
+      } catch {
+        // Historical assignments can outlive a purged session. They must not
+        // prevent the worker heartbeat or hide every other valid session.
+        return false;
+      }
+    });
+  for (const assignment of durableAssignments) {
+    if (assignment.status === "OFFLINE" || assignment.status === "DEGRADED")
+      await updateWorkloadAssignment(assignment.assignmentId, { status: "ASSIGNED", lastError: undefined });
+    if (input.status === "ACTIVE") {
+      try {
+        const session = getSession(assignment.workspaceId, assignment.sessionId);
+        if (session.status === "ACTIVE" && session.authHealth === "VALID")
+          updateSession(assignment.workspaceId, assignment.sessionId, { lastHealthyAt: now });
+      } catch {
+        // The assignment filter above already excludes records purged between
+        // the snapshot and this heartbeat.
+      }
+    }
+  }
+  const durableSessionIds = durableAssignments.map((assignment) => assignment.sessionId);
+  const authorizedSessionIds = new Set(durableSessionIds);
+  const assignedSessionIds = [...new Set([
+    ...input.assignedSessionIds.filter((sessionId) => authorizedSessionIds.has(sessionId)),
+    ...durableSessionIds,
+  ])].slice(0, 100);
   const paused = worker.status === "DISABLED";
   const next = await updateWorkloadWorker(worker.workerId, {
     status: paused ? "DISABLED" : input.status === "ERROR" ? "ERROR" : "ACTIVE",
@@ -392,6 +678,17 @@ export async function recordWorkloadHeartbeat(
   return next;
 }
 
+export async function isWorkloadWorkerAuthorizedForWorkspace(
+  workerId: string,
+  workspaceId: string,
+): Promise<boolean> {
+  const worker = await getWorkloadWorker(workerId);
+  if (!worker || worker.status === "REVOKED") return false;
+  if (worker.workspaceId === workspaceId) return true;
+  const shares = await listWorkloadSharesForWorker(workerId);
+  return shares.some((share) => share.status === "ACTIVE" && share.recipientWorkspaceId === workspaceId);
+}
+
 export async function assignWorkloadSession(
   workspaceId: string,
   sessionId: string,
@@ -400,8 +697,8 @@ export async function assignWorkloadSession(
   const session = getSession(workspaceId, sessionId);
   if (!session || session.workspaceId !== workspaceId) throw new Error("Session is not in this workspace.");
   const worker = await getWorkloadWorker(workerId);
-  if (!worker || worker.workspaceId !== workspaceId) throw new Error("Worker is not owned by this workspace.");
-  if (await getWorkspaceWorkloadMode(workspaceId) === "OFF") throw new Error("Admin Workload is OFF; new external-panel assignments are disabled.");
+  if (!worker || !(await isWorkloadWorkerAuthorizedForWorkspace(workerId, workspaceId))) throw new Error("Worker is not shared with this workspace.");
+  if (worker.workspaceId === workspaceId && await getWorkspaceWorkloadMode(workspaceId) === "OFF") throw new Error("Admin Workload is OFF; new external-panel assignments are disabled.");
   if (!isWorkloadWorkerReady(worker)) throw new Error("Worker must be ACTIVE, compatible, and have a fresh heartbeat before assignment.");
   const existing = await getWorkloadAssignmentBySession(sessionId);
   if (existing && existing.workerId !== workerId && ["ASSIGNED", "RUNNING", "DEGRADED", "OFFLINE"].includes(existing.status))
@@ -516,10 +813,12 @@ export async function pollWorkloadCommands(
     await waitForWorkloadCommandSignal(worker.workerId, Math.min(Math.max(waitMs, 0), 5_000));
     return [];
   }
+  await expireStaleWorkloadCommands(worker.workerId);
   await requeueStaleWorkloadCommands(worker.workerId);
   let commands = await leaseWorkloadCommands(worker.workerId, limit);
   if (commands.length || waitMs <= 0) return commands;
   await waitForWorkloadCommandSignal(worker.workerId, waitMs);
+  await expireStaleWorkloadCommands(worker.workerId);
   await requeueStaleWorkloadCommands(worker.workerId);
   commands = await leaseWorkloadCommands(worker.workerId, limit);
   return commands;
@@ -538,6 +837,7 @@ export async function completeWorkloadCommand(
     ...input,
   } as WorkloadCommandRecord & { ok: boolean });
   if (!completed) throw new Error("Command was already completed, expired, or not leased.");
+  notifyWorkloadCommandCompletion(completed.commandId);
   await appendWorkloadEvent({
     workspaceId: completed.workspaceId,
     workerId: worker.workerId,
@@ -560,7 +860,9 @@ export async function waitForWorkloadCommand(
       if (command.status !== "COMPLETED") throw new Error(command.error ?? "Workload command failed.");
       return command;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    const remaining = Math.max(0, deadline - Date.now());
+    if (remaining <= 0) break;
+    await waitForWorkloadCommandCompletionSignal(commandId, remaining);
   }
   throw new Error("Assigned workload worker did not respond before the control timeout.");
 }
@@ -569,6 +871,9 @@ export async function setWorkloadMode(
   workspaceId: string,
   mode: "ON" | "OFF",
 ): Promise<void> {
+  // Admin Workload is a global VPS policy. Persist it before rendering the
+  // result so every user workspace reads the same authoritative value.
+  await setGlobalWorkloadMode(mode);
   updateWorkspaceWorkloadMode(workspaceId, mode);
 }
 
@@ -578,7 +883,7 @@ export async function disconnectWorkloadWorker(workerId: string): Promise<Worklo
   const updated = await updateWorkloadWorker(workerId, { status: "OFFLINE", lastError: "Graceful disconnect." });
   if (!updated) throw new Error("Workload worker could not be disconnected.");
   notifyWorkloadOwner(updated, "OFFLINE", "Graceful disconnect.");
-  for (const assignment of (await listWorkloadAssignments(worker.workspaceId)).filter((item) => item.workerId === workerId && item.status !== "REVOKED"))
+  for (const assignment of (await listWorkloadAssignmentsForWorker(workerId)).filter((item) => item.status !== "REVOKED"))
     await updateWorkloadAssignment(assignment.assignmentId, { status: "OFFLINE", lastError: "Worker disconnected." });
   await appendWorkloadEvent({ workspaceId: updated.workspaceId, workerId, kind: "worker.status", metadata: { status: "OFFLINE", reason: "graceful-disconnect" } });
   return updated;
@@ -594,13 +899,13 @@ export async function markUnreachableWorkloadWorkers(
     if (!worker.lastHeartbeatAt || worker.lastHeartbeatAt >= cutoff) continue;
     const updated = await updateWorkloadWorker(worker.workerId, { status: "UNREACHABLE", lastError: "Heartbeat timeout." });
     if (updated) notifyWorkloadOwner(updated, "UNREACHABLE", "Heartbeat timeout.");
-    const assignments = await listWorkloadAssignments(worker.workspaceId);
+    const assignments = await listWorkloadAssignmentsForWorker(worker.workerId);
     for (const assignment of assignments.filter((item) => item.workerId === worker.workerId && item.status !== "REVOKED")) {
       await updateWorkloadAssignment(assignment.assignmentId, { status: "OFFLINE", lastError: "Worker heartbeat timeout." });
       try {
-        const session = getSession(worker.workspaceId, assignment.sessionId);
+        const session = getSession(assignment.workspaceId, assignment.sessionId);
         if (session.status !== "LOGGED_OUT" && session.status !== "BANNED") {
-          updateSession(worker.workspaceId, assignment.sessionId, {
+          updateSession(assignment.workspaceId, assignment.sessionId, {
             status: "DEGRADED",
             authHealth: session.authHealth === "INVALID" ? "INVALID" : "DEGRADED",
             disconnectReason: "Panel heartbeat timeout; panel is offline. Session data is retained for recovery.",
@@ -622,7 +927,7 @@ export async function markUnreachableWorkloadWorkers(
 }
 
 export async function getWorkloadMode(workspaceId: string): Promise<"ON" | "OFF"> {
-  return getWorkspaceWorkloadMode(workspaceId);
+  return (await getGlobalWorkloadMode()) ?? getWorkspaceWorkloadMode(workspaceId);
 }
 
 export async function listWorkspaceWorkloadWorkers(workspaceId: string): Promise<WorkloadWorkerRecord[]> {
@@ -671,7 +976,7 @@ export async function revokeWorkloadWorker(workerId: string): Promise<WorkloadWo
   if (!worker) throw new Error("Workload worker not found.");
   const updated = await updateWorkloadWorker(workerId, { status: "REVOKED" });
   if (!updated) throw new Error("Workload worker could not be revoked.");
-  for (const assignment of (await listWorkloadAssignments(worker.workspaceId)).filter((item) => item.workerId === workerId && item.status !== "REVOKED")) {
+  for (const assignment of (await listWorkloadAssignmentsForWorker(workerId)).filter((item) => item.status !== "REVOKED")) {
     await updateWorkloadAssignment(assignment.assignmentId, { status: "REVOKED", lastError: "Workload worker removed." });
   }
   await appendWorkloadEvent({

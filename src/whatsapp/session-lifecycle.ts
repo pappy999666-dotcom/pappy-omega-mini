@@ -23,6 +23,9 @@ export interface SessionLifecycleState {
   socketGeneration: number;
   status: AuthoritativeLifecycleState;
   lastTransitionAt: number;
+  lastHeartbeatAt?: number;
+  heartbeatFailures: number;
+  lastHeartbeatFailureAt?: number;
   lastMessageReceivedAt?: number;
   lastCommandProcessedAt?: number;
   lastOutboundMessageAt?: number;
@@ -44,6 +47,7 @@ export function getLifecycleState(key: string): SessionLifecycleState {
     connected: false,
     reconnectTimer: undefined,
     heartbeatTimer: undefined,
+    heartbeatFailures: 0,
     stopping: false,
     socketGeneration: 0,
     status: "CREATING",
@@ -78,6 +82,14 @@ export function markOpening(key: string): void {
   state.stopping = false;
   state.socketGeneration += 1;
   setLifecycleStatus(key, "CONNECTING");
+}
+
+export function noteHeartbeat(key: string, at = Date.now()): number {
+  const state = getLifecycleState(key);
+  state.lastHeartbeatAt = at;
+  state.heartbeatFailures = 0;
+  delete state.lastHeartbeatFailureAt;
+  return at;
 }
 
 export function noteMessageReceived(key: string): number {
@@ -171,26 +183,38 @@ export function startHeartbeat(input: {
   intervalMs?: number;
   probe?: () => Promise<void>;
   onFailure?: (error: unknown) => void;
+  failureThreshold?: number;
 }): void {
   const state = getLifecycleState(input.key);
   if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
+  let probeRunning = false;
+  const failureThreshold = Math.max(2, input.failureThreshold ?? 3);
   state.heartbeatTimer = setInterval(() => {
-    if (state.stopping) return;
+    if (state.stopping || probeRunning) return;
     if (!input.probe) {
+      const at = noteHeartbeat(input.key);
       updateSession(input.workspaceId, input.sessionId, {
-        lastHealthyAt: Date.now(),
+        lastHealthyAt: at,
       });
       return;
     }
+    probeRunning = true;
     void input
       .probe()
       .then(() => {
+        const at = noteHeartbeat(input.key);
         updateSession(input.workspaceId, input.sessionId, {
-          lastHealthyAt: Date.now(),
+          lastHealthyAt: at,
         });
       })
       .catch((error) => {
-        input.onFailure?.(error);
+        state.heartbeatFailures += 1;
+        state.lastHeartbeatFailureAt = Date.now();
+        noteError(input.key, error instanceof Error ? error.message : String(error));
+        if (state.heartbeatFailures >= failureThreshold) input.onFailure?.(error);
+      })
+      .finally(() => {
+        probeRunning = false;
       });
   }, input.intervalMs ?? 30_000);
 }
@@ -198,11 +222,14 @@ export function startHeartbeat(input: {
 export function getLifecycleHealth(
   key: string,
   now = Date.now(),
-): {
+  ): {
   status: AuthoritativeLifecycleState;
   connected: boolean;
   socketGeneration: number;
   reconnectAttempt: number;
+  lastHeartbeatAt?: number;
+  heartbeatFailures: number;
+  lastHeartbeatFailureAt?: number;
   lastMessageReceivedAt?: number;
   lastCommandProcessedAt?: number;
   lastOutboundMessageAt?: number;
@@ -215,6 +242,13 @@ export function getLifecycleHealth(
     connected: state.connected,
     socketGeneration: state.socketGeneration,
     reconnectAttempt: state.reconnectAttempt,
+    ...(state.lastHeartbeatAt !== undefined
+      ? { lastHeartbeatAt: state.lastHeartbeatAt }
+      : {}),
+    heartbeatFailures: state.heartbeatFailures,
+    ...(state.lastHeartbeatFailureAt !== undefined
+      ? { lastHeartbeatFailureAt: state.lastHeartbeatFailureAt }
+      : {}),
     ...(state.lastMessageReceivedAt !== undefined
       ? { lastMessageReceivedAt: state.lastMessageReceivedAt }
       : {}),
@@ -225,7 +259,10 @@ export function getLifecycleHealth(
       ? { lastOutboundMessageAt: state.lastOutboundMessageAt }
       : {}),
     ...(state.lastError ? { lastError: state.lastError } : {}),
-    ageSinceHeartbeatMs: Math.max(0, now - state.lastTransitionAt),
+    ageSinceHeartbeatMs: Math.max(
+      0,
+      now - (state.lastHeartbeatAt ?? state.lastTransitionAt),
+    ),
   };
 }
 

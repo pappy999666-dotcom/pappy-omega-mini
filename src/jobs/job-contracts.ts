@@ -12,6 +12,7 @@ export type JobKind =
   | "preview-hydration"
   | "media-processing"
   | "group-sync"
+  | "group-control"
   | "cleanup"
   | "join-manager"
   | "moderator-expiry"
@@ -74,6 +75,9 @@ export interface JobRecord<TPayload = Record<string, unknown>> {
   createdAt: number;
   startedAt?: number;
   heartbeatAt?: number;
+  workerId?: string;
+  leaseToken?: string;
+  leaseExpiresAt?: number;
   completedAt?: number;
   error?: string;
 }

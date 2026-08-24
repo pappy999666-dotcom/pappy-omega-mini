@@ -45,19 +45,32 @@ function ensureLoaded(): void {
 export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
   ensureLoaded();
   const existing = settings.get(workspaceId);
-  if (existing)
+  if (existing) {
+    const legacyImmediateDefaults =
+      existing.defaultJoinDelayMs === 0 &&
+      existing.defaultJoinMinDelayMs === 0 &&
+      existing.defaultJoinMaxDelayMs === 0 &&
+      (existing.defaultJoinMode === undefined || existing.defaultJoinMode === "immediate");
     return {
       ...existing,
+      ...(legacyImmediateDefaults
+        ? {
+            defaultJoinDelayMs: 5000,
+            defaultJoinMinDelayMs: 5000,
+            defaultJoinMaxDelayMs: 5000,
+            defaultJoinMode: "auto" as const,
+          }
+        : {}),
       defaultJoinTargetCount: existing.defaultJoinTargetCount ?? 100,
       defaultJoinBatchCycles: existing.defaultJoinBatchCycles ?? 1,
       defaultJoinMaxConcurrency: existing.defaultJoinMaxConcurrency ?? 2,
       defaultJoinRetryLimit: existing.defaultJoinRetryLimit ?? 2,
       defaultJoinMinDelayMs:
-        existing.defaultJoinMinDelayMs ??
-        Math.max(0, existing.defaultJoinDelayMs ?? 0),
+        (legacyImmediateDefaults ? 5000 : existing.defaultJoinMinDelayMs) ??
+        Math.max(1000, existing.defaultJoinDelayMs ?? 5000),
       defaultJoinMaxDelayMs:
-        existing.defaultJoinMaxDelayMs ??
-        Math.max(0, existing.defaultJoinDelayMs ?? 0),
+        (legacyImmediateDefaults ? 5000 : existing.defaultJoinMaxDelayMs) ??
+        Math.max(1000, existing.defaultJoinDelayMs ?? 5000),
       defaultJoinRetryBaseMs: existing.defaultJoinRetryBaseMs ?? 5000,
       defaultJoinSessionCooldownMs:
         existing.defaultJoinSessionCooldownMs ?? 30000,
@@ -65,19 +78,22 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
         1,
         Math.min(5, existing.defaultJoinRestrictionThreshold ?? 5),
       ),
-      defaultJoinMode: existing.defaultJoinMode ?? "auto",
+      defaultJoinMode: legacyImmediateDefaults
+        ? "auto"
+        : existing.defaultJoinMode ?? "auto",
       defaultBroadcastDelayMs: Math.max(
         1000,
-        Math.min(60000, existing.defaultBroadcastDelayMs ?? 20000),
+        Math.min(60000, existing.defaultBroadcastDelayMs ?? 10000),
       ),
     };
+  }
   const created: WorkspaceSettings = {
     workspaceId,
     defaultPrefix: ".",
     defaultAutoJoinEnabled: false,
-    defaultJoinDelayMs: 0,
-    defaultJoinMinDelayMs: 0,
-    defaultJoinMaxDelayMs: 0,
+    defaultJoinDelayMs: 5000,
+    defaultJoinMinDelayMs: 5000,
+    defaultJoinMaxDelayMs: 5000,
     defaultJoinRetryBaseMs: 5000,
     defaultJoinSessionCooldownMs: 30000,
     defaultJoinRestrictionThreshold: 5,
@@ -85,8 +101,8 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
     defaultJoinBatchCycles: 1,
     defaultJoinMaxConcurrency: 2,
     defaultJoinRetryLimit: 2,
-    defaultJoinMode: "immediate",
-    defaultBroadcastDelayMs: 20000,
+    defaultJoinMode: "auto",
+    defaultBroadcastDelayMs: 10000,
     timezone: "UTC",
     updatedAt: Date.now(),
   };
@@ -109,16 +125,16 @@ export function updateWorkspaceSettings(
       3,
     ),
     defaultJoinDelayMs: Math.max(
-      0,
+      1000,
       Math.min(
-        600000,
+        60000,
         Number(patch.defaultJoinDelayMs ?? current.defaultJoinDelayMs),
       ),
     ),
     defaultJoinMinDelayMs: Math.max(
-      0,
+      1000,
       Math.min(
-        600000,
+        60000,
         Number(
           patch.defaultJoinMinDelayMs ??
             current.defaultJoinMinDelayMs ??
@@ -127,9 +143,9 @@ export function updateWorkspaceSettings(
       ),
     ),
     defaultJoinMaxDelayMs: Math.max(
-      0,
+      1000,
       Math.min(
-        600000,
+        60000,
         Number(
           patch.defaultJoinMaxDelayMs ??
             current.defaultJoinMaxDelayMs ??
@@ -213,7 +229,7 @@ export function updateWorkspaceSettings(
       Math.min(
         60000,
         Number(
-          patch.defaultBroadcastDelayMs ?? current.defaultBroadcastDelayMs ?? 20000,
+          patch.defaultBroadcastDelayMs ?? current.defaultBroadcastDelayMs ?? 10000,
         ),
       ),
     ),

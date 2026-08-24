@@ -150,6 +150,33 @@ describe("WhatsApp command privacy", () => {
     ).toContain("ACTIVE");
   });
 
+  it("dispatches bare bridge commands independently of the session prefix", async () => {
+    const user = resolveUser(`wa-bridge-prefix-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "bridge-prefix",
+      phoneNumber: "2348012345678",
+    });
+    updateSession(user.workspaceId, session.sessionId, {
+      status: "ACTIVE",
+      prefix: "!",
+      lastHealthyAt: Date.now(),
+    });
+    await expect(routeWhatsAppText({
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      senderJid: "telegram-bridge",
+      text: "ping",
+      bridgeAuthorized: true,
+    })).resolves.toContain("ACTIVE");
+    await expect(routeWhatsAppText({
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      senderJid: "2348012345678@s.whatsapp.net",
+      text: "ping",
+    })).resolves.toBeNull();
+  });
+
   it("silences public and unknown WhatsApp commands", async () => {
     const user = resolveUser(`wa-auth-${Date.now()}-${Math.random()}`);
     const session = createSession({

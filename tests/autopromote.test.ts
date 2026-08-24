@@ -18,6 +18,7 @@ import {
   validateAutoPromoteInput,
   zonedTimeToUtc,
 } from "../src/autopromote/types.js";
+import { resolveTargetSessionIds } from "../src/autopromote/service.js";
 
 describe("Auto Promote scheduling contracts", () => {
   it("uses the requested named daily slots for every times-per-day value", () => {
@@ -57,6 +58,7 @@ describe("Auto Promote scheduling contracts", () => {
     expect(commandData).toContain("allstatus");
     expect(commandData).toContain("allchat");
     expect(commandData).toContain("allstatusx");
+    expect(commandData).toContain("allstatusd");
     expect(daysData).toContain("autopromote:days:30");
     expect(timesData).toContain("autopromote:times:5");
     expect(postsData).toContain("autopromote:posts:10");
@@ -75,6 +77,35 @@ describe("Auto Promote scheduling contracts", () => {
     expect(isAutoPromoteWizardContinuation("autopromote:command:allstatus")).toBe(true);
     expect(isAutoPromoteWizardContinuation("autopromote:global:toggle:s1")).toBe(true);
     expect(isAutoPromoteWizardContinuation("admin:panel")).toBe(false);
+  });
+
+  it("enumerates only live eligible sessions for session and global targets", () => {
+    const sessions = [
+      { sessionId: "active", workspaceId: "w1", status: "ACTIVE", authHealth: "VALID" },
+      { sessionId: "invalid", workspaceId: "w1", status: "ACTIVE", authHealth: "INVALID" },
+      { sessionId: "degraded", workspaceId: "w1", status: "DEGRADED", authHealth: "HEALTHY" },
+    ] as never;
+    const base = {
+      id: "cfg",
+      ownerTelegramUserId: "owner",
+      command: "allstatus" as const,
+      payload: { text: "hello" },
+      days: 2,
+      timesPerDay: 1,
+      timezone: DEFAULT_AUTOPROMOTE_TIMEZONE,
+      slotTimes: DEFAULT_AUTOPROMOTE_SLOT_TIMES,
+      startDate: "2026-08-20",
+      endDate: "2026-08-21",
+      enabled: true,
+      state: "SCHEDULED" as const,
+      cooldownMinutes: 30,
+      misfireGraceMinutes: 30,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    expect(resolveTargetSessionIds({ ...base, scope: "GLOBAL" }, sessions)).toEqual(["active"]);
+    expect(resolveTargetSessionIds({ ...base, scope: "GLOBAL", targetSessionIds: ["invalid", "degraded", "active"] }, sessions)).toEqual(["active"]);
+    expect(resolveTargetSessionIds({ ...base, scope: "SESSION", sessionId: "degraded" }, sessions)).toEqual([]);
   });
 
 });

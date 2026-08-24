@@ -182,6 +182,19 @@ describe("Live Show renderer", () => {
     expect(rendered).toContain("Joined Alpha");
   });
 
+  it("renders Group Control action labels and worker lease metadata", () => {
+    const control = job();
+    control.kind = "group-control";
+    control.workerId = "control-worker-1";
+    control.leaseExpiresAt = Date.now() + 30_000;
+    control.payload = { delayMs: 350 };
+    control.progress.currentAction = "processing approve";
+    const rendered = jobLiveText(control);
+    expect(rendered).toContain("Next action");
+    expect(rendered).toContain("control-worker-1");
+    expect(rendered).toContain("Lease until");
+  });
+
   it("renders the live cadence, remaining count, and next-post countdown", () => {
     const running = job();
     running.kind = "allstatus";

@@ -75,6 +75,7 @@ export interface WhatsAppSession {
   validatorRetireReason?: string;
   validatorFailureCount?: number;
   validatorRateLimitCount?: number;
+  validatorConsecutiveRateLimitCount?: number;
   validatorLastSuccessAt?: number;
   workerNodeId?: string;
   /** Persisted external/owner worker assignment, if this session is panel-hosted. */

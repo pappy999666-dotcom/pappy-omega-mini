@@ -25,14 +25,20 @@ import {
   writeEncryptedJson,
 } from "../core/encrypted-store.js";
 import { routeWhatsAppText, type WhatsAppReply } from "./message-router.js";
+import { runAntiChecks, runAntiParticipantEvent } from "./anti-system/engine.js";
 import { collectLinks, extractWhatsAppGroupInviteUrls } from "../links/link-collector.js";
 import { prepareCanonicalPreviewContent } from "./baileys-native-preview.js";
+import { enqueueInbound } from "./inbound-admission.js";
+import { enqueueOutbound } from "./outbound-admission.js";
 import {
   extractMessageText,
+  extractWhatsAppInteraction,
   extractQuotedMessage,
   extractQuotedText,
   resolveMediaPayload,
 } from "./quoted-payload-resolver.js";
+import { phoneJidFromIdentity } from "./identity-normalization.js";
+import { trackInboundMessage } from "./moderation-message-tracker.js";
 import { createAssignedWorkloadSocket, callAssignedWorkloadTransport } from "./workload-transport.js";
 import {
   queueWorkloadCommand,
@@ -82,6 +88,7 @@ interface RuntimeSocket extends WASocket {
 
 interface RuntimeSession {
   socket: RuntimeSocket;
+  generation: number;
   stop: () => void;
   flushAuth: () => Promise<void>;
 }
@@ -108,15 +115,29 @@ export interface DisconnectClassification {
 
 export function classifyDisconnect(error: unknown): DisconnectClassification {
   const candidate = error as {
+    message?: unknown;
     output?: { statusCode?: unknown };
     statusCode?: unknown;
     data?: { statusCode?: unknown };
   };
+  const message = String(
+    candidate?.message ?? (error instanceof Error ? error.message : error ?? ""),
+  ).toLowerCase();
+  const explicitLogout = /logged[ _-]?out|auth[ _-]?revoked|invalid[ _-]?session|device[ _-]?removed|account[ _-]?logout/.test(message);
   const rawCode =
     candidate?.output?.statusCode ??
     candidate?.statusCode ??
     candidate?.data?.statusCode;
   const code = typeof rawCode === "number" ? rawCode : undefined;
+  if (explicitLogout) {
+    return {
+      ...(code !== undefined ? { code } : {}),
+      label: "logged-out",
+      terminal: true,
+      status: "LOGGED_OUT",
+      recovery: "WhatsApp explicitly confirmed permanent logout or auth invalidation.",
+    };
+  }
   const known: Record<number, Omit<DisconnectClassification, "code">> = {
     401: {
       label: "logged-out",
@@ -127,17 +148,17 @@ export function classifyDisconnect(error: unknown): DisconnectClassification {
     },
     403: {
       label: "forbidden",
-      terminal: true,
-      status: "LOGGED_OUT",
+      terminal: false,
+      status: "DEGRADED",
       recovery:
-        "WhatsApp rejected this authentication. Purge the session and pair again.",
+        "WhatsApp returned forbidden without explicit logout confirmation; credentials are preserved and recovery is scheduled.",
     },
     405: {
       label: "device-mismatch",
-      terminal: true,
-      status: "ERROR",
+      terminal: false,
+      status: "DEGRADED",
       recovery:
-        "This device session is incompatible. Purge the session and pair again.",
+        "WhatsApp reported a device mismatch; credentials are preserved and recovery is scheduled.",
     },
     408: {
       label: "connection-closed",
@@ -159,17 +180,17 @@ export function classifyDisconnect(error: unknown): DisconnectClassification {
     },
     440: {
       label: "connection-replaced",
-      terminal: true,
-      status: "ERROR",
+      terminal: false,
+      status: "DEGRADED",
       recovery:
-        "Another WhatsApp Web session replaced this one. Purge and pair again if this is unintended.",
+        "Another WhatsApp stream may have replaced this connection; credentials are preserved and recovery is scheduled.",
     },
     500: {
       label: "bad-session",
-      terminal: true,
-      status: "ERROR",
+      terminal: false,
+      status: "DEGRADED",
       recovery:
-        "The saved authentication is invalid. Purge the session and pair again.",
+        "WhatsApp returned a bad-session signal without explicit logout confirmation; credentials are preserved and recovery is scheduled.",
     },
     503: {
       label: "service-unavailable",
@@ -185,6 +206,16 @@ export function classifyDisconnect(error: unknown): DisconnectClassification {
         "WhatsApp requested a transport restart; the worker will retry.",
     },
   };
+  if (code === 401 && !explicitLogout) {
+    return {
+      code,
+      label: "unauthorized-transient",
+      terminal: false,
+      status: "DEGRADED",
+      recovery:
+        "401 was received without explicit logout confirmation; credentials are preserved and recovery is scheduled.",
+    };
+  }
   const fallback = {
     label: "unknown-transport",
     terminal: false,
@@ -261,9 +292,10 @@ async function openWhatsAppSession(
 
   markOpening(key);
   const openingState = getLifecycleState(key);
+  const socketGeneration = openingState.socketGeneration;
   updateSession(workspaceId, sessionId, {
     status: "RECONNECTING",
-    socketGeneration: openingState.socketGeneration,
+    socketGeneration,
     reconnectCount: openingState.reconnectAttempt,
     workerNodeId: process.env.HOSTNAME ?? `pid-${process.pid}`,
   });
@@ -292,6 +324,12 @@ async function openWhatsAppSession(
   );
   let recoverStaleSocket: ((reason: string) => void) | undefined;
   let staleRecoveryTriggered = false;
+  let cryptoErrorWindowStartedAt = 0;
+  let cryptoErrorCount = 0;
+  let cryptoStormRecoveryTriggered = false;
+  let stableOpenTimer: ReturnType<typeof setTimeout> | undefined;
+  const CRYPTO_ERROR_WINDOW_MS = 30_000;
+  const CRYPTO_ERROR_LIMIT = 12;
   const logger = pino({
     level: process.env.PAPPY_WA_LOG_LEVEL ?? "warn",
     hooks: {
@@ -309,6 +347,24 @@ async function openWhatsAppSession(
                 })(),
           )
           .join(" ");
+        const cryptoFailure = /failed to decrypt message|No session found to decrypt message|Expected Buffer instead of|Received message with old counter/i.test(rendered);
+        if (cryptoFailure) {
+          const now = Date.now();
+          if (!cryptoErrorWindowStartedAt || now - cryptoErrorWindowStartedAt > CRYPTO_ERROR_WINDOW_MS) {
+            cryptoErrorWindowStartedAt = now;
+            cryptoErrorCount = 0;
+            cryptoStormRecoveryTriggered = false;
+          }
+          cryptoErrorCount += 1;
+          if (cryptoErrorCount >= CRYPTO_ERROR_LIMIT && !cryptoStormRecoveryTriggered) {
+            cryptoStormRecoveryTriggered = true;
+            console.warn(
+              `[pappy-omega-mini] Baileys crypto error storm session=${sessionId}; recovering socket after ${cryptoErrorCount} failures in ${Math.round((now - cryptoErrorWindowStartedAt) / 1000)}s`,
+            );
+            queueMicrotask(() => recoverStaleSocket?.("Baileys crypto error storm"));
+          }
+          return;
+        }
         if (rendered.includes("smax-invalid") && !staleRecoveryTriggered) {
           staleRecoveryTriggered = true;
           queueMicrotask(() => recoverStaleSocket?.(rendered));
@@ -330,9 +386,16 @@ async function openWhatsAppSession(
     generateHighQualityLinkPreview: true,
     store: contactStore,
   } as never) as unknown as RuntimeSocket;
+  const isCurrentSocket = (): boolean => {
+    const lifecycleState = getLifecycleState(key);
+    const runtime = runtimes.get(key);
+    return lifecycleState.socketGeneration === socketGeneration &&
+      (!runtime || runtime.socket === socket);
+  };
   contactStore.bind(socket.ev);
   (socket as unknown as { store?: unknown }).store = contactStore;
   const forceSocketRecovery = (error?: unknown) => {
+    if (!isCurrentSocket()) return;
     const reason =
       error instanceof Error
         ? error.message
@@ -350,27 +413,38 @@ async function openWhatsAppSession(
     forceSocketRecovery(new Error(`Baileys server rejection: ${reason}`));
   socket.ws?.on?.("error", forceSocketRecovery);
   socket.ws?.on?.("close", () => {
-    if (runtimes.has(key))
+    if (isCurrentSocket())
       forceSocketRecovery(new Error("WhatsApp websocket closed."));
   });
   const sendTrackedMessage = async (
     jid: string,
     content: any,
   ): Promise<void> => {
+    await enqueueOutbound({
+      sessionId: key,
+      priority: 1,
+      run: async () => {
     try {
-      const text =
-        typeof content?.text === "string"
-          ? content.text
-          : typeof content?.caption === "string"
-            ? content.caption
-            : undefined;
-      const outbound = await prepareCanonicalPreviewContent({
-        ...(text ? { text } : {}),
-        content: content as Record<string, unknown>,
-        socket,
-        cacheScope: `${workspaceId}:${sessionId}`,
-      });
-      await socket.sendMessage(jid, outbound);
+      const nativeTable = content?.nativeTable as { title?: string; headers?: unknown[]; rows?: unknown[][]; buttons?: Array<{ id?: string; text?: string }>; footer?: string } | undefined;
+      const mentions = Array.isArray(content?.mentions) ? content.mentions.filter((value: unknown): value is string => typeof value === "string") : [];
+      if (nativeTable && typeof socket.sendInteractiveTable === "function") {
+        await socket.sendInteractiveTable(jid, nativeTable, mentions.length ? { mentions } : {});
+      } else {
+        const { nativeTable: _nativeTable, ...safeContent } = content ?? {};
+        const text =
+          typeof safeContent?.text === "string"
+            ? safeContent.text
+            : typeof safeContent?.caption === "string"
+              ? safeContent.caption
+              : undefined;
+        const outbound = await prepareCanonicalPreviewContent({
+          ...(text ? { text } : {}),
+          content: safeContent as Record<string, unknown>,
+          socket,
+          cacheScope: `${workspaceId}:${sessionId}`,
+        });
+        await socket.sendMessage(jid, outbound);
+      }
       const sentAt = noteOutboundMessage(key);
       updateSession(workspaceId, sessionId, {
         lastOutboundMessageAt: sentAt,
@@ -381,12 +455,16 @@ async function openWhatsAppSession(
       updateSession(workspaceId, sessionId, { lastError: reason });
       throw error;
     }
+      },
+    });
   };
-
-  socket.ev.on("creds.update", () => void saveCreds());
+  socket.ev.on(
+    "creds.update", () => {
+    if (isCurrentSocket()) void saveCreds();
+  });
   socket.ev.on(
     "messages.upsert",
-    async (event: {
+    (event: {
       messages?: Array<{
         key?: {
           remoteJid?: string;
@@ -411,11 +489,16 @@ async function openWhatsAppSession(
         };
       }>;
     }) => {
+      if (!isCurrentSocket()) return;
       if (process.env.PAPPY_DEBUG_WA_EVENTS === "1")
         console.log(
           `[pappy-omega-mini] WhatsApp inbound upsert session=${sessionId} count=${event.messages?.length ?? 0}`,
         );
       for (const message of event.messages ?? []) {
+        enqueueInbound({
+          sessionId: key,
+          priority: 1,
+          run: async () => {
         const receivedAt = noteMessageReceived(key);
         const lastPersistedAt = lastInboundSessionPersistAt.get(key) ?? 0;
         if (receivedAt - lastPersistedAt >= 5_000 || message.key?.fromMe === true) {
@@ -424,7 +507,7 @@ async function openWhatsAppSession(
             lastMessageReceivedAt: receivedAt,
           });
         }
-        if (!message.key?.remoteJid) continue;
+        if (!message.key?.remoteJid) return;
         const messageKey = message.key;
 
         const envelope = {
@@ -433,14 +516,16 @@ async function openWhatsAppSession(
             ? { message: message.message as Record<string, unknown> }
             : {}),
         };
-        const text = extractMessageText(envelope.message);
+        const interaction = extractWhatsAppInteraction(envelope.message);
+        const interactionId = interaction?.id ?? undefined;
+        const text = interactionId ?? extractMessageText(envelope.message);
         const quoted = extractQuotedMessage(envelope.message);
         const quotedText = extractQuotedText(quoted);
         const combinedText = [text, quotedText].filter(Boolean).join("\n");
         const commandSource = combinedText.trim().toLowerCase();
         const sessionPrefix = getSession(workspaceId, sessionId).prefix.trim();
         const isPrefixedCommand = Boolean(
-          sessionPrefix && commandSource.startsWith(sessionPrefix),
+          interactionId || (sessionPrefix && commandSource.startsWith(sessionPrefix)),
         );
         const hasGroupInvite = extractWhatsAppGroupInviteUrls(combinedText).length > 0;
         const shouldTraceInbound = Boolean(text || quotedText) && (isPrefixedCommand || hasGroupInvite);
@@ -464,7 +549,9 @@ async function openWhatsAppSession(
             message.key.remoteJidAlt ??
             message.key.participant ??
             message.key.remoteJid);
-        const contextInfo = message.message?.extendedTextMessage?.contextInfo;
+        const contextInfo = message.message?.extendedTextMessage?.contextInfo as
+          | { quotedMessage?: Record<string, unknown>; participant?: string; mentionedJid?: string[]; stanzaId?: string }
+          | undefined;
         const lidMapping = (
           socket as unknown as {
             signalRepository?: {
@@ -474,16 +561,48 @@ async function openWhatsAppSession(
         ).signalRepository?.lidMapping;
         const resolvePhoneJid = async (candidate?: string): Promise<string | undefined> => {
           if (!candidate) return undefined;
-          if (candidate.endsWith("@lid") || candidate.endsWith("@hosted.lid"))
-            return (await lidMapping?.getPNForLID?.(candidate)) ?? candidate;
-          if (!candidate.includes("@")) return `${candidate.replace(/\D/g, "")}@s.whatsapp.net`;
-          return candidate;
+          const trimmed = candidate.trim();
+          const mapped = trimmed.endsWith("@lid") || trimmed.endsWith("@hosted.lid")
+            ? await lidMapping?.getPNForLID?.(trimmed)
+            : trimmed;
+          return phoneJidFromIdentity(mapped);
         };
+        const resolvedSenderJid = await resolvePhoneJid(senderJid);
+        if (message.key.remoteJid?.endsWith("@g.us") && resolvedSenderJid && message.key.id)
+          trackInboundMessage(workspaceId, sessionId, message.key.remoteJid, resolvedSenderJid, message.key as Record<string, unknown>);
         const quotedSenderJid = await resolvePhoneJid(contextInfo?.participant);
+        const quotedMessageKey = contextInfo?.stanzaId && message.key.remoteJid
+          ? {
+              remoteJid: message.key.remoteJid,
+              id: contextInfo.stanzaId,
+              ...(quotedSenderJid ? { participant: quotedSenderJid } : {}),
+            }
+          : undefined;
         const mentionedJids = await Promise.all(
           (contextInfo?.mentionedJid ?? []).map((candidate) => resolvePhoneJid(candidate)),
         );
 
+        if (!interactionId) void runAntiChecks({
+          workspaceId,
+          sessionId,
+          groupJid: message.key.remoteJid,
+          ...(message.key.id ? { messageId: message.key.id } : {}),
+          senderJid: resolvedSenderJid ?? "",
+          ...(message.key.fromMe ? { fromMe: true } : {}),
+          text,
+          ...(sessionPrefix ? { prefix: sessionPrefix } : {}),
+          ...(quotedText ? { quotedText } : {}),
+          ...(envelope.message ? { message: envelope.message } : {}),
+          ...(message.key ? { rawKey: message.key as Record<string, unknown> } : {}),
+          ...(mentionedJids.filter((value): value is string => Boolean(value)).length
+            ? { mentionedJids: mentionedJids.filter((value): value is string => Boolean(value)) }
+            : {}),
+          ...(inboundMedia?.kind ? { mediaKind: inboundMedia.kind } : {}),
+          ...(inboundMedia?.ptt !== undefined ? { mediaPtt: inboundMedia.ptt } : {}),
+        }).catch((error) => {
+          if (process.env.PAPPY_DEBUG_WA_ANTI === "1")
+            console.warn(`[pappy-omega-mini] isolated Anti System check failed session=${sessionId}:`, error);
+        });
         if (shouldTraceInbound)
           void saveWhatsAppMessageTrace({
             traceId: randomUUID(),
@@ -497,8 +616,8 @@ async function openWhatsAppSession(
             outcome: "received",
             timestamp: receivedAt,
           }).catch(() => undefined);
-        if (!text && !quotedText) continue;
-        if (!isPrefixedCommand && hasGroupInvite) {
+        if (!text && !quotedText) return;
+        if (!interactionId && !isPrefixedCommand && hasGroupInvite) {
           void collectLinks({
             workspaceId,
             text: [text, quotedText].filter(Boolean).join("\n"),
@@ -526,22 +645,24 @@ async function openWhatsAppSession(
               );
             });
         }
-        if (!isPrefixedCommand && sessionPrefix) continue;
+        if (!interactionId && !isPrefixedCommand && sessionPrefix) return;
         if (process.env.PAPPY_DEBUG_WA_COMMANDS === "1")
           console.info(
             `[pappy-omega-mini] WhatsApp command candidate session=${sessionId} chat=${message.key.remoteJid} text=${JSON.stringify(text.slice(0, 160))}`,
           );
-        void routeWhatsAppText({
-          workspaceId,
-          sessionId,
-          ...(messageKey.id ? { messageId: messageKey.id } : {}),
-          chatJid: message.key.remoteJid,
-          senderJid,
-          ...(quotedSenderJid ? { quotedSenderJid } : {}),
-          ...(mentionedJids.filter((value): value is string => Boolean(value)).length
+        void           routeWhatsAppText({
+            workspaceId,
+            sessionId,
+            ...(messageKey.id ? { messageId: messageKey.id } : {}),
+            chatJid: message.key.remoteJid,
+            senderJid,
+            ...(quotedSenderJid ? { quotedSenderJid } : {}),
+            ...(quotedMessageKey ? { quotedMessageKey } : {}),
+            ...(mentionedJids.filter((value): value is string => Boolean(value)).length
             ? { mentionedJids: mentionedJids.filter((value): value is string => Boolean(value)) }
             : {}),
-          text,
+          text: interactionId ? "" : text,
+          ...(interactionId ? { interactionId } : {}),
           ...(message.key.fromMe ? { fromMe: true } : {}),
           ...(quotedText ? { quotedText } : {}),
           ...(inboundMedia ? { media: inboundMedia } : {}),
@@ -622,10 +743,14 @@ async function openWhatsAppSession(
                     mimetype: mediaReply.media.mimeType,
                     ...(mediaReply.media.kind === "video" ? { fileName: mediaReply.media.fileName } : {}),
                     ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
+                    ...(mediaReply.nativeTable ? { nativeTable: mediaReply.nativeTable } : {}),
+                    ...(mediaReply.mentions?.length ? { mentions: mediaReply.mentions } : {}),
                   }
                 : {
                     ...(mediaReply.text ? { text: mediaReply.text } : {}),
                     ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
+                    ...(mediaReply.nativeTable ? { nativeTable: mediaReply.nativeTable } : {}),
+                    ...(mediaReply.mentions?.length ? { mentions: mediaReply.mentions } : {}),
                   };
               try {
                 await sendTrackedMessage(jid, content);
@@ -633,13 +758,13 @@ async function openWhatsAppSession(
                 const reason = error instanceof Error ? error.message : String(error);
                 if (!mediaReply.nativeFlow) throw error;
                 // nativeFlow is an optional enhancement; a rejected extension must never suppress the command reply.
-                const { nativeFlow: _nativeFlow, ...plainContent } = content;
+                const { nativeFlow: _nativeFlow, nativeTable: _nativeTable, ...plainContent } = content;
                 await sendTrackedMessage(jid, plainContent).catch((fallbackError) => {
                   throw new Error(`${reason}; plain-text fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
                 });
               }
             };
-            if (mediaReply.media || mediaReply.text || mediaReply.nativeFlow) {
+            if (mediaReply.media || mediaReply.text || mediaReply.nativeFlow || mediaReply.mentions?.length) {
               void deliverObjectReply()
                 .then(() =>
                   saveWhatsAppMessageTrace({
@@ -695,7 +820,50 @@ async function openWhatsAppSession(
               timestamp: Date.now(),
             }).catch(() => undefined);
           });
+          },
+          onDrop: () => noteError(key, "Inbound admission queue full; event dropped."),
+        });
       }
+    },
+  );
+
+  socket.ev.on(
+    "group-participants.update",
+    (update: {
+      id?: string;
+      participants?: string[];
+      action?: string;
+      author?: string;
+    }) => {
+      if (!isCurrentSocket()) return;
+      if (update.action !== "promote" && update.action !== "demote") return;
+      const participantAction: "promote" | "demote" = update.action;
+      const groupJid = update.id ?? "";
+      const participants = (update.participants ?? []).filter((value): value is string => typeof value === "string" && value.length > 0);
+      if (!groupJid || !participants.length) return;
+      void (async () => {
+        const lidMapping = (socket as unknown as { signalRepository?: { lidMapping?: { getPNForLID?: (lid: string) => Promise<string | null> } } }).signalRepository?.lidMapping;
+        const resolveEventIdentity = async (candidate: string): Promise<string | undefined> => {
+          const mapped = candidate.endsWith("@lid") || candidate.endsWith("@hosted.lid")
+            ? await lidMapping?.getPNForLID?.(candidate)
+            : candidate;
+          return phoneJidFromIdentity(mapped);
+        };
+        const resolvedParticipants = (await Promise.all(participants.map(resolveEventIdentity))).filter((value): value is string => Boolean(value));
+        if (!resolvedParticipants.length) return;
+        const resolvedAuthor = update.author ? await resolveEventIdentity(update.author) : undefined;
+        await runAntiParticipantEvent({
+          workspaceId,
+          sessionId,
+          groupJid,
+          participants: resolvedParticipants,
+          action: participantAction,
+          ...(resolvedAuthor ? { author: resolvedAuthor } : {}),
+        });
+      })().catch((error) => {
+        if (process.env.PAPPY_DEBUG_WA_ANTI === "1")
+          console.warn(`[pappy-omega-mini] isolated Anti participant check failed session=${sessionId}:`, error);
+      });
     },
   );
 
@@ -705,6 +873,7 @@ async function openWhatsAppSession(
       connection?: string;
       lastDisconnect?: { error?: { output?: { statusCode?: number } } };
     }) => {
+      if (!isCurrentSocket()) return;
       if (update.connection === "open") {
         console.log(
           `[pappy-omega-mini] WhatsApp authenticated open workspace=${workspaceId} session=${sessionId}`,
@@ -717,20 +886,26 @@ async function openWhatsAppSession(
           sessionId,
           intervalMs: 10_000,
           probe: async () => {
+            if (!isCurrentSocket())
+              throw new Error("WhatsApp socket generation is no longer current.");
             if (socket.ws && socket.ws.isOpen === false)
               throw new Error("WhatsApp websocket is closed.");
-            const probe = (
-              socket as RuntimeSocket & {
-                sendPresenceUpdate?: (presence: string) => Promise<void>;
+            // A passive socket/lifecycle check is the default. Presence updates
+            // are opt-in because heartbeat traffic must not become account traffic.
+            if (process.env.PAPPY_WA_HEARTBEAT_SEND_PRESENCE === "1") {
+              const probe = (
+                socket as RuntimeSocket & {
+                  sendPresenceUpdate?: (presence: string) => Promise<void>;
+                }
+              ).sendPresenceUpdate;
+              if (typeof probe === "function") {
+                await probe.call(socket, "available");
+                if (socket.ws && socket.ws.isOpen === false)
+                  throw new Error("WhatsApp websocket closed during heartbeat.");
+                return;
               }
-            ).sendPresenceUpdate;
-            if (typeof probe === "function") {
-              await probe.call(socket, "available");
-              if (socket.ws && socket.ws.isOpen === false)
-                throw new Error("WhatsApp websocket closed during heartbeat.");
-              return;
             }
-            if (!runtimes.has(key))
+            if (!runtimes.has(key) || runtimes.get(key)?.socket !== socket)
               throw new Error("WhatsApp socket is no longer registered.");
           },
           onFailure: (error) => {
@@ -747,34 +922,47 @@ async function openWhatsAppSession(
               // The connection.update close handler owns reconnect scheduling.
             }
           },
-        });
-        updateSession(workspaceId, sessionId, {
-          status: "ACTIVE",
-          connectedAt: Date.now(),
-          lastHealthyAt: Date.now(),
-          socketGeneration: getLifecycleState(key).socketGeneration,
-          reconnectCount: 0,
-          authHealth: "VALID",
-          lastError: undefined,
-          disconnectReason: undefined,
-          workerNodeId: process.env.HOSTNAME ?? `pid-${process.pid}`,
-        });
-        const chatId = pairingNotifications.get(key);
-        const selfJid = (socket as unknown as { user?: { id?: string } }).user?.id;
-        if (pendingWhatsAppPairingNotice.has(key) && selfJid) {
-          pendingWhatsAppPairingNotice.delete(key);
-          void sendTrackedMessage(selfJid, {
-            text: "✦ PAPPY OMEGA MINI · CONNECTED\\n\\nYour WhatsApp session is now connected and ready.\\n\\nStatus · ACTIVE · VALID\\nTransport · Baileys multi-device\\nAction · Commands are ready.",
-          }).catch(() => undefined);
-        }
-        if (chatId && pairingNotifier) {
-          pairingNotifications.delete(key);
-          void pairingNotifier(
-            chatId,
-            `🟢 <b>WhatsApp Session Connected</b>\n\n<blockquote><b>Session:</b> <code>${sessionId.slice(0, 12)}</code>\n<b>Status:</b> ACTIVE · VALID\n<b>Transport:</b> Baileys multi-device\n<b>Action:</b> Ready to receive commands</blockquote>\n\nOpen <b>Workload</b> or <b>Sessions</b> to manage this connection.`,
-          ).catch(() => undefined);
-        }
-        return;
+          });
+          if (stableOpenTimer) clearTimeout(stableOpenTimer);
+          updateSession(workspaceId, sessionId, {
+            status: "RECONNECTING",
+            connectedAt: Date.now(),
+            socketGeneration: getLifecycleState(key).socketGeneration,
+            reconnectCount: 0,
+            authHealth: "DEGRADED",
+            lastError: undefined,
+            disconnectReason: "transport opened; awaiting stable connection check",
+            workerNodeId: process.env.HOSTNAME ?? `pid-${process.pid}`,
+          });
+          stableOpenTimer = setTimeout(() => {
+            stableOpenTimer = undefined;
+            const lifecycle = getLifecycleState(key);
+            if (!isCurrentSocket() || lifecycle.stopping || socket.ws?.isOpen === false) return;
+            updateSession(workspaceId, sessionId, {
+              status: "ACTIVE",
+              lastHealthyAt: Date.now(),
+              authHealth: "VALID",
+              lastError: undefined,
+              disconnectReason: undefined,
+            });
+            const chatId = pairingNotifications.get(key);
+            const selfJid = (socket as unknown as { user?: { id?: string } }).user?.id;
+            if (pendingWhatsAppPairingNotice.has(key) && selfJid) {
+              pendingWhatsAppPairingNotice.delete(key);
+              void sendTrackedMessage(selfJid, {
+                text: "✦ PAPPY OMEGA MINI · CONNECTED\\n\\nYour WhatsApp session is now connected and ready.\\n\\nStatus · ACTIVE · VALID\\nTransport · Baileys multi-device\\nAction · Commands are ready.",
+              }).catch(() => undefined);
+            }
+            if (chatId && pairingNotifier) {
+              pairingNotifications.delete(key);
+              void pairingNotifier(
+                chatId,
+                `🟢 <b>WhatsApp Session Connected</b>\\n\\n<blockquote><b>Session:</b> <code>${sessionId.slice(0, 12)}</code>\\n<b>Status:</b> ACTIVE · VALID\\n<b>Transport:</b> Baileys multi-device\\n<b>Action:</b> Ready to receive commands</blockquote>\\n\\nOpen <b>Workload</b> or <b>Sessions</b> to manage this connection.`,
+              ).catch(() => undefined);
+            }
+          }, 5_000);
+          stableOpenTimer.unref?.();
+          return;
       }
       if (update.connection !== "close") return;
       const classification = classifyDisconnect(update.lastDisconnect?.error);
@@ -783,7 +971,13 @@ async function openWhatsAppSession(
       );
       const code = classification.code;
       const terminal = classification.terminal;
+      const currentRuntime = runtimes.get(key);
+      if (currentRuntime?.socket !== socket) return;
       markClosed(key);
+      if (stableOpenTimer) {
+        clearTimeout(stableOpenTimer);
+        stableOpenTimer = undefined;
+      }
       runtimes.delete(key);
       const ownedLock = sessionLocks.get(key);
       sessionLocks.delete(key);
@@ -830,6 +1024,7 @@ async function openWhatsAppSession(
 
   runtimes.set(key, {
     socket,
+    generation: socketGeneration,
     stop: () => socket.end(),
     flushAuth: () => authStore.flush(),
   });
@@ -1010,7 +1205,7 @@ export function getWhatsAppSocket(
 export async function purgeWhatsAppSession(
   workspaceId: string,
   sessionId: string,
-): Promise<{ jobs: number; links: number; traces: number; remoteCleanup: "CONFIRMED" | "UNREACHABLE" }> {
+): Promise<{ jobs: number; links: number; traces: number; autoPromoteConfigs: number; autoPromoteRuns: number; remoteCleanup: "CONFIRMED" | "UNREACHABLE" }> {
   const session = getSession(workspaceId, sessionId);
   let remoteCleanup: "CONFIRMED" | "UNREACHABLE" = "CONFIRMED";
   if (session.workloadWorkerId) {
@@ -1031,14 +1226,16 @@ export async function purgeWhatsAppSession(
       import("../jobs/runtime.js"),
       import("../persistence/mongo.js"),
     ]);
-  const runtimeData = await purgeRuntimeSessionData(workspaceId, sessionId);
-  const traces = await purgeWhatsAppSessionTraces(workspaceId, sessionId);
   await rm(join(env.SESSION_ROOT, workspaceId, sessionId), {
     recursive: true,
     force: true,
   });
   resetWhatsAppSessionLifecycle(workspaceId, sessionId);
+  // Remove the registry record before Auto Promote reconciliation so the
+  // scheduler cannot observe this session as ACTIVE and recreate a run.
   await deleteSession(workspaceId, sessionId);
+  const runtimeData = await purgeRuntimeSessionData(workspaceId, sessionId);
+  const traces = await purgeWhatsAppSessionTraces(workspaceId, sessionId);
   return { ...runtimeData, traces, remoteCleanup };
 }
 

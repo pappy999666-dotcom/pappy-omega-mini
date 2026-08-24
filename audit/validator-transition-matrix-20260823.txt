@@ -1,0 +1,20 @@
+344:            await buckets.move(GLOBAL_VALIDATOR_SCOPE, canonicalUrl, "validating", {
+393:          const movedActive = await buckets.move(
+498:                    await buckets.move(GLOBAL_VALIDATOR_SCOPE, batchCanonical, "main", {
+554:            bucket: "main",
+804:          await buckets.move(
+826:          await buckets.move(
+849:          await buckets.move(
+894:          await buckets.move(
+922:          await buckets.move(
+1412:        await buckets.move(GLOBAL_VALIDATOR_SCOPE, record.canonicalUrl, "main", {
+1593:              await buckets.move(GLOBAL_VALIDATOR_SCOPE, url, "main", {
+241:  async claimMainForValidation(
+91:export async function mergeValidatorBuckets(
+101:      const next = await store.move(workspaceId, record.canonicalUrl, "main", {
+141:      if (await store.claimMainForValidation(workspaceId, canonicalUrl, sourceSessionId, validationLeaseToken))
+148:export async function requeueValidatorMainLinks(
+163:      const next = await store.move(workspaceId, canonicalUrl, "main", {
+176:export async function requeueLegacyValidatorErrors(
+183:      const next = await store.move(workspaceId, record.canonicalUrl, "main", {
+94:        bucket: "main",

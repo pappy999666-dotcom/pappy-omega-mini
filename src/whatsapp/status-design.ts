@@ -9,41 +9,52 @@ export interface GroupStatusDesign {
   title: string;
 }
 
-// Bright opaque colors only. The Baileys fork accepts six-digit #RRGGBB
-// values and converts them to the status canvas color.
+// Saturated, readable colors for WhatsApp status canvases. None is black or
+// transparent, and the palette is deliberately varied per group/execution.
 const BACKGROUNDS = [
+  "#6D5DFB",
+  "#C2509E",
+  "#0EA5A8",
+  "#D97706",
+  "#DB2777",
   "#2563EB",
   "#7C3AED",
-  "#C026D3",
-  "#DB2777",
-  "#EA580C",
-  "#D97706",
-  "#16A34A",
-  "#0D9488",
-  "#0891B2",
+  "#0F766E",
+  "#BE185D",
   "#4F46E5",
+  "#B45309",
+  "#0891B2",
 ] as const;
 
-// Keep the story composition compact: one title, one framed payload, and no
-// repeated preview title. The original URL remains in the body for matching.
-const TEXT_TEMPLATES = [
-  (title: string, body: string) =>
-    `╭────── ✦ ${title} ✦ ──────╮\n\n${body}\n\n╰───────────────╯`,
-  (title: string, body: string) =>
-    `┌───── ♡ ${title} ♡ ─────┐\n\n        ${body}\n\n└────────────────────┘`,
-  (title: string, body: string) =>
-    `⌜────── ${title} ──────⌝\n\n      ${body}\n\n⌞────────────────⌟`,
-  (title: string, body: string) =>
-    `╭─── ◈ ${title} ◈ ───╮\n\n${body}\n\n╰─────────────────╯`,
-] as const;
-
+// These are intentionally compact and Unicode-only. The URL remains in the
+// body so the native preview resolver can still match the exact source URL.
 const URL_TEMPLATES = [
   (title: string, body: string) =>
-    `╭──── ✦ ${title} ✦ ────╮\n\n${body}\n\n╰────── ⟡ ──────╯`,
+    `┈┈┈ 𓍢ִ໋✧ ${title} ✧𓍢ִ໋ ┈┈┈\n   ${body}\n┈┈┈┈┈┈┈ ₊˚⊹ ┈┈┈┈┈┈┈`,
   (title: string, body: string) =>
-    `┌─── ♡ ${title} ♡ ───┐\n\n${body}\n\n└─────── ✧ ───────┘`,
+    `˚.✦ ── ${title} ── ✦.˚\n   ${body}\n˚.✦ ────── ⋆ ────── ✦.˚`,
   (title: string, body: string) =>
-    `⌜──── ${title} ────⌝\n\n   ${body}\n\n⌞──── OPEN LINK ────⌟`,
+    `─── ᰔ Ɛゝ ${title} Ɛゝ ᰔ ───\n   ${body}\n───────── 𖦹 ─────────`,
+  (title: string, body: string) =>
+    `╭─ Ɛゝ ${title} Ϧ3 ─╮\n   ${body}\n╰─── ⋆⋅☆⋅⋆ ───╯`,
+  (title: string, body: string) =>
+    `┈─𓏲 ${title} 𓏲─┈\n   ${body}\n┈─┈─ ᰔ ─┈─┈`,
+  (title: string, body: string) =>
+    `⟡─── Ɛゝ ${title} ───⟡\n   ${body}\n⟡──────── ✧ ────────⟡`,
+  (title: string, body: string) =>
+    `⋆˚࿔ ${title} ࿔˚⋆\n   ${body}\n───── ⋆⋅☆⋅⋆ ─────`,
+  (title: string, body: string) =>
+    `.・゜-: ✧ ${title} ✧ :-゜・.\n   ${body}\n.・゜-: ─────── :-゜・.`,
+  (title: string, body: string) =>
+    `~〜~ ✧ ${title} ✧ ~〜~\n   ${body}\n~〜~〜~〜 𖦹 ~〜~〜~〜`,
+] as const;
+
+// Kept for direct callers that request a text design. Production d-status
+// paths intentionally bypass this mode when no URL is present.
+const TEXT_TEMPLATES = [
+  (title: string, body: string) => `✧ ${title} ✧\n${body}`,
+  (title: string, body: string) => `ᰔ ${title} ᰔ\n${body}`,
+  (title: string, body: string) => `⟡ ${title} ⟡\n${body}`,
 ] as const;
 
 function hash(input: string): number {
@@ -64,6 +75,10 @@ function hasHttpUrl(text: string): boolean {
   return /https?:\/\/\S+/i.test(text);
 }
 
+function indentBody(text: string): string {
+  return text.replace(/\r?\n/g, "\n   ");
+}
+
 export function createGroupStatusDesign(input: {
   groupName: string;
   text: string;
@@ -79,7 +94,7 @@ export function createGroupStatusDesign(input: {
   const template = templates[value % templates.length] ?? templates[0];
   const backgroundColor = BACKGROUNDS[(value >>> 8) % BACKGROUNDS.length] ?? BACKGROUNDS[0];
   return {
-    text: template(title, sourceText || " "),
+    text: template(title, mode === "url" ? indentBody(sourceText) : sourceText || " "),
     backgroundColor,
     textColor: "#FFFFFF",
     font: value % 10,

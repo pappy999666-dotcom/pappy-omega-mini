@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
 import type { Context, Telegraf } from "telegraf";
 import { env } from "../config/env.js";
-import { btn, keyboard, pageText, ui } from "./ui.js";
+import { btn, keyboard, pageText, telegramCommandUsageCardText, ui } from "./ui.js";
 import {
   escapeHtml,
   infoResponse,
@@ -286,6 +286,13 @@ export function startModeratorReconciliation(bot: Telegraf<Context>): void {
 export function stopModeratorReconciliation(): void {
   if (moderatorReconciliationTimer) clearInterval(moderatorReconciliationTimer);
   moderatorReconciliationTimer = undefined;
+}
+
+export async function closeModeratorProtectionRedis(): Promise<void> {
+  const client = protectionRedis;
+  protectionRedis = undefined;
+  if (!client) return;
+  await client.quit().catch(() => undefined);
 }
 
 export function installModeratorProtection(bot: Telegraf<Context>): void {
@@ -842,7 +849,7 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     }
     if (!group || !target) {
       await ctx.reply(
-        "Reply to a member or provide a numeric Telegram user ID. Usage: /mute 600",
+        telegramCommandUsageCardText({ title: "Mute Command", command: "/mute", syntax: "/mute <seconds> [reply or Telegram user ID]", acceptedTargets: ["Reply · Reply to the member's message", "Telegram ID · Explicit numeric Telegram user ID"], examples: ["/mute 600"], note: "Group-wide mute uses /mute all and requires moderator permissions." }),
       );
       return;
     }
@@ -1193,7 +1200,7 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     }
     if (!target) {
       await ctx.reply(
-        "Reply to a member or provide a numeric Telegram user ID. Usage: /unmute",
+        telegramCommandUsageCardText({ title: "Unmute Command", command: "/unmute", syntax: "/unmute [all] [reply or Telegram user ID]", acceptedTargets: ["Reply · Reply to the member's message", "Telegram ID · Explicit numeric Telegram user ID"], examples: ["/unmute all"], note: "Use /unmute all to restore group-wide sending." }),
       );
       return;
     }
@@ -1218,7 +1225,7 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     const target = targetId(ctx);
     if (!group || !target) {
       await ctx.reply(
-        "Reply to a member or provide a numeric Telegram user ID. Usage: /warn reason",
+        telegramCommandUsageCardText({ title: "Warn Command", command: "/warn", syntax: "/warn <reason> [reply or Telegram user ID]", acceptedTargets: ["Reply · Reply to the member's message", "Telegram ID · Explicit numeric Telegram user ID"], examples: ["/warn Repeated spam"], note: "Warnings are recorded for the current Telegram group." }),
       );
       return;
     }
@@ -1357,7 +1364,7 @@ export function installModeratorCommands(bot: Telegraf<Context>): void {
     if (!group) return;
     const text = args(ctx).join(" ").trim();
     if (!text) {
-      await ctx.reply("Usage: /setrules your group rules");
+      await ctx.reply(telegramCommandUsageCardText({ title: "Set Rules", command: "/setrules", syntax: "/setrules <your group rules>", examples: ["/setrules Be respectful and follow the group topic."], note: "Rules are saved for the current Telegram group." }));
       return;
     }
     group.rulesDraft = text.slice(0, 4000);

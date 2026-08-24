@@ -1,5 +1,6 @@
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
+import { attachRedisErrorHandler } from "../core/redis-events.js";
 import {
   LinkBucketStore,
   type LinkBucket,
@@ -12,10 +13,13 @@ export type ValidatorBucket = Exclude<LinkBucket, "master">;
 async function withStore<T>(
   fn: (store: LinkBucketStore) => Promise<T>,
 ): Promise<T> {
-  const redis = new Redis(env.REDIS_URL, {
-    maxRetriesPerRequest: 1,
-    connectTimeout: 1200,
-  });
+  const redis = attachRedisErrorHandler(
+    new Redis(env.REDIS_URL, {
+      maxRetriesPerRequest: 1,
+      connectTimeout: 1200,
+    }),
+    "validator-operation",
+  );
   const store = new LinkBucketStore(redis);
   try {
     return await fn(store);
@@ -88,11 +92,10 @@ export async function mergeValidatorBuckets(
   workspaceId: string,
 ): Promise<number> {
   return withStore(async (store) => {
-    const records = [
-      ...(await listFromStore(store, workspaceId, "validating")),
-      ...(await listFromStore(store, workspaceId, "active")),
-      ...(await listFromStore(store, workspaceId, "error")),
-    ];
+    // Active is a verified terminal bucket for validation. It must never be
+    // drained by a maintenance/requeue action; the guard owns stale leases and
+    // retryable failures remain the only manual requeue candidates.
+    const records = await listFromStore(store, workspaceId, "error");
     let moved = 0;
     for (const record of records) {
       const next = await store.move(workspaceId, record.canonicalUrl, "main", {

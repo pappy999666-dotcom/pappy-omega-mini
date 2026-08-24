@@ -9,6 +9,7 @@ import {
 } from "../config/env.js";
 import { assertOperationAllowed } from "../core/control-plane.js";
 import { getSession } from "../core/session-registry.js";
+import { attachRedisErrorHandler } from "../core/redis-events.js";
 import type {
   JobKind,
   JobProgress,
@@ -29,6 +30,7 @@ const STALE_ACTIVE_JOB_GRACE_MS = 60_000;
 const WORKER_LOCK_DURATION_MS = 30 * 60_000;
 const WORKER_LOCK_RENEW_MS = 10_000;
 const WORKER_STALLED_INTERVAL_MS = 120_000;
+const PROCESS_WORKER_ID = `${isWorkerProcess ? "worker" : "control"}:${process.pid}`;
 
 export class RedisJobStore {
   constructor(private readonly redis: Redis) {}
@@ -141,10 +143,13 @@ export class JobOrchestrator {
   private reaperBusy = false;
 
   constructor(concurrency = env.QUEUE_CONCURRENCY) {
-    this.redis = new Redis(env.REDIS_URL, {
-      maxRetriesPerRequest: null,
-      enableReadyCheck: true,
-    });
+    this.redis = attachRedisErrorHandler(
+      new Redis(env.REDIS_URL, {
+        maxRetriesPerRequest: null,
+        enableReadyCheck: true,
+      }),
+      "job-orchestrator",
+    );
     this.store = new RedisJobStore(this.redis);
     this.joinResults = new JoinResultStore(this.redis);
     const defaultJobOptions = { removeOnComplete: false, removeOnFail: false };
@@ -409,7 +414,9 @@ export class JobOrchestrator {
     workspaceId: string,
     code: string,
   ): Promise<JobRecord | undefined> {
-    return this.store.getByCode(workspaceId, code.trim().toUpperCase());
+    const record = await this.store.getByCode(workspaceId, code.trim().toUpperCase());
+    if (!record) return undefined;
+    return (await this.reconcileWorkerLocalBroadcast(record).catch(() => undefined)) ?? record;
   }
 
   async listRecent(limit = 100): Promise<JobRecord[]> {
@@ -450,7 +457,7 @@ export class JobOrchestrator {
       error: reason,
       heartbeatAt: now,
     });
-    await this.queueForKind(record.kind).add(
+    await this.queueForRecord(record).add(
       `${record.kind}:inceptor-recovery`,
       { ...record, state: "QUEUED", attempts: Math.min(record.maxAttempts, record.attempts + 1) },
       {
@@ -637,7 +644,9 @@ export class JobOrchestrator {
 
   async close(): Promise<void> {
     clearInterval(this.reaperTimer);
-    await Promise.all([this.worker.close(), this.broadcastWorker.close(), this.panelBroadcastWorker.close(), this.validatorWorker.close()]);
+    // Do not wait for long-running handlers during process shutdown. Their durable
+    // records remain recoverable by the next process after the lease expires.
+    await Promise.all([this.worker.close(true), this.broadcastWorker.close(true), this.panelBroadcastWorker.close(true), this.validatorWorker.close(true)]);
     await Promise.all(this.allQueues().map((queue) => queue.close()));
     for (const hook of this.closeHooks) await hook();
     await this.redis.quit();
@@ -654,11 +663,16 @@ export class JobOrchestrator {
     assertOperationAllowed(operationFor(record.kind));
     const handler = this.handlers.get(record.kind);
     if (!handler) throw new Error(`No worker registered for ${record.kind}.`);
+    const startedAt = Date.now();
+    const leaseToken = `${PROCESS_WORKER_ID}:${record.jobId}:${startedAt}`;
     await this.store.update(record.jobId, {
       state: "RUNNING",
       attempts: Math.max(record.attempts, bullJob.attemptsMade + 1),
-      startedAt: Date.now(),
-      heartbeatAt: Date.now(),
+      startedAt,
+      heartbeatAt: startedAt,
+      workerId: PROCESS_WORKER_ID,
+      leaseToken,
+      leaseExpiresAt: startedAt + WORKER_LOCK_DURATION_MS,
     });
     await this.store.clearError(record.jobId);
     const controller = new AbortController();
@@ -688,9 +702,11 @@ export class JobOrchestrator {
           ...progress,
           elapsedMs: Date.now() - (current.startedAt ?? Date.now()),
         };
+        const heartbeatAt = Date.now();
         await this.store.update(record.jobId, {
           progress: nextProgress,
-          heartbeatAt: Date.now(),
+          heartbeatAt,
+          leaseExpiresAt: heartbeatAt + WORKER_LOCK_DURATION_MS,
           ...(patch?.payload ? { payload: patch.payload } : {}),
         });
         await bullJob.updateProgress(nextProgress);
@@ -704,10 +720,12 @@ export class JobOrchestrator {
           ? "PARTIAL"
           : "COMPLETED";
       await context.report(result);
+      const completedAt = Date.now();
       await this.store.update(record.jobId, {
         state: finalState,
-        completedAt: Date.now(),
-        heartbeatAt: Date.now(),
+        completedAt,
+        heartbeatAt: completedAt,
+        leaseExpiresAt: completedAt,
         cancellationRequested: context.isCancellationRequested(),
       });
       if (finalState === "COMPLETED") await this.store.clearError(record.jobId);
@@ -757,10 +775,10 @@ export class JobOrchestrator {
       failed: progress.failed,
       skipped: progress.skipped,
       elapsedMs: Math.max(0, Date.now() - (record.startedAt ?? record.createdAt)),
-      currentAction: progress.state.toLowerCase(),
+      currentAction: progress.currentAction ?? (progress.state === "WAITING_FOR_SESSION" ? "waiting for WhatsApp reconnect" : progress.state.toLowerCase()),
       ...(progress.currentGroup ? { currentGroup: progress.currentGroup } : {}),
       ...(progress.nextActionAt ? { nextActionAt: progress.nextActionAt } : {}),
-      ...(progress.error ? { lastResult: progress.error } : { lastResult: `Worker-local ${record.kind} progress: ${progress.completed}/${progress.totalGroups * repeat}.` }),
+      lastResult: progress.lastResult ?? progress.error ?? `Worker-local ${record.kind} progress: ${progress.completed}/${progress.totalGroups * repeat}.`,
     };
     const terminal = ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(progress.state);
     const nextState: JobRecord["state"] = terminal
@@ -921,7 +939,8 @@ function operationFor(
     kind === "cleanup" ||
     kind === "preview-hydration" ||
     kind === "media-processing" ||
-    kind === "group-sync"
+    kind === "group-sync" ||
+    kind === "group-control"
   )
     return "massSend";
   if (

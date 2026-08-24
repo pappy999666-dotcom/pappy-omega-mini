@@ -1,0 +1,631 @@
+# Telegram Surface Delta
+
+Generated from Omega-V1 reference files and current PAPPY files. Omega: 12 files, 206 literal callbacks, 10 regex callbacks, 150 exported functions. PAPPY: 4 files, 267 literal callbacks, 76 regex callbacks, 93 exported functions.
+
+## Omega-V1 literal callback values not present verbatim in PAPPY
+
+- `${kind === `
+- `admin:allsessions`
+- `admin:allsessions:${page + 1}`
+- `admin:allsessions:${page - 1}`
+- `admin:autopromo`
+- `admin:autopromo:clear`
+- `admin:autopromo:rm:${i}`
+- `admin:autopromo:set`
+- `admin:ban:${telegramId}`
+- `admin:defaults`
+- `admin:defaults:mode`
+- `admin:defaults:prefix`
+- `admin:defaults:timezone`
+- `admin:idea:${i.id}`
+- `admin:idea:${ideaId}:complete`
+- `admin:idea:${ideaId}:delete`
+- `admin:idea:${ideaId}:reply`
+- `admin:ideas:${page + 1}`
+- `admin:ideas:${page - 1}`
+- `admin:ideas:0`
+- `admin:inspect:${telegramId}`
+- `admin:logs`
+- `admin:maintenance:off`
+- `admin:maintenance:on`
+- `admin:master:bucket`
+- `admin:menuurl`
+- `admin:menuurl:add`
+- `admin:menuurl:changeurl:${buttonId}`
+- `admin:menuurl:delete:${buttonId}`
+- `admin:menuurl:down:${b.id}`
+- `admin:menuurl:edit:${b.id}`
+- `admin:menuurl:manage`
+- `admin:menuurl:rename:${buttonId}`
+- `admin:menuurl:toggle:${buttonId}`
+- `admin:menuurl:up:${b.id}`
+- `admin:omni`
+- `admin:omniowner`
+- `admin:pause:off`
+- `admin:pause:on`
+- `admin:plugins`
+- `admin:purge_sessions:${telegramId}`
+- `admin:release:menu`
+- `admin:release:setuser`
+- `admin:release:toggle:off`
+- `admin:release:toggle:on`
+- `admin:stats`
+- `admin:tutorials`
+- `admin:tutorials:add`
+- `admin:tutorials:del:${t.command}`
+- `admin:tutorials:preview:gameapi`
+- `admin:tutorials:type:image`
+- `admin:tutorials:type:video`
+- `admin:unban:${telegramId}`
+- `admin:update`
+- `admin:user:${u.telegramId}`
+- `admin:users:0`
+- `bridge:exit`
+- `bucket:downloads:active`
+- `bucket:downloads:dead`
+- `bucket:downloads:error`
+- `bucket:downloads:main`
+- `bucket:export:${bucket}:html`
+- `bucket:export:${bucket}:merge`
+- `bucket:export:${bucket}:txt`
+- `bucket:live:back`
+- `bucket:live:stop`
+- `bucket:page:${bucket}:${page + 1}`
+- `bucket:page:${bucket}:${page - 1}`
+- `bucket:purge:error:confirm`
+- `bucket:purge:master`
+- `bucket:purge:master:confirm`
+- `bucket:refresh`
+- `gcbridge:${sessionId}:${gcKey}`
+- `gcbridge:${sessionId}:${gcKey}:exit`
+- `gcset:${sessionId}:${gcKey}`
+- `gcset:${sessionId}:${gcKey}:approval:off`
+- `gcset:${sessionId}:${gcKey}:approval:on`
+- `gcset:${sessionId}:${gcKey}:approverequests`
+- `gcset:${sessionId}:${gcKey}:approverequests:all`
+- `gcset:${sessionId}:${gcKey}:approverequests:byamount`
+- `gcset:${sessionId}:${gcKey}:approverequests:bycountry`
+- `gcset:${sessionId}:${gcKey}:blockall`
+- `gcset:${sessionId}:${gcKey}:demote`
+- `gcset:${sessionId}:${gcKey}:demoteall`
+- `gcset:${sessionId}:${gcKey}:desc`
+- `gcset:${sessionId}:${gcKey}:getpfp`
+- `gcset:${sessionId}:${gcKey}:invitelink`
+- `gcset:${sessionId}:${gcKey}:kickadmins`
+- `gcset:${sessionId}:${gcKey}:kickall`
+- `gcset:${sessionId}:${gcKey}:leave`
+- `gcset:${sessionId}:${gcKey}:memberadd:off`
+- `gcset:${sessionId}:${gcKey}:memberadd:on`
+- `gcset:${sessionId}:${gcKey}:name`
+- `gcset:${sessionId}:${gcKey}:pfp`
+- `gcset:${sessionId}:${gcKey}:promote`
+- `gcset:${sessionId}:${storeGcJid(sessionId, g.id)}`
+- `gcset:${sessionId}:${storeGcJid(sessionId, groupJid)}`
+- `help:stickers`
+- `idea:submit`
+- `pair:code:${sessionId}`
+- `pair:qr:${sessionId}`
+- `session:${entry.sessionId}:plugins`
+- `session:${s.id}:menu`
+- `session:${s.sessionId}:menu`
+- `session:${sessionId}:aigroup`
+- `session:${sessionId}:aigroup:add:${token}`
+- `session:${sessionId}:aigroup:bot:${token}`
+- `session:${sessionId}:aigroup:invite:${token}`
+- `session:${sessionId}:aigroup:leave:${token}`
+- `session:${sessionId}:aigroup:revoke:${token}`
+- `session:${sessionId}:aigroup:select:${aiGroupToken(group.jid)}`
+- `session:${sessionId}:aigroup:status:${token}`
+- `session:${sessionId}:autopromo`
+- `session:${sessionId}:autopromo:cancel`
+- `session:${sessionId}:autopromo:rm:${i}`
+- `session:${sessionId}:autopromo:set`
+- `session:${sessionId}:bridge`
+- `session:${sessionId}:creategc`
+- `session:${sessionId}:freeze`
+- `session:${sessionId}:gameapi`
+- `session:${sessionId}:gameapi:setup`
+- `session:${sessionId}:gameapi:test`
+- `session:${sessionId}:gameapi:tutorial`
+- `session:${sessionId}:groups`
+- `session:${sessionId}:groups:${page + 1}`
+- `session:${sessionId}:groups:${page - 1}`
+- `session:${sessionId}:info`
+- `session:${sessionId}:join:setbatch`
+- `session:${sessionId}:join:setdelay`
+- `session:${sessionId}:join:setlimit`
+- `session:${sessionId}:leavegc`
+- `session:${sessionId}:mygroups`
+- `session:${sessionId}:mygroups:${page + 1}`
+- `session:${sessionId}:mygroups:${page - 1}`
+- `session:${sessionId}:pfp:get`
+- `session:${sessionId}:pfp:remove`
+- `session:${sessionId}:pfp:set`
+- `session:${sessionId}:plugin:${manifest.enabled ? `
+- `session:${sessionId}:plugin:install`
+- `session:${sessionId}:plugin:reload:${manifest.id}`
+- `session:${sessionId}:plugin:remove:${manifest.id}`
+- `session:${sessionId}:plugins`
+- `session:${sessionId}:purge`
+- `session:${sessionId}:reinit`
+- `session:${sessionId}:setbio`
+- `session:${sessionId}:setname`
+- `session:${sessionId}:smartpromo`
+- `session:${sessionId}:smartpromo:delete-confirm:${jobId}`
+- `session:${sessionId}:smartpromo:delete:${job.id}`
+- `session:${sessionId}:smartpromo:delete:${jobId}`
+- `session:${sessionId}:smartpromo:job:${job.id}`
+- `session:${sessionId}:smartpromo:job:${jobId}`
+- `session:${sessionId}:smartpromo:jobs`
+- `session:${sessionId}:smartpromo:new:manual`
+- `session:${sessionId}:smartpromo:new:smart`
+- `session:${sessionId}:smartpromo:pause:${jobId}`
+- `session:${sessionId}:smartpromo:resume:${jobId}`
+- `session:${sessionId}:smartpromo:run:${jobId}`
+- `session:${sessionId}:smartpromo:stop:${jobId}`
+- `session:${sessionId}:sudo`
+- `session:${sessionId}:sudo:del:${i}`
+- `session:${sessionId}:unfreeze`
+- `session:${sessionId}:wainfo`
+- `session:new:cancel`
+- `sessions:list`
+- `settings:globalsudo`
+- `settings:macros`
+- `settings:notifications`
+- `settings:prefix`
+- `sleep:menu`
+- `sleep:off`
+- `sleep:on`
+- `status:overview`
+- `support:start`
+- `verify:joined`
+
+## Omega-V1 registered slash commands
+
+- `/admin`
+- `/bucket`
+- `/help`
+- `/jid`
+- `/omni`
+- `/sessions`
+- `/start`
+- `/unbind`
+
+## Omega Telegram files
+
+- `bot.ts`
+- `handlers/admin.ts`
+- `handlers/bucket.ts`
+- `handlers/feedback.ts`
+- `handlers/group-bridge.ts`
+- `handlers/promotion.ts`
+- `handlers/session.ts`
+- `handlers/tutorials.ts`
+- `middlewares/auth.ts`
+- `renderer.ts`
+- `rich-messages.ts`
+- `ui/keyboards.ts`
+
+## Omega exported handler functions
+
+- `bot.ts: createAlertSender`
+- `bot.ts: createBot`
+- `handlers/admin.ts: executeOmniCommand`
+- `handlers/admin.ts: handleAdminMenuUrlDelete`
+- `handlers/admin.ts: handleAdminMenuUrlEdit`
+- `handlers/admin.ts: handleAdminMenuUrlManager`
+- `handlers/admin.ts: handleAdminMenuUrlMove`
+- `handlers/admin.ts: handleAdminMenuUrlToggle`
+- `handlers/admin.ts: handleAdminPanel`
+- `handlers/admin.ts: handleAdminUserMenu`
+- `handlers/admin.ts: handleAdminUsers`
+- `handlers/admin.ts: handleBanUser`
+- `handlers/admin.ts: handleClearAllSessionsConfirm`
+- `handlers/admin.ts: handleClearAllSessionsExecute`
+- `handlers/admin.ts: handleClearDeadSessions`
+- `handlers/admin.ts: handleGlobalPause`
+- `handlers/admin.ts: handleGlobalSudoPanel`
+- `handlers/admin.ts: handleInspectUser`
+- `handlers/admin.ts: handleLogStream`
+- `handlers/admin.ts: handleMaintenanceToggle`
+- `handlers/admin.ts: handleMasterBucket`
+- `handlers/admin.ts: handleOmniBridge`
+- `handlers/admin.ts: handleOmniOwnerPanel`
+- `handlers/admin.ts: handlePermissionInput`
+- `handlers/admin.ts: handlePlatformStats`
+- `handlers/admin.ts: handlePurgeConfirm`
+- `handlers/admin.ts: handlePurgeUserSessions`
+- `handlers/admin.ts: handleReleaseMenu`
+- `handlers/admin.ts: handleReleaseToggle`
+- `handlers/admin.ts: handleRestartBot`
+- `handlers/admin.ts: handleSessionDefaultsPanel`
+- `handlers/admin.ts: handleSetReleaseUsername`
+- `handlers/admin.ts: handleUpdateBot`
+- `handlers/admin.ts: processReleaseUsername`
+- `handlers/admin.ts: stopLogStream`
+- `handlers/bucket.ts: handleAddLinks`
+- `handlers/bucket.ts: handleBucketStatus`
+- `handlers/bucket.ts: handleBucketView`
+- `handlers/bucket.ts: handleExportBucket`
+- `handlers/bucket.ts: handleLiveMonitor`
+- `handlers/bucket.ts: handleMergeToMain`
+- `handlers/bucket.ts: handlePurgeDead`
+- `handlers/bucket.ts: handlePurgeErrorConfirm`
+- `handlers/bucket.ts: handlePurgeErrorPrompt`
+- `handlers/bucket.ts: handlePurgeMasterConfirm`
+- `handlers/bucket.ts: handlePurgeMasterPrompt`
+- `handlers/bucket.ts: handleStartFilter`
+- `handlers/bucket.ts: handleStopFilter`
+- `handlers/bucket.ts: handleStopLiveLog`
+- `handlers/bucket.ts: stopValidationLiveLog`
+- `handlers/feedback.ts: handleAdminIdeaComplete`
+- `handlers/feedback.ts: handleAdminIdeaDelete`
+- `handlers/feedback.ts: handleAdminIdeaReply`
+- `handlers/feedback.ts: handleAdminIdeaView`
+- `handlers/feedback.ts: handleAdminIdeas`
+- `handlers/feedback.ts: handleIdeaSubmit`
+- `handlers/feedback.ts: processAdminIdeaReply`
+- `handlers/feedback.ts: processTelegramIdea`
+- `handlers/group-bridge.ts: clearGroupBridge`
+- `handlers/group-bridge.ts: getGroupBridge`
+- `handlers/group-bridge.ts: isGroupBridgeActive`
+- `handlers/group-bridge.ts: setGroupBridge`
+- `handlers/promotion.ts: beginPromotionWizard`
+- `handlers/promotion.ts: handlePromotionAction`
+- `handlers/promotion.ts: handlePromotionMenu`
+- `handlers/promotion.ts: handlePromotionWizardInput`
+- `handlers/promotion.ts: handlePromotionWizardMedia`
+- `handlers/session.ts: clearJoinManagerSub`
+- `handlers/session.ts: getBridgeSession`
+- `handlers/session.ts: handleBridgeExit`
+- `handlers/session.ts: handleBridgeSession`
+- `handlers/session.ts: handleFreezeSession`
+- `handlers/session.ts: handleJoinManager`
+- `handlers/session.ts: handleLinkCollection`
+- `handlers/session.ts: handleNewSession`
+- `handlers/session.ts: handlePairingCode`
+- `handlers/session.ts: handlePurgeConfirm`
+- `handlers/session.ts: handlePurgeSession`
+- `handlers/session.ts: handleReinitSession`
+- `handlers/session.ts: handleSessionInfo`
+- `handlers/session.ts: handleSessionsList`
+- `handlers/session.ts: handleUnfreezeSession`
+- `handlers/tutorials.ts: handleTutorialAdd`
+- `handlers/tutorials.ts: handleTutorialDelete`
+- `handlers/tutorials.ts: handleTutorialDeleteConfirm`
+- `handlers/tutorials.ts: handleTutorialPreview`
+- `handlers/tutorials.ts: handleTutorialType`
+- `handlers/tutorials.ts: handleTutorialsMenu`
+- `handlers/tutorials.ts: processTutorialCommand`
+- `handlers/tutorials.ts: saveTutorialUpload`
+- `middlewares/auth.ts: authMiddleware`
+- `middlewares/auth.ts: forceJoinMiddleware`
+- `middlewares/auth.ts: isGlobalPaused`
+- `middlewares/auth.ts: isMaintenanceMode`
+- `middlewares/auth.ts: ownerOnly`
+- `middlewares/auth.ts: setGlobalPause`
+- `middlewares/auth.ts: setMaintenanceMode`
+- `renderer.ts: installTelegramRenderer`
+- `renderer.ts: normalizeTelegramNewlines`
+- `renderer.ts: renderTelegramBlockquote`
+- `renderer.ts: renderTelegramHtml`
+- `renderer.ts: renderTelegramPlainText`
+- `rich-messages.ts: editTelegramRichMessage`
+- `rich-messages.ts: richTableHtml`
+- `rich-messages.ts: richTablesHtml`
+- `rich-messages.ts: sendTelegramRichMessage`
+- `ui/keyboards.ts: adminIdeaViewKeyboard`
+- `ui/keyboards.ts: adminIdeasKeyboard`
+- `ui/keyboards.ts: adminMenuUrlEditKeyboard`
+- `ui/keyboards.ts: adminMenuUrlManagerKeyboard`
+- `ui/keyboards.ts: adminPanelKeyboard`
+- `ui/keyboards.ts: adminUserKeyboard`
+- `ui/keyboards.ts: adminUsersKeyboard`
+- `ui/keyboards.ts: aiGroupKeyboard`
+- `ui/keyboards.ts: aiGroupListKeyboard`
+- `ui/keyboards.ts: backKeyboard`
+- `ui/keyboards.ts: bridgeExitKeyboard`
+- `ui/keyboards.ts: btn`
+- `ui/keyboards.ts: bucketMenuKeyboard`
+- `ui/keyboards.ts: bucketViewKeyboard`
+- `ui/keyboards.ts: confirmKeyboard`
+- `ui/keyboards.ts: copyBtn`
+- `ui/keyboards.ts: gameApiKeyboard`
+- `ui/keyboards.ts: groupBridgeActiveKeyboard`
+- `ui/keyboards.ts: helpCategoryKeyboard`
+- `ui/keyboards.ts: helpKeyboard`
+- `ui/keyboards.ts: joinManagerKeyboard`
+- `ui/keyboards.ts: linkCollectionKeyboard`
+- `ui/keyboards.ts: liveValidationKeyboard`
+- `ui/keyboards.ts: mainMenuKeyboard`
+- `ui/keyboards.ts: pairingCodeKeyboard`
+- `ui/keyboards.ts: permissionPanelKeyboard`
+- `ui/keyboards.ts: promotionJobDeleteConfirmKeyboard`
+- `ui/keyboards.ts: promotionJobKeyboard`
+- `ui/keyboards.ts: promotionJobsKeyboard`
+- `ui/keyboards.ts: purgeErrorConfirmKeyboard`
+- `ui/keyboards.ts: purgeMasterConfirmKeyboard`
+- `ui/keyboards.ts: sessionMenuKeyboard`
+- `ui/keyboards.ts: sessionPairKeyboard`
+- `ui/keyboards.ts: sessionWizardKeyboard`
+- `ui/keyboards.ts: sessionsListKeyboard`
+- `ui/keyboards.ts: settingsKeyboard`
+- `ui/keyboards.ts: sleepKeyboard`
+- `ui/keyboards.ts: smartPromotionKeyboard`
+- `ui/keyboards.ts: statusKeyboard`
+- `ui/keyboards.ts: stickerMacrosKeyboard`
+- `ui/keyboards.ts: supportKeyboard`
+- `ui/keyboards.ts: urlBtn`
+- `ui/keyboards.ts: validationBucketDownloadKeyboard`
+- `ui/keyboards.ts: validationDownloadsKeyboard`
+
+## PAPPY registered slash commands
+
+- `/adminmedia`
+- `/antilink`
+- `/autopromote`
+- `/ban`
+- `/filter`
+- `/goodbye`
+- `/help`
+- `/logs`
+- `/menu`
+- `/moderation`
+- `/mute`
+- `/pair`
+- `/protection`
+- `/resetwarn`
+- `/rules`
+- `/sessions`
+- `/setrules`
+- `/settings`
+- `/staff`
+- `/tagall`
+- `/trusted`
+- `/unban`
+- `/unmute`
+- `/warn`
+- `/warnlimit`
+- `/warnlist`
+- `/warns`
+- `/welcome`
+- `/whitelist`
+
+## PAPPY literal callback values not present in Omega verbatim
+
+- `${shared ? `
+- `0`
+- `admin:audit`
+- `admin:autopromote`
+- `admin:autopromote:new`
+- `admin:autopromote:targets:refresh`
+- `admin:bridge`
+- `admin:bridge:all`
+- `admin:bridge:clear`
+- `admin:bridge:command`
+- `admin:bridge:command:${session.workspaceId}:${session.sessionId}`
+- `admin:bridge:command:${workspaceId}:${sessionId}`
+- `admin:bridge:send:${token}`
+- `admin:bridge:toggle:${token}`
+- `admin:broadcast:cancel`
+- `admin:broadcast:confirm`
+- `admin:bucket`
+- `admin:forcejoin:add`
+- `admin:forcejoin:remove:${target.targetId}`
+- `admin:forcejoin:toggle:${target.targetId}`
+- `admin:home`
+- `admin:inceptor`
+- `admin:inceptor:run`
+- `admin:jobs`
+- `admin:jobs:clear`
+- `admin:jobs:clear:confirm`
+- `admin:jobs:refresh`
+- `admin:media`
+- `admin:media:add:image`
+- `admin:media:add:video`
+- `admin:media:caption`
+- `admin:media:clear`
+- `admin:media:pick:${item.mediaId}`
+- `admin:media:select`
+- `admin:safe`
+- `admin:support`
+- `admin:support:close:${ticket.ticketId}`
+- `admin:support:reply:${ticket.ticketId}`
+- `admin:support:reply:${ticketId}`
+- `admin:user:${user.status === `
+- `admin:users`
+- `admin:users:${page}`
+- `admin:workload`
+- `admin:workload:toggle`
+- `admin:workload:worker:${worker.workerId}`
+- `admin:workload:worker:check:${workerId}`
+- `admin:workload:worker:toggle:${workerId}`
+- `autopromote:${config.state === `
+- `autopromote:cancel`
+- `autopromote:command:allchat`
+- `autopromote:command:allstatus`
+- `autopromote:command:allstatusd`
+- `autopromote:command:allstatusx`
+- `autopromote:confirm`
+- `autopromote:days:${value}`
+- `autopromote:delete:${config.id}`
+- `autopromote:delete:confirm:${config.id}`
+- `autopromote:disable:${config.id}`
+- `autopromote:edit`
+- `autopromote:global:all`
+- `autopromote:global:ready`
+- `autopromote:global:toggle:${session.sessionId}`
+- `autopromote:new`
+- `autopromote:posts:${value}`
+- `autopromote:scope:SESSION:${session.sessionId}`
+- `autopromote:scope:SESSION:${sessionId}`
+- `autopromote:scope:USER`
+- `autopromote:times:${value}`
+- `autopromote:user`
+- `autopromote:view:${config.id}`
+- `bridge:global:clear`
+- `bridge:global:command`
+- `bridge:global:select`
+- `bridge:global:select:all`
+- `bridge:global:toggle:${session.sessionId}`
+- `bucket:download:${bucket}:html`
+- `bucket:download:${bucket}:txt`
+- `bucket:download:active:html`
+- `bucket:download:active:txt`
+- `bucket:download:dead:html`
+- `bucket:download:dead:txt`
+- `bucket:download:error:html`
+- `bucket:download:error:txt`
+- `bucket:download:main:html`
+- `bucket:download:main:txt`
+- `bucket:download:validating:html`
+- `bucket:download:validating:txt`
+- `bucket:live:off`
+- `bucket:live:on`
+- `bucket:purge:confirm:${bucket}`
+- `bucket:user:active`
+- `bucket:user:download:active:html`
+- `bucket:user:download:active:txt`
+- `bucket:validate`
+- `bucket:view:${bucket}`
+- `bucket:view:validating`
+- `forcejoin:check`
+- `forcejoin:status`
+- `group:start:moderation`
+- `group:start:refresh`
+- `group:start:rules`
+- `home`
+- `job:live:${code}`
+- `jobs:list`
+- `jobs:live:open`
+- `mod:cancel:${confirmation.token}`
+- `mod:confirm:ban:${confirmation.token}`
+- `mod:confirm:resetwarn:${confirmation.token}`
+- `mod:confirm:tagall:${confirmation.token}`
+- `mod:quick-protect`
+- `mod:refresh`
+- `mod:rules:cancel:${group.groupId}`
+- `mod:rules:publish:${group.groupId}`
+- `mod:toggle:antiLink`
+- `mod:toggle:antiSpam`
+- `mod:toggle:enabled`
+- `mod:toggle:goodbye`
+- `mod:toggle:raid`
+- `mod:toggle:welcome`
+- `mod:view:filters`
+- `mod:view:logs`
+- `mod:view:rules`
+- `mod:view:setup`
+- `mod:view:warnings`
+- `pair:local`
+- `pair:number:${sessionId}`
+- `pair:workload:${code}`
+- `schedule:disable:${schedule.scheduleId}`
+- `schedule:new:validation`
+- `session:${groupLeave.sessionId}:action:groups`
+- `session:${groupLeave.sessionId}:group:leave:confirm`
+- `session:${id}:action:purge`
+- `session:${id}:action:reconnect`
+- `session:${id}:autopromote`
+- `session:${id}:groups`
+- `session:${id}:menu`
+- `session:${id}:section:access`
+- `session:${id}:section:bridge`
+- `session:${id}:section:health`
+- `session:${id}:section:join`
+- `session:${id}:section:overview`
+- `session:${id}:section:settings`
+- `session:${id}:section:tools`
+- `session:${session.sessionId}:action:bio`
+- `session:${session.sessionId}:action:creategroup`
+- `session:${session.sessionId}:action:groups`
+- `session:${session.sessionId}:action:health`
+- `session:${session.sessionId}:action:name`
+- `session:${session.sessionId}:action:pfp`
+- `session:${session.sessionId}:action:prefix`
+- `session:${session.sessionId}:action:reconnect`
+- `session:${session.sessionId}:bridge:${operation === `
+- `session:${session.sessionId}:bridge:command`
+- `session:${session.sessionId}:bridge:start`
+- `session:${session.sessionId}:bridge:stop`
+- `session:${session.sessionId}:group:invite:${index}`
+- `session:${session.sessionId}:group:leave`
+- `session:${session.sessionId}:group:leave:${index}`
+- `session:${session.sessionId}:group:leave:confirm`
+- `session:${session.sessionId}:group:picture:${index}`
+- `session:${session.sessionId}:group:view:${index}`
+- `session:${session.sessionId}:groups:${safePage + 1}`
+- `session:${session.sessionId}:groups:${safePage - 1}`
+- `session:${session.sessionId}:groups:${safePage}`
+- `session:${session.sessionId}:groups:0`
+- `session:${session.sessionId}:join:edit:batch`
+- `session:${session.sessionId}:join:edit:concurrency`
+- `session:${session.sessionId}:join:edit:cooldown`
+- `session:${session.sessionId}:join:edit:delay`
+- `session:${session.sessionId}:join:edit:maxDelay`
+- `session:${session.sessionId}:join:edit:minDelay`
+- `session:${session.sessionId}:join:edit:mode`
+- `session:${session.sessionId}:join:edit:restriction`
+- `session:${session.sessionId}:join:edit:retry`
+- `session:${session.sessionId}:join:edit:retryBase`
+- `session:${session.sessionId}:join:edit:target`
+- `session:${session.sessionId}:join:settings`
+- `session:${session.sessionId}:joinmgr`
+- `session:${session.sessionId}:menu`
+- `session:${session.sessionId}:pfp:change`
+- `session:${session.sessionId}:pfp:get`
+- `session:${session.sessionId}:pfp:remove`
+- `session:${session.sessionId}:purge:confirm`
+- `session:${session.sessionId}:section:groups`
+- `session:${session.sessionId}:sudo:add`
+- `session:${session.sessionId}:sudo:list`
+- `session:${session.sessionId}:sudo:remove`
+- `session:${sessionId}:action:autojoin`
+- `session:${sessionId}:action:bio`
+- `session:${sessionId}:action:creategroup`
+- `session:${sessionId}:action:gpp`
+- `session:${sessionId}:action:name`
+- `session:${sessionId}:action:pfp`
+- `session:${sessionId}:action:prefix`
+- `session:${sessionId}:action:profile`
+- `session:${sessionId}:action:purge`
+- `session:${sessionId}:join:edit:batch`
+- `session:${sessionId}:join:edit:delay`
+- `session:${sessionId}:join:edit:target`
+- `session:${sessionId}:join:settings`
+- `session:${sessionId}:sudo:list`
+- `session:${sessionId}:sudo:remove`
+- `session:${sessionSetting.sessionId}:menu`
+- `session:${sessionSudo.sessionId}:menu`
+- `session:${sessionSudo.sessionId}:sudo:list`
+- `sessions:list:0`
+- `settings:autojoin:toggle`
+- `settings:broadcastdelay:cycle`
+- `settings:broadcastdelay:set`
+- `settings:delay:cycle`
+- `settings:joinmode:cycle`
+- `settings:prefix:cycle`
+- `ui:bridge`
+- `ui:help`
+- `ui:join`
+- `ui:schedule`
+- `ui:settings`
+- `ui:support`
+- `ui:validator`
+- `workload:add`
+- `workload:download`
+- `workload:enroll`
+- `workload:guide`
+- `workload:list`
+- `workload:logger:${token}`
+- `workload:logger:${workloadCode}`
+- `workload:logger:refresh:${workloadCode}`
+- `workload:menu`
+- `workload:select:${code}`
+- `workload:select:${worker.workloadCode ?? worker.displayKey}`
+- `workload:select:${workloadCode}`
+- `workload:share:${workloadCode}`
+- `workload:share:add`
+- `workload:share:users:${workloadCode}`
+- `workload:status`
+- `workload:use:${workloadCode}`

@@ -5,6 +5,7 @@ import type { InceptorSnapshot } from "../jobs/inceptor.js";
 import type { AutoPromoteConfig, AutoPromoteRun } from "../autopromote/types.js";
 import { effectiveSessionStatus } from "../menus/menu-model.js";
 import { infoResponse } from "./renderer.js";
+import { pappyTelegramFeatureSections } from "./feature-catalog.js";
 
 export type ButtonStyle = "primary" | "success" | "danger";
 type InlineButton = InlineKeyboardMarkup["inline_keyboard"][number][number] & {
@@ -230,6 +231,27 @@ export function sessionKeyboard(
   return keyboard(rows);
 }
 
+export function sessionGroupKeyboard(
+  sessionId: string,
+  index: number,
+): InlineKeyboardMarkup {
+  return keyboard([
+    [
+      btn("✎ Edit Name", `session:${sessionId}:group:name:${index}`, "primary"),
+      btn("✎ Edit Description", `session:${sessionId}:group:description:${index}`, "primary"),
+    ],
+    [
+      btn("🖼 Set Picture", `session:${sessionId}:group:picture:${index}`),
+      btn("◉ Get Picture", `session:${sessionId}:group:picture:get:${index}`),
+    ],
+    [btn("🛡 Moderation", `session:${sessionId}:group:moderation:${index}`, "primary")],
+    [btn("✅ Approvals", `session:${sessionId}:group:moderation:approve:${index}`, "success")],
+    [btn("🔗 Invite Link", `session:${sessionId}:group:invite:${index}`)],
+    [btn("↪ Leave Group", `session:${sessionId}:group:leave:${index}`, "danger")],
+    [btn("‹ My Groups", `session:${sessionId}:section:groups`)],
+  ]);
+}
+
 export function sessionToolsKeyboard(sessionId: string): InlineKeyboardMarkup {
   return keyboard([
     [
@@ -340,7 +362,7 @@ export function validatorLiveText(
       lastResult?: string;
     };
   }> = [],
-  sessions: Array<{ sessionId: string; sessionName: string; status: string; authHealth?: string }> = [],
+  sessions: Array<{ sessionId: string; sessionName: string; status: string; authHealth?: string; validatorRetiredUntil?: number; validatorRetireReason?: string; validatorFailureCount?: number }> = [],
   summary?: {
     totalSessions: number;
     eligibleSessions: number;
@@ -367,16 +389,31 @@ export function validatorLiveText(
       : (snapshot.counts.main ?? 0) > 0
         ? "Main links are waiting for the next automatic admission sweep or a healthy validation socket."
         : "No Main links are waiting; collection is active and the Validator is idle.";
+  const sessionLine = (session: {
+    sessionId: string;
+    sessionName: string;
+    status: string;
+    authHealth?: string;
+    validatorRetiredUntil?: number;
+    validatorRetireReason?: string;
+    validatorFailureCount?: number;
+  }): string => {
+    const remaining = session.validatorRetiredUntil && session.validatorRetiredUntil > Date.now()
+      ? ` · retired ${Math.ceil((session.validatorRetiredUntil - Date.now()) / 60_000)}m · ${session.validatorRetireReason ?? "cooldown"}`
+      : "";
+    const failures = session.validatorFailureCount ? ` · failures ${session.validatorFailureCount}` : "";
+    return `${session.status === "ACTIVE" ? "●" : "○"} <b>${escapeHtml(session.sessionName)}</b> · ${escapeHtml(session.status)}${session.authHealth ? ` · ${escapeHtml(session.authHealth)}` : ""}${remaining}${failures} · <code>${escapeHtml(session.sessionId.slice(0, 8))}</code>`;
+  };
   const sessionFeed = summary
-    ? `<b>Total sessions:</b> ${summary.totalSessions} · <b>Eligible:</b> ${summary.eligibleSessions} · <b>Leased:</b> ${summary.leasedSessions} · <b>Retired:</b> ${summary.retiredSessions}${sessions.length ? `\n\n<b>Lease sample</b>\n${sessions.slice(0, 12).map((session) => `${session.status === "ACTIVE" ? "●" : "○"} <b>${escapeHtml(session.sessionName)}</b> · ${escapeHtml(session.status)}${session.authHealth ? ` · ${escapeHtml(session.authHealth)}` : ""} · <code>${escapeHtml(session.sessionId.slice(0, 8))}</code>`).join("\n")}` : ""}`
+    ? `<b>Total sessions:</b> ${summary.totalSessions} · <b>Eligible:</b> ${summary.eligibleSessions} · <b>Leased:</b> ${summary.leasedSessions} · <b>Retired:</b> ${summary.retiredSessions}${sessions.length ? `\n\n<b>Lease sample</b>\n${sessions.slice(0, 12).map(sessionLine).join("\n")}` : ""}`
     : sessions.length
-      ? sessions.map((session) => `${session.status === "ACTIVE" ? "●" : "○"} <b>${escapeHtml(session.sessionName)}</b> · ${escapeHtml(session.status)}${session.authHealth ? ` · ${escapeHtml(session.authHealth)}` : ""} · <code>${escapeHtml(session.sessionId.slice(0, 8))}</code>`).join("\n")
+      ? sessions.map(sessionLine).join("\n")
       : "No session is currently available for validation.";
   return pageText(
     "Validator Hub · Live",
     infoResponse(
       active ? "Live feed is ON" : "Live feed is PAUSED",
-      `<b>Live validation workers · state matrix</b> · refreshed in place\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating:</b> ${snapshot.counts.validating ?? 0}\n<b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}\n<b>Retryable:</b> ${snapshot.counts.error ?? 0}\n\n<b>Validator intake</b> · automatic collection ON · one-link lease per eligible session · admission every 5s\n\n<b>Validation sockets</b>\n${sessionFeed}\n\n<b>Current validation</b>\n${activeFeed}\n\n<b>Group matrix</b>\n${matrix}\n\n<i>Links leave Main into Validating while the distributor checks them. Only confirmed invite metadata enters Active. Dead means revoked, expired, invalid, or missing groups. Temporary transport failures return to Main and never contaminate Retryable/Error.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
+      `<b>Live validation workers · state matrix</b> · refreshed in place\n<b>Main:</b> ${snapshot.counts.main ?? 0}  <b>Validating:</b> ${snapshot.counts.validating ?? 0}\n<b>Active:</b> ${snapshot.counts.active ?? 0}  <b>Dead:</b> ${snapshot.counts.dead ?? 0}\n<b>Retryable:</b> ${snapshot.counts.error ?? 0}\n\n<b>Validator intake</b> · automatic collection ON · up to five-link batch per eligible session · one request at a time per socket · admission every 5s\n\n<b>Validation sockets</b>\n${sessionFeed}\n\n<b>Current validation</b>\n${activeFeed}\n\n<b>Group matrix</b>\n${matrix}\n\n<i>Links leave Main into Validating while the distributor checks them. Only confirmed invite metadata enters Active. Dead means revoked, expired, invalid, or missing groups. Automatic transient or rate-limited failures enter Retryable/Error; use explicit requeue to return them to Main. Active links never return to Main automatically.</i>\n<i>Snapshot ${new Date(snapshot.capturedAt).toISOString()}</i>`,
     ),
   );
 }
@@ -408,7 +445,7 @@ export function bucketKeyboard(): InlineKeyboardMarkup {
       btn("✅ Active", "bucket:view:active"),
     ],
     [btn("💀 Dead", "bucket:view:dead"), btn("↻ Retryable", "bucket:view:error")],
-    [btn("🔀 Requeue Active + Retryable", "bucket:merge:main", "success")],
+    [btn("↻ Requeue Retryable Errors", "bucket:merge:main", "success")],
     [btn("⬇️ Downloads", "bucket:downloads")],
     [
       btn("🗑 Purge Dead", "bucket:purge:dead", "danger"),
@@ -882,7 +919,16 @@ export function jobLiveText(job: JobRecord | undefined): string {
     ? "—"
     : `${Math.ceil(countdownMs / 1000)}s`;
   const cadence = typeof job.payload.delayMs === "number"
-    ? `${Math.max(1, Math.round(job.payload.delayMs / 1000))}s/group`
+    ? `${Math.max(1, Math.round(job.payload.delayMs / 1000))}s${job.kind === "allstatus" || job.kind === "allchat" ? "/group" : ""}`
+    : "—";
+  const nextLabel = job.kind === "join-manager"
+    ? "Next attempt"
+    : job.kind === "group-control"
+      ? "Next action"
+      : "Next post";
+  const worker = job.workerId ?? "waiting for worker";
+  const lease = job.leaseExpiresAt
+    ? new Date(job.leaseExpiresAt).toISOString()
     : "—";
   return pageText(
     "Live Show",
@@ -891,7 +937,8 @@ export function jobLiveText(job: JobRecord | undefined): string {
       `<blockquote><b>Signal</b> ${indicator} ${escapeHtml(job.state)}
 <b>Code</b> <code>${escapeHtml(job.jobCode ?? "—")}</code>
 <b>Flow</b> ${liveProgressBar(progress.completed, progress.total)} ${progress.completed}/${progress.total ?? "—"} · ${remaining} remaining
-<b>Next post</b> ${countdown}  <b>Cadence</b> ${cadence}
+<b>${nextLabel}</b> ${countdown}  <b>Cadence</b> ${cadence}
+<b>Worker</b> <code>${escapeHtml(worker)}</code>  <b>Lease until</b> <code>${escapeHtml(lease)}</code>
 <b>Success</b> ${progress.success}  <b>Failed</b> ${progress.failed}  <b>Skipped</b> ${progress.skipped}
 <b>Joined</b> ${progress.joined ?? progress.success}  <b>Already member</b> ${progress.alreadyMember ?? 0}
 <b>Requested</b> ${progress.requested ?? 0}  <b>Dead links</b> ${progress.deadLinks ?? 0}  <b>Rate-limit</b> ${progress.rateLimitHits ?? 0}
@@ -995,13 +1042,7 @@ export function sessionText(
   const autoPromoteText = autoPromote
     ? `\n\n<b>Auto Promote</b>\n<b>Session:</b> ${escapeHtml(autoPromote.sessionState)}\n<b>User:</b> ${escapeHtml(autoPromote.userState)}\n<b>Global:</b> ${escapeHtml(autoPromote.globalState)}\n<b>Next:</b> ${autoPromote.nextExecution ? escapeHtml(new Date(autoPromote.nextExecution).toISOString()) : "—"}\n<b>Cooldown:</b> ${autoPromote.cooldownUntil ? escapeHtml(new Date(autoPromote.cooldownUntil).toISOString()) : "None"}`
     : "";
-  return pageText(
-    "Session Control Plane",
-    infoResponse(
-      `${statusIcon(session.status)} ${escapeHtml(session.sessionName)}`,
-      `<b>Status:</b> ${escapeHtml(status)}\n<b>WhatsApp:</b> <code>${escapeHtml(session.phoneNumber ?? "pairing required")}</code>\n<b>Prefix:</b> <code>${escapeHtml(session.prefix || "none")}</code>\n<b>Auto-join:</b> ${session.autoJoinEnabled ? "ON" : "OFF"}\n<b>Validator:</b> AUTO · ${session.collectedLinkCount ?? 0} collected / ${session.validatedLinkCount ?? 0} validated${autoPromoteText}\n\nChoose a control area below. Each area edits this message and keeps its own Back path.`,
-    ),
-  );
+  return `${sessionStatusCardText(session)}${autoPromoteText}\n\nChoose a control area below. Each area edits this message and keeps its own Back path.`;
 }
 
 export function workspaceSettingsText(settings: {
@@ -1025,10 +1066,40 @@ export function dashboardText(isAdmin: boolean): string {
   );
 }
 
-export function helpText(): string {
+export function helpKeyboard(): InlineKeyboardMarkup {
+  const rows = pappyTelegramFeatureSections.map((section) => [
+    btn(`${section.label}`, `help:section:${section.id}`, "primary"),
+  ]);
+  rows.push([btn(ui.back, "menu:main")]);
+  return keyboard(rows);
+}
+
+export function helpSectionText(sectionId: string): string {
+  const section = pappyTelegramFeatureSections.find((item) => item.id === sectionId);
+  if (!section) return helpText();
+  const entries = section.entries
+    .map((entry) => `${entry.command ? `<code>${escapeHtml(entry.command)}</code> · ` : ""}<b>${escapeHtml(entry.name)}</b> — ${escapeHtml(entry.description)}`)
+    .join("\n");
   return pageText(
-    "Help & Shortcuts",
-    "<b>Workspace</b> — Global Bridge, shared link intake, Scheduled Jobs, Settings, Support. The live Validator Hub is admin-owned.\n<b>Session</b> — Pairing, profile controls, link collection, Join Manager, and per-session Bridge.\n<b>WhatsApp</b> — <code>.menu</code>, <code>.ping</code>, <code>.autojoin on|off</code>, <code>.pfp</code>, <code>.setgpp</code>, <code>.groups</code>, <code>.health</code>, <code>.setname</code>, <code>.setbio</code>, <code>.setsudo</code>, and <code>.setprefix</code>.\n\n${ui.info} <b>Security:</b> Admin controls are never rendered for ordinary users and are checked again on every callback.",
+    `Help · ${section.label}`,
+    `<b>${escapeHtml(section.description)}</b>\n\n${entries}`,
+  );
+}
+
+export function helpSectionKeyboard(sectionId: string): InlineKeyboardMarkup {
+  return keyboard([
+    [btn("‹ All Features", "help:main")],
+    [btn(ui.back, "menu:main")],
+  ]);
+}
+
+export function helpText(): string {
+  const summary = pappyTelegramFeatureSections
+    .map((section) => `<b>${escapeHtml(section.label)}</b> · ${section.entries.length} mapped controls`)
+    .join("\n");
+  return pageText(
+    "Help & Features",
+    `A complete PAPPY-native map of the commands and control surfaces currently implemented in this bot. Select a section for the exact command, purpose, and safe scope.\n\n${summary}\n\n${ui.info} <b>Bridge:</b> kept separate as an existing transport surface and intentionally not duplicated here.\n${ui.info} <b>Security:</b> owner/admin callbacks are checked again on every action.`,
   );
 }
 
@@ -1038,6 +1109,108 @@ export function pageText(title: string, body: string): string {
 
 export function featureText(title: string, body: string): string {
   return pageText(title, body);
+}
+
+export function telegramCommandUsageCardText(input: {
+  title: string;
+  command: string;
+  syntax: string;
+  acceptedTargets?: string[];
+  examples?: string[];
+  note: string;
+}): string {
+  return [
+    `⌬ ⤷ <b>${escapeHtml(input.title.toUpperCase())} USAGE</b> ⚙︎`,
+    "",
+    "─────────────",
+    `<b>⎔ Command</b> · ⇆ <code>${escapeHtml(input.syntax)}</code>`,
+    "─────────────",
+    ...(input.acceptedTargets?.length ? ["<b>» Accepted Targets:</b>", ...input.acceptedTargets.map((line) => `◈ ${escapeHtml(line)}`), ""] : []),
+    ...(input.examples?.length ? ["<b>» Examples:</b>", ...input.examples.map((line) => `» <code>${escapeHtml(line)}</code>`), ""] : []),
+    `» <b>Note:</b> ${escapeHtml(input.note)}`,
+  ].join("\n");
+}
+
+export function antiConfigCardText(input: {
+  name: string;
+  enabled: boolean;
+  action?: string;
+  access?: string;
+  note: string;
+  usage?: string[];
+}): string {
+  const mode = input.enabled ? `Enabled [ ${input.action ?? "delete"} ]` : "Disabled [ off ]";
+  const usage = input.usage?.length
+    ? `\n\n<b>» How to use:</b>\n${input.usage.map((line) => `· <code>${escapeHtml(line)}</code>`).join("\n")}`
+    : "";
+  return [
+    `⌬ ⤷ <b>${escapeHtml(input.name.toUpperCase())} CONFIG</b> ⚙︎`,
+    "",
+    "─────────────",
+    `<b>⎔ Mode</b>        · ⇆ ${escapeHtml(mode)}`,
+    "<b>⎔ Scope</b>       · ⇆ This group only",
+    `<b>⎔ Access</b>      · ⇆ ${escapeHtml(input.access ?? "Local-only")}`,
+    "─────────────",
+    `» <b>Note:</b> ${escapeHtml(input.note)}`,
+    usage,
+  ].join("\n");
+}
+
+export function pairingHelpCardText(): string {
+  return [
+    "⌬ ⤷ <b>PAIRING HELP</b> ⚙︎",
+    "",
+    "─────────────",
+    "<b>⎔ Command</b> · ⇆ <code>.pair &lt;label&gt; &lt;number&gt;</code>",
+    "─────────────",
+    "» <b>Example:</b> <code>.pair support 2348012345678</code>",
+    "» <b>Note:</b> Use full international format without the + symbol.",
+  ].join("\n");
+}
+
+export function sessionPairingCardText(session: WhatsAppSession, phone: string, code: string): string {
+  return [
+    "ㅤ   ⚫︎  <b>𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜</b>  ⚫︎",
+    "",
+    "˗ˏˋ 🗝 ˎˊ˗  <b>SESSION PAIRING</b>  ✦",
+    "─────────────",
+    `<b>⎔ Session</b> · ⇆ ${escapeHtml(session.sessionName)}`,
+    `<b>⎔ Phone</b>   · ⇆ ${escapeHtml(phone)}`,
+    `<b>⎔ Code</b>    · ⇆ <code>${escapeHtml(code)}</code>`,
+    "─────────────",
+    `» <b>Instructions:</b> Open WhatsApp → Linked Devices → Link a Device → Link with phone number, then enter code <b>${escapeHtml(code)}</b>.`,
+    "",
+    "ℹ️ <i>Session chained to workspace and source Telegram owner.</i>",
+  ].join("\n");
+}
+
+export function sessionStatusCardText(session: WhatsAppSession): string {
+  const status = effectiveSessionStatus(session);
+  const active = session.connectedAt ? new Date(session.connectedAt).toISOString().replace("T", " ").replace(".000Z", " UTC") : "—";
+  return [
+    "ㅤ   ⚫︎  <b>𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜</b>  ⚫︎",
+    "",
+    "˗ˏˋ ⎔ ˎˊ˗  <b>SESSION STATUS</b>  ✦",
+    "─────────────",
+    `<b>⎔ Session</b> · ⇆ ${escapeHtml(session.sessionName)}`,
+    `<b>⎔ State</b>   · ⇆ ${escapeHtml(status)}`,
+    `<b>⎔ Active</b>  · ⇆ ${escapeHtml(active)}`,
+    "─────────────",
+  ].join("\n");
+}
+
+export function memberBatchJobCardText(input: { action: string; selected: number; jobId: string }): string {
+  return [
+    "ㅤ   ⚫︎  <b>𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜</b>  ⚫︎",
+    "",
+    "˗ˏˋ ⚙︎ ˎˊ˗  <b>MEMBER BATCH JOB</b>  ✦",
+    "─────────────",
+    `<b>⎔ Action</b>    · ⇆ ${escapeHtml(input.action.toUpperCase())}`,
+    `<b>⎔ Selected</b>  · ⇆ ${input.selected}`,
+    `<b>⎔ Job ID</b>    · ⇆ <code>${escapeHtml(input.jobId)}</code>`,
+    "─────────────",
+    "» <b>Progress:</b> Open Telegram Live Show for detailed results.",
+  ].join("\n");
 }
 
 function jobStatusIcon(state: string): string {
@@ -1089,6 +1262,7 @@ export function autoPromoteScopeKeyboard(
 export function autoPromoteCommandKeyboard(): InlineKeyboardMarkup {
   return keyboard([
     [btn("All Status", "autopromote:command:allstatus", "primary")],
+    [btn("All Status D · Designed", "autopromote:command:allstatusd", "success")],
     [btn("All Chat", "autopromote:command:allchat", "primary")],
     [btn("All Status X", "autopromote:command:allstatusx", "success")],
     [btn("Cancel", "autopromote:cancel", "danger")],
@@ -1213,6 +1387,7 @@ export function workloadKeyboard(hasWorker: boolean): InlineKeyboardMarkup {
   return keyboard([
     [btn("➕ Add Workload", "workload:add", "success")],
     [btn(hasWorker ? "▣ My Workloads" : "▣ My Workload", "workload:list")],
+    [btn("🔗 Add Shared Panel", "workload:share:add", "primary")],
     [btn("⬇ Download Panel Worker", "workload:download", "success")],
     [btn("📖 Simple Setup Guide", "workload:guide")],
     [btn("↻ Refresh Status", "workload:status")],
@@ -1222,43 +1397,80 @@ export function workloadKeyboard(hasWorker: boolean): InlineKeyboardMarkup {
 
 export function workloadText(
   mode: "ON" | "OFF",
-  workers: Array<{ workerName?: string; workloadCode?: string; displayKey: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[] }>,
+  workers: Array<{ workerName?: string; workloadCode?: string; displayKey: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[]; shared?: boolean }>,
 ): string {
   const body = workers.length
     ? workers.map((worker) => {
         const heartbeat = worker.lastHeartbeatAt ? new Date(worker.lastHeartbeatAt).toISOString() : "never";
         const code = worker.workloadCode ?? worker.displayKey;
-        return `<b>${escapeHtml(worker.workerName ?? "Panel")}</b> · <code>${escapeHtml(code)}</code> · ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Heartbeat:</b> ${escapeHtml(heartbeat)}\n<b>Sessions:</b> ${worker.assignedSessionIds.length}`;
+        return `<b>${escapeHtml(worker.workerName ?? "Panel")}</b> · <code>${escapeHtml(code)}</code> · ${worker.shared ? "🔗 SHARED" : escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Heartbeat:</b> ${escapeHtml(heartbeat)}\n<b>Sessions:</b> ${worker.shared ? "Isolated to your workspace" : worker.assignedSessionIds.length}`;
       }).join("\n\n")
     : "No workload panel is attached to this workspace.";
   return pageText(
     "Workload",
     infoResponse(
       "Central control · panel execution",
-      `<b>Panel workload:</b> ${mode === "ON" ? "🟢 ON" : "⚪ OFF"}\n\n${body}\n\n<b>How it works:</b> tap <b>Add Workload</b>. Telegram gives you a copyable pairing code and sends <code>index.js</code>. Upload that exact file to your panel, click <b>Start</b>, then paste the Telegram code when the panel asks. The panel becomes your workload and can host as many sessions as its resources can support. ${mode === "OFF" ? "New sessions currently require an ACTIVE workload." : "Existing sessions are not deleted when workload mode changes."}`,
+      `<b>Central VPS workload:</b> ${mode === "ON" ? "🟢 ON" : "⚪ OFF"}\n\n${body}\n\n<b>How it works:</b> tap <b>Add Workload</b>. Telegram gives you a copyable pairing code and sends <code>index.js</code>. Upload that exact file to your panel, click <b>Start</b>, then paste the Telegram code when the panel asks. The panel becomes your workload and can host as many sessions as its resources can support. ${mode === "OFF" ? "New sessions currently require an ACTIVE workload." : "Existing sessions are not deleted when workload mode changes."}`,
     ),
   );
 }
 
 export function workloadPanelText(
-  worker: { workerName?: string; workloadCode?: string; displayKey: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[] },
+  worker: { workerName?: string; workloadCode?: string; displayKey: string; status: string; workerVersion: string; lastHeartbeatAt?: number; assignedSessionIds: string[]; shared?: boolean },
 ): string {
   return pageText(
     "Workload Panel",
     infoResponse(
       `${escapeHtml(worker.workerName ?? "Panel")} · ${escapeHtml(worker.workloadCode ?? worker.displayKey)}`,
-      `<b>Workload code:</b> <code>${escapeHtml(worker.workloadCode ?? worker.displayKey)}</code>\n<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Last heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}\n<b>Assigned sessions:</b> ${worker.assignedSessionIds.length}\n\nThis panel is attached to Telegram and can host multiple WhatsApp sessions within its available resources. Tap <b>Use This Workload</b> before pairing.`,
+      `<b>Workload code:</b> <code>${escapeHtml(worker.workloadCode ?? worker.displayKey)}</code>\n<b>Access:</b> ${worker.shared ? "🔗 SHARED PANEL · child workspace" : "👑 OWNER PANEL"}\n<b>Status:</b> ${escapeHtml(worker.status)}\n<b>Version:</b> ${escapeHtml(worker.workerVersion)}\n<b>Last heartbeat:</b> ${worker.lastHeartbeatAt ? escapeHtml(new Date(worker.lastHeartbeatAt).toISOString()) : "never"}\n<b>Assigned sessions:</b> ${worker.shared ? "Only your sessions are visible" : worker.assignedSessionIds.length}\n\n<b>Tap the code button below to copy this workload code.</b> This panel can host your WhatsApp sessions within its available resources. Tap <b>Use This Workload</b> before pairing.`,
     ),
   );
 }
 
-export function workloadPanelKeyboard(workloadCode: string): InlineKeyboardMarkup {
+export function workloadPanelKeyboard(workloadCode: string, shared = false): InlineKeyboardMarkup {
   return keyboard([
+    [copyBtn(workloadCode, workloadCode, "success")],
     [btn("✓ Use This Workload", `workload:use:${workloadCode}`, "success")],
-    [btn("▣ Logger", `workload:logger:${workloadCode}`, "primary")],
+    ...(shared ? [] : [[btn("🔗 Share This Panel", `workload:share:${workloadCode}`, "primary")]]),
+    ...(shared ? [] : [[btn("👥 Manage Shared Users", `workload:share:users:${workloadCode}`, "primary")]]),
+    ...(shared ? [] : [[btn("▣ Logger", `workload:logger:${workloadCode}`, "primary")]]),
     [btn("↻ Check Again", "workload:status")],
-    [btn("🗑 Remove Workload", `workload:remove:${workloadCode}`, "danger")],
+    [btn(shared ? "↩ Unlink Shared Panel" : "🗑 Remove Workload", `${shared ? "workload:share:remove" : "workload:remove"}:${workloadCode}`, "danger")],
     [btn(ui.back, "workload:list")],
+  ]);
+}
+
+export function workloadShareUsersText(
+  worker: { workerName?: string; workloadCode?: string; displayKey: string },
+  recipients: Array<{
+    recipientDisplayName: string;
+    recipientTelegramUserId: string;
+    recipientUsername?: string;
+    status: "ACTIVE" | "BLOCKED";
+  }>,
+): string {
+  const body = recipients.length
+    ? recipients.map((recipient, index) => `${index + 1}. <b>${escapeHtml(recipient.recipientDisplayName)}</b>${recipient.recipientUsername ? ` · @${escapeHtml(recipient.recipientUsername)}` : ""}\n<b>Telegram ID:</b> <code>${escapeHtml(recipient.recipientTelegramUserId)}</code>\n<b>Access:</b> ${recipient.status === "BLOCKED" ? "⛔ BLOCKED" : "🟢 ACTIVE"}`).join("\n\n")
+    : "No users have redeemed a share code for this panel yet.";
+  return pageText(
+    "Workload · Shared Users",
+    infoResponse(
+      `${escapeHtml(worker.workerName ?? "Panel")} · ${escapeHtml(worker.workloadCode ?? worker.displayKey)}`,
+      `${body}\n\n<b>Block:</b> immediately stops this user’s child-session commands and pairing access.\n<b>Unblock:</b> restores only this user’s shared access. The parent panel and other users are unaffected.`,
+    ),
+  );
+}
+
+export function workloadShareUsersKeyboard(
+  workloadCode: string,
+  recipients: Array<{ shareId: string; recipientDisplayName: string; status: "ACTIVE" | "BLOCKED" }>,
+): InlineKeyboardMarkup {
+  return keyboard([
+    ...recipients.map((recipient) => [
+      btn(`${recipient.status === "BLOCKED" ? "🟢 Unblock" : "⛔ Block"} · ${recipient.recipientDisplayName.slice(0, 22)}`, `workload:share:${recipient.status === "BLOCKED" ? "unblock" : "block"}:${recipient.shareId}`, recipient.status === "BLOCKED" ? "success" : "danger"),
+    ]),
+    [btn("↻ Refresh Users", `workload:share:users:${workloadCode}`)],
+    [btn(ui.back, `workload:select:${workloadCode}`)],
   ]);
 }
 

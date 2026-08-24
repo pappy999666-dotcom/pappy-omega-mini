@@ -1,0 +1,2290 @@
+
+===== modules/anti-bot.ts =====
+// ============================================================
+// Anti System — AntiBot Module
+// Detects likely automation clients using Baileys metadata.
+// Does NOT flag: Android, iPhone, iPad, official linked devices.
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+
+/**
+ * Known bot/automation platform user-agent strings or device names
+ * that appear in Baileys verifiedBizName or similar fields.
+ */
+const BOT_PLATFORM_HINTS = [
+  'baileys',
+  'wa-automate',
+  'whatsapp-web',
+  'yowsjs',
+  'go-whatsapp',
+  'multidevice',
+  'wwebjs',
+  'node',
+  'python',
+  'bot',
+  'auto',
+  'automation',
+];
+
+/**
+ * Heuristics to detect automation clients:
+ *
+ * 1. Message key ID is 3EB... — this is a Baileys/web-generated key pattern
+ *    (real mobile keys are random alphanumeric, not 3EB-prefixed).
+ * 2. verifiedBizName contains bot hints.
+ * 3. Message is from a non-standard agent (agent field in JID > 0 is linked device,
+ *    agent = 0 is primary — automation clients often spoof agent 0).
+ * 4. Device name from participant JID agent field patterns.
+ *
+ * NOTE: We keep false-positive rate very low. If uncertain, we return false.
+ */
+export function messageIsFromBot(msg: WebMessageInfo): boolean {
+  // Only check incoming messages (not fromMe)
+  if (msg.key.fromMe) return false;
+  // Early exit: must be a group message (AntiBot is a group moderation tool)
+  if (!msg.key.remoteJid?.endsWith('@g.us')) return false;
+
+  const msgId = msg.key.id ?? '';
+  const participant = msg.key.participant ?? '';
+
+  // 1. Baileys / WhatsApp Web generate IDs starting with "3EB"
+  //    Mobile clients use alphanumeric IDs of length 16-22 without this prefix.
+  if (msgId.startsWith('3EB') && msgId.length > 10) {
+    return true;
+  }
+
+  // 2. Baileys occasionally exposes device platform info
+  const bizName = (msg as unknown as { verifiedBizName?: string }).verifiedBizName ?? '';
+  if (bizName && BOT_PLATFORM_HINTS.some((h) => bizName.toLowerCase().includes(h))) {
+    return true;
+  }
+
+  // 3. Check agent index in participant JID — linked devices use agent > 0
+  //    Primary device (mobile) agent = 0; we allow linked devices (agent > 0)
+  //    Automation clients often use agent = 0 with web-like IDs
+  const agentMatch = participant.match(/:(\d+)@/);
+  if (agentMatch) {
+    const agent = parseInt(agentMatch[1] ?? '0', 10);
+    // Agent 0 with 3EB ID already caught above.
+    // Agent > 100 is suspicious (normal devices use 0-5).
+    if (agent > 100) return true;
+  }
+
+  // 4. Message ID length check — real mobile IDs are 16-22 chars
+  //    Very short (< 8) or very long (> 40) IDs are atypical
+  if (msgId.length > 0 && (msgId.length < 6 || msgId.length > 50)) {
+    return true;
+  }
+
+  return false;
+}
+
+===== modules/anti-channel.ts =====
+// ============================================================
+// Anti System — AntiChannel Module
+// Detects messages forwarded from WhatsApp Channels (Newsletters).
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+
+type AnyMsg = Record<string, unknown>;
+
+function getContextInfo(msg: WebMessageInfo): AnyMsg | null {
+  const m = msg.message as AnyMsg | null | undefined;
+  if (!m) return null;
+
+  if (m['ephemeralMessage']) {
+    const inner = (m['ephemeralMessage'] as AnyMsg)['message'];
+    if (inner) return getContextInfo({ ...msg, message: inner as WebMessageInfo['message'] });
+  }
+
+  return (
+    (m['extendedTextMessage'] as AnyMsg | undefined)?.['contextInfo'] as AnyMsg | null ?? null
+  ) ||
+    ((m['imageMessage'] as AnyMsg | undefined)?.['contextInfo'] as AnyMsg | null ?? null) ||
+    ((m['videoMessage'] as AnyMsg | undefined)?.['contextInfo'] as AnyMsg | null ?? null) ||
+    ((m['documentMessage'] as AnyMsg | undefined)?.['contextInfo'] as AnyMsg | null ?? null) ||
+    null;
+}
+
+/**
+ * Returns true if the message was forwarded from a WhatsApp Channel.
+ */
+export function messageIsFromChannel(msg: WebMessageInfo): boolean {
+  const ci = getContextInfo(msg);
+  if (!ci) return false;
+
+  const remoteJid = String(ci['remoteJid'] ?? '');
+  if (remoteJid.endsWith('@newsletter')) return true;
+
+  if (ci['forwardedNewsletterMessageInfo']) return true;
+
+  return false;
+}
+
+===== modules/anti-demote.ts =====
+// ============================================================
+// Anti System — AntiDemote Module
+// Handles unauthorized admin demotions with configurable modes.
+//
+// Modes:
+//   dwp — demote the responsible admin, do NOT restore victim
+//   dnp — demote the responsible admin, restore victim
+//   kwp — kick the responsible admin, do NOT restore victim
+//   knp — kick the responsible admin, restore victim
+// ============================================================
+
+export { demoteParticipant, promoteParticipant, kickParticipant } from '../actions.js';
+
+export interface ParticipantUpdate {
+  id: string;
+  action: 'add' | 'remove' | 'promote' | 'demote';
+  participants: string[];
+  author?: string; // who triggered the demote
+}
+
+/** Returns participants involved in a demote event */
+export function extractDemotedParticipants(update: ParticipantUpdate): string[] {
+  if (update.action !== 'demote') return [];
+  return update.participants;
+}
+
+===== modules/anti-emoji.ts =====
+// ============================================================
+// Anti System — AntiEmoji Module
+// Detects Unicode emoji in the sender's own message payload.
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+import { extractSenderText } from './message-content.js';
+
+// Match any Unicode emoji
+const EMOJI_RE = /\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu;
+
+/** Returns true if the sender's message text contains emoji */
+export function messageContainsEmoji(msg: WebMessageInfo): boolean {
+  const text = extractSenderText(msg);
+  if (!text) return false;
+  EMOJI_RE.lastIndex = 0;
+  return EMOJI_RE.test(text);
+}
+
+===== modules/anti-forward.ts =====
+// ============================================================
+// Anti System — AntiForward Module
+// Detects forwarded messages using WhatsApp forwarding metadata.
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+
+type AnyMsg = Record<string, unknown>;
+
+function getContextInfo(msg: WebMessageInfo): AnyMsg | null {
+  const m = msg.message as AnyMsg | null | undefined;
+  if (!m) return null;
+
+  // Unwrap ephemeral
+  if (m['ephemeralMessage']) {
+    const inner = (m['ephemeralMessage'] as AnyMsg)['message'];
+    if (inner) return getContextInfo({ ...msg, message: inner as WebMessageInfo['message'] });
+  }
+
+  return (
+    (m['extendedTextMessage'] as AnyMsg | undefined)?.['contextInfo'] as AnyMsg | null ?? null
+  ) ||
+    ((m['imageMessage'] as AnyMsg | undefined)?.['contextInfo'] as AnyMsg | null ?? null) ||
+    ((m['videoMessage'] as AnyMsg | undefined)?.['contextInfo'] as AnyMsg | null ?? null) ||
+    ((m['documentMessage'] as AnyMsg | undefined)?.['contextInfo'] as AnyMsg | null ?? null) ||
+    ((m['stickerMessage'] as AnyMsg | undefined)?.['contextInfo'] as AnyMsg | null ?? null) ||
+    ((m['audioMessage'] as AnyMsg | undefined)?.['contextInfo'] as AnyMsg | null ?? null) ||
+    null;
+}
+
+/**
+ * Returns true if the message carries forward metadata.
+ */
+export function messageIsForwarded(msg: WebMessageInfo): boolean {
+  const ci = getContextInfo(msg);
+  if (!ci) return false;
+  return Boolean(ci['isForwarded'] || (ci['forwardingScore'] !== undefined && Number(ci['forwardingScore']) > 0));
+}
+
+===== modules/anti-gm.ts =====
+// ============================================================
+// Anti System — AntiGM Module (v2 — zero false positives)
+//
+// WHAT THIS MODULE PROTECTS AGAINST
+//   WhatsApp's native "Status @Group" feature: a user posts a
+//   Status that explicitly mentions a group. Every member of that
+//   group receives a dedicated system-delivered message whose
+//   top-level content type is `groupStatusMentionMessage`.
+//
+// ROOT CAUSE OF THE OLD FALSE-POSITIVE BUG
+//   Baileys decodes WebMessageInfo through protobufjs. Absent
+//   message fields are materialized as empty objects on the decoded
+//   payload, so `'groupStatusMentionMessage' in message` is TRUE for
+//   EVERY message in the chat. The old detector treated key presence
+//   as the trigger and therefore deleted every message once the
+//   module was enabled.
+//
+// CORRECT DETECTION RULES (all must hold):
+//   1. remoteJid is a group AND is the group this message arrived in
+//   2. The message is not from the bot itself
+//   3. `message.groupStatusMentionMessage` exists AND is a real
+//      object carrying an INNER message with an actual content type
+//      (the inner wrapper is populated only for genuine mentions).
+//      An empty wrapper ({}), a protocolMessage stub, or a message
+//      with no content type is NOT a mention and is ignored.
+//
+// EVERYTHING ELSE IS IGNORED:
+//   normal text, images, stickers, videos, voice notes, polls,
+//   forwarded messages, quoted messages, statusMentionSources,
+//   statusMentionReply, statusMentions, groupMentionedMessage —
+//   none of those are the Status @Group event and none trigger.
+//
+// The detector logs WHY it did or did not trigger so every decision
+// is observable in production.
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+import { logger } from '../../../utils/logger.js';
+
+type AnyRecord = Record<string, unknown>;
+
+/** Detect the primary content type key of a message payload. */
+function detectContentType(inner: AnyRecord | null | undefined): string | null {
+  if (!inner || typeof inner !== 'object') return null;
+  const keys = Object.keys(inner);
+  if (keys.length === 0) return null;
+  // A real message has exactly one content-type key. Prefer the first known
+  // content key; ignore metadata-only keys.
+  const contentKeys = [
+    'conversation', 'extendedTextMessage', 'imageMessage', 'videoMessage',
+    'audioMessage', 'stickerMessage', 'documentMessage', 'contactMessage',
+    'locationMessage', 'pollCreationMessage', 'pollCreationMessageV2',
+    'pollCreationMessageV3', 'protocolMessage', 'reactionMessage',
+    'buttonsMessage', 'buttonsResponseMessage', 'listMessage',
+    'listResponseMessage', 'templateMessage', 'interactiveMessage',
+    'groupStatusMessage', 'groupStatusMessageV2', 'editedMessage',
+    'viewOnceMessage', 'ephemeralMessage',
+  ];
+  const found = contentKeys.find((k) => k in inner);
+  return found ?? keys[0] ?? null;
+}
+
+/** A genuine Status @Group mention or null (never a guess). */
+export function messageIsGroupStatusMention(
+  msg: WebMessageInfo,
+  groupJid: string
+): boolean {
+  const remoteJid = msg.key?.remoteJid ?? '';
+
+  // Rule 1 — must be a group message delivered to THIS group.
+  if (!remoteJid.endsWith('@g.us')) {
+    return false;
+  }
+  if (remoteJid !== groupJid) {
+    return false;
+  }
+
+  // Rule 2 — never punish the bot's own traffic.
+  if (msg.key?.fromMe) {
+    return false;
+  }
+
+  const message = (msg as unknown as AnyRecord)['message'] as AnyRecord | undefined;
+  if (!message || typeof message !== 'object') {
+    return false;
+  }
+
+  // Rule 3 — the ONLY valid trigger is a native groupStatusMentionMessage
+  // wrapper that actually carries a real inner message.
+  const gsm = message['groupStatusMentionMessage'];
+  if (gsm && typeof gsm === 'object') {
+    const inner = (gsm as AnyRecord)['message'] as AnyRecord | undefined;
+    const innerType = detectContentType(inner);
+    const isReal = Boolean(innerType && innerType !== 'protocolMessage');
+
+    if (isReal) {
+      logger.info('[AntiGM] Status @Group mention detected — triggering', {
+        groupJid,
+        innerType,
+        messageId: msg.key?.id,
+      });
+      return true;
+    }
+
+    // Empty / stub wrapper — system noise, NOT a user mention.
+    logger.debug('[AntiGM] groupStatusMentionMessage wrapper carries no real content — ignored', {
+      groupJid,
+      innerType: innerType ?? 'none',
+      messageId: msg.key?.id,
+    });
+    return false;
+  }
+
+  // Everything else — text, media, stickers, forwards, quotes, status
+  // mention sources/replies — is explicitly NOT this event.
+  logger.debug('[AntiGM] No native Status @Group payload — ignored', {
+    groupJid,
+    hasGroupStatusMention: 'groupStatusMentionMessage' in message,
+    messageId: msg.key?.id,
+  });
+  return false;
+}
+
+===== modules/anti-group-call.ts =====
+// ============================================================
+// Anti System — AntiGroupCall Module
+// Detects WhatsApp group call events.
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+
+type AnyMsg = Record<string, unknown>;
+
+/** Returns true if the message signals a group call event */
+export function messageIsGroupCall(msg: WebMessageInfo): boolean {
+  const m = msg.message as AnyMsg | null | undefined;
+  if (!m) return false;
+
+  const callLog = m['callLogMessage'] as AnyMsg | undefined;
+  if (callLog?.['isGroup']) return true;
+  if (m['groupCallMessage']) return true;
+  if (m['callInviteMessage']) return true;
+
+  return false;
+}
+
+===== modules/anti-group-mention.ts =====
+// ============================================================
+// Anti System — AntiGroupMention Module
+// Detects when a user explicitly tags another group with @[group name].
+//
+// FALSE-POSITIVE GUARDS (two known sources of spurious triggers):
+//
+// 1. groupMentionedMessage used for join notifications
+//    WhatsApp reuses the groupMentionedMessage wrapper for system
+//    notifications (e.g. "X joined via invite link"). Those wrappers
+//    have an empty or stub inner message. A genuine user-sent @group
+//    tag always carries a real nested message body (extendedTextMessage
+//    or similar). We require that body to exist before triggering.
+//
+// 2. contextInfo.groupMentions containing the CURRENT group's JID
+//    WhatsApp populates contextInfo.groupMentions with the current
+//    group's JID in many ordinary in-group messages (replies, quotes,
+//    etc.). We must only trigger when a message mentions a DIFFERENT
+//    group — the @group feature is for cross-group tagging, not
+//    self-referential context metadata.
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+
+type AnyMsg = Record<string, unknown>;
+type GroupMention = { groupJid?: string };
+
+/**
+ * @param msg            - The incoming WhatsApp message.
+ * @param currentGroupJid - The JID of the group this message arrived in.
+ *                         Pass this so the self-mention guard can work.
+ */
+export function messageIsGroupMention(msg: WebMessageInfo, currentGroupJid?: string): boolean {
+  // Early exit: must be a group message
+  if (!msg.key.remoteJid?.endsWith('@g.us')) return false;
+
+  const m = msg.message as AnyMsg | null | undefined;
+  if (!m) return false;
+
+  // ── Guard 1: groupMentionedMessage requires a real inner payload ──────
+  // System join/add notifications use this wrapper with an empty struct.
+  // A genuine @group mention from a user always has a nested message body.
+  const gmm = m['groupMentionedMessage'] as AnyMsg | undefined;
+  if (gmm) {
+    const inner = gmm['message'] as AnyMsg | undefined;
+    if (inner && Object.keys(inner).length > 0) return true;
+    // Empty wrapper → join notification → skip
+  }
+
+  // ── Guard 2: extendedTextMessage.contextInfo.groupMentions ────────────
+  // Only trigger when a message explicitly mentions a DIFFERENT group.
+  // WhatsApp may set groupMentions to the current group's JID as context
+  // metadata on ordinary messages — those must not trigger the module.
+  const ext = m['extendedTextMessage'] as AnyMsg | undefined;
+  if (ext?.['contextInfo']) {
+    const ci = ext['contextInfo'] as AnyMsg;
+    const gm = ci['groupMentions'] as GroupMention[] | undefined;
+    if (gm && gm.length > 0) {
+      if (!currentGroupJid) {
+        // No group JID supplied — fall back to original behaviour (fire if any mention)
+        return true;
+      }
+      // Only trigger if at least one mention targets a group other than this one
+      return gm.some((g) => g.groupJid && g.groupJid !== currentGroupJid);
+    }
+  }
+
+  return false;
+}
+
+===== modules/anti-link.ts =====
+// ============================================================
+// Anti System — AntiLink Module
+// Detects user-visible URLs in the sender's own group message.
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+import { logger } from '../../../utils/logger.js';
+import { extractSenderTexts } from './message-content.js';
+
+/**
+ * Candidate URL matcher. Validation is done with the platform URL parser below;
+ * this pattern deliberately does not contain a hardcoded TLD allow-list.
+ */
+const URL_CANDIDATE_RE =
+  /(?:https?|ftp):\/\/[^\s<>"'`]+|www\.[^\s<>"'`]+|(?<![\w@.-])(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z][a-z0-9_-]{1,62}(?::\d{1,5})?(?:[/?#][^\s<>"'`]*)?/giu;
+
+const TRAILING_PUNCTUATION = /[.,!?;:'"…。！？、，；：）】』》]$/u;
+const CLOSING_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  [')', '('],
+  [']', '['],
+  ['}', '{'],
+];
+
+/** Remove punctuation added by the sentence around a URL. */
+function trimUrlPunctuation(raw: string): string {
+  let value = raw;
+  while (TRAILING_PUNCTUATION.test(value)) value = value.slice(0, -1);
+
+  // Keep balanced parentheses/brackets in a URL path, but remove a closing
+  // delimiter that belongs to surrounding prose: "https://x.test/path)."
+  for (const [closing, opening] of CLOSING_PAIRS) {
+    while (value.endsWith(closing)) {
+      const openCount = [...value].filter((char) => char === opening).length;
+      const closeCount = [...value].filter((char) => char === closing).length;
+      if (closeCount <= openCount) break;
+      value = value.slice(0, -1);
+    }
+  }
+  return value;
+}
+
+/** Parse and validate a candidate without requiring a scheme in the message. */
+function normalizeCandidate(raw: string): string | null {
+  const candidate = trimUrlPunctuation(raw);
+  if (!candidate) return null;
+
+  const parseValue = /^(?:https?|ftp):\/\//iu.test(candidate)
+    ? candidate
+    : `https://${candidate}`;
+
+  try {
+    const parsed = new URL(parseValue);
+    if (!['http:', 'https:', 'ftp:'].includes(parsed.protocol)) return null;
+
+    const hostname = parsed.hostname.replace(/^\[|\]$/gu, '').toLowerCase();
+    if (!hostname || !hostname.includes('.')) return null;
+
+    const labels = hostname.split('.');
+    if (labels.some((label) => (
+      !label ||
+      label.length > 63 ||
+      !/^[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?$/iu.test(label)
+    ))) {
+      return null;
+    }
+    const tld = labels[labels.length - 1] ?? '';
+    if (tld.length < 2 || tld.length > 63 || !/^[a-z][a-z0-9_-]*$/iu.test(tld)) return null;
+
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
+/** Extract every validated URL from text, preserving message order. */
+export function extractUrls(text: string): string[] {
+  if (!text) return [];
+
+  const found: string[] = [];
+  const seen = new Set<string>();
+  URL_CANDIDATE_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = URL_CANDIDATE_RE.exec(text)) !== null) {
+    const url = normalizeCandidate(match[0]);
+    if (!url) {
+      logger.debug('[AntiLink] URL candidate rejected', {
+        candidate: trimUrlPunctuation(match[0]),
+        reason: 'invalid URL or hostname',
+      });
+      continue;
+    }
+    const key = url.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      found.push(url);
+    }
+  }
+  URL_CANDIDATE_RE.lastIndex = 0;
+  return found;
+}
+
+/** Check any user-visible text string for at least one valid URL. */
+export function textContainsLink(text: string): boolean {
+  return extractUrls(text).length > 0;
+}
+
+/** Extract all unique links from the sender's actual message payload. */
+export function messageLinks(msg: WebMessageInfo): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  for (const text of extractSenderTexts(msg)) {
+    for (const url of extractUrls(text)) {
+      const key = url.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push(url);
+    }
+  }
+  return found;
+}
+
+/** Return the sender-owned visible text fields for diagnostics/tests. */
+export function extractAllText(msg: WebMessageInfo): string[] {
+  return extractSenderTexts(msg);
+}
+
+/** Returns true only when the sender's own group message contains a URL. */
+export function messageContainsLink(msg: WebMessageInfo): boolean {
+  if (!msg.key.remoteJid?.endsWith('@g.us')) return false;
+  return messageLinks(msg).length > 0;
+}
+
+===== modules/anti-media.ts =====
+// ============================================================
+// Anti System — AntiMedia Modules (AntiPic, AntiVid, AntiAud)
+// Separate detectors for image, video, and audio messages.
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+
+type AnyMsg = Record<string, unknown>;
+
+function unwrap(msg: WebMessageInfo): AnyMsg | null {
+  const m = msg.message as AnyMsg | null | undefined;
+  if (!m) return null;
+  // Unwrap view-once / ephemeral containers
+  return (
+    ((m['viewOnceMessage'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+    ((m['viewOnceMessageV2'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+    ((m['viewOnceMessageV2Extension'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+    ((m['ephemeralMessage'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+    ((m['documentWithCaptionMessage'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+    m
+  );
+}
+
+export function messageIsImage(msg: WebMessageInfo): boolean {
+  const m = unwrap(msg);
+  return Boolean(m?.['imageMessage']);
+}
+
+export function messageIsVideo(msg: WebMessageInfo): boolean {
+  const m = unwrap(msg);
+  if (!m) return false;
+  const vid = m['videoMessage'] as AnyMsg | undefined;
+  if (!vid) return false;
+  const mime = String(vid['mimetype'] ?? '');
+  return mime.startsWith('video/') || mime === '';
+}
+
+export function messageIsAudio(msg: WebMessageInfo): boolean {
+  const m = unwrap(msg);
+  if (!m) return false;
+  const audio = m['audioMessage'] as AnyMsg | undefined;
+  if (!audio) return false;
+  return !audio['ptt']; // ptt = push-to-talk = voice note
+}
+
+===== modules/anti-nsfw.ts =====
+// ============================================================
+// Anti System — AntiNSFW Module
+// External API-based NSFW detection for images and videos.
+// Configure via ANTI_NSFW_API_URL env var.
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+import type { BridgeWASocket as WASocket } from '../../baileys-types.js';
+import { logger } from '../../../utils/logger.js';
+
+const NSFW_API_URL = process.env.ANTI_NSFW_API_URL ?? '';
+
+type AnyMsg = Record<string, unknown>;
+
+function unwrap(msg: WebMessageInfo): AnyMsg | null {
+  const m = msg.message as AnyMsg | null | undefined;
+  if (!m) return null;
+  return (
+    ((m['viewOnceMessage'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+    ((m['viewOnceMessageV2'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+    ((m['ephemeralMessage'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+    m
+  );
+}
+
+function isMediaMessage(msg: WebMessageInfo): boolean {
+  const m = unwrap(msg);
+  return Boolean(m?.['imageMessage'] || m?.['videoMessage']);
+}
+
+/**
+ * Download media buffer from a Baileys message.
+ */
+async function downloadMediaBuffer(
+  msg: WebMessageInfo
+): Promise<Uint8Array | null> {
+  try {
+    const baileys = await import('@crysnovax/baileys') as Record<string, unknown>;
+    const downloadFn = baileys['downloadMediaMessage'] as
+      | ((msg: unknown, type: string, opts: unknown) => Promise<Buffer>)
+      | undefined;
+    if (!downloadFn) {
+      logger.warn('[AntiNSFW] downloadMediaMessage not exported by this Baileys version');
+      return null;
+    }
+    return await downloadFn(msg, 'buffer', {});
+  } catch (err) {
+    logger.warn('[AntiNSFW] Media download failed', { err: String(err) });
+    return null;
+  }
+}
+
+/**
+ * Returns true if the image/video is NSFW according to the configured API.
+ * Returns false if the API is not configured or the check fails (fail-open).
+ */
+export async function messageIsNSFW(
+  _socket: WASocket,
+  msg: WebMessageInfo
+): Promise<boolean> {
+  if (!NSFW_API_URL) return false;
+  if (!isMediaMessage(msg)) return false;
+
+  const buffer = await downloadMediaBuffer(msg);
+  if (!buffer) return false;
+
+  try {
+    const response = await fetch(NSFW_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: buffer as unknown as BodyInit,
+    });
+    if (!response.ok) return false;
+    const data = await response.json() as { nsfw?: boolean; is_nsfw?: boolean; score?: number };
+    return Boolean(data.nsfw ?? data.is_nsfw ?? (data.score !== undefined && data.score > 0.7));
+  } catch (err) {
+    logger.warn('[AntiNSFW] API check failed', { err: String(err) });
+    return false;
+  }
+}
+
+===== modules/anti-poll.ts =====
+// ============================================================
+// Anti System — AntiPoll Module
+// Detects poll creation messages.
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+
+type AnyMsg = Record<string, unknown>;
+
+export function messageIsPoll(msg: WebMessageInfo): boolean {
+  const m = msg.message as AnyMsg | null | undefined;
+  if (!m) return false;
+
+  if (m['ephemeralMessage']) {
+    const inner = (m['ephemeralMessage'] as AnyMsg)['message'];
+    if (inner) return messageIsPoll({ ...msg, message: inner as WebMessageInfo['message'] });
+  }
+
+  return Boolean(
+    m['pollCreationMessage'] ??
+    m['pollCreationMessageV2'] ??
+    m['pollCreationMessageV3']
+  );
+}
+
+===== modules/anti-promote.ts =====
+// ============================================================
+// Anti System — AntiPromote Module
+// Monitors unauthorized admin promotions in group-participants.update.
+// ============================================================
+
+export interface ParticipantUpdate {
+  id: string;
+  action: 'add' | 'remove' | 'promote' | 'demote';
+  participants: string[];
+  author?: string; // who triggered the change
+}
+
+/** Returns participants involved in a promote event */
+export function extractPromotedParticipants(update: ParticipantUpdate): string[] {
+  if (update.action !== 'promote') return [];
+  return update.participants;
+}
+
+===== modules/anti-spam.ts =====
+// ============================================================
+// Anti System — AntiSpam Module
+// Rolling window rate-limiter. No fixed intervals.
+// ============================================================
+
+export { recordSpamMessage, resetSpamWindow } from '../config.js';
+
+===== modules/anti-sticker.ts =====
+// ============================================================
+// Anti System — AntiSticker Module
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+
+type AnyMsg = Record<string, unknown>;
+
+/** Returns true if the message is a sticker */
+export function messageIsSticker(msg: WebMessageInfo): boolean {
+  const m = msg.message as AnyMsg | null | undefined;
+  if (!m) return false;
+  if (m['ephemeralMessage']) {
+    const inner = (m['ephemeralMessage'] as AnyMsg)['message'];
+    if (inner) return messageIsSticker({ ...msg, message: inner as WebMessageInfo['message'] });
+  }
+  return Boolean(m['stickerMessage']);
+}
+
+===== modules/anti-text.ts =====
+// ============================================================
+// Anti System — AntiText Module
+// Blocks plain text messages (no media).
+//
+// Classification rules (production-hardened):
+//   • conversation                       → plain text
+//   • extendedTextMessage (no link)      → plain text
+//   • extendedTextMessage (canonicalUrl) → link → NOT plain text
+//   • ephemeralMessage / viewOnceMessage / viewOnceMessageV2 → recurse
+//   • protocolMessage / eventMessage / groupInviteMessage /
+//     groupMentionMessage / system messages → NEVER plain text
+//   • messages with media (image/video/audio/sticker/doc/poll/contact/
+//     location/liveLocation/groupStatusMention/reaction) → NOT plain text
+//   • bot command messages (see isBotCommandText) → NOT plain text
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+
+type AnyMsg = Record<string, unknown>;
+
+// Message fields that carry actual content and must exclude a message
+// from the plain-text class even if a text-ish field also exists.
+const NON_TEXT_KEYS = [
+  'imageMessage', 'videoMessage', 'audioMessage', 'stickerMessage',
+  'documentMessage', 'documentWithCaptionMessage', 'contactMessage',
+  'contactsArrayMessage', 'locationMessage', 'liveLocationMessage',
+  'pollCreationMessage', 'pollCreationMessageV2', 'pollCreationMessageV3',
+  'pollUpdateMessage', 'reactionMessage', 'groupStatusMentionMessage',
+  'groupInviteMessage', 'buttonsMessage', 'listMessage', 'templateMessage',
+  'interactiveMessage', 'orderMessage', 'productMessage', 'invoiceMessage',
+  'protocolMessage', 'eventMessage', 'callLogMessage', 'callLogMessageV2',
+  'callLogMessageV3', 'callLogMessageV4', 'keepInChatMessage',
+  'pinInChatMessage', 'sharePhoneNumberMessage', 'encReactionMessage',
+  'editedMessage', 'requestPaymentMessage', 'sendPaymentMessage',
+  'cancelPaymentRequestMessage', 'declinePaymentRequestMessage',
+  'groupMentionMessage', 'lottieStickerMessage', 'ptvMessage',
+  'viewOnceMessage', 'viewOnceMessageV2', 'ephemeralMessage',
+  'botInvokeMessage', 'msgRecurring', 'scheduledCallCreationMessage',
+  'scheduledCallEditMessage', 'verificationCodeSyncMessage',
+];
+
+/**
+ * True when the message carries a non-text content field.
+ * Unwraps ephemeral/viewOnce containers before the check.
+ */
+function hasNonTextContent(m: AnyMsg): boolean {
+  // Unwrap container wrappers first
+  const wrapped = m['ephemeralMessage'] ?? m['viewOnceMessage'] ?? m['viewOnceMessageV2'] ?? m['documentWithCaptionMessage'];
+  if (wrapped && typeof wrapped === 'object') {
+    const inner = (wrapped as AnyMsg)['message'] as AnyMsg | undefined;
+    if (inner && typeof inner === 'object') {
+      if (hasNonTextContent(inner)) return true;
+    }
+  }
+  for (const key of NON_TEXT_KEYS) {
+    // These two are containers we already recursed into.
+    if (key === 'ephemeralMessage' || key === 'viewOnceMessage' || key === 'viewOnceMessageV2' || key === 'documentWithCaptionMessage') continue;
+    if (m[key] && typeof m[key] === 'object' && Object.keys(m[key] as AnyMsg).length > 0) return true;
+  }
+  return false;
+}
+
+/** True when the text is a bot command (prefix + known word). */
+export function isBotCommandText(text: string, prefix: string): boolean {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (!prefix || !prefix.trim()) return false;
+  // Null-prefix mode is deliberately excluded — everything could be a command.
+  const p = prefix.trim();
+  if (!trimmed.startsWith(p)) return false;
+  const rest = trimmed.slice(p.length).trimStart();
+  const word = rest.split(/\s/)[0] ?? '';
+  return /^[a-z][a-z0-9]{1,20}$/i.test(word);
+}
+
+/** Returns true if the message is a plain text message (no media). */
+export function messageIsPlainText(
+  msg: WebMessageInfo,
+  opts?: { prefix?: string }
+): boolean {
+  const m = msg.message as AnyMsg | null | undefined;
+  if (!m) return false;
+
+  if (m['ephemeralMessage']) {
+    const inner = (m['ephemeralMessage'] as AnyMsg)['message'];
+    if (inner) return messageIsPlainText({ ...msg, message: inner as WebMessageInfo['message'] }, opts);
+  }
+  if (m['viewOnceMessage']) {
+    const inner = (m['viewOnceMessage'] as AnyMsg)['message'];
+    if (inner) return messageIsPlainText({ ...msg, message: inner as WebMessageInfo['message'] }, opts);
+  }
+  if (m['viewOnceMessageV2']) {
+    const inner = (m['viewOnceMessageV2'] as AnyMsg)['message'];
+    if (inner) return messageIsPlainText({ ...msg, message: inner as WebMessageInfo['message'] }, opts);
+  }
+
+  // Any non-text content field → definitely not plain text.
+  if (hasNonTextContent(m)) return false;
+
+  const conversation = m['conversation'];
+  if (typeof conversation === 'string' && conversation.length > 0) {
+    // Bot commands (prefix + word) are excluded so AntiText never eats
+    // command invocations that should reach the dispatcher.
+    if (opts?.prefix && isBotCommandText(conversation, opts.prefix)) return false;
+    return true;
+  }
+
+  const ext = m['extendedTextMessage'] as AnyMsg | undefined;
+  if (ext?.['text'] && !ext?.['canonicalUrl']) {
+    const text = String(ext['text']);
+    if (opts?.prefix && isBotCommandText(text, opts.prefix)) return false;
+    return true;
+  }
+
+  return false;
+}
+
+===== modules/anti-vn.ts =====
+// ============================================================
+// Anti System — AntiVN (Voice Note) Module
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+
+type AnyMsg = Record<string, unknown>;
+
+function unwrap(msg: WebMessageInfo): AnyMsg | null {
+  const m = msg.message as AnyMsg | null | undefined;
+  if (!m) return null;
+  return (
+    ((m['viewOnceMessage'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+    ((m['viewOnceMessageV2'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+    ((m['ephemeralMessage'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+    m
+  );
+}
+
+/** Returns true if the message is a push-to-talk (voice note) audio */
+export function messageIsVoiceNote(msg: WebMessageInfo): boolean {
+  const m = unwrap(msg);
+  if (!m) return false;
+  const audio = m['audioMessage'] as AnyMsg | undefined;
+  return Boolean(audio?.['ptt']);
+}
+
+===== modules/anti-words.ts =====
+// ============================================================
+// Anti System — AntiWords Module
+// Blocks messages containing configured words/phrases in the
+// sender's own payload, never in quoted/replied content.
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+import { extractSenderText } from './message-content.js';
+
+/** Returns the first matched blocked word, or null if none matched */
+export function messageContainsBlockedWord(
+  msg: WebMessageInfo,
+  words: string[]
+): string | null {
+  if (!words.length) return null;
+  const text = extractSenderText(msg).toLowerCase();
+  for (const word of words) {
+    if (text.includes(word.toLowerCase())) return word;
+  }
+  return null;
+}
+
+===== modules/message-content.ts =====
+// ============================================================
+// Anti System — Sender Message Content
+//
+// Extracts user-visible content from the incoming message itself.
+// ContextInfo is metadata: its quotedMessage is deliberately never
+// traversed, so replies cannot inherit the quoted sender's payload.
+// ============================================================
+
+import type { WebMessageInfo } from '../../baileys-types.js';
+import { WRAPPER_KEYS } from '../../quoted-message/MessageUnwrapper.js';
+
+type AnyMessage = Record<string, unknown>;
+
+function addText(texts: string[], value: unknown): void {
+  if (typeof value === 'string' && value.trim()) texts.push(value);
+}
+
+function addListText(texts: string[], list: AnyMessage): void {
+  addText(texts, list['title']);
+  addText(texts, list['description']);
+  const sections = list['sections'];
+  if (!Array.isArray(sections)) return;
+  for (const section of sections) {
+    if (!section || typeof section !== 'object') continue;
+    const sectionRecord = section as AnyMessage;
+    addText(texts, sectionRecord['title']);
+    const rows = sectionRecord['rows'];
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') continue;
+      const rowRecord = row as AnyMessage;
+      addText(texts, rowRecord['title']);
+      addText(texts, rowRecord['description']);
+    }
+  }
+}
+
+/**
+ * Collect user-visible text from a message content node.
+ *
+ * This recursively follows message containers only. It never follows
+ * `contextInfo`, especially `contextInfo.quotedMessage`, and never scans
+ * transport/media URL fields such as `imageMessage.url`.
+ */
+function collectSenderText(
+  message: AnyMessage,
+  texts: string[],
+  seen: Set<object>,
+  depth: number,
+): void {
+  if (depth > 16 || seen.has(message)) return;
+  seen.add(message);
+
+  addText(texts, message['conversation']);
+
+  const extended = message['extendedTextMessage'];
+  if (extended && typeof extended === 'object') {
+    const ext = extended as AnyMessage;
+    addText(texts, ext['text']);
+    // These fields are hydrated content belonging to this message. The
+    // nested contextInfo is intentionally ignored.
+    addText(texts, ext['matchedText']);
+    // These are sender-owned link-preview fields when present. Do not read
+    // anything below contextInfo; quoted payloads remain metadata only.
+    addText(texts, ext['canonicalUrl']);
+    addText(texts, ext['title']);
+    addText(texts, ext['description']);
+  }
+
+  for (const mediaKey of ['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage']) {
+    const media = message[mediaKey];
+    if (media && typeof media === 'object') {
+      addText(texts, (media as AnyMessage)['caption']);
+    }
+  }
+
+  const buttons = message['buttonsMessage'];
+  if (buttons && typeof buttons === 'object') {
+    addText(texts, (buttons as AnyMessage)['contentText']);
+  }
+  const buttonResponse = message['buttonsResponseMessage'];
+  if (buttonResponse && typeof buttonResponse === 'object') {
+    const response = buttonResponse as AnyMessage;
+    addText(texts, response['selectedDisplayText']);
+    addText(texts, response['selectedButtonId']);
+  }
+
+  const list = message['listMessage'];
+  if (list && typeof list === 'object') addListText(texts, list as AnyMessage);
+  const listResponse = message['listResponseMessage'];
+  if (listResponse && typeof listResponse === 'object') {
+    const reply = (listResponse as AnyMessage)['singleSelectReply'];
+    if (reply && typeof reply === 'object') {
+      addText(texts, (reply as AnyMessage)['selectedDisplayText']);
+      addText(texts, (reply as AnyMessage)['selectedRowId']);
+    }
+  }
+
+  const templateReply = message['templateButtonReplyMessage'];
+  if (templateReply && typeof templateReply === 'object') {
+    const reply = templateReply as AnyMessage;
+    addText(texts, reply['selectedDisplayText']);
+    addText(texts, reply['selectedId']);
+  }
+
+  const template = message['templateMessage'];
+  if (template && typeof template === 'object') {
+    const hydrated = (template as AnyMessage)['hydratedTemplate'];
+    if (hydrated && typeof hydrated === 'object') {
+      addText(texts, (hydrated as AnyMessage)['hydratedContentText']);
+    }
+  }
+
+  const interactive = message['interactiveMessage'];
+  if (interactive && typeof interactive === 'object') {
+    const interactiveRecord = interactive as AnyMessage;
+    for (const field of ['header', 'body', 'footer']) {
+      const value = interactiveRecord[field];
+      if (value && typeof value === 'object') {
+        const record = value as AnyMessage;
+        addText(texts, record['text']);
+        addText(texts, record['title']);
+      }
+    }
+  }
+  const interactiveResponse = message['interactiveResponseMessage'];
+  if (interactiveResponse && typeof interactiveResponse === 'object') {
+    const response = interactiveResponse as AnyMessage;
+    const body = response['body'];
+    if (body && typeof body === 'object') addText(texts, (body as AnyMessage)['text']);
+    const native = response['nativeFlowResponseMessage'];
+    if (native && typeof native === 'object') addText(texts, (native as AnyMessage)['paramsJson']);
+  }
+
+  for (const pollKey of ['pollCreationMessage', 'pollCreationMessageV2', 'pollCreationMessageV3']) {
+    const poll = message[pollKey];
+    if (poll && typeof poll === 'object') addText(texts, (poll as AnyMessage)['name']);
+  }
+
+  // Follow only known content wrappers. Do not generalize this to every
+  // object-valued property: contextInfo is intentionally outside this list.
+  for (const wrapperKey of WRAPPER_KEYS) {
+    const wrapper = message[wrapperKey];
+    if (!wrapper || typeof wrapper !== 'object') continue;
+    const inner = (wrapper as AnyMessage)['message'];
+    if (inner && typeof inner === 'object') {
+      collectSenderText(inner as AnyMessage, texts, seen, depth + 1);
+    }
+  }
+
+  // Edited messages can also arrive as protocol metadata with the edited
+  // payload nested under protocolMessage.editedMessage. That is still the
+  // sender's own content; contextInfo remains deliberately excluded.
+  const protocol = message['protocolMessage'];
+  if (protocol && typeof protocol === 'object') {
+    const edited = (protocol as AnyMessage)['editedMessage'];
+    if (edited && typeof edited === 'object') {
+      collectSenderText(edited as AnyMessage, texts, seen, depth + 1);
+    }
+  }
+}
+
+/** Extract all visible text belonging to the sender's own message payload. */
+export function extractSenderTexts(msg: WebMessageInfo): string[] {
+  const texts: string[] = [];
+  const message = msg.message as AnyMessage | null | undefined;
+  if (message && typeof message === 'object') {
+    collectSenderText(message, texts, new Set<object>(), 0);
+  }
+  return texts;
+}
+
+/** Join sender-owned text for anti-word/emoji checks. */
+export function extractSenderText(msg: WebMessageInfo): string {
+  return extractSenderTexts(msg).join('\n');
+}
+
+===== security-authorization.ts =====
+// ============================================================
+// Central Security Authorization Engine
+// ============================================================
+//
+// Single authoritative source for actor permission classification.
+// Shared by: AntiPromote, AntiDemote, Kick, Ban, Warn, AutoBlock,
+//            AntiLink, AntiSpam, AntiBot, and all future modules.
+//
+// Core principle:
+//   Normal message anti modules protect administrators and only enforce
+//   against ordinary members. AntiPromote and AntiDemote are the explicit
+//   administrator-protection modules and enforce their configured actions
+//   for administrator-targeted changes.
+//
+//   Detection  = centralized by module target scope
+//   Punishment = only after the module's target policy allows enforcement
+//
+// Permission levels classify actors for the dedicated admin-protection
+// engine and future module-specific policies. Normal message anti modules
+// do not use WA_ADMIN as an enforcement target.
+// ============================================================
+
+import type { BridgeWASocket as WASocket } from '../baileys-types.js';
+import { logger } from '../../utils/logger.js';
+import {
+  fetchGroupMeta,
+  numericId,
+} from '../utils/group-permissions.js';
+import { loadSessionConfig } from '../../services/workspace.js';
+import type { PermissionLevel, SkipReason, AuthorizationResult } from './types.js';
+
+// ── Protected level set ────────────────────────────────────
+
+const PROTECTED_LEVELS = new Set<PermissionLevel>([
+  'GLOBAL_OWNER',
+  'SESSION_OWNER',
+  'WORKSPACE_OWNER',
+  'TRUSTED_ADMIN',
+  'SUDO_USER',
+  'TEMPORARY_PERMIT',
+]);
+
+/** True when the permission level exempts the actor from punishment. */
+export function isPunishable(level: PermissionLevel): boolean {
+  return !PROTECTED_LEVELS.has(level);
+}
+
+/** Returns the structured skip reason string for a protected level. */
+export function getSkipReason(level: PermissionLevel): SkipReason | undefined {
+  const map: Partial<Record<PermissionLevel, SkipReason>> = {
+    GLOBAL_OWNER:     'Global Owner',
+    SESSION_OWNER:    'Session Owner',
+    WORKSPACE_OWNER:  'Workspace Owner',
+    TRUSTED_ADMIN:    'Trusted Admin',
+    SUDO_USER:        'Sudo User',
+    TEMPORARY_PERMIT: 'Temporary Permit',
+  };
+  return map[level];
+}
+
+// ── Owner number resolution ────────────────────────────────
+
+/**
+ * Resolve all WhatsApp numbers that should be treated as Session Owner /
+ * Workspace Owner for the given workspace.
+ *
+ * Stored in `ownerWaNumbers` (string[]) in UserConfig.
+ * If absent, only the sudoNumbers list is used (SUDO_USER level).
+ */
+function getOwnerWaNumbers(sessionCfg: import('../../types/index.js').UserConfig | null): string[] {
+  if (!sessionCfg) return [];
+  return (sessionCfg.ownerWaNumbers ?? []).map((n) => n.replace(/\D/g, ''));
+}
+
+/**
+ * Resolve all numbers explicitly configured as Trusted Admins.
+ * Stored in `trustedAdminNumbers` (string[]) in UserConfig.
+ */
+function getTrustedAdminNumbers(sessionCfg: import('../../types/index.js').UserConfig | null): string[] {
+  if (!sessionCfg) return [];
+  return (sessionCfg.trustedAdminNumbers ?? []).map((n) => n.replace(/\D/g, ''));
+}
+
+// ── Core Classification ────────────────────────────────────
+//
+// AntiPromote and AntiDemote use this classifier for administrator-targeted
+// events. Normal message anti modules use the centralized member-only target
+// policy in anti-system/index.ts and do not punish WhatsApp admins.
+
+/**
+ * Classify an actor by permission level and determine whether enforcement
+ * should proceed.
+ *
+ * Checks (in priority order):
+ *  1. Group metadata must be fetchable
+ *  2. Bot must be admin (otherwise enforcement is impossible)
+ *  3. Actor is the bot itself → skip (own action)
+ *  4. Actor number in ownerWaNumbers → GLOBAL_OWNER or SESSION_OWNER
+ *  5. Actor number in trustedAdminNumbers → TRUSTED_ADMIN
+ *  6. Actor number in sudoNumbers → SUDO_USER
+ *  7. Actor number in per-module permit list → TEMPORARY_PERMIT
+ *  8. Actor is a WhatsApp admin (regular or superadmin) → WA_ADMIN (enforced)
+ *  9. Everyone else → NONE (enforced)
+ *
+ * The WA group owner (superadmin) is treated as WA_ADMIN unless they appear
+ * in a higher-trust list.  Group admin status alone never grants exemption.
+ */
+export async function classifyActor(
+  socket: WASocket,
+  sessionId: string,
+  telegramId: string,
+  groupJid: string,
+  actorJid: string,
+  permitList: string[]          // per-module permit list
+): Promise<AuthorizationResult> {
+
+  // 1. Group metadata (bust cache — we need current admin list)
+  const meta = await fetchGroupMeta(socket, groupJid, true).catch(() => null);
+  if (!meta) {
+    logger.warn('[SecurityAuth] fetchGroupMeta failed — cannot classify actor', {
+      sessionId, groupJid, actorJid,
+    });
+    return {
+      level: 'NONE',
+      isPunishable: false,
+      skipReason: 'Unknown Group State',
+      botIsAdmin: false,
+    };
+  }
+
+  // 2. Bot admin check — cannot enforce without admin privileges
+  if (!meta.botIsAdmin) {
+    logger.info('[SecurityAuth] Bot is not admin — enforcement suspended', {
+      sessionId, groupJid,
+    });
+    return {
+      level: 'NONE',
+      isPunishable: false,
+      skipReason: 'Bot is no longer Admin',
+      botIsAdmin: false,
+    };
+  }
+
+  // 3. Ignore bot's own actions
+  const actorNum = numericId(actorJid);
+  const botNum   = numericId(meta.botJid);
+  if (actorNum && actorNum === botNum) {
+    return {
+      level: 'NONE',
+      isPunishable: false,
+      skipReason: 'Bot is Self',
+      botIsAdmin: true,
+    };
+  }
+
+  if (!actorNum) {
+    logger.warn('[SecurityAuth] actorJid has no numeric part', { actorJid, sessionId, groupJid });
+    return {
+      level: 'NONE',
+      isPunishable: false,
+      skipReason: 'Invalid Actor',
+      botIsAdmin: true,
+    };
+  }
+
+  // 4. Load workspace session config
+  const sessionCfg = await Promise.resolve(
+    loadSessionConfig(telegramId, sessionId)
+  ).catch(() => null);
+
+  // 5. Global Owner / Session Owner / Workspace Owner
+  //    (ownerWaNumbers field in UserConfig, persisted in workspace config)
+  const ownerNums = getOwnerWaNumbers(sessionCfg);
+  if (ownerNums.includes(actorNum)) {
+    const level: PermissionLevel = sessionCfg?.isOwner ? 'GLOBAL_OWNER' : 'SESSION_OWNER';
+    logger.info('[SecurityAuth] Actor classified', {
+      level, actorNum, sessionId, groupJid,
+    });
+    return {
+      level,
+      isPunishable: false,
+      skipReason: getSkipReason(level),
+      botIsAdmin: true,
+    };
+  }
+
+  // 6. Trusted Admin (trustedAdminNumbers field in UserConfig)
+  const trustedNums = getTrustedAdminNumbers(sessionCfg);
+  if (trustedNums.includes(actorNum)) {
+    logger.info('[SecurityAuth] Actor classified', {
+      level: 'TRUSTED_ADMIN', actorNum, sessionId, groupJid,
+    });
+    return {
+      level: 'TRUSTED_ADMIN',
+      isPunishable: false,
+      skipReason: 'Trusted Admin',
+      botIsAdmin: true,
+    };
+  }
+
+  // 7. Sudo User
+  const sudoNumbers: string[] = (sessionCfg?.sudoNumbers ?? []).map((n: string) =>
+    n.replace(/\D/g, '')
+  );
+  if (sudoNumbers.includes(actorNum)) {
+    logger.info('[SecurityAuth] Actor classified', {
+      level: 'SUDO_USER', actorNum, sessionId, groupJid,
+    });
+    return {
+      level: 'SUDO_USER',
+      isPunishable: false,
+      skipReason: 'Sudo User',
+      botIsAdmin: true,
+    };
+  }
+
+  // 8. Temporary Permit (per-module permit list)
+  const normalizedPermits = permitList.map((n) => n.replace(/\D/g, ''));
+  if (normalizedPermits.includes(actorNum)) {
+    logger.info('[SecurityAuth] Actor classified', {
+      level: 'TEMPORARY_PERMIT', actorNum, sessionId, groupJid,
+    });
+    return {
+      level: 'TEMPORARY_PERMIT',
+      isPunishable: false,
+      skipReason: 'Temporary Permit',
+      botIsAdmin: true,
+    };
+  }
+
+  // 9. WhatsApp Admin (regular or superadmin) — NOT exempt from enforcement
+  //    Being a WA admin means they have WhatsApp group privileges.
+  //    It does NOT mean they are trusted at the security engine level.
+  const actorParticipant = meta.participants.find(
+    (p) => numericId(p.id) === actorNum
+  );
+  const isWaAdmin =
+    actorParticipant?.admin === 'admin' ||
+    actorParticipant?.admin === 'superadmin';
+
+  const level: PermissionLevel = isWaAdmin ? 'WA_ADMIN' : 'NONE';
+
+  logger.info('[SecurityAuth] Actor classified', {
+    level, actorNum, sessionId, groupJid,
+    isWaSuperadmin: actorParticipant?.admin === 'superadmin',
+  });
+
+  // Both WA_ADMIN and NONE are punishable
+  return {
+    level,
+    isPunishable: true,
+    botIsAdmin: true,
+  };
+}
+
+===== group-security-engine.ts =====
+// ============================================================
+// Group Security Engine — AntiPromote + AntiDemote (v3)
+// ============================================================
+//
+// Complete redesign. Authorization exemptions have been removed.
+// The engine enforces based solely on TargetMode — no owner, trusted
+// admin, session owner, workspace owner, or sudo exemptions apply here.
+//
+// ── Design principles ─────────────────────────────────────
+//
+//   1. Bot self-protection always fires on demote events,
+//      regardless of whether the AntiDemote module is enabled.
+//
+//   2. Target mode is the only enforcement gate:
+//        protected — only the bot is protected
+//        admins              — every administrator is protected
+//
+//   3. Actor exemptions: NONE.
+//      Any actor who promotes or demotes a protected target is punished.
+//      Owner, trusted admin, sudo, session owner — all are treated equally.
+//
+//   4. Every event produces exactly one logged outcome:
+//        Ignored  / Reason: Module disabled
+//        Ignored  / Reason: Target not protected by current mode
+//        Ignored  / Reason: Invalid Actor
+//        Ignored  / Reason: Bot is no longer Admin
+//        Restored / Punishment: <mode>
+//        Failed   / Reason: Bot restore failed
+//
+//   5. A single `finally` block writes the audit. No branch calls
+//      logAudit directly.
+//
+//   6. No race conditions — enforce runs exactly once per event.
+//      Promise.allSettled used for concurrent independent ops.
+//
+// ── Entry points ──────────────────────────────────────────
+//   handleAntiDemoteEvent (socket, sessionId, telegramId, update)
+//   handleAntiPromoteEvent(socket, sessionId, telegramId, update)
+//   drainPendingRestores  (socket, sessionId, telegramId)
+//
+// ── Validation matrix ─────────────────────────────────────
+//
+//   Mode: protected
+//   ✓ Admin demotes BOT      → Restore BOT + Punish actor
+//   ✓ Admin demotes admin    → Ignored (target not protected)
+//   ✓ Admin demotes owner    → Ignored (target not protected)
+//   ✓ Bot cannot be restored → Send failure message, no punishment
+//   ✓ Admin promotes any     → Ignored (protected mode = no-op for AntiPromote)
+//
+//   Mode: admins
+//   ✓ Admin A demotes Admin B  → Restore B + Punish A
+//   ✓ Owner demotes Admin      → Restore Admin + Punish Owner
+//   ✓ Admin demotes BOT        → Restore BOT + Punish actor
+//   ✓ Admin promotes member    → Revert promotion + Punish actor
+//   ✓ Admin promotes bot       → Ignored (bot already admin)
+//
+//   Both modes
+//   ✓ Module disabled          → Bot self-protection still runs (demote)
+//   ✓ No actor in event        → Logged, no punishment possible
+//   ✓ Bot not admin            → Cannot enforce, logged
+//   ✓ Legacy modes mapped      → Correct action chain applied
+//   ✓ Unknown mode             → Error logged, safe fallback (restore)
+//   ✓ Exactly one audit per event
+//   ✓ No duplicate execution
+// ============================================================
+
+import type { BridgeWASocket as WASocket } from '../baileys-types.js';
+import { logger } from '../../utils/logger.js';
+import {
+  fetchGroupMeta,
+  numericId,
+  stripDeviceSuffix,
+} from '../utils/group-permissions.js';
+import { loadGroupAntiConfig, incrementWarn, resetWarn, isSilentActionMessages } from './config.js';
+import { PreviewManager } from '../../preview-engine/index.js';
+import { addPendingRestore, removePendingRestore, loadPendingRestores } from './pending-restores.js';
+import { resolveIdentity, type IdentityParticipant } from '../utils/identity.js';
+import { resolveMention } from '../utils/mention-engine.js';
+import { formatInTimeZone, renderTemplate } from '../../utils/response-engine.js';
+import type {
+  GroupSecurityMode,
+  LegacySecurityMode,
+  SecurityAction,
+  SecurityAuditLog,
+  SecurityEventType,
+  AntiPromoteConfig,
+  AntiDemoteConfig,
+  SkipReason,
+  TargetMode,
+} from './types.js';
+
+// ── Utilities ──────────────────────────────────────────────
+
+function normalizeNumber(jid: string | null | undefined): string {
+  if (!jid) return '';
+  return (jid.split('@')[0] ?? '').split(':')[0]!.replace(/\D/g, '');
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ── Participant Update Event ───────────────────────────────
+
+export interface ParticipantUpdateEvent {
+  id: string;                // group JID
+  participants: string[];    // affected participants
+  action: 'add' | 'remove' | 'promote' | 'demote';
+  author?: string;           // actor JID (who performed the action)
+}
+
+// ── Restore Engine ─────────────────────────────────────────
+
+const RESTORE_DELAYS_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
+
+async function retryGroupUpdate(
+  socket: WASocket,
+  groupJid: string,
+  participants: string[],
+  action: 'promote' | 'demote' | 'remove',
+  maxAttempts = 5
+): Promise<boolean> {
+  const sock = socket as unknown as {
+    groupParticipantsUpdate(jid: string, p: string[], a: string): Promise<unknown>;
+  };
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await sock.groupParticipantsUpdate(groupJid, participants, action);
+      return true;
+    } catch (err) {
+      const delay = RESTORE_DELAYS_MS[attempt] ?? 60_000;
+      logger.warn('[SecurityEngine] groupParticipantsUpdate failed, retrying', {
+        attempt: attempt + 1, maxAttempts, groupJid, action, delay, err: String(err),
+      });
+      if (attempt < maxAttempts - 1) await sleep(delay);
+    }
+  }
+  return false;
+}
+
+// ── Mode Normalization ─────────────────────────────────────
+//
+// Every mode maps to ONE canonical action plan. Legacy aliases and
+// enforcement modes (KNP/KWP/DNP/DWP/JW/WNP) are all resolved here so
+// the enforcement code never branches on mode strings.
+
+const ENFORCEMENT_MODES = new Set<string>(['knp', 'kwp', 'dnp', 'dwp', 'jw', 'wnp']);
+
+function isLegacyMode(mode: string): boolean {
+  return ENFORCEMENT_MODES.has(mode);
+}
+
+// ── Action Plan ────────────────────────────────────────────
+
+interface ActionPlan {
+  /** true = re-promote (demote) or re-demote (promote) the targets */
+  restoreVictim: boolean;
+  warnActor: boolean;
+  kickActor: boolean;
+  /** demote the actor from admin (AntiPromote/AntiDemote enforcement) */
+  demoteActor: boolean;
+  banActor: boolean;
+  /** restorewarn:<N> — warns before the actor is kicked (escalation). */
+  warnLimit?: number;
+  label: string;
+  penalty: string;
+}
+
+function buildActionPlan(mode: GroupSecurityMode): ActionPlan {
+  const isEnforcement = isLegacyMode(mode) || mode.startsWith('restorewarn:');
+  if (isEnforcement) {
+    logger.info('[SecurityEngine] Enforcement mode — applying action plan', { mode });
+  }
+
+  // restorewarn:<N> — restore victim + warn actor; after N warns the actor is kicked.
+  if (mode.startsWith('restorewarn:')) {
+    const n = parseInt(mode.slice('restorewarn:'.length), 10);
+    const limit = Number.isFinite(n) && n > 0 ? n : 3;
+    return {
+      restoreVictim: true,
+      warnActor: true,
+      kickActor: false,
+      demoteActor: false,
+      banActor: false,
+      warnLimit: limit,
+      label: 'Victim Restored',
+      penalty: `Actor Warned (kick after ${limit})`,
+    };
+  }
+
+  switch (mode) {
+    // ── Canonical v3 ──
+    case 'restore':
+      return { restoreVictim: true,  warnActor: false, kickActor: false, demoteActor: false, banActor: false, label: 'Victim Restored',   penalty: 'None' };
+    case 'restorewarn':
+      return { restoreVictim: true,  warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Victim Restored',   penalty: 'Actor Warned' };
+    case 'restorekick':
+      return { restoreVictim: true,  warnActor: false, kickActor: true,  demoteActor: false, banActor: false, label: 'Victim Restored',   penalty: 'Actor Kicked' };
+    case 'restoreban':
+      return { restoreVictim: true,  warnActor: false, kickActor: true,  demoteActor: false, banActor: true,  label: 'Victim Restored',   penalty: 'Actor Kicked & Blocked' };
+    // ── Backward-compat aliases ──
+    case 'revert': return buildActionPlan('restore');
+    case 'warn':   return buildActionPlan('restorewarn');
+    case 'kick':   return buildActionPlan('restorekick');
+    case 'ban':    return buildActionPlan('restoreban');
+    // ── Enforcement modes ──
+    case 'knp':  // K(ick) N(o-restore) P
+      return { restoreVictim: false, warnActor: false, kickActor: true,  demoteActor: false, banActor: false, label: 'Offender Kicked',       penalty: 'Kick · No restore' };
+    case 'kwp':  // K(ick) W(arn) P
+      return { restoreVictim: false, warnActor: true,  kickActor: true,  demoteActor: false, banActor: false, label: 'Offender Kicked',       penalty: 'Kick + Warn · No restore' };
+    case 'dnp':  // D(emote) N(o-restore) P
+      return { restoreVictim: true,  warnActor: false, kickActor: false, demoteActor: true,  banActor: false, label: 'Victim Restored',       penalty: 'Offender Demoted' };
+    case 'dwp':  // D(emote) W(arn) P
+      return { restoreVictim: false, warnActor: false, kickActor: false, demoteActor: true,  banActor: false, label: 'Offender Demoted',      penalty: 'Demote · No restore' };
+    case 'jw':   // J(ust) W(arn)
+      return { restoreVictim: false, warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Offender Warned',       penalty: 'Warning only' };
+    case 'wnp':  // W(arn) N(o-kick) P
+      return { restoreVictim: true,  warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Victim Restored',       penalty: 'Offender Warned' };
+
+    // ── Action shorthand engine (v4) ───────────────────────
+    case 'd/p':  // Demote actor + promote (restore) victim, notify everyone
+      return { restoreVictim: true,  warnActor: false, kickActor: false, demoteActor: true,  banActor: false, label: 'Victim Restored',       penalty: 'Actor Demoted' };
+    case 'd/d':  // Demote actor, no restore
+      return { restoreVictim: false, warnActor: false, kickActor: false, demoteActor: true,  banActor: false, label: 'Actor Demoted',          penalty: 'No restore' };
+    case 'p/p':  // Promote (restore) victim + warn actor, no demote
+      return { restoreVictim: true,  warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Victim Restored',       penalty: 'Actor Warned' };
+    case 'p/k':  // Promote (restore) victim + kick actor
+      return { restoreVictim: true,  warnActor: false, kickActor: true,  demoteActor: false, banActor: false, label: 'Victim Restored',       penalty: 'Actor Kicked' };
+
+    case 'off':
+    default:
+      logger.error('[SecurityEngine] Unknown or disabled mode — falling back to restore', { mode });
+      return buildActionPlan('restore');
+  }
+}
+
+// ── OMEGA Security Response Card ───────────────────────────
+
+function buildSecurityCard(opts: {
+  eventLabel: string;
+  actorNumber: string;
+  targetNumbers: string[];
+  enforcementMode?: string;
+  actionLabel: string;
+  penaltyLabel: string;
+  skipReason?: string;
+}): string {
+  const time = formatInTimeZone(new Date(), {
+    hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  const targets = opts.targetNumbers
+    .map((n) => `  ➜ ${n ? `@${n}` : 'Unknown'}`)
+    .join('\n');
+  const skipLine = opts.skipReason
+    ? `\nStatus\n  ➜ ${opts.skipReason}\n`
+    : '';
+  const modeLine = opts.enforcementMode
+    ? `\nMode\n  ➜ ${opts.enforcementMode}\n`
+    : '';
+  return (
+    `⟦ OMEGA • SECURITY ⟧\n\n` +
+    `⚠ ${opts.eventLabel}\n\n` +
+    `Actor\n  ➜ ${opts.actorNumber ? `@${opts.actorNumber}` : 'Unknown'}\n\n` +
+    `Target\n${targets}\n\n` +
+    `Action\n  ➜ ${opts.actionLabel}\n\n` +
+    `Penalty\n  ➜ ${opts.penaltyLabel}\n` +
+    modeLine +
+    skipLine +
+    `\nTime\n  ➜ ${time}`
+  );
+}
+
+// ── Bot Self-Protection ────────────────────────────────────
+//
+// Always fires when the bot is among the demoted participants.
+// Independent of module enabled/disabled state.
+// Returns true if the bot's admin was successfully restored.
+
+async function runBotSelfProtection(
+  socket: WASocket,
+  sessionId: string,
+  telegramId: string,
+  groupJid: string
+): Promise<boolean> {
+  logger.warn('[SecurityEngine] Bot self-protection: bot was demoted', { sessionId, groupJid });
+
+  const sock = socket as unknown as { user?: { id?: string } };
+  const botJid = sock.user?.id ? stripDeviceSuffix(sock.user.id) : null;
+
+  if (!botJid) {
+    logger.error('[SecurityEngine] Bot self-protection: cannot resolve bot JID', { sessionId, groupJid });
+    return false;
+  }
+
+  const restored = await retryGroupUpdate(socket, groupJid, [botJid], 'promote', 3);
+
+  if (restored) {
+    logger.info('[SecurityEngine] Bot self-protection: admin status restored', { sessionId, groupJid });
+    return true;
+  }
+
+  logger.error('[SecurityEngine] Bot self-protection: cannot restore admin status', { sessionId, groupJid });
+
+  try {
+    await PreviewManager.send(
+      socket as any, groupJid,
+      `⚠️ AntiDemote detected.\nBot lost administrator privileges before restoration.\n\nPlease promote the bot back to administrator.`,
+      { sessionId, telegramId }
+    );
+  } catch (err) {
+    logger.warn('[SecurityEngine] Bot self-protection: failed to send recovery message', {
+      err: String(err), sessionId, groupJid,
+    });
+  }
+
+  return false;
+}
+
+// ── Bot Admin Check ────────────────────────────────────────
+
+async function checkBotIsAdmin(
+  socket: WASocket,
+  sessionId: string,
+  groupJid: string
+): Promise<boolean> {
+  const meta = await fetchGroupMeta(socket, groupJid, true).catch(() => null);
+  if (!meta) {
+    logger.warn('[SecurityEngine] fetchGroupMeta failed — cannot verify bot admin status', {
+      sessionId, groupJid,
+    });
+    return false;
+  }
+  return meta.botIsAdmin;
+}
+
+// ── Punishment Executor ────────────────────────────────────
+
+interface PunishmentContext {
+  socket: WASocket;
+  sessionId: string;
+  telegramId: string;
+  groupJid: string;
+  actorJid: string;
+  targetJids: string[];
+  plan: ActionPlan;
+  eventLabel: string;
+  customMessage?: string;
+  audit: SecurityAuditLog;
+}
+
+async function executePunishment(ctx: PunishmentContext): Promise<void> {
+  const {
+    socket, sessionId, telegramId, groupJid,
+    actorJid, targetJids,
+    plan, eventLabel, customMessage, audit,
+  } = ctx;
+
+  // ── Central Mention Engine ────────────────────────────────
+  // Resolve the actor + targets to REAL phone identities so the security
+  // card never leaks LID digits and EVERY @<phone> token in the card has a
+  // matching real phone JID in the mentions array — the structural
+  // precondition for native WhatsApp mentions (text ⇄ mentionedJid sync).
+  const actorMention = await resolveMention(socket, { jid: actorJid }).catch(() => null);
+  const cardActorNumber = actorMention?.number || '';
+  const notifyJids: string[] = [];
+  if (actorMention?.jid) notifyJids.push(actorMention.jid);
+  const targetNumbers: string[] = [];
+  for (const j of targetJids) {
+    const m = await resolveMention(socket, { jid: j }).catch(() => null);
+    targetNumbers.push(m?.number || '');
+    if (m?.jid && !notifyJids.includes(m.jid)) notifyJids.push(m.jid);
+  }
+  const notifyJid = notifyJids[0] ?? '';
+  const notifyGroup = !isSilentActionMessages(telegramId, sessionId, groupJid);
+
+  const executedActions: SecurityAction[] = [];
+  const ops: Promise<unknown>[] = [];
+
+  // ── Kick / Ban actor ──────────────────────────────────────
+  if (ctx.plan.kickActor) {
+    executedActions.push('kick');
+    ops.push(
+      retryGroupUpdate(socket, groupJid, [actorJid], 'remove').then((ok) => {
+        if (!ok) audit.errors?.push('kick_actor_failed_all_attempts');
+      })
+    );
+  }
+
+  if (ctx.plan.banActor) {
+    executedActions.push('ban');
+    ops.push(
+      (socket as unknown as {
+        updateBlockStatus(jid: string, action: string): Promise<unknown>;
+      }).updateBlockStatus(actorJid, 'block').catch((err) => {
+        audit.errors?.push(`block_actor_failed:${String(err)}`);
+      })
+    );
+  }
+
+  // ── Notify group ─────────────────────────────────────────
+  if (!notifyGroup) {
+    // Enforcement continues; only the routine group card is suppressed.
+  } else {
+  executedActions.push('notify_group');
+  const card = buildSecurityCard({
+    eventLabel,
+    actorNumber: cardActorNumber,
+    targetNumbers,
+    actionLabel: plan.label,
+    penaltyLabel: plan.penalty,
+  });
+  // Admin-custom messages may use @mention — render it through the template
+  // engine so it becomes a real native mention (never a literal token).
+  const cardText = customMessage
+    ? await renderTemplate(customMessage, {
+        senderJid: notifyJid || actorJid,
+        mentionNumber: cardActorNumber,
+        gcName: groupJid.split('@')[0] ?? 'Group',
+        socket,
+        groupJid,
+      }).catch(() => customMessage)
+    : card;
+  ops.push(
+    PreviewManager.send(socket as any, groupJid, cardText, {
+      ...(notifyJids.length > 0 ? { extra: { mentions: notifyJids } } : {}),
+      forceMentions: true,
+      sessionId, telegramId,
+    }).catch((err) => {
+      audit.errors?.push(`send_card_failed:${String(err)}`);
+    })
+  );
+  }
+
+  // ── Warn actor ────────────────────────────────────────────
+  // For restorewarn:<N> the warn is ESCALATED: after N accumulated warns
+  // the actor is kicked (punishment escalation) instead of warned again.
+  if (plan.warnActor) {
+    executedActions.push('warn');
+    if (plan.warnLimit) {
+      const actorNumber = normalizeNumber(actorJid);
+      const count = incrementWarn(sessionId, groupJid, actorNumber, 'security');
+      if (count >= plan.warnLimit) {
+        resetWarn(sessionId, groupJid, actorNumber, 'security');
+        executedActions.push('kick');
+        ops.push(
+          retryGroupUpdate(socket, groupJid, [actorJid], 'remove').then((ok) => {
+            if (!ok) audit.errors?.push('kick_actor_after_warn_limit_failed');
+          })
+        );
+        logger.info('[SecurityEngine] Actor kicked after warn limit', {
+          sessionId, groupJid, actorNumber, limit: plan.warnLimit,
+        });
+      }
+    }
+  }
+
+  executedActions.push('audit');
+  audit.executedActions = executedActions;
+
+  if (ops.length > 0) await Promise.allSettled(ops);
+}
+
+// ── Audit Log ──────────────────────────────────────────────
+
+function logAudit(audit: SecurityAuditLog, startMs: number): void {
+  audit.durationMs = Date.now() - startMs;
+  const level = audit.success ? 'info' : 'error';
+  logger[level]('[SecurityEngine] SecurityAudit', {
+    timestamp:       audit.timestamp,
+    workspaceId:     audit.workspaceId,
+    sessionId:       audit.sessionId,
+    groupId:         audit.groupId,
+    groupName:       audit.groupName,
+    actorJid:        audit.actorJid,
+    actorNumber:     audit.actorNumber,
+    targets:         audit.targetJids,
+    event:           audit.event,
+    enforcementMode: audit.enforcementMode,
+    targetMode:      audit.targetMode,
+    executedActions: audit.executedActions,
+    skipReason:      audit.skipReason,
+    restoreSuccess:  audit.restoreSuccess,
+    success:         audit.success,
+    durationMs:      audit.durationMs,
+    errors:          audit.errors?.length ? audit.errors : undefined,
+  });
+}
+
+function makeAudit(
+  telegramId: string,
+  sessionId: string,
+  groupJid: string,
+  actorJid: string,
+  targetJids: string[],
+  event: SecurityEventType,
+  enforcementMode: string,
+  targetMode: TargetMode
+): SecurityAuditLog {
+  return {
+    timestamp:       new Date().toISOString(),
+    workspaceId:     telegramId,
+    sessionId,
+    groupId:         groupJid,
+    groupName:       groupJid.split('@')[0] ?? '',
+    actorJid,
+    actorNumber:     normalizeNumber(actorJid),
+    targetJids,
+    event,
+    enforcementMode,
+    targetMode,
+    executedActions: [],
+    success:         true,
+    durationMs:      0,
+    errors:          [],
+  };
+}
+
+// ══════════════════════════════════════════════════════════
+// AntiDemote Engine
+// ══════════════════════════════════════════════════════════
+//
+// Processing flow:
+//   1. Bot self-protection (always, regardless of module state)
+//   2. Guard: module enabled?
+//   3. Guard: actor known?
+//   4. Determine enforcement targets by targetMode
+//   5. Guard: any protected target was demoted?
+//   6. Restore non-bot targets (bot already handled in step 1)
+//   7. Execute punishment against actor
+//   8. Audit (single finally block)
+
+export async function handleAntiDemoteEvent(
+  socket: WASocket,
+  sessionId: string,
+  telegramId: string,
+  update: ParticipantUpdateEvent
+): Promise<void> {
+  if (update.action !== 'demote') return;
+
+  const startMs   = Date.now();
+  const groupJid  = update.id;
+  const targetJids = update.participants;
+  const actorJid  = update.author ?? '';
+
+  // Resolve bot JID early — needed for self-protection and target checks.
+  const sock = socket as unknown as { user?: { id?: string } };
+  const rawBotJid = sock.user?.id ?? '';
+  const botNum    = rawBotJid ? numericId(rawBotJid) : '';
+  const botJid    = rawBotJid ? stripDeviceSuffix(rawBotJid) : '';
+
+  // ── Step 1: Bot Self-Protection ─────────────────────────
+  // Fires regardless of module state.  Records whether the bot was
+  // demoted and whether restoration succeeded.
+  const botWasDemoted = botNum
+    ? targetJids.some((jid) => numericId(jid) === botNum)
+    : false;
+
+  let botRestored = false;
+  if (botWasDemoted) {
+    botRestored = await runBotSelfProtection(socket, sessionId, telegramId, groupJid);
+  }
+
+  // ── Load module config ───────────────────────────────────
+  const gc  = loadGroupAntiConfig(telegramId, sessionId, groupJid);
+  const mod = gc.antidemote as AntiDemoteConfig | undefined;
+  const targetMode: TargetMode = mod?.targetMode ?? 'admins';
+  const modeStr = mod ? String(mod.mode) : 'off';
+
+  const audit = makeAudit(
+    telegramId, sessionId, groupJid, actorJid, targetJids,
+    'skipped', modeStr, targetMode
+  );
+
+  try {
+    // ── Step 2: Module enabled? ──────────────────────────────
+    if (!mod?.enabled || mod.mode === 'off') {
+      audit.skipReason     = 'Module Disabled';
+      audit.executedActions = ['audit'];
+      logger.debug('[SecurityEngine] AntiDemote disabled', { sessionId, groupJid });
+      return;
+    }
+
+    // ── Step 3: Actor known? ────────────────────────────────
+    if (!actorJid) {
+      audit.skipReason     = 'Invalid Actor';
+      audit.executedActions = ['audit'];
+      logger.debug('[SecurityEngine] AntiDemote: no author in event', { sessionId, groupJid });
+      return;
+    }
+
+    const actorNumber   = normalizeNumber(actorJid);
+
+    // ── Step 4: Determine enforcement targets ────────────────
+    // targetMode 'protected': only the bot is a protected target.
+    // targetMode 'admins':    every demoted participant is a protected target.
+    let enforcementTargets: string[];
+    if (targetMode === 'protected') {
+      // Only enforce when the bot was demoted.
+      enforcementTargets = botWasDemoted ? [botJid].filter(Boolean) : [];
+    } else {
+      // 'admins' mode: all demoted participants are protected.
+      enforcementTargets = [...targetJids];
+    }
+
+    // ── Step 5: Any protected target? ───────────────────────
+    if (enforcementTargets.length === 0) {
+      audit.event      = 'skipped';
+      audit.skipReason = 'Target not protected by current mode';
+      audit.executedActions = ['audit'];
+      logger.info('[SecurityEngine] AntiDemote: no protected targets', {
+        sessionId, groupJid, targetMode,
+      });
+      return;
+    }
+
+    const targetNumbers = enforcementTargets.map((j) => normalizeNumber(j));
+
+    // ── Step 6: Bot admin check (needed for non-bot restores) ─
+    // In 'protected' mode the only target is the bot — restoration was
+    // already attempted in Step 1 so we skip this check.
+    // In 'admins' mode we need the bot to be admin to restore others.
+    const nonBotTargets = enforcementTargets.filter((j) => numericId(j) !== botNum);
+    const hasBotInTargets = botWasDemoted;
+
+    if (nonBotTargets.length > 0) {
+      const botIsAdmin = await checkBotIsAdmin(socket, sessionId, groupJid);
+      if (!botIsAdmin) {
+        audit.event      = 'skipped';
+        audit.skipReason = 'Bot is no longer Admin';
+        audit.executedActions = ['audit'];
+        logger.info('[SecurityEngine] AntiDemote: bot not admin, cannot restore', {
+          sessionId, groupJid,
+        });
+        return;
+      }
+    }
+
+    // ── Step 6b: If only target was bot and restore failed ───
+    if (hasBotInTargets && !botRestored && nonBotTargets.length === 0) {
+      // Bot protection ran but failed and there are no other targets.
+      // Punishment cannot execute — we already sent the failure message.
+      audit.event          = 'bot_restore_failed';
+      audit.restoreSuccess = false;
+      audit.success        = false;
+      audit.skipReason     = 'Bot restore failed';
+      audit.executedActions = ['audit'];
+      logger.warn('[SecurityEngine] AntiDemote: bot restore failed, punishment skipped', {
+        sessionId, groupJid,
+      });
+      return;
+    }
+
+    // ── Step 6c: Restore non-bot targets ────────────────────
+    const restoreOps: Promise<void>[] = [];
+    const restoreIds: string[] = [];
+
+    if (nonBotTargets.length > 0) {
+      const restoreId = `demote:${groupJid}:${nonBotTargets.join(',')}:${Date.now()}`;
+      restoreIds.push(restoreId);
+      addPendingRestore(sessionId, telegramId, {
+        id: restoreId, groupJid, participants: nonBotTargets,
+        action: 'promote', reason: 'antidemote_restore',
+      });
+      restoreOps.push(
+        retryGroupUpdate(socket, groupJid, nonBotTargets, 'promote').then((ok) => {
+          audit.restoreSuccess = ok;
+          if (ok) {
+            removePendingRestore(sessionId, telegramId, restoreId);
+          } else {
+            audit.errors?.push('restore_failed_all_attempts');
+          }
+        })
+      );
+    }
+
+    if (hasBotInTargets) {
+      // Already restored in step 1; record result.
+      audit.restoreSuccess = botRestored;
+    }
+
+    audit.event          = 'unauthorized_demote';
+    audit.enforcementMode = modeStr;
+
+    const plan = buildActionPlan(mod.mode);
+
+    // Run restores concurrently with punishment setup.
+    await Promise.allSettled(restoreOps);
+
+    // ── Step 7: Punishment ───────────────────────────────────
+    // If the ONLY enforcement target was the bot and restore failed,
+    // punishment is skipped (spec requirement: "Punishment cannot be executed").
+    // If there are non-bot targets or bot was successfully restored, punish.
+    const canPunish = !(hasBotInTargets && !botRestored && nonBotTargets.length === 0);
+    if (!canPunish) {
+      logger.warn('[SecurityEngine] AntiDemote: bot restore failed — skipping punishment', {
+        sessionId, groupJid, actorJid,
+      });
+      return;
+    }
+
+    await executePunishment({
+      socket, sessionId, telegramId, groupJid,
+      actorJid, targetJids: enforcementTargets,
+      plan,
+      eventLabel: 'Unauthorized Demotion',
+      customMessage: mod.customMessage,
+      audit,
+    });
+
+    logger.info('[SecurityEngine] AntiDemote enforced', {
+      sessionId, groupJid, actorJid, targetMode, mode: modeStr,
+    });
+
+  } catch (err) {
+    audit.success = false;
+    audit.errors?.push(`engine_error:${String(err)}`);
+    logger.error('[SecurityEngine] AntiDemote engine error', {
+      err: String(err), sessionId, groupJid,
+    });
+  } finally {
+    logAudit(audit, startMs);
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// AntiPromote Engine
+// ══════════════════════════════════════════════════════════
+//
+// Processing flow:
+//   1. Guard: module enabled?
+//   2. Guard: actor known?
+//   3. Determine enforcement targets by targetMode
+//   4. Guard: any protected target was promoted?
+//   5. Guard: bot is admin?
+//   6. Revert promotions
+//   7. Execute punishment against actor
+//   8. Audit (single finally block)
+//
+// Target mode 'protected':
+//   All promotions are ignored. In 'protected' mode the bot is the
+//   only entity of concern, and promoting the bot (already an admin)
+//   is a no-op that should be ignored.
+//
+// Target mode 'admins':
+//   Any promotion of a member to admin is unauthorized.
+//   Promoting the bot is still ignored (it is already admin).
+
+export async function handleAntiPromoteEvent(
+  socket: WASocket,
+  sessionId: string,
+  telegramId: string,
+  update: ParticipantUpdateEvent
+): Promise<void> {
+  if (update.action !== 'promote') return;
+
+  const startMs    = Date.now();
+  const groupJid   = update.id;
+  const targetJids  = update.participants;
+  const actorJid   = update.author ?? '';
+
+  const sock = socket as unknown as { user?: { id?: string } };
+  const rawBotJid = sock.user?.id ?? '';
+  const botNum    = rawBotJid ? numericId(rawBotJid) : '';
+
+  const gc  = loadGroupAntiConfig(telegramId, sessionId, groupJid);
+  const mod = gc.antipromote as AntiPromoteConfig | undefined;
+  const targetMode: TargetMode = mod?.targetMode ?? 'admins';
+  const modeStr = mod ? String(mod.mode) : 'off';
+
+  const audit = makeAudit(
+    telegramId, sessionId, groupJid, actorJid, targetJids,
+    'skipped', modeStr, targetMode
+  );
+
+  try {
+    // ── Step 1: Module enabled? ──────────────────────────────
+    if (!mod?.enabled || mod.mode === 'off') {
+      audit.skipReason     = 'Module Disabled';
+      audit.executedActions = ['audit'];
+      logger.debug('[SecurityEngine] AntiPromote disabled', { sessionId, groupJid });
+      return;
+    }
+
+    // ── Step 2: Actor known? ────────────────────────────────
+    if (!actorJid) {
+      audit.skipReason     = 'Invalid Actor';
+      audit.executedActions = ['audit'];
+      logger.debug('[SecurityEngine] AntiPromote: no author in event', { sessionId, groupJid });
+      return;
+    }
+
+    const actorNumber = normalizeNumber(actorJid);
+
+    // ── Step 3: Determine enforcement targets ────────────────
+    // targetMode 'protected':
+    //   Bot is the only protected entity. Promoting the bot is harmless
+    //   ("already admin" — spec says ignore). No other promotions trigger enforcement.
+    //   Result: enforcement targets = empty → ignored.
+    //
+    // targetMode 'admins':
+    //   Any member being promoted to admin is an unauthorized promotion.
+    //   Exception: promoting the bot (already admin) is ignored.
+
+    let enforcementTargets: string[];
+    if (targetMode === 'protected') {
+      // In 'protected' mode, AntiPromote has nothing to act on:
+      //   - Bot promoted → ignore (already admin)
+      //   - Others promoted → not our concern
+      enforcementTargets = [];
+    } else {
+      // 'admins' mode: every promoted participant is a target,
+      // EXCEPT the bot itself (bot is already admin — ignore).
+      enforcementTargets = targetJids.filter((jid) => {
+        const n = numericId(jid);
+        return !n || n !== botNum;
+      });
+    }
+
+    // ── Step 4: Any enforcement target? ─────────────────────
+    if (enforcementTargets.length === 0) {
+      audit.event      = 'skipped';
+      audit.skipReason = 'Target not protected by current mode';
+      audit.executedActions = ['audit'];
+      logger.info('[SecurityEngine] AntiPromote: no enforcement targets', {
+        sessionId, groupJid, targetMode,
+      });
+      return;
+    }
+
+    const targetNumbers = enforcementTargets.map((j) => normalizeNumber(j));
+
+    // ── Step 5: Bot admin check ──────────────────────────────
+    const botIsAdmin = await checkBotIsAdmin(socket, sessionId, groupJid);
+    if (!botIsAdmin) {
+      audit.event      = 'skipped';
+      audit.skipReason = 'Bot is no longer Admin';
+      audit.executedActions = ['audit'];
+      logger.info('[SecurityEngine] AntiPromote: bot not admin, cannot enforce', {
+        sessionId, groupJid,
+      });
+      return;
+    }
+
+    // ── Step 6: Revert promotions ────────────────────────────
+    audit.event          = 'unauthorized_promote';
+    audit.enforcementMode = modeStr;
+
+    const plan = buildActionPlan(mod.mode);
+
+    if (plan.restoreVictim) {
+      const restoreId = `promote:${groupJid}:${enforcementTargets.join(',')}:${Date.now()}`;
+      addPendingRestore(sessionId, telegramId, {
+        id: restoreId, groupJid, participants: enforcementTargets,
+        action: 'demote', reason: 'antipromote_revert',
+      });
+      const ok = await retryGroupUpdate(socket, groupJid, enforcementTargets, 'demote');
+      audit.restoreSuccess = ok;
+      if (ok) {
+        removePendingRestore(sessionId, telegramId, restoreId);
+      } else {
+        audit.errors?.push('revert_promotion_failed_all_attempts');
+      }
+    }
+
+    // ── Step 7: Punishment ───────────────────────────────────
+    await executePunishment({
+      socket, sessionId, telegramId, groupJid,
+      actorJid, targetJids: enforcementTargets,
+      plan,
+      eventLabel: 'Unauthorized Promotion',
+      customMessage: mod.customMessage,
+      audit,
+    });
+
+    logger.info('[SecurityEngine] AntiPromote enforced', {
+      sessionId, groupJid, actorJid, targetMode, mode: modeStr,
+    });
+
+  } catch (err) {
+    audit.success = false;
+    audit.errors?.push(`engine_error:${String(err)}`);
+    logger.error('[SecurityEngine] AntiPromote engine error', {
+      err: String(err), sessionId, groupJid,
+    });
+  } finally {
+    logAudit(audit, startMs);
+  }
+}
+
+// ── Reconnect Restore Drain ────────────────────────────────
+
+export async function drainPendingRestores(
+  socket: WASocket,
+  sessionId: string,
+  telegramId: string
+): Promise<void> {
+  const pending = loadPendingRestores(sessionId, telegramId);
+  if (!pending.length) return;
+
+  logger.info('[SecurityEngine] Draining pending restores after reconnect', {
+    sessionId, count: pending.length,
+  });
+
+  for (const entry of pending) {
+    try {
+      const ok = await retryGroupUpdate(socket, entry.groupJid, entry.participants, entry.action, 3);
+      if (ok) {
+        removePendingRestore(sessionId, telegramId, entry.id);
+        logger.info('[SecurityEngine] Pending restore succeeded', {
+          sessionId, groupJid: entry.groupJid, action: entry.action, reason: entry.reason,
+        });
+      } else {
+        logger.warn('[SecurityEngine] Pending restore still failing, will retry next reconnect', {
+          sessionId, groupJid: entry.groupJid, reason: entry.reason,
+        });
+      }
+    } catch (err) {
+      logger.warn('[SecurityEngine] Pending restore threw', {
+        sessionId, groupJid: entry.groupJid, err: String(err),
+      });
+    }
+  }
+}

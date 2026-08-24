@@ -1,0 +1,500 @@
+src/autopromote/service.ts:23:  validateAutoPromoteInput,
+src/autopromote/service.ts:150:  validateAutoPromoteInput({
+src/autopromote/service.ts:289:    const groupJids = groups.map((group) => group.jid).filter(Boolean);
+src/autopromote/types.ts:120:export function validateAutoPromoteInput(input: {
+src/autopromote/types.ts:155:    throw new Error("Invalid Auto Promote schedule date or time.");
+src/core/control-plane.ts:30:  maxValidatorLinks: 500,
+src/core/errors.ts:55:    userMessage: "That media file is not supported or failed validation.",
+src/core/session-registry.ts:150:  phoneNumber?: string;
+src/core/session-registry.ts:157:    ...(input.phoneNumber ? { phoneNumber: input.phoneNumber } : {}),
+src/core/session-registry.ts:165:    autoValidateLinks: true,
+src/core/session-registry.ts:168:    validatedLinkCount: 0,
+src/core/session-registry.ts:249:  identity: string,
+src/core/session-registry.ts:253:  const normalized = identity.replace(/[^0-9A-Za-z:_.@-]/g, "");
+src/core/session-registry.ts:254:  if (!normalized) throw new Error("Invalid WhatsApp identity.");
+src/core/session-registry.ts:311:    autoValidateLinks: true,
+src/core/session-registry.ts:317:    validatedLinkCount: session.validatedLinkCount ?? 0,
+src/doctor.ts:47:          detail: `identity verified${body.result?.username ? ` as @${body.result.username}` : ""}`,
+src/index.ts:30:import { ensureDurableValidatorIndexes } from "./links/validator-persistence.js";
+src/index.ts:41:import { closeValidatorSnapshot } from "./links/validator-snapshot.js";
+src/index.ts:106:  await ensureDurableValidatorIndexes();
+src/index.ts:135:        senderJid: event.senderJid,
+src/index.ts:138:        ...(event.messageId ? { quotedSenderJid: event.quotedSenderJid } : {}),
+src/index.ts:140:        ...(event.quotedSenderJid ? { quotedSenderJid: event.quotedSenderJid } : {}),
+src/index.ts:278:    await closeSafely("validator snapshot", closeValidatorSnapshot);
+src/jobs/job-contracts.ts:4:  | "link-validation"
+src/jobs/job-orchestrator.ts:26:const VALIDATOR_QUEUE_NAME = "pappy-omega-mini-validator";
+src/jobs/job-orchestrator.ts:132:  private readonly validatorQueue: Queue<JobRecord>;
+src/jobs/job-orchestrator.ts:137:  private readonly validatorWorker: Worker<JobRecord>;
+src/jobs/job-orchestrator.ts:168:    this.validatorQueue = new Queue<JobRecord>(VALIDATOR_QUEUE_NAME, {
+src/jobs/job-orchestrator.ts:203:    this.validatorWorker = new Worker<JobRecord>(
+src/jobs/job-orchestrator.ts:227:    this.validatorWorker.on("failed", handleFailed);
+src/jobs/job-orchestrator.ts:245:    if (kind === "link-validation") return this.validatorQueue;
+src/jobs/job-orchestrator.ts:256:    return [this.queue, this.broadcastQueue, this.panelBroadcastQueue, this.validatorQueue];
+src/jobs/job-orchestrator.ts:649:    await Promise.all([this.worker.close(true), this.broadcastWorker.close(true), this.panelBroadcastWorker.close(true), this.validatorWorker.close(true)]);
+src/jobs/job-orchestrator.ts:936:    kind === "link-validation" ||
+src/jobs/join-operation.ts:61:      return { success: false, error: "Invalid WhatsApp invite link." };
+src/jobs/join-result-store.ts:113:    case "invalid-invite":
+src/jobs/runtime.ts:11:import { claimValidatorMainLinks } from "../links/validator-operations.js";
+src/jobs/runtime.ts:49:  validateInviteLink,
+src/jobs/runtime.ts:78:interface LinkValidationPayload {
+src/jobs/runtime.ts:82:  validationLeaseToken?: string;
+src/jobs/runtime.ts:94:  | "invalid-invite"
+src/jobs/runtime.ts:117:    "invalid group",
+src/jobs/runtime.ts:136:  if (/invalid invite|invalid group|group (?:is )?not found|group does not exist/.test(lower))
+src/jobs/runtime.ts:137:    return { classification: "invalid-invite", retryable: false, message };
+src/jobs/runtime.ts:156:let validatorSweepTimer: NodeJS.Timeout | undefined;
+src/jobs/runtime.ts:157:let validatorGuardTimer: NodeJS.Timeout | undefined;
+src/jobs/runtime.ts:158:let validatorGuardBusy = false;
+src/jobs/runtime.ts:161:// validatorRetiredUntil: Date.now() + VALIDATOR_RETIRE_MS
+src/jobs/runtime.ts:163:const validatorGuardStartedAt = Date.now();
+src/jobs/runtime.ts:165:function isInviteValidationRateLimited(message: string): boolean {
+src/jobs/runtime.ts:171:function isInviteValidationPermanentFailure(message: string): boolean {
+src/jobs/runtime.ts:172:  // Only link-specific, confirmed invalidity may enter Dead. Generic
+src/jobs/runtime.ts:174:  return /invalid whatsapp group invite|unknown invite|group not found|invite not found|expired invite|revoked invite|gone/i.test(
+src/jobs/runtime.ts:191:export async function runValidatorSweepNow(): Promise<void> {
+src/jobs/runtime.ts:193:    await sweepPendingMainValidation(activeRuntime, activeBuckets);
+src/jobs/runtime.ts:329:    if (validatorSweepTimer) clearInterval(validatorSweepTimer);
+src/jobs/runtime.ts:330:    if (validatorGuardTimer) clearInterval(validatorGuardTimer);
+src/jobs/runtime.ts:331:    validatorSweepTimer = undefined;
+src/jobs/runtime.ts:332:    validatorGuardTimer = undefined;
+src/jobs/runtime.ts:336:  orchestrator.register("link-validation", async (context) => {
+src/jobs/runtime.ts:337:    const payload = context.job.payload as LinkValidationPayload;
+src/jobs/runtime.ts:342:      // One validation request at a time per WhatsApp socket. Separate
+src/jobs/runtime.ts:343:      // sessions are isolated by their independent validator jobs.
+src/jobs/runtime.ts:351:          currentAction: "validating",
+src/jobs/runtime.ts:362:            throw new Error("Invalid WhatsApp group invite link.");
+src/jobs/runtime.ts:376:              "No healthy WhatsApp validation session is available yet.",
+src/jobs/runtime.ts:382:          if (!existing || existing.bucket !== "validating")
+src/jobs/runtime.ts:384:          const leaseToken = payload.validationLeaseToken;
+src/jobs/runtime.ts:387:            existing.metadata?.validationLeaseToken &&
+src/jobs/runtime.ts:388:            payload.validationLeaseToken &&
+src/jobs/runtime.ts:389:            existing.metadata.validationLeaseToken !==
+src/jobs/runtime.ts:390:              payload.validationLeaseToken
+src/jobs/runtime.ts:393:          if (existing.metadata?.validationLeaseToken !== leaseToken) {
+src/jobs/runtime.ts:397:              "validating",
+src/jobs/runtime.ts:403:                  validationLeaseToken: leaseToken,
+src/jobs/runtime.ts:404:                  needsValidation: false,
+src/jobs/runtime.ts:405:                  validationState: "validating",
+src/jobs/runtime.ts:411:            Awaited<ReturnType<typeof validateInviteLink>> | undefined;
+src/jobs/runtime.ts:413:          let lastValidationError: unknown;
+src/jobs/runtime.ts:418:              metadata = await validateInviteLink(
+src/jobs/runtime.ts:426:              lastValidationError = error;
+src/jobs/runtime.ts:427:              const validationMessage =
+src/jobs/runtime.ts:429:              if (isInviteValidationRateLimited(validationMessage)) {
+src/jobs/runtime.ts:435:                  (currentSession.validatorConsecutiveRateLimitCount ?? 0) + 1;
+src/jobs/runtime.ts:437:                  validatorFailureCount:
+src/jobs/runtime.ts:438:                    (currentSession.validatorFailureCount ?? 0) + 1,
+src/jobs/runtime.ts:439:                  validatorRateLimitCount:
+src/jobs/runtime.ts:440:                    (currentSession.validatorRateLimitCount ?? 0) + 1,
+src/jobs/runtime.ts:441:                  validatorConsecutiveRateLimitCount: consecutiveRateLimitCount,
+src/jobs/runtime.ts:442:                  validatorRetiredUntil: Date.now() - 1,
+src/jobs/runtime.ts:443:                  validatorRetireReason:
+src/jobs/runtime.ts:444:                    "per-link rate-limit; session retained for validation",
+src/jobs/runtime.ts:447:              if (isInviteValidationPermanentFailure(validationMessage)) break;
+src/jobs/runtime.ts:451:            throw lastValidationError instanceof Error
+src/jobs/runtime.ts:452:              ? lastValidationError
+src/jobs/runtime.ts:453:              : new Error("Invite validation failed on all healthy sessions.");
+src/jobs/runtime.ts:460:            currentRecord.bucket !== "validating" ||
+src/jobs/runtime.ts:461:            currentRecord.metadata?.validationLeaseToken !== leaseToken
+src/jobs/runtime.ts:479:                needsValidation: false,
+src/jobs/runtime.ts:480:                validationState: "active",
+src/jobs/runtime.ts:485:          await buckets.clearValidationError(
+src/jobs/runtime.ts:494:            validatedLinkCount: (currentSession.validatedLinkCount ?? 0) + 1,
+src/jobs/runtime.ts:495:            lastLinkValidatedAt: Date.now(),
+src/jobs/runtime.ts:496:            validatorConsecutiveRateLimitCount: 0,
+src/jobs/runtime.ts:497:            validatorLastSuccessAt: Date.now(),
+src/jobs/runtime.ts:498:            validatorRetiredUntil: Date.now() - 1,
+src/jobs/runtime.ts:499:            validatorRetireReason:
+src/jobs/runtime.ts:500:              "recovered after successful invite validation",
+src/jobs/runtime.ts:504:            currentAction: "validated",
+src/jobs/runtime.ts:550:            currentAction: "validation failed",
+src/jobs/runtime.ts:554:          const isRateLimited = isInviteValidationRateLimited(lower);
+src/jobs/runtime.ts:555:          const isDead = isInviteValidationPermanentFailure(lower);
+src/jobs/runtime.ts:574:                    batchRecord?.bucket === "validating" &&
+src/jobs/runtime.ts:575:                    batchRecord.metadata?.validationLeaseToken ===
+src/jobs/runtime.ts:576:                      payload.validationLeaseToken
+src/jobs/runtime.ts:583:                        validationError: message.slice(0, 240),
+src/jobs/runtime.ts:586:                          needsValidation: false,
+src/jobs/runtime.ts:587:                          validationState: "retryable-error",
+src/jobs/runtime.ts:597:            existing.bucket !== "validating" ||
+src/jobs/runtime.ts:598:            !payload.validationLeaseToken ||
+src/jobs/runtime.ts:599:            existing.metadata?.validationLeaseToken !==
+src/jobs/runtime.ts:600:              payload.validationLeaseToken
+src/jobs/runtime.ts:605:              validationError: message.slice(0, 240),
+src/jobs/runtime.ts:608:                needsValidation: false,
+src/jobs/runtime.ts:609:                validationState: isDead ? "dead" : "retryable-error",
+src/jobs/runtime.ts:620:    const payload = context.job.payload as LinkValidationPayload;
+src/jobs/runtime.ts:641:            metadata: { needsValidation: true },
+src/jobs/runtime.ts:672:      throw new Error("This WhatsApp identity is no longer an administrator in the selected group.");
+src/jobs/runtime.ts:698:              .map((failure) => failure.jid)
+src/jobs/runtime.ts:809:              .map((failure) => failure.jid)
+src/jobs/runtime.ts:1113:          ...(result.jid ? { groupJid: result.jid } : {}),
+src/jobs/runtime.ts:1130:            ...(result.jid ? { jid: result.jid } : {}),
+src/jobs/runtime.ts:1135:            lastResult: `Joined ${result.title ?? result.jid ?? record.canonicalUrl}`,
+src/jobs/runtime.ts:1152:            ...(result.jid ? { jid: result.jid } : {}),
+src/jobs/runtime.ts:1157:            lastResult: `Already joined ${result.title ?? result.jid ?? record.canonicalUrl}`,
+src/jobs/runtime.ts:1171:              validationError: "Join request sent or approval required.",
+src/jobs/runtime.ts:1180:            ...(result.jid ? { jid: result.jid } : {}),
+src/jobs/runtime.ts:1186:            lastResult: `Request pending for ${result.title ?? result.jid ?? record.canonicalUrl}`,
+src/jobs/runtime.ts:1205:        if (classified.classification === "invalid-invite") {
+src/jobs/runtime.ts:1212:              validationError:
+src/jobs/runtime.ts:1213:                "Join Manager confirmed the Active invite is invalid or unavailable.",
+src/jobs/runtime.ts:1219:                needsValidation: false,
+src/jobs/runtime.ts:1220:                validationState: "dead",
+src/jobs/runtime.ts:1225:            ...(result.jid ? { jid: result.jid } : {}),
+src/jobs/runtime.ts:1235:          const deadLink = ["invalid-invite", "expired", "group-unavailable"].includes(
+src/jobs/runtime.ts:1244:              validationError: classified.message.slice(0, 240),
+src/jobs/runtime.ts:1249:                needsValidation: false,
+src/jobs/runtime.ts:1250:                validationState: deadLink ? "dead" : "active",
+src/jobs/runtime.ts:1258:              ...(result.jid ? { jid: result.jid } : {}),
+src/jobs/runtime.ts:1455:          ).map((group) => group.jid);
+src/jobs/runtime.ts:1484:          const resolved = await validateInviteLink(
+src/jobs/runtime.ts:1489:          if (resolved?.jid) ignoredJids.add(resolved.jid);
+src/jobs/runtime.ts:1752:        `[pappy-omega-mini] Validator index reconciled removed=${result.removed} restored=${result.restored}`,
+src/jobs/runtime.ts:1757:        "[pappy-omega-mini] Validator index reconciliation failed:",
+src/jobs/runtime.ts:1761:  void sweepPendingMainValidation(orchestrator, buckets);
+src/jobs/runtime.ts:1762:  void runValidatorGuard(orchestrator, buckets, redis);
+src/jobs/runtime.ts:1763:  validatorSweepTimer = setInterval(
+src/jobs/runtime.ts:1764:    () => void sweepPendingMainValidation(orchestrator, buckets),
+src/jobs/runtime.ts:1767:  validatorGuardTimer = setInterval(
+src/jobs/runtime.ts:1768:    () => void runValidatorGuard(orchestrator, buckets, redis),
+src/jobs/runtime.ts:1771:  validatorSweepTimer.unref?.();
+src/jobs/runtime.ts:1772:  validatorGuardTimer.unref?.();
+src/jobs/runtime.ts:1776:async function runValidatorGuard(
+src/jobs/runtime.ts:1781:  if (validatorGuardBusy) return;
+src/jobs/runtime.ts:1782:  validatorGuardBusy = true;
+src/jobs/runtime.ts:1785:    if (now - lastValidatorIndexReconcileAt >= 60_000) {
+src/jobs/runtime.ts:1786:      lastValidatorIndexReconcileAt = now;
+src/jobs/runtime.ts:1791:            "[pappy-omega-mini] periodic Validator index reconciliation failed:",
+src/jobs/runtime.ts:1796:    const activeValidationJobs = (await orchestrator.listRecent(1000)).filter(
+src/jobs/runtime.ts:1798:        job.kind === "link-validation" &&
+src/jobs/runtime.ts:1802:      activeValidationJobs.flatMap((job) => {
+src/jobs/runtime.ts:1813:        "validating",
+src/jobs/runtime.ts:1829:              validationError:
+src/jobs/runtime.ts:1830:                "Validator Guard expired a stale validation claim; explicit requeue is required.",
+src/jobs/runtime.ts:1833:                needsValidation: false,
+src/jobs/runtime.ts:1834:                validationState: "retryable-error",
+src/jobs/runtime.ts:1845:        job.kind === "link-validation" &&
+src/jobs/runtime.ts:1849:        (job.completedAt ?? now) >= validatorGuardStartedAt - 60_000 &&
+src/jobs/runtime.ts:1853:      const marker = `pappy-omega-mini:validator-guard:${job.jobId}`;
+src/jobs/runtime.ts:1865:      const rateLimited = isInviteValidationRateLimited(resultText);
+src/jobs/runtime.ts:1866:      // “No healthy validation session” is an admission/scheduler result, not
+src/jobs/runtime.ts:1873:        ) && !/no healthy(?: whatsapp)? validation session/.test(resultText);
+src/jobs/runtime.ts:1878:          validatorFailureCount: 0,
+src/jobs/runtime.ts:1879:          validatorRateLimitCount: 0,
+src/jobs/runtime.ts:1880:          validatorLastSuccessAt: now,
+src/jobs/runtime.ts:1881:          validatorRetiredUntil: now - 1,
+src/jobs/runtime.ts:1882:          validatorRetireReason: "recovered",
+src/jobs/runtime.ts:1887:      const failureCount = (session.validatorFailureCount ?? 0) + 1;
+src/jobs/runtime.ts:1889:        (session.validatorRateLimitCount ?? 0) + (rateLimited ? 1 : 0);
+src/jobs/runtime.ts:1891:        ? (session.validatorConsecutiveRateLimitCount ?? 0) + 1
+src/jobs/runtime.ts:1895:        validatorFailureCount: failureCount,
+src/jobs/runtime.ts:1896:        validatorRateLimitCount: rateLimitCount,
+src/jobs/runtime.ts:1897:        validatorConsecutiveRateLimitCount: consecutiveRateLimitCount,
+src/jobs/runtime.ts:1900:              validatorRetiredUntil: now + VALIDATOR_RETIRE_MS,
+src/jobs/runtime.ts:1901:              validatorRetireReason: "repeated validation transport failure",
+src/jobs/runtime.ts:1904:              validatorRetiredUntil: now - 1,
+src/jobs/runtime.ts:1905:              validatorRetireReason: rateLimited
+src/jobs/runtime.ts:1906:                ? "per-link rate-limit; session retained for validation"
+src/jobs/runtime.ts:1907:                : "transient validation failure; cooldown not applied",
+src/jobs/runtime.ts:1913:      "[pappy-omega-mini] Validator Guard failed:",
+src/jobs/runtime.ts:1917:    validatorGuardBusy = false;
+src/jobs/runtime.ts:1921:let validatorSweepBusy = false;
+src/jobs/runtime.ts:1922:let lastValidatorIndexReconcileAt = 0;
+src/jobs/runtime.ts:1924:async function sweepPendingMainValidation(
+src/jobs/runtime.ts:1928:  if (validatorSweepBusy) return;
+src/jobs/runtime.ts:1929:  validatorSweepBusy = true;
+src/jobs/runtime.ts:1933:        "[pappy-omega-mini] Validator session registry refresh failed:",
+src/jobs/runtime.ts:1950:    const activeValidationJobs = (await orchestrator.listRecent(1000)).filter(
+src/jobs/runtime.ts:1952:        job.kind === "link-validation" &&
+src/jobs/runtime.ts:1956:      activeValidationJobs
+src/jobs/runtime.ts:1979:          record.metadata?.needsValidation === true ||
+src/jobs/runtime.ts:1981:            record.metadata?.needsValidation !== false),
+src/jobs/runtime.ts:1992:    const validatorBatchSize = 5;
+src/jobs/runtime.ts:1995:      availableSessions.length * validatorBatchSize,
+src/jobs/runtime.ts:2005:      const batch = urls.slice(0, validatorBatchSize);
+src/jobs/runtime.ts:2006:      const validationLeaseToken = randomUUID();
+src/jobs/runtime.ts:2007:      const claimed = await claimValidatorMainLinks(
+src/jobs/runtime.ts:2011:        validationLeaseToken,
+src/jobs/runtime.ts:2017:        sourceUserId: "validator-auto",
+src/jobs/runtime.ts:2018:        validationLeaseToken,
+src/jobs/runtime.ts:2028:            kind: "link-validation",
+src/jobs/runtime.ts:2030:            idempotencyKey: `validator-auto:global:${session.sessionId}:${payloadHash}`,
+src/jobs/runtime.ts:2035:                validationError: error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240),
+src/jobs/runtime.ts:2037:                  needsValidation: false,
+src/jobs/runtime.ts:2038:                  validationState: "retryable-error",
+src/jobs/runtime.ts:2039:                  validationLeaseToken,
+src/jobs/runtime.ts:2048:    validatorSweepBusy = false;
+src/jobs/runtime.ts:2096:  if (validatorSweepTimer) clearInterval(validatorSweepTimer);
+src/jobs/runtime.ts:2097:  if (validatorGuardTimer) clearInterval(validatorGuardTimer);
+src/jobs/runtime.ts:2098:  validatorSweepTimer = undefined;
+src/jobs/runtime.ts:2099:  validatorGuardTimer = undefined;
+src/links/link-bucket-store.ts:5:  mirrorDurableValidatorLinkState,
+src/links/link-bucket-store.ts:6:  type DurableValidatorState,
+src/links/link-bucket-store.ts:7:} from "./validator-persistence.js";
+src/links/link-bucket-store.ts:9:export const GLOBAL_VALIDATOR_SCOPE = "__admin_validator__";
+src/links/link-bucket-store.ts:13:  | "validating"
+src/links/link-bucket-store.ts:19:function durableStateForBucket(bucket: LinkBucket): DurableValidatorState | undefined {
+src/links/link-bucket-store.ts:21:  if (bucket === "validating") return "PROCESSING";
+src/links/link-bucket-store.ts:45:      | "invalid-invite"
+src/links/link-bucket-store.ts:60:    needsValidation?: boolean;
+src/links/link-bucket-store.ts:61:    validationState?: "pending" | "validating" | "active" | "dead" | "retryable-error";
+src/links/link-bucket-store.ts:62:    validationLeaseToken?: string;
+src/links/link-bucket-store.ts:64:  validationError?: string;
+src/links/link-bucket-store.ts:81:          // Re-seeing a URL is deduplication, not a new validation request.
+src/links/link-bucket-store.ts:82:          // Preserve the authoritative bucket and any active validation lease.
+src/links/link-bucket-store.ts:95:                  needsValidation: true,
+src/links/link-bucket-store.ts:107:    for (const bucketName of ["main", "validating", "active", "dead", "error"] as LinkBucket[])
+src/links/link-bucket-store.ts:120:        await mirrorDurableValidatorLinkState({
+src/links/link-bucket-store.ts:127:          ...(record.validationError ? { error: record.validationError } : {}),
+src/links/link-bucket-store.ts:130:            "[pappy-omega-mini] durable validator dual-write upsert failed:",
+src/links/link-bucket-store.ts:157:    // Active is a confirmed terminal validation state. Automatic writers must
+src/links/link-bucket-store.ts:158:    // never recycle it into Main; explicit operational revalidation needs a
+src/links/link-bucket-store.ts:173:    for (const oldBucket of ["main", "validating", "active", "dead", "error"] as LinkBucket[])
+src/links/link-bucket-store.ts:183:        await mirrorDurableValidatorLinkState({
+src/links/link-bucket-store.ts:190:          ...(next.validationError ? { error: next.validationError } : {}),
+src/links/link-bucket-store.ts:193:            "[pappy-omega-mini] durable validator dual-write move failed:",
+src/links/link-bucket-store.ts:202:  async clearValidationError(
+src/links/link-bucket-store.ts:207:    if (!existing || existing.validationError === undefined) return false;
+src/links/link-bucket-store.ts:209:    delete next.validationError;
+src/links/link-bucket-store.ts:223:      "validating",
+src/links/link-bucket-store.ts:260:    const bucketNames = ["main", "validating", "active", "dead", "error"] as LinkBucket[];
+src/links/link-bucket-store.ts:307:  async claimMainForValidation(
+src/links/link-bucket-store.ts:311:    validationLeaseToken?: string,
+src/links/link-bucket-store.ts:313:    const lockKey = `pappy-omega-mini:validator-claim:${workspaceId}:${createHash("sha256").update(canonicalUrl).digest("hex")}`;
+src/links/link-bucket-store.ts:320:      const moved = await this.move(workspaceId, canonicalUrl, "validating", {
+src/links/link-bucket-store.ts:324:          ...(validationLeaseToken ? { validationLeaseToken } : {}),
+src/links/link-bucket-store.ts:325:          needsValidation: false,
+src/links/link-bucket-store.ts:326:          validationState: "validating",
+src/links/link-bucket-store.ts:330:      await this.clearValidationError(workspaceId, canonicalUrl);
+src/links/link-bucket-store.ts:346:    for (const bucket of ["main", "validating", "active", "dead", "error"] as LinkBucket[]) {
+src/links/link-bucket-store.ts:386:    const claimKey = "pappy-omega-mini:validator-global-migration";
+src/links/link-collector.ts:102:          needsValidation: true,
+src/links/link-collector.ts:107:      // Ignore malformed or non-group links while preserving valid links from the same payload.
+src/links/link-export.ts:61:main{max-width:1180px;margin:0 auto}.eyebrow{color:var(--accent);font:700 12px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase}.header{display:flex;justify-content:space-between;gap:20px;align-items:end;margin-bottom:24px}.header h1{font-size:clamp(24px,4vw,42px);margin:6px 0}.summary{color:var(--muted);margin:0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:14px}.card{position:relative;overflow:hidden;background:rgba(16,24,39,.92);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:0 12px 30px rgba(0,0,0,.18)}.card:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--accent)}.card.validating:before{background:var(--warn)}.card.dead:before{background:#fb7185}.card.retryable-error:before{background:#f97316}.card-head{display:flex;justify-content:space-between;gap:10px;align-items:start}.title{font-weight:700;font-size:17px;overflow-wrap:anywhere}.status{border:1px solid var(--line);border-radius:999px;color:var(--accent);font:700 11px ui-monospace,SFMono-Regular,Menlo,monospace;padding:4px 8px;white-space:nowrap}.status.validating{color:var(--warn)}.status.dead{color:#fb7185}.status.retryable-error{color:#f97316}.url{display:block;color:#9bdcff;margin:14px 0;overflow-wrap:anywhere;text-decoration:none}.url:hover{text-decoration:underline}.meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}.meta div{border-top:1px solid var(--line);padding-top:8px}.label{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em}.value{display:block;margin-top:3px;overflow-wrap:anywhere}.empty{border:1px dashed var(--line);border-radius:16px;color:var(--muted);padding:34px;text-align:center}@media(max-width:560px){body{padding:16px}.header{display:block}.meta{grid-template-columns:1fr}}
+src/links/link-export.ts:77:  const status = record.metadata?.validationState ?? record.metadata?.joinClassification ?? record.bucket;
+src/links/validator-operations.ts:11:export type ValidatorBucket = Exclude<LinkBucket, "master">;
+src/links/validator-operations.ts:21:    "validator-operation",
+src/links/validator-operations.ts:31:export async function listValidatorBucket(
+src/links/validator-operations.ts:33:  bucket: ValidatorBucket,
+src/links/validator-operations.ts:59:export async function countValidatorBucket(
+src/links/validator-operations.ts:61:  bucket: ValidatorBucket,
+src/links/validator-operations.ts:66:export async function listAllValidatorBucket(
+src/links/validator-operations.ts:68:  bucket: ValidatorBucket,
+src/links/validator-operations.ts:78:export async function purgeValidatorBucket(
+src/links/validator-operations.ts:80:  bucket: ValidatorBucket,
+src/links/validator-operations.ts:91:export async function mergeValidatorBuckets(
+src/links/validator-operations.ts:95:    // Active is a verified terminal bucket for validation. It must never be
+src/links/validator-operations.ts:102:        metadata: { ...record.metadata, needsValidation: true, validationState: "pending" },
+src/links/validator-operations.ts:113:  bucket: ValidatorBucket,
+src/links/validator-operations.ts:126:export async function claimValidatorMainLinks(
+src/links/validator-operations.ts:130:  validationLeaseToken?: string,
+src/links/validator-operations.ts:141:      if (await store.claimMainForValidation(workspaceId, canonicalUrl, sourceSessionId, validationLeaseToken))
+src/links/validator-operations.ts:148:export async function requeueValidatorMainLinks(
+src/links/validator-operations.ts:162:      if (current?.bucket !== "validating") continue;
+src/links/validator-operations.ts:166:          needsValidation: true,
+src/links/validator-operations.ts:167:          validationState: "pending",
+src/links/validator-operations.ts:176:export async function requeueLegacyValidatorErrors(
+src/links/validator-operations.ts:186:          needsValidation: true,
+src/links/validator-operations.ts:187:          validationState: "pending",
+src/links/validator-snapshot.ts:10:export interface ValidatorSnapshot {
+src/links/validator-snapshot.ts:22:  "validator-snapshot",
+src/links/validator-snapshot.ts:26:export async function getValidatorSnapshot(
+src/links/validator-snapshot.ts:28:): Promise<ValidatorSnapshot> {
+src/links/validator-snapshot.ts:31:    "validating",
+src/links/validator-snapshot.ts:40:    ...(await store.list(workspaceId, "validating", 0, 40)).records,
+src/links/validator-snapshot.ts:52:export async function closeValidatorSnapshot(): Promise<void> {
+src/links/validator-persistence.ts:5:export const VALIDATOR_GLOBAL_SCOPE = "__admin_validator__";
+src/links/validator-persistence.ts:7:export type DurableValidatorState =
+src/links/validator-persistence.ts:10:export type DurableValidatorErrorClass =
+src/links/validator-persistence.ts:24:export interface DurableValidatorLinkRecord {
+src/links/validator-persistence.ts:28:  state: DurableValidatorState;
+src/links/validator-persistence.ts:35:  validatedAt?: number;
+src/links/validator-persistence.ts:36:  validationAttempts: number;
+src/links/validator-persistence.ts:38:  lastErrorClass?: DurableValidatorErrorClass;
+src/links/validator-persistence.ts:39:  validatorJobId?: string;
+src/links/validator-persistence.ts:48:interface DurableValidatorLinkDocument
+src/links/validator-persistence.ts:49:  extends DurableValidatorLinkRecord, mongoose.Document {}
+src/links/validator-persistence.ts:51:const durableValidatorLinkSchema =
+src/links/validator-persistence.ts:52:  new mongoose.Schema<DurableValidatorLinkDocument>(
+src/links/validator-persistence.ts:64:      validatedAt: Number,
+src/links/validator-persistence.ts:65:      validationAttempts: { type: Number, required: true, default: 0 },
+src/links/validator-persistence.ts:68:      validatorJobId: { type: String, index: true },
+src/links/validator-persistence.ts:76:    { collection: "validator_links", versionKey: false },
+src/links/validator-persistence.ts:79:durableValidatorLinkSchema.index(
+src/links/validator-persistence.ts:81:  { unique: true, name: "validator_scope_normalized_url_unique" },
+src/links/validator-persistence.ts:83:durableValidatorLinkSchema.index({ scopeId: 1, state: 1, updatedAt: -1 });
+src/links/validator-persistence.ts:84:durableValidatorLinkSchema.index({ state: 1, lockExpiresAt: 1 });
+src/links/validator-persistence.ts:86:let model: Model<DurableValidatorLinkDocument> | undefined;
+src/links/validator-persistence.ts:88:function validatorLinkModel(): Model<DurableValidatorLinkDocument> {
+src/links/validator-persistence.ts:90:    mongoose.models.ValidatorLink ??
+src/links/validator-persistence.ts:91:    mongoose.model<DurableValidatorLinkDocument>(
+src/links/validator-persistence.ts:92:      "ValidatorLink",
+src/links/validator-persistence.ts:93:      durableValidatorLinkSchema,
+src/links/validator-persistence.ts:97:export async function ensureDurableValidatorIndexes(): Promise<void> {
+src/links/validator-persistence.ts:99:  await validatorLinkModel().createIndexes();
+src/links/validator-persistence.ts:102:export async function upsertDurableValidatorLink(input: {
+src/links/validator-persistence.ts:109:}): Promise<DurableValidatorLinkRecord> {
+src/links/validator-persistence.ts:113:  const record = await validatorLinkModel()
+src/links/validator-persistence.ts:133:          validationAttempts: 0,
+src/links/validator-persistence.ts:139:    .lean<DurableValidatorLinkRecord>()
+src/links/validator-persistence.ts:142:    throw new Error("Durable validator link upsert returned no record.");
+src/links/validator-persistence.ts:146:export async function mirrorDurableValidatorLinkState(input: {
+src/links/validator-persistence.ts:152:  state: DurableValidatorState;
+src/links/validator-persistence.ts:154:}): Promise<DurableValidatorLinkRecord> {
+src/links/validator-persistence.ts:155:  await upsertDurableValidatorLink(input);
+src/links/validator-persistence.ts:157:  const updated = await validatorLinkModel()
+src/links/validator-persistence.ts:175:                validatorJobId: 1,
+src/links/validator-persistence.ts:186:    .lean<DurableValidatorLinkRecord>()
+src/links/validator-persistence.ts:189:    throw new Error("Durable validator state mirror returned no record.");
+src/links/validator-persistence.ts:193:export async function claimDurableValidatorLink(input: {
+src/links/validator-persistence.ts:200:}): Promise<DurableValidatorLinkRecord | undefined> {
+src/links/validator-persistence.ts:207:  const record = await validatorLinkModel()
+src/links/validator-persistence.ts:221:          validatorJobId: input.jobId,
+src/links/validator-persistence.ts:228:        $inc: { validationAttempts: 1 },
+src/links/validator-persistence.ts:232:    .lean<DurableValidatorLinkRecord>()
+src/links/validator-persistence.ts:237:export async function completeDurableValidatorLink(input: {
+src/links/validator-persistence.ts:242:  state: Exclude<DurableValidatorState, "MAIN" | "PROCESSING">;
+src/links/validator-persistence.ts:244:  errorClass?: DurableValidatorErrorClass;
+src/links/validator-persistence.ts:245:}): Promise<DurableValidatorLinkRecord | undefined> {
+src/links/validator-persistence.ts:248:  const record = await validatorLinkModel()
+src/links/validator-persistence.ts:254:        validatorJobId: input.jobId,
+src/links/validator-persistence.ts:261:          ...(input.state === "ACTIVE" ? { validatedAt: now } : {}),
+src/links/validator-persistence.ts:266:          validatorJobId: 1,
+src/links/validator-persistence.ts:275:    .lean<DurableValidatorLinkRecord>()
+src/links/validator-persistence.ts:280:export async function recoverExpiredDurableValidatorLinks(
+src/links/validator-persistence.ts:286:  const stale = await validatorLinkModel()
+src/links/validator-persistence.ts:294:  const result = await validatorLinkModel().updateMany(
+src/links/validator-persistence.ts:303:        validatorJobId: 1,
+src/links/validator-persistence.ts:314:export async function countDurableValidatorState(
+src/links/validator-persistence.ts:316:  state: DurableValidatorState,
+src/links/validator-persistence.ts:319:  return validatorLinkModel().countDocuments({ scopeId, state }).exec();
+src/menus/menu-model.ts:57:    { id: "profile", label: "Profile", command: "profile", description: "View session identity and health." },
+src/menus/menu-model.ts:107:    statusLine: `${liveStatus}|${isOwner ? "SUDO" : "USER"} · prefix ${session.prefix || "none"} · join ${session.autoJoinEnabled ? "ON" : "OFF"} · health ${formatHealthAge(session.lastHealthyAt)} · links ${session.collectedLinkCount ?? 0}/${session.validatedLinkCount ?? 0}`,
+src/persistence/mongo.ts:27:  senderJid?: string;
+src/persistence/mongo.ts:41:  senderJid?: string;
+src/persistence/mongo.ts:79:  kind: "allstatus" | "allchat" | "tag" | "link-validation" | "join-manager";
+src/persistence/mongo.ts:184:      senderJid: String,
+src/persistence/mongo.ts:206:    senderJid: String,
+src/persistence/mongo.ts:399:    phoneNumber: String,
+src/persistence/mongo.ts:418:    autoValidateLinks: { type: Boolean, default: true },
+src/persistence/mongo.ts:421:    validatedLinkCount: { type: Number, default: 0 },
+src/persistence/mongo.ts:423:    lastLinkValidatedAt: Number,
+src/persistence/mongo.ts:437:    validatorRetiredUntil: Number,
+src/persistence/mongo.ts:438:    validatorRetireReason: String,
+src/persistence/mongo.ts:439:    validatorFailureCount: Number,
+src/persistence/mongo.ts:440:    validatorRateLimitCount: Number,
+src/persistence/mongo.ts:441:    validatorConsecutiveRateLimitCount: Number,
+src/persistence/mongo.ts:442:    validatorLastSuccessAt: Number,
+src/persistence/mongo.ts:969:  kind: "allstatus" | "allchat" | "tag" | "link-validation" | "join-manager";
+src/telegram/bot.ts:36:  runValidatorSweepNow,
+src/telegram/bot.ts:60:import { getValidatorSnapshot } from "../links/validator-snapshot.js";
+src/telegram/bot.ts:63:  listValidatorBucket,
+src/telegram/bot.ts:64:  countValidatorBucket,
+src/telegram/bot.ts:65:  mergeValidatorBuckets,
+src/telegram/bot.ts:66:  purgeValidatorBucket,
+src/telegram/bot.ts:67:  type ValidatorBucket,
+src/telegram/bot.ts:68:} from "../links/validator-operations.js";
+src/telegram/bot.ts:167:  validatorDashboardText,
+src/telegram/bot.ts:177:  validatorLiveKeyboard,
+src/telegram/bot.ts:178:  validatorLiveText,
+src/telegram/bot.ts:261:const validatorLiveStates = new Map<string, boolean>();
+src/telegram/bot.ts:1007:                "Invalid Setting",
+src/telegram/bot.ts:1008:                `${escapeHtml(parsed.error ?? "The value is not valid.")}\n\nCorrect the value or send <code>cancel</code>.`,
+src/telegram/bot.ts:1220:              "Invalid Group JID",
+src/telegram/bot.ts:1221:              "Send a WhatsApp group JID ending in <code>@g.us</code>.",
+src/telegram/bot.ts:1287:            "This WhatsApp identity is no longer an administrator in the group.",
+src/telegram/bot.ts:1298:            const digits = (participant.phoneNumber ?? participant.id ?? participant.jid ?? "").replace(/\D/g, "");
+src/telegram/bot.ts:1310:            participants: participants.map((participant) => participant.id),
+src/telegram/bot.ts:1313:          const preview = participants.slice(0, 20).map((participant) => escapeHtml(participant.id)).join("\n");
+src/telegram/bot.ts:1368:              const digits = (request.phoneNumber ?? request.jid).replace(
+src/telegram/bot.ts:1386:            participants: requests.map((request) => request.jid),
+src/telegram/bot.ts:1416:          const candidates = [item.id, item.jid, item.phoneNumber]
+src/telegram/bot.ts:1428:            "That WhatsApp member is not in the selected group. Send a full participant JID or international number.",
+src/telegram/bot.ts:1446:          participants: [participant.id],
+src/telegram/bot.ts:1454:              `<b>Action:</b> ${participantAction}\n<b>Member:</b> <code>${escapeHtml(participant.id)}</code>\n<b>Job:</b> <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>`,
+src/telegram/bot.ts:1525:      const valid =
+src/telegram/bot.ts:1529:      if (!valid) {
+src/telegram/bot.ts:1534:              "Invalid Value",
+src/telegram/bot.ts:1675:              "Invalid delay",
+src/telegram/bot.ts:1767:      const identity = ctx.message.text
+src/telegram/bot.ts:1771:      if (!current || !identity) return;
+src/telegram/bot.ts:1774:          ? [...new Set([...current.sudoList, identity])]
+src/telegram/bot.ts:1775:          : current.sudoList.filter((item) => item !== identity);
+src/telegram/bot.ts:1784:            `<code>${escapeHtml(identity)}</code> is ${sessionSudo.action === "add" ? "now authorized" : "no longer authorized"} for this session.`,
+src/telegram/bot.ts:2000:            senderJid: session.phoneNumber ?? "admin-global-bridge",
+src/telegram/bot.ts:2086:          senderJid: session.phoneNumber ?? "admin-bridge",
+src/telegram/bot.ts:2206:          senderJid: session.phoneNumber ?? "telegram-bridge",
+src/telegram/bot.ts:2355:              "Invalid workload name",
+src/telegram/bot.ts:2420:        const validationJobs = runtime
+src/telegram/bot.ts:2421:          ? await enqueueValidatorJobs(
+src/telegram/bot.ts:2431:            validationJobs.length
+src/telegram/bot.ts:2433:                  "Imported · Validation Started",
+src/telegram/bot.ts:2434:                  `${collection.found} WhatsApp group invite link${collection.found === 1 ? "" : "s"} found; ${collection.added} new links added to Main. ${validationJobs.length} validation worker${validationJobs.length === 1 ? "" : "s"} started automatically.`,
+src/telegram/bot.ts:2437:                  "Imported · Validation Waiting",
+src/telegram/bot.ts:2438:                  `${collection.found} WhatsApp group invite link${collection.found === 1 ? "" : "s"} found; ${collection.added} new links added to Main. No active validation session is available yet; the links remain safe in Main.`,
+src/telegram/bot.ts:2509:            senderJid: session.phoneNumber ?? "telegram-bridge",
+src/telegram/bot.ts:2653:        const validationJobs = runtime
+src/telegram/bot.ts:2654:          ? await enqueueValidatorJobs(
+src/telegram/bot.ts:2661:        const validationMessage = validationJobs.length
+src/telegram/bot.ts:2662:          ? `${validationJobs.length} validation worker${validationJobs.length === 1 ? "" : "s"} started automatically. Open Live Log to watch progress.`
+src/telegram/bot.ts:2663:          : "No authenticated validation session is available yet; the links remain safely in Main and will be available for validation when a session is active.";
+src/telegram/bot.ts:2671:              ? validationJobs.length
+src/telegram/bot.ts:2673:                    "Imported · Validation Started",
+src/telegram/bot.ts:2674:                    `${result.found} WhatsApp group links found; ${result.added} new links added to Main.\n\n${validationMessage}`,
+src/telegram/bot.ts:2677:                    "Imported · Validation Waiting",
+src/telegram/bot.ts:2678:                    `${result.found} WhatsApp group links found; ${result.added} new links added to Main.\n\n${validationMessage}`,
+src/telegram/bot.ts:3067:    /^session:([^:]+):section:(overview|tools|groups|bridge|validator|join|health|settings|access)$/,
+src/telegram/bot.ts:3100:      if (section === "validator") {
+src/telegram/bot.ts:3108:              `<b>Collection:</b> automatic into the admin-owned shared Main\n<b>Validation:</b> automatic across eligible sessions\n<b>Collected:</b> ${session.collectedLinkCount ?? 0}\n<b>Validated:</b> ${session.validatedLinkCount ?? 0}\n\nThis session does not own a Validator Hub. All users feed one shared pipeline.`,
+src/telegram/bot.ts:3121:              `<b>Auto-join:</b> ${session.autoJoinEnabled ? "ON" : "OFF"}\n<b>Prefix:</b> <code>${escapeHtml(session.prefix || "none")}</code>\n<b>Validator:</b> AUTO\n\nChanges here are applied in place and return to this session control plane.`,
+src/telegram/bot.ts:3132:            "Profile, media, group creation, group picture, and identity controls are isolated to this session.",
+src/telegram/bot.ts:3300:            `<b>Subject:</b> ${escapeHtml(group.subject)}\n<b>JID:</b> <code>${escapeHtml(group.jid)}</code>\n<b>Members:</b> ${group.participantCount}\n\nChoose one action for this group.`,
+src/telegram/bot.ts:3332:        group.jid,
+src/telegram/bot.ts:3388:        groupJid: group.jid,
+src/telegram/bot.ts:3424:          group.jid,
+src/telegram/bot.ts:3428:            "This WhatsApp identity is no longer an administrator in the group.",
+src/telegram/bot.ts:3435:            group.jid,
+src/telegram/bot.ts:3442:            group.jid,
+src/telegram/bot.ts:3494:          group.jid,
+src/telegram/bot.ts:3498:            "This WhatsApp identity is no longer an administrator in the group.",
+src/telegram/bot.ts:3503:          group.jid,
+src/telegram/bot.ts:3587:          group.jid,
+src/telegram/bot.ts:3591:            "This WhatsApp identity is no longer an administrator in the group.",
+src/telegram/bot.ts:3596:          group.jid,
+src/telegram/bot.ts:3604:              "The previous group invite has been invalidated. Open Invite Link from the group dashboard to obtain the replacement link.",
+src/telegram/bot.ts:3751:          group.jid,
+src/telegram/bot.ts:3755:            "This WhatsApp identity is no longer an administrator in the group.",
+src/telegram/bot.ts:3757:        const selfDigits = (session.phoneNumber ?? "").replace(/\\D/g, "");
+src/telegram/bot.ts:3761:              participant.phoneNumber,
+src/telegram/bot.ts:3762:              participant.id,
+src/telegram/bot.ts:3763:              participant.jid,
+src/telegram/bot.ts:3785:          groupJid: group.jid,
+src/telegram/bot.ts:3787:          participants: targets.map((participant) => participant.id),
+src/telegram/bot.ts:3874:              `<b>Country:</b> +${pending.countryCode}\n<b>Selected:</b> ${pending.participants.length}\n<b>Job:</b> <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>\nThe worker will revalidate admin access and process the protected selection with partial-result tracking.`,
+src/telegram/bot.ts:3906:        const snapshot = await getGroupModerationSnapshot(session.workspaceId, session.sessionId, group.jid, { fresh: false });
+src/telegram/bot.ts:3907:        if (!snapshot.isAdmin) throw new Error("This WhatsApp identity is no longer an administrator in the group.");
+src/telegram/bot.ts:3910:          `• ${escapeHtml(participant.id)}${participant.admin ? " · admin" : ""}`,
+src/telegram/bot.ts:3950:        groupJid: group.jid,
+src/telegram/bot.ts:3983:        group.jid,
+src/telegram/bot.ts:3992:        groupJid: group.jid,
+src/telegram/bot.ts:4002:            `<b>Group:</b> ${escapeHtml(group.subject)}\nSend the member’s full WhatsApp number or participant JID, or send <code>cancel</code>. The current group membership and administrator role will be checked again before the change.`,
+src/telegram/bot.ts:4033:          group.jid,
+src/telegram/bot.ts:4037:            "This WhatsApp identity is no longer an administrator in the group.",
+src/telegram/bot.ts:4043:          group.jid,
+src/telegram/bot.ts:4089:          group.jid,
+src/telegram/bot.ts:4093:            "This WhatsApp identity is no longer an administrator in the group.",
+src/telegram/bot.ts:4098:          group.jid,
+src/telegram/bot.ts:4187:          group.jid,
+src/telegram/bot.ts:4191:            "This WhatsApp identity is no longer an administrator in the group.",
+src/telegram/bot.ts:4196:          group.jid,
+src/telegram/bot.ts:4295:      const requests = await listGroupJoinRequests(session.workspaceId, session.sessionId, group.jid).catch(() => []);
+src/telegram/bot.ts:4324:        const snapshot = await getGroupModerationSnapshot(session.workspaceId, session.sessionId, group.jid);
+src/telegram/bot.ts:4325:        if (!snapshot.isAdmin) throw new Error("This WhatsApp identity is no longer an administrator in the group.");
+src/telegram/bot.ts:4326:        const requests = await listGroupJoinRequests(session.workspaceId, session.sessionId, group.jid);
+src/telegram/bot.ts:4331:          groupJid: group.jid,
+src/telegram/bot.ts:4333:          participants: requests.map((request) => request.jid),
+src/telegram/bot.ts:4378:        group.jid,
+src/telegram/bot.ts:4422:          group.jid,
+src/telegram/bot.ts:4426:            "This WhatsApp identity is no longer an administrator in the group.",

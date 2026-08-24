@@ -21,6 +21,9 @@ import {
 const users = new Map<string, User>();
 const workspaces = new Map<string, Workspace>();
 const sessions = new Map<string, WhatsAppSession>();
+// Prevent an in-flight Mongo hydration snapshot from resurrecting a session
+// after purge has removed it from the live registry.
+const deletedSessionIds = new Set<string>();
 
 export function resolveUser(
   telegramUserId: string,
@@ -93,15 +96,17 @@ function normalizedSessionJoinSettings(
   const next = { ...base, ...(current ?? {}) };
   const clamp = (value: number, min: number, max: number): number =>
     Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
-  const minDelayMs = clamp(next.minDelayMs, 0, 600000);
+  const allowImmediate = next.mode === "immediate";
+  const delayMinMs = allowImmediate ? 0 : 1000;
+  const minDelayMs = clamp(next.minDelayMs, delayMinMs, 60000);
   const maxDelayMs = Math.max(
     minDelayMs,
-    clamp(next.maxDelayMs, minDelayMs, 600000),
+    clamp(next.maxDelayMs, minDelayMs, 60000),
   );
   return {
     ...next,
     targetCount: clamp(next.targetCount, 1, 10000),
-    delayMs: clamp(next.delayMs, 0, 600000),
+    delayMs: clamp(next.delayMs, delayMinMs, 60000),
     minDelayMs,
     maxDelayMs,
     batchCycles: clamp(next.batchCycles, 1, 20),
@@ -205,6 +210,7 @@ export async function deleteSession(
   sessionId: string,
 ): Promise<void> {
   getSession(workspaceId, sessionId);
+  deletedSessionIds.add(sessionId);
   sessions.delete(sessionId);
   await deletePersistedSession(sessionId);
 }
@@ -292,6 +298,26 @@ export function setUserStatusLocal(
   return true;
 }
 
+function normalizedPersistedSession(session: WhatsAppSession): WhatsAppSession {
+  return {
+    ...session,
+    prefix: session.prefix ?? getWorkspaceSettings(session.workspaceId).defaultPrefix,
+    sudoList: session.sudoList ?? [],
+    ignoredGroupLinks: session.ignoredGroupLinks ?? [],
+    autoJoinEnabled:
+      session.autoJoinEnabled ??
+      getWorkspaceSettings(session.workspaceId).defaultAutoJoinEnabled,
+    autoCollectLinks: true,
+    autoValidateLinks: true,
+    joinSettings: normalizedSessionJoinSettings(
+      session.workspaceId,
+      session.joinSettings,
+    ),
+    collectedLinkCount: session.collectedLinkCount ?? 0,
+    validatedLinkCount: session.validatedLinkCount ?? 0,
+  };
+}
+
 export async function hydrateSessionRegistry(): Promise<void> {
   const snapshot = await hydrateRegistry();
   users.clear();
@@ -305,23 +331,43 @@ export async function hydrateSessionRegistry(): Promise<void> {
       workloadMode: workspace.workloadMode ?? "ON",
     });
   for (const session of snapshot.sessions)
-    sessions.set(session.sessionId, {
-      ...session,
-      prefix: session.prefix ?? getWorkspaceSettings(session.workspaceId).defaultPrefix,
-      sudoList: session.sudoList ?? [],
-      ignoredGroupLinks: session.ignoredGroupLinks ?? [],
-      autoJoinEnabled:
-        session.autoJoinEnabled ??
-        getWorkspaceSettings(session.workspaceId).defaultAutoJoinEnabled,
-      autoCollectLinks: true,
-      autoValidateLinks: true,
-      joinSettings: normalizedSessionJoinSettings(
-        session.workspaceId,
-        session.joinSettings,
-      ),
-      collectedLinkCount: session.collectedLinkCount ?? 0,
-      validatedLinkCount: session.validatedLinkCount ?? 0,
-    });
+    sessions.set(session.sessionId, normalizedPersistedSession(session));
+}
+
+let registryRefreshPromise: Promise<void> | undefined;
+let lastRegistryRefreshAt = 0;
+const REGISTRY_REFRESH_MIN_INTERVAL_MS = 10_000;
+
+/** Merge database-created sessions into the running registry for picker views and schedulers. */
+export async function refreshSessionRegistry(): Promise<void> {
+  if (Date.now() - lastRegistryRefreshAt < REGISTRY_REFRESH_MIN_INTERVAL_MS) return;
+  if (registryRefreshPromise) return registryRefreshPromise;
+  registryRefreshPromise = (async () => {
+    const snapshot = await hydrateRegistry();
+    for (const user of snapshot.users) users.set(user.telegramUserId, user);
+    for (const workspace of snapshot.workspaces)
+      workspaces.set(workspace.workspaceId, {
+        ...workspace,
+        globalSudoList: workspace.globalSudoList ?? [],
+        workloadMode: workspace.workloadMode ?? "ON",
+      });
+    for (const session of snapshot.sessions) {
+      if (deletedSessionIds.has(session.sessionId)) continue;
+      const current = sessions.get(session.sessionId);
+      const persisted = normalizedPersistedSession(session);
+      // DB is authoritative for records not currently held by a live socket.
+      // Preserve a newer in-memory lifecycle update when it exists.
+      const persistedAt = Math.max(persisted.lastHealthyAt ?? 0, persisted.connectedAt ?? 0, persisted.lastMessageReceivedAt ?? 0);
+      const currentAt = current
+        ? Math.max(current.lastHealthyAt ?? 0, current.connectedAt ?? 0, current.lastMessageReceivedAt ?? 0)
+        : 0;
+      if (!current || persistedAt >= currentAt) sessions.set(session.sessionId, persisted);
+    }
+    lastRegistryRefreshAt = Date.now();
+  })().finally(() => {
+    registryRefreshPromise = undefined;
+  });
+  return registryRefreshPromise;
 }
 
 export function getUserWorkspace(telegramUserId: string): string {

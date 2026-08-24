@@ -1,5 +1,6 @@
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
+import { attachRedisErrorHandler } from "../core/redis-events.js";
 import {
   LinkBucketStore,
   type LinkBucket,
@@ -17,7 +18,10 @@ export async function exportBucket(
   bucket: LinkBucket,
   format: "txt" | "html",
 ): Promise<BucketExport> {
-  const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 1 });
+  const redis = attachRedisErrorHandler(
+    new Redis(env.REDIS_URL, { maxRetriesPerRequest: 1 }),
+    "link-export",
+  );
   try {
     const store = new LinkBucketStore(redis);
     const records: LinkRecord[] = [];

@@ -1,5 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
+import { env } from "../config/env.js";
+import {
+  mirrorDurableValidatorLinkState,
+  type DurableValidatorState,
+} from "./validator-persistence.js";
 
 export const GLOBAL_VALIDATOR_SCOPE = "__admin_validator__";
 
@@ -10,6 +15,15 @@ export type LinkBucket =
   | "dead"
   | "error"
   | "master";
+
+function durableStateForBucket(bucket: LinkBucket): DurableValidatorState | undefined {
+  if (bucket === "main") return "MAIN";
+  if (bucket === "validating") return "PROCESSING";
+  if (bucket === "active") return "ACTIVE";
+  if (bucket === "dead") return "DEAD";
+  if (bucket === "error") return "ERROR";
+  return undefined;
+}
 
 export interface LinkRecord {
   canonicalUrl: string;
@@ -29,9 +43,15 @@ export interface LinkRecord {
     joinClassification?:
       | "already-member"
       | "invalid-invite"
+      | "expired"
+      | "group-unavailable"
       | "forbidden"
+      | "permission-denied"
       | "rate-limit"
+      | "timeout"
+      | "network-error"
       | "transport"
+      | "internal-error"
       | "request-required"
       | "joined"
       | "dead-link"
@@ -56,22 +76,63 @@ export class LinkBucketStore {
     const key = this.recordKey(GLOBAL_VALIDATOR_SCOPE, input.canonicalUrl);
     const existing = await this.get(GLOBAL_VALIDATOR_SCOPE, input.canonicalUrl);
     const record: LinkRecord = existing
-      ? { ...existing, ...normalizedInput, duplicateCount: existing.duplicateCount + 1 }
+      ? {
+          ...existing,
+          // Re-seeing a URL is deduplication, not a new validation request.
+          // Preserve the authoritative bucket and any active validation lease.
+          bucket: existing.bucket,
+          originalUrl: existing.originalUrl || input.originalUrl,
+          sourceUserId: existing.sourceUserId || input.sourceUserId,
+          ...(existing.sourceSessionId || !input.sourceSessionId
+            ? {}
+            : { sourceSessionId: input.sourceSessionId }),
+          duplicateCount: existing.duplicateCount + 1,
+          ...(existing.bucket === "main"
+            ? {
+                metadata: {
+                  ...(existing.metadata ?? {}),
+                  ...(input.metadata ?? {}),
+                  needsValidation: true,
+                },
+              }
+            : {}),
+        }
       : {
           ...normalizedInput,
           duplicateCount: input.duplicateCount ?? 0,
           firstSeenAt: Date.now(),
         };
-    await this.redis.set(key, JSON.stringify(record));
+    const upsertTransaction = this.redis.multi();
+    upsertTransaction.set(key, JSON.stringify(record));
     for (const bucketName of ["main", "validating", "active", "dead", "error"] as LinkBucket[])
-      await this.redis.srem(
+      upsertTransaction.srem(
         this.bucketKey(GLOBAL_VALIDATOR_SCOPE, bucketName),
         record.canonicalUrl,
       );
-    await this.redis.sadd(
+    upsertTransaction.sadd(
       this.bucketKey(GLOBAL_VALIDATOR_SCOPE, record.bucket),
       record.canonicalUrl,
     );
+    await upsertTransaction.exec();
+    if (env.VALIDATOR_DURABLE_DUAL_WRITE) {
+      const state = durableStateForBucket(record.bucket);
+      if (state) {
+        await mirrorDurableValidatorLinkState({
+          normalizedUrl: record.canonicalUrl,
+          originalUrl: record.originalUrl,
+          workspaceId: record.workspaceId,
+          ownerUserId: record.sourceUserId,
+          ...(record.sourceSessionId ? { sourceSessionId: record.sourceSessionId } : {}),
+          state,
+          ...(record.validationError ? { error: record.validationError } : {}),
+        }).catch((error) => {
+          console.error(
+            "[pappy-omega-mini] durable validator dual-write upsert failed:",
+            error instanceof Error ? error.message : String(error),
+          );
+        });
+      }
+    }
     return record;
   }
 
@@ -93,6 +154,10 @@ export class LinkBucketStore {
   ): Promise<LinkRecord | undefined> {
     const current = await this.get(workspaceId, canonicalUrl);
     if (!current) return undefined;
+    // Active is a confirmed terminal validation state. Automatic writers must
+    // never recycle it into Main; explicit operational revalidation needs a
+    // separate, auditable transition rather than a generic move call.
+    if (current.bucket === "active" && bucket === "main") return undefined;
     const next: LinkRecord = {
       ...current,
       ...patch,
@@ -100,16 +165,37 @@ export class LinkBucketStore {
       bucket,
       lastCheckedAt: Date.now(),
     };
-    await this.redis.set(
+    const moveTransaction = this.redis.multi();
+    moveTransaction.set(
       this.recordKey(workspaceId, canonicalUrl),
       JSON.stringify(next),
     );
     for (const oldBucket of ["main", "validating", "active", "dead", "error"] as LinkBucket[])
-      await this.redis.srem(
+      moveTransaction.srem(
         this.bucketKey(workspaceId, oldBucket),
         canonicalUrl,
       );
-    await this.redis.sadd(this.bucketKey(workspaceId, bucket), canonicalUrl);
+    moveTransaction.sadd(this.bucketKey(workspaceId, bucket), canonicalUrl);
+    await moveTransaction.exec();
+    if (env.VALIDATOR_DURABLE_DUAL_WRITE) {
+      const durableState = durableStateForBucket(bucket);
+      if (durableState) {
+        await mirrorDurableValidatorLinkState({
+          normalizedUrl: next.canonicalUrl,
+          originalUrl: next.originalUrl,
+          workspaceId: next.workspaceId,
+          ownerUserId: next.sourceUserId,
+          ...(next.sourceSessionId ? { sourceSessionId: next.sourceSessionId } : {}),
+          state: durableState,
+          ...(next.validationError ? { error: next.validationError } : {}),
+        }).catch((error) => {
+          console.error(
+            "[pappy-omega-mini] durable validator dual-write move failed:",
+            error instanceof Error ? error.message : String(error),
+          );
+        });
+      }
+    }
     return next;
   }
 
@@ -316,8 +402,18 @@ export class LinkBucketStore {
         migrated += 1;
       }
     } while (cursor !== "0");
-    const legacyMasterKeys = await this.redis.keys("pappy-omega-mini:links:*:master");
-    if (legacyMasterKeys.length) await this.redis.del(...legacyMasterKeys);
+    let masterCursor = "0";
+    do {
+      const [nextCursor, legacyMasterKeys] = await this.redis.scan(
+        masterCursor,
+        "MATCH",
+        "pappy-omega-mini:links:*:master",
+        "COUNT",
+        500,
+      );
+      if (legacyMasterKeys.length) await this.redis.del(...legacyMasterKeys);
+      masterCursor = nextCursor;
+    } while (masterCursor !== "0");
     return migrated;
   }
 

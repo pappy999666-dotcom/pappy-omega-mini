@@ -8,6 +8,7 @@ import {
 } from "./config/env.js";
 import { createTelegramBot } from "./telegram/bot.js";
 import {
+  closeModeratorProtectionRedis,
   startModeratorReconciliation,
   stopModeratorReconciliation,
 } from "./telegram/moderator.js";
@@ -24,7 +25,9 @@ import {
   updateSession,
 } from "./core/session-registry.js";
 import { hydrateControlPlane } from "./core/control-plane.js";
+import { startRuntimeHealthMonitor, stopRuntimeHealthMonitor } from "./core/runtime-health.js";
 import { startWorkerRuntime } from "./jobs/runtime.js";
+import { ensureDurableValidatorIndexes } from "./links/validator-persistence.js";
 import {
   closeMongo,
   deletePairingRequest,
@@ -36,11 +39,14 @@ import { DurableScheduler } from "./jobs/scheduler.js";
 import { AutoPromoteScheduler } from "./autopromote/service.js";
 import { hydrateMenuMedia } from "./media/menu-media-store.js";
 import { closeValidatorSnapshot } from "./links/validator-snapshot.js";
+import { closeLinkCollector } from "./links/link-collector.js";
+import { closeBroadcastProgress } from "./workload/broadcast-progress.js";
 import { closeCanonicalPreview } from "./whatsapp/baileys-native-preview.js";
 import { closeSessionLockRedis } from "./core/session-lock.js";
 import { routeWhatsAppText, type WhatsAppReply } from "./whatsapp/message-router.js";
 import { callAssignedWorkloadTransport } from "./whatsapp/workload-transport.js";
 import { setWorkloadInboundEventHandler } from "./workload/events.js";
+import type { WorkloadInboundEvent, WorkloadInboundResult } from "./workload/types.js";
 import {
   startRemoteBridgeResponder,
   stopRemoteBridgeResponder,
@@ -50,8 +56,39 @@ import {
   stopWorkloadControlServer,
 } from "./workload/control-server.js";
 
+const INBOUND_DEDUPE_TTL_MS = 5 * 60_000;
+let processShutdownInProgress = false;
+const inboundDedupe = new Map<string, { expiresAt: number; result: Promise<WorkloadInboundResult> }>();
+
+process.on("uncaughtException", (error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (processShutdownInProgress && message === "Connection is closed.") {
+    console.warn("[pappy-omega-mini] Redis connection closed during shutdown; continuing cleanup.");
+    return;
+  }
+  console.error("[pappy-omega-mini] uncaught exception:", error);
+  process.exitCode = 1;
+});
+
+process.on("unhandledRejection", (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  if (processShutdownInProgress && message === "Connection is closed.") {
+    console.warn("[pappy-omega-mini] Redis rejection during shutdown; continuing cleanup.");
+    return;
+  }
+  console.error("[pappy-omega-mini] unhandled rejection:", reason);
+  process.exitCode = 1;
+});
+
+function inboundDedupeKey(event: WorkloadInboundEvent): string | undefined {
+  return event.messageId
+    ? `${event.workspaceId}:${event.sessionId}:${event.messageId}`
+    : undefined;
+}
+
 async function main(): Promise<void> {
   assertProductionSecrets();
+  startRuntimeHealthMonitor();
   await mkdir(env.SESSION_ROOT, { recursive: true });
   await mkdir(env.MEDIA_ROOT, { recursive: true });
 
@@ -66,9 +103,18 @@ async function main(): Promise<void> {
   }
 
   await ensureMongoIndexes();
-  await hydrateMenuMedia();
+  await ensureDurableValidatorIndexes();
   await hydrateSessionRegistry();
   await hydrateControlPlane();
+  let bot: ReturnType<typeof createTelegramBot> | undefined;
+  if (!isWorkerProcess) {
+    bot = createTelegramBot();
+    startModeratorReconciliation(bot);
+    void bot.launch()
+      .then(() => console.log("[pappy-omega-mini] Telegram polling stopped."))
+      .catch((error) => console.error("[pappy-omega-mini] Telegram gateway failed:", error instanceof Error ? error.message : String(error)));
+    console.log("[pappy-omega-mini] Telegram gateway starting in polling mode.");
+  }
   let workers: JobOrchestrator | undefined;
   let scheduler: DurableScheduler | undefined;
   let autoPromoteScheduler: AutoPromoteScheduler | undefined;
@@ -77,12 +123,18 @@ async function main(): Promise<void> {
   if (isWorkerProcess) await startRemoteBridgeResponder(routeWhatsAppText);
   if (!isWorkerProcess) {
     setWorkloadInboundEventHandler(async (event) => {
+      const key = inboundDedupeKey(event);
+      const cached = key ? inboundDedupe.get(key) : undefined;
+      if (cached && cached.expiresAt > Date.now()) return cached.result;
+      if (cached) inboundDedupe.delete(key!);
+      const processInbound = async (): Promise<WorkloadInboundResult> => {
       const reply = await routeWhatsAppText({
         workspaceId: event.workspaceId,
         sessionId: event.sessionId,
         chatJid: event.remoteJid,
         senderJid: event.senderJid,
         text: event.text,
+        ...(event.interactionId ? { interactionId: event.interactionId } : {}),
         ...(event.messageId ? { quotedSenderJid: event.quotedSenderJid } : {}),
         ...(event.quotedText ? { quotedText: event.quotedText } : {}),
         ...(event.quotedSenderJid ? { quotedSenderJid: event.quotedSenderJid } : {}),
@@ -112,14 +164,29 @@ async function main(): Promise<void> {
               caption: result.caption ?? "",
               mimetype: result.media.mimeType,
               ...(result.nativeFlow ? { nativeFlow: result.nativeFlow } : {}),
+              ...(result.nativeTable ? { nativeTable: result.nativeTable } : {}),
             }
           : {
               ...(result.text ? { text: result.text } : {}),
               ...(result.nativeFlow ? { nativeFlow: result.nativeFlow } : {}),
+              ...(result.nativeTable ? { nativeTable: result.nativeTable } : {}),
             };
       }
       await callAssignedWorkloadTransport(event.workspaceId, event.sessionId, "sendMessage", [event.remoteJid, payload]);
       return { reply: { delivered: true } };
+      };
+      if (!key) return processInbound();
+      let result: Promise<WorkloadInboundResult>;
+      result = processInbound().catch((error) => {
+        if (inboundDedupe.get(key)?.result === result) inboundDedupe.delete(key);
+        throw error;
+      });
+      inboundDedupe.set(key, { expiresAt: Date.now() + INBOUND_DEDUPE_TTL_MS, result });
+      const timer = setTimeout(() => {
+        if (inboundDedupe.get(key)?.result === result) inboundDedupe.delete(key);
+      }, INBOUND_DEDUPE_TTL_MS);
+      timer.unref?.();
+      return result;
     });
     await startWorkloadControlServer();
   }
@@ -164,13 +231,7 @@ async function main(): Promise<void> {
   console.log(
     `[pappy-omega-mini] ${isWorkerProcess ? "Worker" : "Main"} WhatsApp recovery completed for ${recoverableSessions.length} persisted paired session(s); ${ownedSessions.length - recoverableSessions.length} owned session(s) await pairing or recovery.`,
   );
-  let bot: ReturnType<typeof createTelegramBot> | undefined;
-  if (!isWorkerProcess) {
-    bot = createTelegramBot();
-    startModeratorReconciliation(bot);
-    await bot.launch();
-    console.log("[pappy-omega-mini] Telegram gateway online.");
-  } else {
+  if (isWorkerProcess) {
     console.log(`[pappy-omega-mini] Worker role online; owned sessions=${[...workerSessionIds].join(",") || "none"}. Telegram gateway disabled.`);
   }
 
@@ -178,21 +239,57 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    processShutdownInProgress = true;
     console.log(`[pappy-omega-mini] ${signal} received; stopping new work.`);
-    bot?.stop(signal);
+    try {
+      bot?.stop(signal);
+    } catch (error) {
+      console.warn(
+        "[pappy-omega-mini] Telegram stop was already closed; continuing shutdown:",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     if (pairingCleanupTimer) clearInterval(pairingCleanupTimer);
-    if (bot) stopModeratorReconciliation();
-    await scheduler?.close();
-    await autoPromoteScheduler?.close();
-    await workers?.close();
-    await closeValidatorSnapshot();
-    await shutdownWhatsAppSessions();
-    await stopWorkloadControlServer();
-    await closeMongo();
-    await closeCanonicalPreview();
-    await closeSessionLockRedis();
-    await stopRemoteBridgeResponder();
+    if (bot) {
+      try {
+        stopModeratorReconciliation();
+      } catch (error) {
+        console.warn(
+          "[pappy-omega-mini] moderator cleanup failed during shutdown:",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+    const closeSafely = async (label: string, task: () => Promise<void>): Promise<void> => {
+      try {
+        await task();
+      } catch (error) {
+        console.error(
+          `[pappy-omega-mini] ${label} cleanup failed; continuing shutdown:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    };
+    await closeSafely("workload control", stopWorkloadControlServer);
+    await closeSafely("scheduler", async () => scheduler?.close());
+    await closeSafely("auto-promote scheduler", async () => autoPromoteScheduler?.close());
+    await closeSafely("WhatsApp sessions", shutdownWhatsAppSessions);
+    await closeSafely("job workers", async () => workers?.close());
+    await closeSafely("validator snapshot", closeValidatorSnapshot);
+    await closeSafely("link collector", closeLinkCollector);
+    await closeSafely("broadcast progress", closeBroadcastProgress);
+    await closeSafely("moderator protection", closeModeratorProtectionRedis);
+    await closeSafely("MongoDB", closeMongo);
+    await closeSafely("canonical preview", closeCanonicalPreview);
+    await closeSafely("session lock", closeSessionLockRedis);
+    await closeSafely("remote bridge", stopRemoteBridgeResponder);
+    stopRuntimeHealthMonitor();
     console.log("[pappy-omega-mini] transports closed; shutdown complete.");
+    // A few library-owned handles (for example duplicated Redis clients) can
+    // outlive their public close promise. Give final microtasks a short grace
+    // window, then exit cleanly instead of letting systemd SIGKILL the process.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    process.exit(0);
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
@@ -201,7 +298,7 @@ async function main(): Promise<void> {
 async function cleanupLoggedOutSessions(): Promise<void> {
   const terminal = listAllSessions().filter(
     (session) =>
-      (isWorkerProcess ? workerSessionIds.has(session.sessionId) : !excludedSessionIds.has(session.sessionId) && !session.workloadWorkerId) &&
+      (isWorkerProcess ? workerSessionIds.has(session.sessionId) : !excludedSessionIds.has(session.sessionId)) &&
       (session.status === "LOGGED_OUT" ||
         (session.authHealth === "INVALID" && session.status !== "ACTIVE")),
   );

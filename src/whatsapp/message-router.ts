@@ -20,6 +20,7 @@ import { isPanelAssignedSession } from "./workload-transport.js";
 const BROADCAST_INVENTORY_ACK_TIMEOUT_MS = 4_000;
 import { persistJobMedia } from "./job-media-store.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
+import type { GroupControlTable } from "./group-control-confirmation.js";
 import { getWorkerRuntime } from "../jobs/runtime.js";
 import { requestWhatsAppPairingCode } from "./session-manager.js";
 import {
@@ -29,6 +30,7 @@ import {
   sendGroupColorStatus,
   sendPersonalStatus,
   sendGroupText,
+  sendGroupPoll,
 } from "./transport-adapter.js";
 import { buildWhatsappMenuPayload } from "../menus/whatsapp-menu.js";
 import {
@@ -44,6 +46,7 @@ export interface IncomingTextMessage {
   messageId?: string;
   senderJid: string;
   quotedSenderJid?: string;
+  quotedMessageKey?: Record<string, unknown>;
   mentionedJids?: string[];
   chatJid?: string;
   text: string;
@@ -51,10 +54,13 @@ export interface IncomingTextMessage {
   media?: WhatsAppMediaPayload;
   bridgeAuthorized?: boolean;
   fromMe?: boolean;
+  interactionId?: string;
 }
 export interface WhatsAppReply {
   text?: string;
+  mentions?: string[];
   nativeFlow?: Array<{ text: string; copy?: string; id?: string; url?: string }>;
+  nativeTable?: GroupControlTable;
   media?: {
     kind: "image" | "video";
     bytes: Buffer;
@@ -99,7 +105,8 @@ export async function routeWhatsAppText(
   message: IncomingTextMessage,
 ): Promise<string | WhatsAppReply | null> {
   const commandInput = mergeQuotedPayload(message.text, message.quotedText);
-  const trimmed = commandInput.trim();
+  const interactionId = message.interactionId?.trim();
+  const trimmed = interactionId || commandInput.trim();
   if (
     getEmergencyState().enabled &&
     /^(?:[^\w\s]{1,3})?(?:menu|help|m)(?:\s|$)/i.test(trimmed)
@@ -109,8 +116,21 @@ export async function routeWhatsAppText(
     return routeViaRemoteBridge(message);
   const session = getSession(message.workspaceId, message.sessionId);
   const prefix = session.prefix;
-  if (prefix && !trimmed.startsWith(prefix)) return null;
-  const raw = prefix ? trimmed.slice(prefix.length) : trimmed;
+  // Telegram Bridge is an already-authorized control-plane transport. It must
+  // dispatch the command body independently of the target session's local
+  // WhatsApp prefix. Direct WhatsApp messages still require their session prefix.
+  if (!message.interactionId && !message.bridgeAuthorized && prefix && !trimmed.startsWith(prefix)) return null;
+  const raw = message.interactionId
+    ? trimmed
+    : message.bridgeAuthorized
+    ? prefix && trimmed.startsWith(prefix)
+      ? trimmed.slice(prefix.length)
+      : trimmed.startsWith(".")
+        ? trimmed.slice(1)
+        : trimmed
+    : prefix
+      ? trimmed.slice(prefix.length)
+      : trimmed;
   if (!raw.trim()) return null;
 
   const commandName = raw.trim().split(/\s+/, 1)[0]?.toLowerCase();
@@ -144,6 +164,8 @@ export async function routeWhatsAppText(
     isOwner,
     senderJid: message.senderJid,
     ...(message.quotedSenderJid ? { quotedSenderJid: message.quotedSenderJid } : {}),
+    ...(message.quotedMessageKey ? { quotedMessageKey: message.quotedMessageKey } : {}),
+    ...(message.quotedText ? { quotedText: message.quotedText } : {}),
     ...(message.mentionedJids?.length ? { mentionedJids: message.mentionedJids } : {}),
     ...(message.chatJid ? { chatJid: message.chatJid } : {}),
     ...(message.media ? { media: message.media } : {}),
@@ -219,6 +241,38 @@ export async function routeWhatsAppText(
               expectedTimeMs: Math.max(0, targetCount - 1) * delayMs,
             } satisfies EnqueueJoinJobResult;
           },
+          enqueueGroupControlJob: async ({
+            groupJid,
+            operation,
+            participants,
+            participantAction,
+          }: {
+            groupJid: string;
+            operation: "approve" | "reject" | "participant";
+            participants: string[];
+            participantAction?: "promote" | "demote" | "remove" | "block" | "demote-remove";
+          }) => {
+            const payload = {
+              groupJid,
+              operation,
+              participants: [...new Set(participants)].slice(0, 1_000),
+              ...(participantAction ? { participantAction } : {}),
+            };
+            const payloadHash = createHash("sha256")
+              .update(JSON.stringify(payload))
+              .digest("hex");
+            const record = await runtime.enqueue({
+              workspaceId: message.workspaceId,
+              sessionId: message.sessionId,
+              kind: "group-control",
+              payload,
+              idempotencyKey: `${message.workspaceId}:${message.sessionId}:group-control:${operation}:${message.messageId ?? payloadHash}`,
+              maxAttempts: 5,
+            });
+            return {
+              jobCode: record.jobCode ?? record.jobId.slice(0, 8),
+            };
+          },
           enqueueJob: async ({
             kind,
             payload,
@@ -256,25 +310,17 @@ export async function routeWhatsAppText(
               !isWorkerProcess &&
               (kind === "allstatus" || kind === "allchat") &&
               isPanelAssignedSession(message.workspaceId, message.sessionId);
-            let inventory: Array<{ jid: string }> = [];
-            if (!panelBroadcast && (kind === "allstatus" || kind === "allchat") && !payload.groups) {
-              try {
-                inventory = await listGroups(message.workspaceId, message.sessionId);
-              } catch (error) {
-                throw new Error(
-                  `Unable to resolve WhatsApp groups before ${kind}: ${error instanceof Error ? error.message : String(error)}`,
-                );
-              }
-              if (!inventory.length)
-                throw new Error(`No WhatsApp groups were returned for ${kind}.`);
-            }
+            // Never block the command acknowledgement on a full group scan.
+            // Broadcast workers resolve their own inventory after the durable job
+            // is created, so the command can dispatch immediately and report
+            // progress truthfully while inventory is loading.
             const resolvedGroups: string[] = panelBroadcast
               ? []
               : Array.isArray(payload.groups)
                 ? payload.groups.filter((value): value is string => typeof value === "string")
                 : kind === "gstatus"
                   ? groups.map((group) => group.jid)
-                  : inventory.map((group) => group.jid);
+                  : [];
             const enrichedPayload = {
               ...payload,
               ...(kind === "allstatus" || kind === "allchat"
@@ -285,7 +331,9 @@ export async function routeWhatsAppText(
                         : broadcastDelayMs,
                   }
                 : {}),
-              ...(panelBroadcast ? { workerLocal: true } : { groups: resolvedGroups }),
+              ...(panelBroadcast
+                ? { workerLocal: true }
+                : { groups: resolvedGroups, inventoryDeferred: kind === "allstatus" || kind === "allchat" }),
               ...(mediaReference ? { media: mediaReference } : {}),
               ...(kind === "allstatus" || kind === "allchat"
                 ? message.chatJid && !message.bridgeAuthorized
@@ -314,7 +362,7 @@ export async function routeWhatsAppText(
               1,
               Math.min(20, Number((payload as { count?: unknown }).count ?? 1)),
             );
-            const delayMs = Number(enrichedPayload.delayMs ?? 20000);
+            const delayMs = Number(enrichedPayload.delayMs ?? 10000);
             return {
               jobCode: record.jobCode ?? record.jobId.slice(0, 8),
               ...(totalGroups > 0 ? { totalGroups } : {}),
@@ -323,6 +371,8 @@ export async function routeWhatsAppText(
               ...(totalGroups > 0
                 ? { expectedTimeMs: Math.max(0, totalGroups * repeat - 1) * delayMs }
                 : {}),
+              ...(panelBroadcast ? { workerLocal: true } : {}),
+              ...(kind === "allstatus" || kind === "allchat" ? { inventoryDeferred: panelBroadcast ? false : true } : {}),
 
             } satisfies EnqueueJobResult;
           },
@@ -334,6 +384,11 @@ export async function routeWhatsAppText(
         message.sessionId,
         { text, ...(message.media ? { media: message.media } : {}) },
       );
+    },
+    sendCurrentGroupPoll: async ({ question, options }: { question: string; options: string[] }) => {
+      if (!message.chatJid || !message.chatJid.endsWith("@g.us"))
+        throw new Error("This command must be used inside a WhatsApp group.");
+      await sendGroupPoll(message.workspaceId, message.sessionId, message.chatJid, question, options);
     },
     sendCurrentGroupHidetag: async ({
       text,
@@ -413,6 +468,7 @@ export async function routeWhatsAppText(
       : {}),
   };
   const response = await executeCommand(registry, raw, commandContext);
+  if (typeof response !== "string") return response;
   if (response.startsWith("Unknown command.")) return null;
   const liveCode = response.match(/Live code\s*[·:]\s*([A-Z0-9]{8})/i)?.[1];
   const pairingCode = response.match(/(?:^|\n)\s*Code\s*[·:]\s*([A-Z0-9]{8})/i)?.[1];

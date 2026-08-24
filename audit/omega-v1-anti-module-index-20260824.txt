@@ -1,0 +1,690 @@
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:3:// Handles: kick, warn, delete for any violation
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:9:import { bold, italic, successCard, warningCard } from '../../utils/ascii-art.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:18:export async function deleteMessage(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:27:    }).sendMessage(key.remoteJid, { delete: key });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:29:    logger.warn('[AntiSystem] deleteMessage failed', { err: String(err) });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:34:export async function kickParticipant(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:41:      groupParticipantsUpdate(jid: string, participants: string[], action: string): Promise<unknown>;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:45:    logger.warn('[AntiSystem] kickParticipant failed', { err: String(err), participantJid });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:51:export async function demoteParticipant(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:58:      groupParticipantsUpdate(jid: string, participants: string[], action: string): Promise<unknown>;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:62:    logger.warn('[AntiSystem] demoteParticipant failed', { err: String(err), participantJid });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:68:export async function promoteParticipant(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:75:      groupParticipantsUpdate(jid: string, participants: string[], action: string): Promise<unknown>;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:79:    logger.warn('[AntiSystem] promoteParticipant failed', { err: String(err), participantJid });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:87: * Execute the configured action for a violation.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:90: * Returns true if the action was taken (not ignored/exempt).
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:92:export async function executeAction(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:97:  const { groupJid, senderJid, senderNumber, moduleKey, moduleName, moduleConfig, sessionId, telegramId } = ctx;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:98:  const { action, warnThreshold, customMessage } = moduleConfig;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:134:    customMessage ?? getDefaultMessage(moduleName, action),
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:138:  // Always delete the message immediately (concurrent with action)
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:139:  const ops: Promise<unknown>[] = [deleteMessage(socket, msg)];
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:141:  if (action === 'kick') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:143:    ops.push(kickParticipant(socket, groupJid, senderJid));
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:152:    logger.info(`[AntiSystem] KICK — ${moduleName}`, { sessionId, groupJid, senderNumber });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:154:  } else if (action === 'warn') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:155:    const count = incrementWarn(sessionId, groupJid, senderNumber, moduleKey);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:156:    const remaining = warnThreshold - count;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:158:    if (count >= warnThreshold) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:159:      // Threshold reached — kick and reset
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:160:      resetWarn(sessionId, groupJid, senderNumber, moduleKey);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:161:      ops.push(kickParticipant(socket, groupJid, senderJid));
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:162:      const kickMsg = await renderResponse(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:163:        `⚠️ @mention has been kicked after ${warnThreshold} warnings (${moduleName}).`,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:167:        PreviewManager.send(socket as any, groupJid, kickMsg, {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:174:      logger.info(`[AntiSystem] WARN→KICK — ${moduleName}`, { sessionId, groupJid, senderNumber, count });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:176:      // Still within warn window
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:177:      const warnMsg = `${responseText}\n\n${italic(`Warning ${count}/${warnThreshold}. ${remaining} more will result in a kick.`)}`;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:179:        PreviewManager.send(socket as any, groupJid, warnMsg, {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:186:      logger.info(`[AntiSystem] WARN ${count}/${warnThreshold} — ${moduleName}`, { sessionId, groupJid, senderNumber });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:189:  } else if (action === 'delete') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:199:    logger.info(`[AntiSystem] DELETE — ${moduleName}`, { sessionId, groupJid, senderNumber });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:210:function getDefaultMessage(moduleName: string, action: AntiAction): string {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:211:  switch (action) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:212:    case 'kick':
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:213:      return `🚫 @mention violated *${moduleName}* and has been removed from this group.`;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:214:    case 'warn':
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:215:      return `⚠️ @mention violated *${moduleName}*. Please follow group rules.`;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:216:    case 'delete':
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/actions.ts:218:      return `🗑️ @mention — Your message was removed. *${moduleName}* is active in this group.`;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:7:import { bold, italic, successCard, warningCard, errorCard, asciiBox } from '../../utils/ascii-art.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:11:import { quotedTextOf } from '../quoted-message/index.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:52:function parseAction(arg: string): AntiAction | null {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:53:  if (['kick', 'warn', 'delete'].includes(arg)) return arg as AntiAction;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:58:function moduleLabel(key: string): string {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:65:    antiwords: 'AntiWords', antipoll: 'AntiPoll', antiforward: 'AntiForward',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:66:    antigstatus: 'AntiGStatus',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:73:function spacedHeader(label: string): string {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:77:export function handleSilentActionsCommand(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:85:  const mode = (args[0] ?? 'status').toLowerCase();
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:86:  if (!['on', 'off', 'status'].includes(mode)) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:87:    return warningCard('Silent Actions', `Usage: ${prefix}silentactions <on|off|status>`);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:89:  if (mode === 'status') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:90:    return successCard('Silent Actions', `Moderation and antisystem action notices are ${isSilentActionMessages(telegramId, sessionId, groupJid) ? bold('SILENT') : bold('VISIBLE')}.\n\nEnforcement actions remain active.`);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:94:  return successCard('Silent Actions Updated', `${enabled ? 'Moderation and antisystem action notices are now silent.' : 'Moderation and antisystem action notices are now visible.'}\n\nEnforcement actions remain active.`);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:97:// ── Generic enable/disable for a module ──────────────────────
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:99:export function handleAntiCommand(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:101:  moduleKey: keyof Omit<GroupAntiConfig, 'groupJid' | 'messages'>,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:117:    const mod = gc[moduleKey] as AntiModuleConfig | undefined;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:119:      return warningCard(spacedHeader(moduleLabel(moduleKey)), 'Already disabled in this group.');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:123:    return successCard(spacedHeader(moduleLabel(moduleKey)), 'Disabled in this group.');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:126:  const action = parseAction(subCmd ?? '');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:127:  if (!action) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:129:      spacedHeader(moduleLabel(moduleKey)),
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:130:      `Usage: ${prefix}${command} <kick|warn|delete|off>\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:131:      `Warn threshold: ${prefix}${command} warn [count]\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:136:  const warnThreshold = action === 'warn'
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:141:  const persisted = gc[moduleKey] as AntiModuleConfig | undefined;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:146:    moduleKey === 'antispam'
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:149:  (gc as unknown as Record<string, unknown>)[moduleKey] = {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:152:    action,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:153:    warnThreshold,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:157:  const actionStr = action === 'warn' ? `warn (kick after ${warnThreshold})` : action;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:159:    spacedHeader(moduleLabel(moduleKey)),
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:160:    `Enabled with action: ${bold(actionStr)}\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:170: *   .antiwords warn 3 [scam, fraud, free money]
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:171: *   .antiwords delete [scam, fraud]
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:174: * plain-text detector and never receives or consults this word list.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:176:export function handleAntiWordsCommand(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:191:    if (!existing?.enabled) return warningCard(spacedHeader('AntiWords'), 'Already disabled in this group.');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:197:  const action = parseAction(subCmd ?? '');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:198:  if (!action) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:201:      `Usage: ${prefix}antiwords <kick|warn N|delete|off> [words]\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:202:      `Example: ${prefix}antiwords warn 3 [scam, fraud, free money]`
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:206:  const thresholdArgIndex = action === 'warn' ? 1 : 0;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:207:  const thresholdToken = action === 'warn' ? (args[1] ?? '') : '';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:209:  const warnThreshold = action === 'warn'
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:212:  if (action === 'warn' && (!Number.isInteger(warnThreshold) || warnThreshold < 1)) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:213:    return errorCard(spacedHeader('AntiWords'), `Warn threshold must be a positive number.\nExample: ${prefix}antiwords warn 3 [scam, fraud]`);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:216:  // Accept both `warn 3 [words]` and the compact `warn 3[words]` form.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:217:  const compactWords = action === 'warn' && thresholdMatch?.[2]
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:224:      `Words must be enclosed in brackets.\nExample: ${prefix}antiwords warn 3 [scam, fraud]`
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:231:      `Provide the words to block in brackets.\nExample: ${prefix}antiwords warn 3 [scam, fraud, free money]`
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:241:    action,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:242:    warnThreshold,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:247:  const actionText = action === 'warn' ? `warn (kick after ${warnThreshold})` : action;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:250:    `Enabled with ${bold(actionText)}.\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:252:    `${italic(`AntiText remains plain-text only; use ${prefix}antitext ${action} for all plain text.`)}`,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:259:export function handlePermitCommand(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:260:  moduleKey: keyof Omit<GroupAntiConfig, 'groupJid' | 'messages'>,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:277:  const mod = gc[moduleKey] as AntiModuleConfig | undefined;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:279:    return warningCard('Permit', `${moduleLabel(moduleKey)} is not configured in this group yet.`);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:283:    addPermit(telegramId, sessionId, groupJid, moduleKey, number);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:284:    return successCard('Permit Added', `@${number} is now exempt from ${bold(moduleLabel(moduleKey))}.`, [['Module', moduleLabel(moduleKey)], ['Number', number]]);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:286:    removePermit(telegramId, sessionId, groupJid, moduleKey, number);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:287:    return successCard('Permit Removed', `@${number} is no longer exempt from ${bold(moduleLabel(moduleKey))}.`, [['Module', moduleLabel(moduleKey)], ['Number', number]]);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:293:export function handleSpamlimit(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:314:export function handleAntiMsg(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:315:  moduleKey: string,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:329:  const quotedText = quotedTextOf(msg);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:330:  const message = rawArgs || quotedText;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:334:  setCustomMessage(telegramId, sessionId, groupJid, moduleKey, message);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:335:  return successCard(`${moduleLabel(moduleKey)} Message`, `Custom response saved.\n${italic('Variables: @mention, &gcname, &desc, &getpp')}`, [['Preview', message.slice(0, 60)]]);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:340:export function handleAntiAddWord(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:355:export function handleAntiRemoveWord(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:370:export function handleAntiWordList(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:380:  if (!words.length) return warningCard('AntiWords', 'No blocked words configured for this group.');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:392: * Case-insensitive, duplicate-safe, Unicode-safe. Enables the module.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:394:export function handleSetAntiWords(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:418:    return warningCard('AntiWords', 'All provided words were already blocked — list unchanged.');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:424:    `${added.length} word(s) added — module enabled.\n${italic('Never overwrites existing words; duplicates ignored.')}`,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:435:export function handleRemoveAntiWords(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:452:    return warningCard('AntiWords', 'None of the provided words were in the blocked list.');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:470:export function handleClearAntiWords(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:483:    return warningCard('AntiWords', 'No blocked words configured for this group.');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:487:    return warningCard(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:497:// ── Security module parsers ───────────────────────────────────
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:499:function parseSecurityMode(arg: string): GroupSecurityMode | null {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:503:    'restore', 'restorewarn', 'restorekick', 'restoreban',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:505:    'revert', 'warn', 'kick', 'ban',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:512:  // restorewarn:<count> — restore + warn with kick escalation after <count>
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:513:  const rw = arg.match(/^restorewarn:(\d+)$/);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:514:  if (rw) return `restorewarn:${parseInt(rw[1] ?? '3', 10)}` as GroupSecurityMode;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:518:function parseTargetMode(arg: string): TargetMode | null {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:525:  `${bold('restorewarn')}  — restore victim + warn actor\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:526:  `${bold('restorewarn <N>')} — restore victim + warn actor, kick actor after N warns\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:527:  `${bold('restorekick')}  — restore victim + kick actor\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:528:  `${bold('restoreban')}   — restore victim + kick + block actor\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:531:  `${bold('p/p')}          — restore victim + warn actor (no demotion)\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:532:  `${bold('p/k')}          — restore victim + kick actor\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:533:  `${italic('Legacy:')} dwp (demote) · dnp (demote+restore) · kwp (kick+warn, no restore) · knp (kick, no restore)\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:534:  `${italic('Aliases:')} revert=restore · warn=restorewarn · kick=restorekick · ban=restoreban`;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:543: * Handles: .antipromote on|off|mode <mode>|target <protected|admins>|status
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:548: *   .antipromote mode restorekick      → set punishment mode
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:550: *   .antipromote mode restorewarn 3    → restore + warn, kick after 3
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:553: *   .antipromote status                → show config
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:555:export function handleAntiPromoteCmd(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:569:  if (subCmd === 'status') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:572:    if (!mod?.enabled) return warningCard('AntiPromote', 'Disabled in this group.');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:577:      `Permits: ${mod.permitList.length}`
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:585:    if (!mod?.enabled) return warningCard('AntiPromote', 'Already disabled.');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:641:  // Direct mode shorthand: .antipromote restore|restorekick|d/p|...
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:651:  // restorewarn <count> shorthand: .antipromote restorewarn 3
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:652:  if (subCmd === 'restorewarn') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:654:    const mode = `restorewarn:${Number.isFinite(n) && n > 0 ? n : 3}` as GroupSecurityMode;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:658:      `Mode: ${bold(mode)} — restore victim, warn actor, kick after ${n} warns.\nTo disable: ${italic(`${prefix}antipromote off`)}`,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:664:    `Usage: ${prefix}antipromote <on|off|status|mode|target>\n\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:669:    `  ${prefix}antipromote mode restorekick\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:671:    `  ${prefix}antipromote mode restorewarn 3\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:680: * Handles: .antidemote on|off|mode <mode>|target <protected|admins>|status
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:685: *   .antidemote mode restorekick      → set punishment mode
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:689: *   .antidemote status                → show config
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:691:export function handleAntiDemote(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:705:  if (subCmd === 'status') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:708:    if (!mod?.enabled) return warningCard('AntiDemote', 'Disabled in this group.');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:713:      `Permits: ${mod.permitList.length}`
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:721:    if (!mod?.enabled) return warningCard('AntiDemote', 'Already disabled.');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:777:  // Direct mode shorthand: .antidemote restore|restorekick|d/p|...
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:787:  // restorewarn <count> shorthand: .antidemote restorewarn 3
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:788:  if (subCmd === 'restorewarn') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:790:    const mode = `restorewarn:${Number.isFinite(n) && n > 0 ? n : 3}` as GroupSecurityMode;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:794:      `Mode: ${bold(mode)} — restore victim, warn actor, kick after ${n} warns.\nTo disable: ${italic(`${prefix}antidemote off`)}`,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:800:    `Usage: ${prefix}antidemote <on|off|status|mode|target>\n\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:805:    `  ${prefix}antidemote mode restorekick\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:807:    `  ${prefix}antidemote mode restorewarn 3\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:815:export function handleAntiStatus(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:824:  const modules: [string, string][] = [
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:825:    ['AntiLink', gc.antilink?.enabled ? `✅ ${gc.antilink.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:826:    ['AntiBot', gc.antibot?.enabled ? `✅ ${gc.antibot.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:827:    ['AntiSpam', gc.antispam?.enabled ? `✅ ${gc.antispam.action} (${gc.antispam.messageLimit}msg/${gc.antispam.windowSeconds}s)` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:828:    ['AntiPic', gc.antipic?.enabled ? `✅ ${gc.antipic.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:829:    ['AntiVid', gc.antivid?.enabled ? `✅ ${gc.antivid.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:830:    ['AntiAud', gc.antiaud?.enabled ? `✅ ${gc.antiaud.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:831:    ['AntiVN', gc.antivn?.enabled ? `✅ ${gc.antivn.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:832:    ['AntiText', gc.antitxt?.enabled ? `✅ ${gc.antitxt.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:833:    ['AntiEmoji', gc.antiemoji?.enabled ? `✅ ${gc.antiemoji.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:834:    ['AntiSticker', gc.antisticker?.enabled ? `✅ ${gc.antisticker.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:835:    ['AntiGroupCall', gc.antigroupcall?.enabled ? `✅ ${gc.antigroupcall.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:836:    ['AntiNSFW', gc.antinsfw?.enabled ? `✅ ${gc.antinsfw.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:837:    ['AntiGroupMention', gc.antigroupmention?.enabled ? `✅ ${gc.antigroupmention.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:838:    ['AntiGM', gc.antigm?.enabled ? `✅ ${gc.antigm.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:839:    ['AntiWords', gc.antiwords?.enabled ? `✅ ${gc.antiwords.action} (${gc.antiwords.words.length} words)` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:840:    ['AntiPoll', gc.antipoll?.enabled ? `✅ ${gc.antipoll.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:841:    ['AntiForward', gc.antiforward?.enabled ? `✅ ${gc.antiforward.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:842:    ['AntiChannel', gc.antichannel?.enabled ? `✅ ${gc.antichannel.action}` : '❌ off'],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/commands.ts:849:    rows: modules,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:26:export function defaultModuleConfig(action: AntiAction = 'delete'): AntiModuleConfig {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:29:    action,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:30:    warnThreshold: 3,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:31:    permitList: [],
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:35:export function defaultSpamConfig(): AntiSpamConfig {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:37:    ...defaultModuleConfig('kick'),
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:43:export function defaultWordsConfig(): AntiWordsConfig {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:45:    ...defaultModuleConfig('delete'),
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:50:export function defaultPromoteConfig(): AntiPromoteConfig {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:52:    ...defaultModuleConfig('kick'),
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:53:    mode: 'restorekick',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:54:    // Admin protection modules monitor administrator-targeted events by default.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:59:export function defaultDemoteConfig(): AntiDemoteConfig {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:61:    ...defaultModuleConfig('kick'),
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:62:    mode: 'restorekick',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:63:    // Admin protection modules monitor administrator-targeted events by default.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:70:function antiConfigPath(telegramId: string, sessionId: string): string {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:76:export function loadSessionAntiConfig(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:85:    logger.warn('[AntiSystem] Failed to parse anti config, resetting', { err: String(err) });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:90:export function saveSessionAntiConfig(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:100:export function loadGroupAntiConfig(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:109:export function saveGroupAntiConfig(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:119:export function isSilentActionMessages(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:127:export function setSilentActionMessages(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:141:export function getModuleConfig<K extends keyof Omit<GroupAntiConfig, 'groupJid' | 'messages'>>(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:151:export function setModuleConfig<K extends keyof Omit<GroupAntiConfig, 'groupJid' | 'messages'>>(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:166:export function addPermit(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:170:  moduleKey: keyof Omit<GroupAntiConfig, 'groupJid' | 'messages'>,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:175:  const mod = (all[groupJid][moduleKey] as AntiModuleConfig | undefined);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:177:  if (!mod.permitList.includes(number)) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:178:    mod.permitList.push(number);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:183:export function removePermit(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:187:  moduleKey: keyof Omit<GroupAntiConfig, 'groupJid' | 'messages'>,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:192:  const mod = (all[groupJid][moduleKey] as AntiModuleConfig | undefined);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:194:  mod.permitList = mod.permitList.filter((n) => n !== number);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:200:export function setCustomMessage(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:214:export function getCustomMessage(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:225:// key: `${sessionId}:${groupJid}:${senderNumber}:${moduleKey}`
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:227:const warnCounts = new Map<string, number>();
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:229:export function incrementWarn(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:233:  moduleKey: string
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:235:  const key = `${sessionId}:${groupJid}:${senderNumber}:${moduleKey}`;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:236:  const count = (warnCounts.get(key) ?? 0) + 1;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:237:  warnCounts.set(key, count);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:241:export function resetWarn(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:245:  moduleKey: string
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:247:  const key = `${sessionId}:${groupJid}:${senderNumber}:${moduleKey}`;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:248:  warnCounts.delete(key);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:251:export function getWarnCount(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:255:  moduleKey: string
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:257:  const key = `${sessionId}:${groupJid}:${senderNumber}:${moduleKey}`;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:258:  return warnCounts.get(key) ?? 0;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:266:export function recordSpamMessage(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:281:export function resetSpamWindow(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:286:  spamWindows.delete(`${sessionId}:${groupJid}:${senderNumber}`);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:291:export function setSpamLimit(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:307:export function addWord(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:321:export function removeWord(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:338:export function addWords(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:368:export function removeWords(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:382:      existing.delete(w);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:392:export function clearWords(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:407:export function setPromoteMode(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:420:export function setPromoteTargetMode(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:435:export function setDemoteMode(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:448:export function setDemoteTargetMode(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:463: * can apply the exact correct action chain:
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:470: *   This function must remain so that existing/migrated legacy configs preserve
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:473:export function setDemotelLegacyMode(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/config.ts:480:  // maps it to the correct action chain at enforcement time.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:12://      regardless of whether the AntiDemote module is enabled.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:61://   ✓ Legacy modes mapped      → Correct action chain applied
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:94:function normalizeNumber(jid: string | null | undefined): string {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:99:function sleep(ms: number): Promise<void> {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:105:export interface ParticipantUpdateEvent {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:108:  action: 'add' | 'remove' | 'promote' | 'demote';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:109:  author?: string;           // actor JID (who performed the action)
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:116:async function retryGroupUpdate(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:120:  action: 'promote' | 'demote' | 'remove',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:128:      await sock.groupParticipantsUpdate(groupJid, participants, action);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:132:      logger.warn('[SecurityEngine] groupParticipantsUpdate failed, retrying', {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:133:        attempt: attempt + 1, maxAttempts, groupJid, action, delay, err: String(err),
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:143:// Every mode maps to ONE canonical action plan. Legacy aliases and
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:149:function isLegacyMode(mode: string): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:158:  warnActor: boolean;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:159:  kickActor: boolean;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:163:  /** restorewarn:<N> — warns before the actor is kicked (escalation). */
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:164:  warnLimit?: number;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:169:function buildActionPlan(mode: GroupSecurityMode): ActionPlan {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:170:  const isEnforcement = isLegacyMode(mode) || mode.startsWith('restorewarn:');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:172:    logger.info('[SecurityEngine] Enforcement mode — applying action plan', { mode });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:175:  // restorewarn:<N> — restore victim + warn actor; after N warns the actor is kicked.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:176:  if (mode.startsWith('restorewarn:')) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:177:    const n = parseInt(mode.slice('restorewarn:'.length), 10);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:181:      warnActor: true,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:182:      kickActor: false,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:185:      warnLimit: limit,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:187:      penalty: `Actor Warned (kick after ${limit})`,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:194:      return { restoreVictim: true,  warnActor: false, kickActor: false, demoteActor: false, banActor: false, label: 'Victim Restored',   penalty: 'None' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:195:    case 'restorewarn':
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:196:      return { restoreVictim: true,  warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Victim Restored',   penalty: 'Actor Warned' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:197:    case 'restorekick':
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:198:      return { restoreVictim: true,  warnActor: false, kickActor: true,  demoteActor: false, banActor: false, label: 'Victim Restored',   penalty: 'Actor Kicked' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:200:      return { restoreVictim: true,  warnActor: false, kickActor: true,  demoteActor: false, banActor: true,  label: 'Victim Restored',   penalty: 'Actor Kicked & Blocked' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:203:    case 'warn':   return buildActionPlan('restorewarn');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:204:    case 'kick':   return buildActionPlan('restorekick');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:208:      return { restoreVictim: false, warnActor: false, kickActor: true,  demoteActor: false, banActor: false, label: 'Offender Kicked',       penalty: 'Kick · No restore' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:210:      return { restoreVictim: false, warnActor: true,  kickActor: true,  demoteActor: false, banActor: false, label: 'Offender Kicked',       penalty: 'Kick + Warn · No restore' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:212:      return { restoreVictim: true,  warnActor: false, kickActor: false, demoteActor: true,  banActor: false, label: 'Victim Restored',       penalty: 'Offender Demoted' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:214:      return { restoreVictim: false, warnActor: false, kickActor: false, demoteActor: true,  banActor: false, label: 'Offender Demoted',      penalty: 'Demote · No restore' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:216:      return { restoreVictim: false, warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Offender Warned',       penalty: 'Warning only' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:217:    case 'wnp':  // W(arn) N(o-kick) P
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:218:      return { restoreVictim: true,  warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Victim Restored',       penalty: 'Offender Warned' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:222:      return { restoreVictim: true,  warnActor: false, kickActor: false, demoteActor: true,  banActor: false, label: 'Victim Restored',       penalty: 'Actor Demoted' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:224:      return { restoreVictim: false, warnActor: false, kickActor: false, demoteActor: true,  banActor: false, label: 'Actor Demoted',          penalty: 'No restore' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:225:    case 'p/p':  // Promote (restore) victim + warn actor, no demote
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:226:      return { restoreVictim: true,  warnActor: true,  kickActor: false, demoteActor: false, banActor: false, label: 'Victim Restored',       penalty: 'Actor Warned' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:227:    case 'p/k':  // Promote (restore) victim + kick actor
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:228:      return { restoreVictim: true,  warnActor: false, kickActor: true,  demoteActor: false, banActor: false, label: 'Victim Restored',       penalty: 'Actor Kicked' };
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:239:function buildSecurityCard(opts: {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:244:  actionLabel: string;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:265:    `Action\n  ➜ ${opts.actionLabel}\n\n` +
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:276:// Independent of module enabled/disabled state.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:279:async function runBotSelfProtection(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:285:  logger.warn('[SecurityEngine] Bot self-protection: bot was demoted', { sessionId, groupJid });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:298:    logger.info('[SecurityEngine] Bot self-protection: admin status restored', { sessionId, groupJid });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:302:  logger.error('[SecurityEngine] Bot self-protection: cannot restore admin status', { sessionId, groupJid });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:307:      `⚠️ AntiDemote detected.\nBot lost administrator privileges before restoration.\n\nPlease promote the bot back to administrator.`,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:311:    logger.warn('[SecurityEngine] Bot self-protection: failed to send recovery message', {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:321:async function checkBotIsAdmin(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:328:    logger.warn('[SecurityEngine] fetchGroupMeta failed — cannot verify bot admin status', {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:351:async function executePunishment(ctx: PunishmentContext): Promise<void> {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:380:  if (ctx.plan.kickActor) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:381:    executedActions.push('kick');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:384:        if (!ok) audit.errors?.push('kick_actor_failed_all_attempts');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:393:        updateBlockStatus(jid: string, action: string): Promise<unknown>;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:409:    actionLabel: plan.label,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:435:  // For restorewarn:<N> the warn is ESCALATED: after N accumulated warns
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:436:  // the actor is kicked (punishment escalation) instead of warned again.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:437:  if (plan.warnActor) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:438:    executedActions.push('warn');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:439:    if (plan.warnLimit) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:442:      if (count >= plan.warnLimit) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:444:        executedActions.push('kick');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:447:            if (!ok) audit.errors?.push('kick_actor_after_warn_limit_failed');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:450:        logger.info('[SecurityEngine] Actor kicked after warn limit', {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:451:          sessionId, groupJid, actorNumber, limit: plan.warnLimit,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:465:function logAudit(audit: SecurityAuditLog, startMs: number): void {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:489:function makeAudit(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:523://   1. Bot self-protection (always, regardless of module state)
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:524://   2. Guard: module enabled?
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:532:export async function handleAntiDemoteEvent(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:538:  if (update.action !== 'demote') return;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:552:  // Fires regardless of module state.  Records whether the bot was
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:563:  // ── Load module config ───────────────────────────────────
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:647:      logger.warn('[SecurityEngine] AntiDemote: bot restore failed, punishment skipped', {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:662:        action: 'promote', reason: 'antidemote_restore',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:695:      logger.warn('[SecurityEngine] AntiDemote: bot restore failed — skipping punishment', {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:730://   1. Guard: module enabled?
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:748:export async function handleAntiPromoteEvent(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:754:  if (update.action !== 'promote') return;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:854:        action: 'demote', reason: 'antipromote_revert',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:892:export async function drainPendingRestores(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:906:      const ok = await retryGroupUpdate(socket, entry.groupJid, entry.participants, entry.action, 3);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:910:          sessionId, groupJid: entry.groupJid, action: entry.action, reason: entry.reason,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:913:        logger.warn('[SecurityEngine] Pending restore still failing, will retry next reconnect', {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/group-security-engine.ts:918:      logger.warn('[SecurityEngine] Pending restore threw', {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:4:// Each module is fully isolated. Errors in one never affect others.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:7://  • All modules now skip protected participants (admins, bot,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:21:import { executeAction, deleteMessage } from './actions.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:39:import { messageContainsLink } from './modules/anti-link.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:40:import { extractSenderText } from './modules/message-content.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:41:import { messageIsFromBot } from './modules/anti-bot.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:43:import { messageIsImage, messageIsVideo, messageIsAudio } from './modules/anti-media.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:44:import { messageIsVoiceNote } from './modules/anti-vn.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:45:import { messageIsPlainText, isBotCommandText } from './modules/anti-text.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:46:import { messageContainsEmoji } from './modules/anti-emoji.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:47:import { messageIsSticker } from './modules/anti-sticker.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:48:import { messageIsGroupCall } from './modules/anti-group-call.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:49:import { messageIsNSFW } from './modules/anti-nsfw.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:50:import { messageIsGroupMention } from './modules/anti-group-mention.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:51:import { messageIsGroupStatusMention } from './modules/anti-gm.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:52:import { messageContainsBlockedWord } from './modules/anti-words.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:53:import { messageIsPoll } from './modules/anti-poll.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:54:import { messageIsForwarded } from './modules/anti-forward.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:55:import { messageIsFromChannel } from './modules/anti-channel.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:61:  | 'antinsfw' | 'antigroupmention' | 'antigm' | 'antiwords' | 'antipoll'
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:62:  | 'antiforward' | 'antichannel' | 'antigstatus';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:65: * Central target policy for message anti modules. Keep this map exhaustive:
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:68:export const ANTI_TARGET_SCOPE: Readonly<Record<ModuleKey, AntiTargetScope>> = {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:84:  antipoll: 'members',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:85:  antiforward: 'members',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:87:  antigstatus: 'members',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:90:export function antiTargetScope(moduleKey: ModuleKey): AntiTargetScope {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:91:  return ANTI_TARGET_SCOPE[moduleKey];
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:94:/** Check if sender is in a module's permit list */
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:95:function isPermitted(moduleConfig: AntiModuleConfig, senderNumber: string): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:96:  return moduleConfig.permitList.some((n) => normalizeWhatsAppNumber(n) === senderNumber);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:99:/** Central member/admin targeting gate used by every message anti module. */
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:100:function isModuleTargetAllowed(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:101:  moduleKey: ModuleKey,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:106:  const scope = antiTargetScope(moduleKey);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:112: * Build ViolationContext and run executeAction for a detected violation.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:113: * Each module catches its own error — one failure does not stop others.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:115:async function triggerViolation(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:123:  moduleKey: ModuleKey,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:124:  moduleName: string,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:125:  moduleConfig: AntiModuleConfig,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:130:    const resolvedMsg = (customMessageKey && gc.messages?.[customMessageKey]) ?? moduleConfig.customMessage;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:137:      moduleKey,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:138:      moduleName,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:139:      moduleConfig: { ...moduleConfig, customMessage: resolvedMsg },
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:144:    logger.error(`[AntiSystem] ${moduleName} action failed`, { err: String(err), sessionId, groupJid });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:150: * Runs all enabled anti modules concurrently where safe.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:153: * automatically skipped — no module will ever punish an admin.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:155: * Returns true if any module triggered (caller can skip command parsing).
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:157:export async function runAntiChecks(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:192:    logger.warn('[AntiSystem] Skipping checks because group metadata is unavailable', { senderJid, groupJid });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:195:  // Normal message anti modules target members only. The bot, admins, sudo,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:196:  // and configured owners are protected centrally before any module runs.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:204:  // (text, image, video, audio, voice note, document, contact, poll,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:205:  // sticker, location, live location, group mentions, reactions) is deleted
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:209:    const deletion = deleteMessage(socket, msg);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:242:    logger.info('[AntiSystem] BANNED MEMBER — message deleted', {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:254:  // OR contextInfo.isGroupStatus from the fork's group-status send path).
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:255:  // Respects the permit list and the protected-participant guard above.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:260:    const gs = gc.antigstatus;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:261:    if (gs?.enabled && isModuleTargetAllowed('antigstatus', meta, senderJid) && !isPermitted(gs, senderNumber)) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:262:      logger.info('[AntiGStatus] Group status post flagged', { sessionId, groupJid, senderNumber });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:265:        'antigstatus', 'AntiGStatus', gs, 'antigstatus'
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:282:  function tryModule(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:299:        logger.debug(`[AntiSystem] ${name} skipped (permitted)`, { sessionId, groupJid, senderNumber });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:302:      const detected = check();
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:303:      logger.debug(`[AntiSystem] ${name} check result`, { detected, sessionId, groupJid });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:304:      if (!detected) return;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:308:      logger.warn(`[AntiSystem] ${name} check threw`, { err: String(err) });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:331:    logger.warn('[AntiSystem] AntiSpam check threw', { err: String(err) });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:361:  // Pass currentGroupJid so the module can filter out self-referential
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:369:  tryModule('antipoll', 'AntiPoll', () => messageIsPoll(msg), 'antipoll');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:372:  tryModule('antiforward', 'AntiForward', () => messageIsForwarded(msg), 'antiforward');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:388:    logger.warn('[AntiSystem] AntiWords check threw', { err: String(err) });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:394:    triggered = true; // Mark as potentially triggered; actual violation only if detected
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:400:        logger.warn('[AntiSystem] AntiNSFW threw', { err: String(err) });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:420:export const DEFAULT_WELCOME_TEMPLATE = '👋 Welcome @mention to *&gcname*.';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:422:export const DEFAULT_GOODBYE_TEMPLATE = '👋 Goodbye @mention from *&gcname*.';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:426:export interface ParticipantUpdateEvent {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:429:  action: 'add' | 'remove' | 'promote' | 'demote';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:438: *  • Welcome messages  (action = 'add')
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:439: *  • Goodbye messages  (action = 'remove')
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:440: *  • AutoBlock         (action = 'add', per-group toggle)
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:447:export async function handleParticipantUpdate(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:453:  const { id: groupJid, participants, action, author } = update;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:460:  if (action === 'remove') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:468:  // Surgically patch the in-memory metadata cache for this action.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:471:  // bustGroupMetaCache is kept as a hard fallback for unexpected actions.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:472:  if (action === 'promote' || action === 'demote' || action === 'add' || action === 'remove') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:473:    patchGroupMetaCache(socket, groupJid, action, participants);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:483:  if (action === 'promote') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:487:      action: 'promote',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:495:  if (action === 'add') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:588:            logger.warn('[GroupEvents] Welcome batch send failed', { err: String(err), sessionId, groupJid });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:613:            updateBlockStatus(jid: string, action: string): Promise<unknown>;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:617:          logger.warn('[AutoBlock] Block failed', { err: String(err), participantJid });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:624:  if (action === 'remove') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:712:            logger.warn('[GroupEvents] Goodbye batch send failed', { err: String(err), sessionId, groupJid });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:722:  if (action === 'demote') {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/index.ts:726:      action: 'demote',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-bot.ts:29: * Heuristics to detect automation clients:
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-bot.ts:40:export function messageIsFromBot(msg: WebMessageInfo): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-channel.ts:3:// Detects messages forwarded from WhatsApp Channels (Newsletters).
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-channel.ts:10:function getContextInfo(msg: WebMessageInfo): AnyMsg | null {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-channel.ts:29: * Returns true if the message was forwarded from a WhatsApp Channel.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-channel.ts:31:export function messageIsFromChannel(msg: WebMessageInfo): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-channel.ts:38:  if (ci['forwardedNewsletterMessageInfo']) return true;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-demote.ts:8://   kwp — kick the responsible admin, do NOT restore victim
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-demote.ts:9://   knp — kick the responsible admin, restore victim
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-demote.ts:12:export { demoteParticipant, promoteParticipant, kickParticipant } from '../actions.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-demote.ts:14:export interface ParticipantUpdate {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-demote.ts:16:  action: 'add' | 'remove' | 'promote' | 'demote';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-demote.ts:22:export function extractDemotedParticipants(update: ParticipantUpdate): string[] {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-demote.ts:23:  if (update.action !== 'demote') return [];
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-emoji.ts:13:export function messageContainsEmoji(msg: WebMessageInfo): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-forward.ts:3:// Detects forwarded messages using WhatsApp forwarding metadata.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-forward.ts:10:function getContextInfo(msg: WebMessageInfo): AnyMsg | null {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-forward.ts:32: * Returns true if the message carries forward metadata.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-forward.ts:34:export function messageIsForwarded(msg: WebMessageInfo): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-forward.ts:37:  return Boolean(ci['isForwarded'] || (ci['forwardingScore'] !== undefined && Number(ci['forwardingScore']) > 0));
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:14://   EVERY message in the chat. The old detector treated key presence
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:15://   as the trigger and therefore deleted every message once the
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:16://   module was enabled.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:28://   normal text, images, stickers, videos, voice notes, polls,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:29://   forwarded messages, quoted messages, statusMentionSources,
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:30://   statusMentionReply, statusMentions, groupMentionedMessage —
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:33:// The detector logs WHY it did or did not trigger so every decision
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:43:function detectContentType(inner: AnyRecord | null | undefined): string | null {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:52:    'locationMessage', 'pollCreationMessage', 'pollCreationMessageV2',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:53:    'pollCreationMessageV3', 'protocolMessage', 'reactionMessage',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:57:    'viewOnceMessage', 'ephemeralMessage',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:64:export function messageIsGroupStatusMention(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:93:    const innerType = detectContentType(inner);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:97:      logger.info('[AntiGM] Status @Group mention detected — triggering', {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-gm.ts:114:  // Everything else — text, media, stickers, forwards, quotes, status
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-group-call.ts:11:export function messageIsGroupCall(msg: WebMessageInfo): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-group-mention.ts:32:export function messageIsGroupMention(msg: WebMessageInfo, currentGroupJid?: string): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-group-mention.ts:52:  // metadata on ordinary messages — those must not trigger the module.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-link.ts:25:function trimUrlPunctuation(raw: string): string {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-link.ts:43:function normalizeCandidate(raw: string): string | null {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-link.ts:76:export function extractUrls(text: string): string[] {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-link.ts:103:export function textContainsLink(text: string): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-link.ts:108:export function messageLinks(msg: WebMessageInfo): string[] {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-link.ts:123:export function extractAllText(msg: WebMessageInfo): string[] {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-link.ts:128:export function messageContainsLink(msg: WebMessageInfo): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-media.ts:3:// Separate detectors for image, video, and audio messages.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-media.ts:10:function unwrap(msg: WebMessageInfo): AnyMsg | null {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-media.ts:15:    ((m['viewOnceMessage'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-media.ts:16:    ((m['viewOnceMessageV2'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-media.ts:17:    ((m['viewOnceMessageV2Extension'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-media.ts:24:export function messageIsImage(msg: WebMessageInfo): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-media.ts:25:  const m = unwrap(msg);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-media.ts:29:export function messageIsVideo(msg: WebMessageInfo): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-media.ts:30:  const m = unwrap(msg);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-media.ts:38:export function messageIsAudio(msg: WebMessageInfo): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-media.ts:39:  const m = unwrap(msg);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-nsfw.ts:3:// External API-based NSFW detection for images and videos.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-nsfw.ts:15:function unwrap(msg: WebMessageInfo): AnyMsg | null {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-nsfw.ts:19:    ((m['viewOnceMessage'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-nsfw.ts:20:    ((m['viewOnceMessageV2'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-nsfw.ts:26:function isMediaMessage(msg: WebMessageInfo): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-nsfw.ts:27:  const m = unwrap(msg);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-nsfw.ts:34:async function downloadMediaBuffer(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-nsfw.ts:43:      logger.warn('[AntiNSFW] downloadMediaMessage not exported by this Baileys version');
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-nsfw.ts:48:    logger.warn('[AntiNSFW] Media download failed', { err: String(err) });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-nsfw.ts:57:export async function messageIsNSFW(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-nsfw.ts:77:    logger.warn('[AntiNSFW] API check failed', { err: String(err) });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-poll.ts:3:// Detects poll creation messages.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-poll.ts:10:export function messageIsPoll(msg: WebMessageInfo): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-poll.ts:20:    m['pollCreationMessage'] ??
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-poll.ts:21:    m['pollCreationMessageV2'] ??
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-poll.ts:22:    m['pollCreationMessageV3']
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-promote.ts:6:export interface ParticipantUpdate {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-promote.ts:8:  action: 'add' | 'remove' | 'promote' | 'demote';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-promote.ts:14:export function extractPromotedParticipants(update: ParticipantUpdate): string[] {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-promote.ts:15:  if (update.action !== 'promote') return [];
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-spam.ts:6:export { recordSpamMessage, resetSpamWindow } from '../config.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-sticker.ts:10:export function messageIsSticker(msg: WebMessageInfo): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:9://   • ephemeralMessage / viewOnceMessage / viewOnceMessageV2 → recurse
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:12://   • messages with media (image/video/audio/sticker/doc/poll/contact/
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:13://     location/liveLocation/groupStatusMention/reaction) → NOT plain text
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:22:// from the plain-text class even if a text-ish field also exists.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:27:  'pollCreationMessage', 'pollCreationMessageV2', 'pollCreationMessageV3',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:28:  'pollUpdateMessage', 'reactionMessage', 'groupStatusMentionMessage',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:33:  'pinInChatMessage', 'sharePhoneNumberMessage', 'encReactionMessage',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:37:  'viewOnceMessage', 'viewOnceMessageV2', 'ephemeralMessage',
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:44: * Unwraps ephemeral/viewOnce containers before the check.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:46:function hasNonTextContent(m: AnyMsg): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:48:  const wrapped = m['ephemeralMessage'] ?? m['viewOnceMessage'] ?? m['viewOnceMessageV2'] ?? m['documentWithCaptionMessage'];
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:57:    if (key === 'ephemeralMessage' || key === 'viewOnceMessage' || key === 'viewOnceMessageV2' || key === 'documentWithCaptionMessage') continue;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:64:export function isBotCommandText(text: string, prefix: string): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:77:export function messageIsPlainText(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:88:  if (m['viewOnceMessage']) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:89:    const inner = (m['viewOnceMessage'] as AnyMsg)['message'];
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:92:  if (m['viewOnceMessageV2']) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-text.ts:93:    const inner = (m['viewOnceMessageV2'] as AnyMsg)['message'];
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-vn.ts:9:function unwrap(msg: WebMessageInfo): AnyMsg | null {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-vn.ts:13:    ((m['viewOnceMessage'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-vn.ts:14:    ((m['viewOnceMessageV2'] as AnyMsg | undefined)?.['message'] as AnyMsg | undefined) ??
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-vn.ts:21:export function messageIsVoiceNote(msg: WebMessageInfo): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-vn.ts:22:  const m = unwrap(msg);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-words.ts:4:// sender's own payload, never in quoted/replied content.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/anti-words.ts:11:export function messageContainsBlockedWord(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/message-content.ts:5:// ContextInfo is metadata: its quotedMessage is deliberately never
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/message-content.ts:6:// traversed, so replies cannot inherit the quoted sender's payload.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/message-content.ts:10:import { WRAPPER_KEYS } from '../../quoted-message/MessageUnwrapper.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/message-content.ts:14:function addText(texts: string[], value: unknown): void {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/message-content.ts:18:function addListText(texts: string[], list: AnyMessage): void {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/message-content.ts:42: * `contextInfo`, especially `contextInfo.quotedMessage`, and never scans
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/message-content.ts:45:function collectSenderText(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/message-content.ts:64:    // anything below contextInfo; quoted payloads remain metadata only.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/message-content.ts:135:  for (const pollKey of ['pollCreationMessage', 'pollCreationMessageV2', 'pollCreationMessageV3']) {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/message-content.ts:136:    const poll = message[pollKey];
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/message-content.ts:137:    if (poll && typeof poll === 'object') addText(texts, (poll as AnyMessage)['name']);
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/message-content.ts:164:export function extractSenderTexts(msg: WebMessageInfo): string[] {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/modules/message-content.ts:174:export function extractSenderText(msg: WebMessageInfo): string {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/pending-restores.ts:16:export interface PendingRestore {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/pending-restores.ts:20:  action: 'promote' | 'demote';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/pending-restores.ts:25:function restorePath(sessionId: string, telegramId: string): string {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/pending-restores.ts:29:function loadAll(sessionId: string, telegramId: string): PendingRestore[] {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/pending-restores.ts:35:    logger.warn('[PendingRestores] Failed to parse, resetting', { err: String(err) });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/pending-restores.ts:40:function saveAll(sessionId: string, telegramId: string, restores: PendingRestore[]): void {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/pending-restores.ts:46:export function addPendingRestore(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/pending-restores.ts:58:export function removePendingRestore(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/pending-restores.ts:67:export function loadPendingRestores(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/response.ts:4:// Kept as a thin re-export for backward compatibility.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/response.ts:7:export type { ResponseContext } from '../../utils/response-engine.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/response.ts:8:export { renderTemplate as renderResponse } from '../../utils/response-engine.js';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:7://            AntiLink, AntiSpam, AntiBot, and all future modules.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:10://   Normal message anti modules protect administrators and only enforce
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:12://   administrator-protection modules and enforce their configured actions
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:15://   Detection  = centralized by module target scope
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:16://   Punishment = only after the module's target policy allows enforcement
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:19:// engine and future module-specific policies. Normal message anti modules
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:44:export function isPunishable(level: PermissionLevel): boolean {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:49:export function getSkipReason(level: PermissionLevel): SkipReason | undefined {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:70:function getOwnerWaNumbers(sessionCfg: import('../../types/index.js').UserConfig | null): string[] {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:79:function getTrustedAdminNumbers(sessionCfg: import('../../types/index.js').UserConfig | null): string[] {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:87:// events. Normal message anti modules use the centralized member-only target
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:97: *  3. Actor is the bot itself → skip (own action)
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:101: *  7. Actor number in per-module permit list → TEMPORARY_PERMIT
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:106: * in a higher-trust list.  Group admin status alone never grants exemption.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:108:export async function classifyActor(
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:114:  permitList: string[]          // per-module permit list
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:120:    logger.warn('[SecurityAuth] fetchGroupMeta failed — cannot classify actor', {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:144:  // 3. Ignore bot's own actions
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:157:    logger.warn('[SecurityAuth] actorJid has no numeric part', { actorJid, sessionId, groupJid });
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:217:  // 8. Temporary Permit (per-module permit list)
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/security-authorization.ts:218:  const normalizedPermits = permitList.map((n) => n.replace(/\D/g, ''));
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:5:export type AntiAction = 'kick' | 'warn' | 'delete';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:8: * Who an anti module is allowed to enforce against.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:9: * Every newly-added module must declare a scope in the central policy map.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:11:export type AntiTargetScope = 'members' | 'admins' | 'both';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:15:// Still used by other moderation modules (AntiLink, AntiSpam, etc.).
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:19:export type PermissionLevel =
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:47:export type TargetMode = 'protected' | 'admins';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:54:export type SkipReason =
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:64:  // Used by other modules (AntiLink, AntiSpam, etc.) via classifyActor
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:80:export type SecurityAction =
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:82:  | 'warn'             // Warn the actor in group
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:83:  | 'kick'             // Remove the actor from the group
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:91:// Legacy action names (kept for type compat — mapped at use site)
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:92:export type LegacySecurityAction =
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:98:export type SecurityEventType =
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:103:  | 'bot_restore_failed'   // Bot could not recover its admin status
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:110:export interface SecurityAuditLog {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:131:// Still used by other moderation modules via security-authorization.ts.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:133:export interface AuthorizationResult {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:142:// Legacy modes are mapped to modern action chains:
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:145://   kwp → kick + warn actor, no restore
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:146://   knp → kick actor only, no restore
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:148:export type LegacySecurityMode = 'dwp' | 'dnp' | 'kwp' | 'knp';
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:151:export type AntiDemoteMode = LegacySecurityMode;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:158: *   restorewarn  — restore victim + warn actor in group
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:159: *   restorekick  — restore victim + kick actor
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:160: *   restoreban   — restore victim + kick + block actor
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:164: *   warn         → restorewarn
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:165: *   kick         → restorekick
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:169: *   knp          — K(ick) N(o-restore) P: kick actor, NO restore
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:170: *   kwp          — K(ick) W(arn) P: kick + warn actor, NO restore
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:173: *   jw           — J(ust) W(arn): warn actor only, NO restore, NO kick
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:174: *   wnp          — W(arn) N(o-kick) P: warn actor + restore victim
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:178:export type GroupSecurityMode =
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:182:  | 'restorewarn'
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:183:  | 'restorekick'
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:187:  | 'warn'
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:188:  | 'kick'
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:200:  //   p/p — Promote victim (restore), warn actor, no actor demotion
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:201:  //   p/k — Promote victim (restore), kick actor
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:206:  //   restorewarn:<N> — restore victim + warn actor; after N warns the
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:207:  //   actor is kicked (punishment escalation). Parsed at runtime.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:208:  | `restorewarn:${number}`
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:212:/** Base config shared by every anti module */
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:213:export interface AntiModuleConfig {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:215:  action: AntiAction;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:216:  warnThreshold: number;   // number of warns before kick (default 3)
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:217:  permitList: string[];    // normalized phone numbers exempt from this module
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:222:export interface AntiSpamConfig extends AntiModuleConfig {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:228:export interface AntiWordsConfig extends AntiModuleConfig {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:233: * AntiPromote module config.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:241:export interface AntiPromoteConfig extends AntiModuleConfig {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:243:  targetMode: TargetMode;  // default: 'admins' for admin protection modules
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:247: * AntiDemote module config.
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:255:export interface AntiDemoteConfig extends AntiModuleConfig {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:257:  targetMode: TargetMode;  // default: 'admins' for admin protection modules
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:263:export interface GroupAntiConfig {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:280:  antipoll?: AntiModuleConfig;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:281:  antiforward?: AntiModuleConfig;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:286:  antigstatus?: AntiModuleConfig;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:287:  /** Suppress antisystem/moderation action notices while retaining enforcement. */
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:289:  // Per-module custom response overrides
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:294:export type SessionAntiConfig = Record<string, GroupAntiConfig>;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:296:/** Violation context passed to action executor */
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:297:export interface ViolationContext {
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:303:  moduleKey: keyof Omit<GroupAntiConfig, 'groupJid' | 'messages'>;
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:304:  moduleName: string;   // display name e.g. "AntiLink"
+/home/ubuntu/omega-v1/artifacts/wa-bridge/src/whatsapp/anti-system/types.ts:305:  moduleConfig: AntiModuleConfig;

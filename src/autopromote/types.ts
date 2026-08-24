@@ -1,7 +1,7 @@
 import type { JobMediaReference } from "../whatsapp/job-media-store.js";
 
 export type AutoPromoteScope = "SESSION" | "USER" | "GLOBAL";
-export type AutoPromoteCommand = "allstatus" | "allchat" | "allstatusx";
+export type AutoPromoteCommand = "allstatus" | "allstatusd" | "allchat" | "allstatusx";
 export type AutoPromoteState =
   | "SCHEDULED"
   | "QUEUED"

@@ -16,12 +16,34 @@ import {
   renderAsciiMenu,
 } from "../menus/menu-model.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
+import { firstVerifiedPhone, maskedPhoneLabel, phoneJidFromIdentity, verifiedTargetPhone } from "./identity-normalization.js";
+import { buildModerationActionResponse, buildModerationJobResponse, realMention } from "./moderation-response.js";
+import { banUsageCard, commandUsageCard, pairingHelpCard, sessionPairingCard } from "./response-cards.js";
+import type { GroupControlTable } from "./group-control-confirmation.js";
+import { registerGroupControlConfirmation, consumeGroupControlConfirmation } from "./group-control-confirmation.js";
 import {
   getPreviewDebugSnapshot,
   prepareCanonicalPreviewContent,
 } from "./baileys-native-preview.js";
 import { createSupportTicket } from "../persistence/mongo.js";
 import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
+import {
+  applyModerationConfirmation,
+  banList,
+  banMember,
+  blockAll,
+  clearWarning,
+  createPoll,
+  deleteAllMember,
+  filterCountry,
+  filterOut,
+  moderateParticipant,
+  muteGroup,
+  showWarnings,
+  unbanMember,
+  unblockMember,
+  warnMember,
+} from "./group-moderation-commands.js";
 import {
   createWhatsAppGroup,
   getProfilePictureUrl,
@@ -33,6 +55,8 @@ import {
   updateGroupProfilePicture,
   updateGroupDescription,
   getGroupInviteCode,
+  getGroupModerationSnapshot,
+  listGroupJoinRequests,
 } from "./transport-adapter.js";
 
 export interface EnqueueJobResult {
@@ -42,6 +66,8 @@ export interface EnqueueJobResult {
   delayMs?: number;
   expectedTimeMs?: number;
   inventoryPending?: boolean;
+  inventoryDeferred?: boolean;
+  workerLocal?: boolean;
 }
 
 export interface EnqueueJoinJobResult {
@@ -51,12 +77,27 @@ export interface EnqueueJoinJobResult {
   expectedTimeMs: number;
 }
 
+export interface EnqueueGroupControlResult {
+  jobCode: string;
+}
+
+const MAX_GROUP_CONTROL_PARTICIPANTS = 1_000;
+
+export interface WhatsAppCommandReply {
+  text?: string;
+  mentions?: string[];
+  nativeFlow?: Array<{ text: string; copy?: string; id?: string; url?: string }>;
+  nativeTable?: GroupControlTable;
+}
+
 export interface CommandContext {
   workspaceId: string;
   sessionId: string;
   isOwner: boolean;
   senderJid?: string;
   quotedSenderJid?: string;
+  quotedText?: string;
+  quotedMessageKey?: Record<string, unknown>;
   mentionedJids?: string[];
   chatJid?: string;
   media?: WhatsAppMediaPayload;
@@ -74,6 +115,12 @@ export interface CommandContext {
   enqueueJoinJob?: (input: {
     payload: Record<string, unknown>;
   }) => Promise<string | EnqueueJoinJobResult>;
+  enqueueGroupControlJob?: (input: {
+    groupJid: string;
+    operation: "approve" | "reject" | "participant";
+    participants: string[];
+    participantAction?: "promote" | "demote" | "remove" | "block" | "demote-remove";
+  }) => Promise<string | EnqueueGroupControlResult>;
   sendCurrentGroupStatus?: (input: {
     text: string;
     repeat: number;
@@ -87,6 +134,7 @@ export interface CommandContext {
     text: string;
     participantCount?: number;
   }) => Promise<void>;
+  sendCurrentGroupPoll?: (input: { question: string; options: string[] }) => Promise<void>;
   cancelJobs?: (
     kind: "gstatus" | "allstatus" | "allchat" | "tag",
   ) => Promise<number>;
@@ -97,7 +145,7 @@ export interface RegisteredCommand {
   aliases: string[];
   description: string;
   ownerOnly?: boolean;
-  run: (ctx: CommandContext) => Promise<string>;
+  run: (ctx: CommandContext) => Promise<string | WhatsAppCommandReply>;
 }
 
 function session(ctx: CommandContext): WhatsAppSession {
@@ -122,6 +170,226 @@ function mediaCommandPayload(ctx: CommandContext): string {
   return caption;
 }
 
+function groupJidForApproval(ctx: CommandContext): string {
+  if (!ctx.chatJid || !ctx.chatJid.endsWith("@g.us"))
+    throw new Error("This command must be used inside a WhatsApp group.");
+  return ctx.chatJid;
+}
+
+async function pendingApprovalRequests(ctx: CommandContext) {
+  const groupJid = groupJidForApproval(ctx);
+  const snapshot = await getGroupModerationSnapshot(
+    ctx.workspaceId,
+    ctx.sessionId,
+    groupJid,
+    { fresh: true },
+  );
+  if (!snapshot.isAdmin)
+    throw new Error("This WhatsApp identity is not an administrator in this group.");
+  return {
+    groupJid,
+    requests: await listGroupJoinRequests(
+      ctx.workspaceId,
+      ctx.sessionId,
+      groupJid,
+    ),
+  };
+}
+
+function approvalCountry(request: { jid: string; phoneNumber?: string }): string {
+  const source = request.phoneNumber ?? (/@(s\.whatsapp\.net|c\.us)$/iu.test(request.jid) ? request.jid : "");
+  return source.replace(/\D/g, "");
+}
+
+function approvalPreviewLabel(request: { jid?: string; phoneNumber?: string }, index: number): string {
+  return maskedPhoneLabel(firstVerifiedPhone(request.phoneNumber, request.jid), index);
+}
+
+function buildApprovalTable(operation: "approve" | "reject", requests: Array<{ phoneNumber?: string }>, token: string): GroupControlTable {
+  const action = operation === "approve" ? "Approve" : "Reject";
+  return {
+    title: `Join Requests · ${action} Confirmation`,
+    headers: ["Request", "Selection"],
+    rows: requests.slice(0, 40).map((request, index) => [approvalPreviewLabel(request, index), "Pending request"]),
+    buttons: [
+      { text: `✅ Confirm ${action}`, id: `group-control:confirm:${token}` },
+      { text: "❌ Cancel", id: `group-control:cancel:${token}` },
+    ],
+    footer: `${requests.length} request(s) selected · This action queues one batch job after confirmation.`,
+  };
+}
+
+async function approvalConfirmationReply(
+  ctx: CommandContext,
+  operation: "approve" | "reject",
+  requests: Array<{ jid: string; phoneNumber?: string }>,
+  selectionLabel: string,
+): Promise<WhatsAppCommandReply> {
+  const senderJid = ctx.senderJid ?? "";
+  if (!senderJid) return { text: "Confirmation is unavailable because the requesting identity could not be verified." };
+  const table: GroupControlTable = {
+    title: `Join Requests · ${operation === "approve" ? "Approve" : "Reject"} Confirmation`,
+    headers: ["Request", "Selection"],
+    rows: requests.slice(0, 40).map((request, index) => [approvalPreviewLabel(request, index), selectionLabel]),
+    buttons: [],
+    footer: `${requests.length} request(s) selected · Confirm within 90 seconds or the plan expires.`,
+  };
+  const pending = registerGroupControlConfirmation({
+    workspaceId: ctx.workspaceId,
+    sessionId: ctx.sessionId,
+    groupJid: groupJidForApproval(ctx),
+    senderJid,
+    operation,
+    participants: requests.map((request) => request.jid),
+    table,
+  });
+  pending.table.buttons = [
+    { text: `✅ Confirm ${operation === "approve" ? "Approve" : "Reject"}`, id: `group-control:confirm:${pending.token}` },
+    { text: "❌ Cancel", id: `group-control:cancel:${pending.token}` },
+  ];
+  return {
+    text: [
+      `✦ PAPPY OMEGA MINI · JOIN ${operation.toUpperCase()} REVIEW`,
+      "─────────────────────",
+      `Selected      · ${requests.length}`,
+      `Scope         · ${selectionLabel}`,
+      "Safety        · No action has been queued.",
+      "Action        · Use the native Confirm or Cancel button below.",
+    ].join("\n"),
+    nativeTable: pending.table,
+    nativeFlow: pending.table.buttons,
+  };
+}
+
+function memberPreviewLabel(participant: { phoneNumber?: string; id: string; jid?: string }, index: number): string {
+  const phone = firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id);
+  return phone ? realMention(phone) : `#${index + 1} Verified phone unavailable`;
+}
+
+async function memberConfirmationReply(
+  ctx: CommandContext,
+  groupJid: string,
+  participantAction: "remove" | "demote" | "promote" | "block" | "demote-remove",
+  participants: Array<{ id: string; phoneNumber?: string; jid?: string }>,
+  selectionLabel: string,
+): Promise<WhatsAppCommandReply> {
+  const senderJid = ctx.senderJid ?? "";
+  if (!senderJid) return { text: "Confirmation is unavailable because the requesting identity could not be verified." };
+  const pending = registerGroupControlConfirmation({
+    workspaceId: ctx.workspaceId,
+    sessionId: ctx.sessionId,
+    groupJid,
+    senderJid,
+    operation: "participant",
+    participantAction,
+    participants: participants.map((participant) => phoneJidFromIdentity(firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id) ?? "")).filter((jid): jid is string => Boolean(jid)),
+    table: {
+      title: `Member Control · ${participantAction.toUpperCase()} Confirmation`,
+      headers: ["Member", "Selection"],
+      rows: participants.slice(0, 40).map((participant, index) => [memberPreviewLabel(participant, index), selectionLabel]),
+      buttons: [],
+      footer: `${participants.length} member(s) selected · Confirm within 90 seconds or the plan expires.`,
+    },
+  });
+  pending.table.buttons = [
+    { text: `✅ Confirm ${participantAction.toUpperCase()}`, id: `group-control:confirm:${pending.token}` },
+    { text: "❌ Cancel", id: `group-control:cancel:${pending.token}` },
+  ];
+  return {
+    text: [
+      "✦ PAPPY OMEGA MINI · MEMBER CONTROL REVIEW",
+      "─────────────────────",
+      `Action        · ${participantAction.toUpperCase()}`,
+      `Selected      · ${participants.length}`,
+      `Scope         · ${selectionLabel}`,
+      "Safety        · No action has been queued.",
+      "Action        · Use the native Confirm or Cancel button below.",
+    ].join("\n"),
+    mentions: participants.map((participant) => firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id)).filter((phone): phone is string => Boolean(phone)).map((phone) => phoneJidFromIdentity(phone)!).filter(Boolean),
+    nativeTable: pending.table,
+    nativeFlow: pending.table.buttons,
+  };
+}
+
+async function queueApprovalOperation(
+  ctx: CommandContext,
+  operation: "approve" | "reject",
+  participants: string[],
+): Promise<string> {
+  if (!ctx.enqueueGroupControlJob)
+    return "Join Approval is unavailable until the worker runtime is ready.";
+  const groupJid = groupJidForApproval(ctx);
+  const boundedParticipants = [...new Set(participants)].slice(0, MAX_GROUP_CONTROL_PARTICIPANTS);
+  if (!boundedParticipants.length)
+    return `There are no pending WhatsApp join requests to ${operation}.`;
+  const queued = await ctx.enqueueGroupControlJob({
+    groupJid,
+    operation,
+    participants: boundedParticipants,
+  });
+  const jobCode = typeof queued === "string" ? queued : queued.jobCode;
+  return [
+    "✦ PAPPY OMEGA MINI · JOIN APPROVAL",
+    "─────────────────────",
+    `Action        · ${operation === "approve" ? "APPROVE" : "REJECT"}`,
+    `Selected      · ${boundedParticipants.length}`,
+    `Job           · ${jobCode}`,
+    "Progress      · Open Telegram Live Show for detailed results.",
+  ].join("\n");
+}
+
+function participantDigits(participant: { id: string; jid?: string; phoneNumber?: string }): string {
+  return [participant.phoneNumber, participant.id, participant.jid]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\D/g, "");
+}
+
+async function eligibleMemberTargets(ctx: CommandContext) {
+  const groupJid = groupJidForApproval(ctx);
+  const snapshot = await getGroupModerationSnapshot(
+    ctx.workspaceId,
+    ctx.sessionId,
+    groupJid,
+  );
+  if (!snapshot.isAdmin)
+    throw new Error("This WhatsApp identity is not an administrator in this group.");
+  const selfDigits = (session(ctx).phoneNumber ?? "").replace(/\D/g, "");
+  const targets = snapshot.participants
+    .filter((participant) => {
+      const isSelf = selfDigits.length >= 7 && participantDigits(participant).includes(selfDigits);
+      return !participant.admin && !isSelf && Boolean(firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id));
+    })
+    .slice(0, MAX_GROUP_CONTROL_PARTICIPANTS);
+  return { groupJid, snapshot, targets };
+}
+
+async function queueMemberOperation(
+  ctx: CommandContext,
+  groupJid: string,
+  participantAction: "remove" | "demote" | "promote" | "block" | "demote-remove",
+  participants: string[],
+): Promise<string | WhatsAppCommandReply> {
+  if (!ctx.enqueueGroupControlJob)
+    return "Member batch control is unavailable until the worker runtime is ready.";
+  const boundedParticipants = [...new Set(participants)].slice(0, MAX_GROUP_CONTROL_PARTICIPANTS);
+  if (!boundedParticipants.length) return "No eligible non-admin members matched this action.";
+  const queued = await ctx.enqueueGroupControlJob({
+    groupJid,
+    operation: "participant",
+    participantAction,
+    participants: boundedParticipants,
+  });
+  const jobCode = typeof queued === "string" ? queued : queued.jobCode;
+    const mentionJids = boundedParticipants.map((participant) => phoneJidFromIdentity(firstVerifiedPhone(participant))).filter((jid): jid is string => Boolean(jid));
+  const response = buildModerationJobResponse({
+    action: participantAction,
+    selected: boundedParticipants.length,
+    jobId: jobCode,
+    phones: boundedParticipants.map((participant) => firstVerifiedPhone(participant)).filter((phone): phone is string => Boolean(phone)),
+  });
+  return mentionJids.length ? { ...response, mentions: mentionJids } : response;
+}
 function formatSeconds(milliseconds: number): string {
   return `${Math.max(0, Math.round(milliseconds / 1000))}s`;
 }
@@ -139,9 +407,18 @@ function queuedJobAcknowledgement(
 ): string {
   if (typeof result === "string")
     return `${kind === "allstatus" ? "All-status" : "All-chat"} job queued: ${result}`;
+  if (result.workerLocal === true || result.inventoryDeferred === true)
+    return [
+      `✦ PAPPY OMEGA MINI · ${kind === "allstatus" ? "ALL-STATUS" : "ALL-CHAT"} STARTED`,
+      "─────────────────────",
+      `Delay         · ${Math.max(1, Math.round((result.delayMs ?? 10000) / 1000))}s`,
+      `Live code     · ${result.jobCode}`,
+      `Action        · ${kind === "allstatus" ? (result.workerLocal === true ? "Designed status delivery dispatched to the owning panel worker." : "Designed status delivery dispatched to the broadcast worker.") : (result.workerLocal === true ? "Hidden-member delivery dispatched to the owning panel worker." : "Hidden-member delivery dispatched to the broadcast worker.")}`,
+      "Progress      · Open Telegram Live Show for live totals and completion.",
+    ].join("\n");
   if (result.inventoryPending === true || result.totalGroups === undefined || result.totalPosts === undefined)
     return `⛔ ${kind === "allstatus" ? "All-status" : "All-chat"} was not started: WhatsApp group inventory was not resolved. No broadcast was dispatched. Retry after the session reports its groups online.`;
-  const delay = Math.max(1, Math.round((result.delayMs ?? 20000) / 1000));
+  const delay = Math.max(1, Math.round((result.delayMs ?? 10000) / 1000));
   const totalGroups = result.totalGroups;
   const totalPosts = result.totalPosts;
   const expectedTime =
@@ -182,15 +459,161 @@ function repeatAndPayload(
   };
 }
 
+function lazyAntiCommands(): RegisteredCommand[] {
+  const ANTI_CONFIG_COMMANDS = ["antilink", "antibot", "antispam", "antipic", "antivid", "antiaud", "antivn", "antitxt", "antiemoji", "antisticker", "antigroupcall", "antinsfw", "antigroupmention", "antigm", "antipoll", "antiforward", "antichannel", "antipromote", "antidemote", "antigstatus"] as const;
+  const ANTI_MESSAGE_COMMANDS = ["antilink", "antispam", "antivn", "antitxt", "antiemoji", "antiwords", "antigroupmention", "antigm", "antipoll", "antiforward", "antichannel", "antigstatus"] as const;
+  const ANTI_PERMIT_COMMANDS = [
+    ["linkpermit", "rmlinkpermit", "antilink"], ["botpermit", "rmbotpermit", "antibot"], ["spampermit", "rmspampermit", "antispam"],
+    ["picpermit", "rmpicpermit", "antipic"], ["vidpermit", "rmvidpermit", "antivid"], ["audpermit", "rmaudpermit", "antiaud"],
+    ["vnpermit", "rmvnpermit", "antivn"], ["emojipermit", "rmemojipermit", "antiemoji"], ["sticpermit", "rmsticpermit", "antisticker"],
+    ["nsfwpermit", "rmnsfwpermit", "antinsfw"], ["mentionpermit", "rmmentionpermit", "antigroupmention"], ["gmpermit", "rmgmpermit", "antigroupmention"],
+    ["pollpermit", "rmpollpermit", "antipoll"], ["fwdpermit", "rmfwdpermit", "antiforward"], ["chanpermit", "rmchanpermit", "antichannel"],
+  ] as const;
+  const entries: RegisteredCommand[] = [
+    { name: "antistatus", aliases: [], description: "Show all Anti System module status for this group.", run: async (ctx) => (await import("./anti-system/commands.js")).antiStatus(ctx) },
+    { name: "spamlimit", aliases: [], description: "Set AntiSpam messages and seconds window.", run: async (ctx) => (await import("./anti-system/commands.js")).antiSpamLimit(ctx) },
+    { name: "antiwords", aliases: [], description: "Configure AntiWords and its bracketed list.", run: async (ctx) => (await import("./anti-system/commands.js")).antiWords(ctx) },
+    { name: "antiaddword", aliases: [], description: "Add a blocked AntiWords phrase.", run: async (ctx) => (await import("./anti-system/commands.js")).antiWordManagement(ctx, "add") },
+    { name: "antirmword", aliases: [], description: "Remove a blocked AntiWords phrase.", run: async (ctx) => (await import("./anti-system/commands.js")).antiWordManagement(ctx, "remove") },
+    { name: "antiwordlist", aliases: [], description: "List blocked AntiWords phrases.", run: async (ctx) => (await import("./anti-system/commands.js")).antiWordManagement(ctx, "list") },
+    { name: "setantiwords", aliases: [], description: "Append comma-separated AntiWords phrases.", run: async (ctx) => (await import("./anti-system/commands.js")).antiWordManagement(ctx, "set") },
+    { name: "rmantiwords", aliases: [], description: "Remove comma-separated AntiWords phrases.", run: async (ctx) => (await import("./anti-system/commands.js")).antiWordManagement(ctx, "rmset") },
+    { name: "clearantiwords", aliases: [], description: "Clear all AntiWords phrases.", run: async (ctx) => (await import("./anti-system/commands.js")).antiWordManagement(ctx, "clear") },
+    { name: "silentactions", aliases: [], description: "Hide or show Anti System notices.", run: async (ctx) => (await import("./anti-system/commands.js")).antiSilent(ctx) },
+  ];
+  for (const key of ANTI_CONFIG_COMMANDS) entries.push({ name: key, aliases: key === "antitxt" ? ["antitext"] : [], description: `Omega-V1 ${key} group control.`, run: async (ctx) => (await import("./anti-system/commands.js")).configureAnti(ctx, key) });
+  for (const [addName, removeName, key] of ANTI_PERMIT_COMMANDS) {
+    entries.push({ name: addName, aliases: [], description: `Permit a member for ${key}.`, run: async (ctx) => (await import("./anti-system/commands.js")).antiPermit(ctx, key, true) });
+    entries.push({ name: removeName, aliases: [], description: `Remove a ${key} permit.`, run: async (ctx) => (await import("./anti-system/commands.js")).antiPermit(ctx, key, false) });
+  }
+  for (const key of ANTI_MESSAGE_COMMANDS) entries.push({ name: `${key}msg`, aliases: [], description: `Set a custom ${key} response.`, run: async (ctx) => (await import("./anti-system/commands.js")).antiMessage(ctx, key) });
+  return entries;
+}
+
 export function createCommandRegistry(): RegisteredCommand[] {
   return [
+    ...lazyAntiCommands(),
+    {
+      name: "kick",
+      aliases: ["remove"],
+      description: "Review removal of one verified group member.",
+      run: async (ctx) => moderateParticipant(ctx, "remove"),
+    },
+    {
+      name: "promote",
+      aliases: [],
+      description: "Review promotion of one verified group member.",
+      run: async (ctx) => moderateParticipant(ctx, "promote"),
+    },
+    {
+      name: "demote",
+      aliases: [],
+      description: "Review demotion of one verified group administrator.",
+      run: async (ctx) => moderateParticipant(ctx, "demote"),
+    },
+    {
+      name: "block",
+      aliases: [],
+      description: "Review removal and block of one verified group member.",
+      run: async (ctx) => moderateParticipant(ctx, "block"),
+    },
+    {
+      name: "unblock",
+      aliases: [],
+      description: "Remove WhatsApp block from a verified phone identity.",
+      run: async (ctx) => unblockMember(ctx),
+    },
+    {
+      name: "dnkick",
+      aliases: [],
+      description: "Review sequential demotion then removal of one administrator.",
+      run: async (ctx) => moderateParticipant(ctx, "demote-remove"),
+    },
+    {
+      name: "ban",
+      aliases: [],
+      description: "Locally restrict a verified member without removing them.",
+      run: async (ctx) => banMember(ctx),
+    },
+    {
+      name: "unban",
+      aliases: [],
+      description: "Remove a local restriction from one verified group member.",
+      run: async (ctx) => unbanMember(ctx),
+    },
+    {
+      name: "banlist",
+      aliases: ["bans"],
+      description: "Show the masked local ban list for this WhatsApp group.",
+      run: async (ctx) => banList(ctx),
+    },
+    {
+      name: "warn",
+      aliases: [],
+      description: "Issue one durable manual warning to a verified member.",
+      run: async (ctx) => warnMember(ctx),
+    },
+    {
+      name: "unwarn",
+      aliases: ["resetwarn"],
+      description: "Reset durable manual warnings for a verified member.",
+      run: async (ctx) => clearWarning(ctx),
+    },
+    {
+      name: "warns",
+      aliases: [],
+      description: "Show durable manual warning count for a verified member.",
+      run: async (ctx) => showWarnings(ctx),
+    },
+    {
+      name: "mute",
+      aliases: [],
+      description: "Review group-wide administrators-only chat mode.",
+      run: async (ctx) => muteGroup(ctx, true),
+    },
+    {
+      name: "unmute",
+      aliases: [],
+      description: "Review reopening group chat to all members.",
+      run: async (ctx) => muteGroup(ctx, false),
+    },
+    {
+      name: "filter",
+      aliases: [],
+      description: "Read-only verified country-prefix member count.",
+      run: async (ctx) => filterCountry(ctx),
+    },
+    {
+      name: "filterout",
+      aliases: [],
+      description: "Review bounded removal of verified members by country prefix.",
+      run: async (ctx) => filterOut(ctx),
+    },
+    {
+      name: "poll",
+      aliases: [],
+      description: "Create a native WhatsApp poll in the current group.",
+      run: async (ctx) => createPoll(ctx),
+    },
+    {
+      name: "blockall",
+      aliases: [],
+      description: "Bounded review of eligible participant blocking; no bulk action is queued automatically.",
+      run: async (ctx) => blockAll(ctx),
+    },
+    {
+      name: "deleteall",
+      aliases: [],
+      description: "Review bounded deletion of recent tracked messages from one verified member.",
+      run: async (ctx) => deleteAllMember(ctx),
+    },
     {
       name: "support",
       aliases: ["helpdesk", "ticket"],
       description: "Create a support ticket for this WhatsApp sender.",
       run: async (ctx) => {
         const message = ctx.args.join(" ").trim();
-        if (!message) return "Usage: .support <describe your issue>.";
+        if (!message) return commandUsageCard({ title: "Support Command", command: ".support", commandSyntax: ".support <describe-your-issue>", note: "Describe the issue in one message so it can be routed to the support inbox." });
         const now = Date.now();
         const ticketId = randomUUID();
         await createSupportTicket({
@@ -219,21 +642,12 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const label = parts[0] ?? "whatsapp-session";
         const phoneNumber = parts[1] ?? "";
         if (!/^\d{8,15}$/.test(phoneNumber.replace(/\D/g, "")))
-          return "Usage: .pair <label> <international-phone-number>. Example: .pair support 2348012345678";
+          return `${pairingHelpCard()}\n\n» *Error:* Send a valid international phone number without the + symbol.`;
         try {
           const paired = await ctx.pairSession({ label, phoneNumber });
-          return [
-            "✦ PAPPY OMEGA MINI · PAIRING",
-            "─────────────────────",
-            `Session · ${paired.sessionName}`,
-            `Phone   · ${paired.phoneNumber}`,
-            `Code    · ${paired.code}`,
-            "",
-            "Open WhatsApp → Linked Devices → Link a Device → Link with phone number, then enter the code.",
-            "The new session is chained to this workspace and its source Telegram owner.",
-          ].join("\n");
+          return sessionPairingCard({ session: paired.sessionName, phone: paired.phoneNumber, code: paired.code });
         } catch (error) {
-          return `Pairing failed: ${error instanceof Error ? error.message : String(error)}`;
+          return `${pairingHelpCard()}\n\n» *Error:* ${error instanceof Error ? error.message : String(error)}`;
         }
       },
     },
@@ -258,7 +672,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
       ownerOnly: true,
       run: async (ctx) => {
         const url = ctx.args.join(" ").trim();
-        if (!url) return "Usage: .previewdebug <https://example.com/...>.";
+        if (!url) return commandUsageCard({ title: "Preview Debug", command: ".previewdebug", commandSyntax: ".previewdebug <https://example.com/...>", note: "Provide one public URL to inspect its preview metadata." });
         const scope = `${ctx.workspaceId}:${ctx.sessionId}`;
         await prepareCanonicalPreviewContent({
           text: url,
@@ -375,9 +789,9 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const current = getSessionJoinSettings(ctx.workspaceId, ctx.sessionId);
         const raw = mediaCommandPayload(ctx).trim();
         if (!raw)
-          return `Join target: ${current.targetCount} Active link(s).\nUsage: ${session(ctx).prefix}targetgs <1-10000>.`;
+          return commandUsageCard({ title: "Target Groups", command: `${session(ctx).prefix}targetgs`, commandSyntax: `${session(ctx).prefix}targetgs <1-10000>`, note: `Current target: ${current.targetCount} Active link(s).` });
         if (!/^\d+$/.test(raw))
-          return `Usage: ${session(ctx).prefix}targetgs <1-10000>.`;
+          return commandUsageCard({ title: "Target Groups", command: `${session(ctx).prefix}targetgs`, commandSyntax: `${session(ctx).prefix}targetgs <1-10000>`, note: "Choose the maximum number of Active links for Join Manager." });
         const targetCount = Number(raw);
         if (targetCount < 1 || targetCount > 10000)
           return "Join target must be between 1 and 10000 links.";
@@ -403,7 +817,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
         }
         const canonical = canonicalizeHttpUrl(raw);
         if (!canonical.toLowerCase().startsWith("https://chat.whatsapp.com/") || !/[A-Za-z0-9_-]+$/.test(canonical))
-          return `Usage: ${current.prefix}iggc <WhatsApp group invite link>, ${current.prefix}iggc list, or ${current.prefix}iggc clear.`;
+          return commandUsageCard({ title: "Ignore Group", command: `${current.prefix}iggc`, commandSyntax: `${current.prefix}iggc <invite-link> | list | clear`, note: "Add, list, or clear ignored WhatsApp group invite links." });
         const ignored = [...new Set([...(current.ignoredGroupLinks ?? []), canonical])];
         updateSession(ctx.workspaceId, ctx.sessionId, { ignoredGroupLinks: ignored });
         return `Group ignored for this session's broadcasts:\n${canonical}`;
@@ -457,7 +871,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
             }
             return "Reply to an image with .pfp set, .setpfp, or .pfp change. A real uploaded image is required; URLs are not accepted.";
           }
-          return "Usage: .pfp get | reply to an image with .pfp set or .setpfp | .pfp remove";
+          return commandUsageCard({ title: "Profile Picture", command: ".pfp", commandSyntax: ".pfp get | .pfp set | .pfp remove", howToUse: ["Reply to an image with .pfp set or .setpfp.", "Use .pfp get to retrieve the current picture.", "Use .pfp remove to clear it."], note: "The set operation requires a real replied image." });
         } catch (error) {
           return error instanceof Error ? error.message : String(error);
         }
@@ -493,7 +907,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
       aliases: ["name"],
       description: "Read or update the WhatsApp display name.",
       run: async (ctx) => {
-        if (!ctx.args.length) return "Usage: .setname <new display name>.";
+        if (!ctx.args.length) return commandUsageCard({ title: "Set Name", command: ".setname", commandSyntax: ".setname <new-display-name>", note: "Provide the new WhatsApp display name." });
         try {
           await updateProfileName(
             ctx.workspaceId,
@@ -511,7 +925,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
       aliases: ["bio"],
       description: "Read or update the WhatsApp bio.",
       run: async (ctx) => {
-        if (!ctx.args.length) return "Usage: .setbio <new bio>.";
+        if (!ctx.args.length) return commandUsageCard({ title: "Set Bio", command: ".setbio", commandSyntax: ".setbio <new-bio>", note: "Provide the new WhatsApp profile biography." });
         try {
           await updateProfileBio(
             ctx.workspaceId,
@@ -531,7 +945,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
       run: async (ctx) => {
         const raw = ctx.args.join(" ").trim();
         if (!raw)
-          return "Usage: .creategroup <name> [| description] [| participant numbers]";
+          return commandUsageCard({ title: "Create Group", command: ".creategroup", commandSyntax: ".creategroup <name> [| description] [| participant numbers]", note: "Participant entries must be verified international phone numbers." });
         const parts = raw.split("|").map((part) => part.trim());
         const subject = parts[0] ?? "";
         const description = parts[1] ?? "";
@@ -540,7 +954,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           .map((value) => value.trim())
           .filter(Boolean);
         if (!subject)
-          return "Usage: .creategroup <name> [| description] [| participant numbers]";
+          return commandUsageCard({ title: "Create Group", command: ".creategroup", commandSyntax: ".creategroup <name> [| description] [| participant numbers]", note: "Participant entries must be verified international phone numbers." });
         try {
           const jid = await createWhatsAppGroup(
             ctx.workspaceId,
@@ -601,7 +1015,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
       run: async (ctx) => {
         const raw = mediaCommandPayload(ctx);
         if (!/^\d+$/.test(raw))
-          return `Broadcast delay is ${Math.round(getWorkspaceDefaults(ctx.workspaceId).defaultBroadcastDelayMs / 1000)}s. Usage: .broadcastdelay <1-60>.`;
+          return commandUsageCard({ title: "Broadcast Delay", command: ".broadcastdelay", commandSyntax: ".broadcastdelay <1-60>", note: `Current delay is ${Math.round(getWorkspaceDefaults(ctx.workspaceId).defaultBroadcastDelayMs / 1000)}s.` });
         const seconds = Number(raw);
         if (seconds < 1 || seconds > 60)
           return "Broadcast delay must be between 1 and 60 seconds.";
@@ -623,7 +1037,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           ctx.invokedName === "allstatusx",
         );
         if (!text && !ctx.media)
-          return "Usage: .allstatus [repeat] <text or media>.";
+          return commandUsageCard({ title: "All Status", command: ".allstatus", commandSyntax: ".allstatus [repeat] <text or media>", note: "Broadcasts to resolved groups through one bounded durable job." });
         const queued = await ctx.enqueueJob({
           kind: "allstatus",
           payload: { text, count: repeat },
@@ -640,7 +1054,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
         if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
         const { repeat, text } = repeatAndPayload(ctx, false);
         if (!text && !ctx.media)
-          return "Usage: .dallstatus <text or media>.";
+          return commandUsageCard({ title: "Designed All Status", command: ".dallstatus", commandSyntax: ".dallstatus <text or media>", note: "Posts designed status content to resolved groups." });
         const queued = await ctx.enqueueJob({
           kind: "allstatus",
           payload: { text, count: repeat, styled: true },
@@ -657,12 +1071,195 @@ export function createCommandRegistry(): RegisteredCommand[] {
         if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
         const { repeat, text } = repeatAndPayload(ctx, true);
         if (!text && !ctx.media)
-          return "Usage: .allstatusx [repeat] <text or media>.";
+          return commandUsageCard({ title: "All Status X", command: ".allstatusx", commandSyntax: ".allstatusx [repeat] <text or media>", note: "Runs the configured repeated group-status broadcast." });
         const queued = await ctx.enqueueJob({
           kind: "allstatus",
           payload: { text, count: repeat },
         });
         return queuedJobAcknowledgement("allstatus", queued);
+      },
+    },
+    {
+      name: "pendingjoin",
+      aliases: ["joinrequests", "pendingrequests"],
+      description: "List pending WhatsApp group join requests.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const { requests } = await pendingApprovalRequests(ctx);
+        if (!requests.length) return "No pending WhatsApp join requests in this group.";
+        const lines = requests.slice(0, 50).map((request, index) =>
+          `${index + 1}. ${maskedPhoneLabel(firstVerifiedPhone(request.phoneNumber, request.jid))}`,
+        );
+        const table: GroupControlTable = {
+          title: "Pending WhatsApp Join Requests",
+          headers: ["#", "Identity", "Country"],
+          rows: requests.slice(0, 100).map((request, index) => {
+            const phone = firstVerifiedPhone(request.phoneNumber, request.jid);
+            const country = phone ? `+${approvalCountry({ ...request, phoneNumber: phone }).slice(0, 4)}` : "unknown";
+            return [String(index + 1), maskedPhoneLabel(phone), country];
+          }),
+          buttons: [],
+          footer: `${requests.length} pending request(s). Only verified phone identities are shown; unresolved identities are excluded from country matching.`,
+        };
+        return {
+          text: `✦ PAPPY OMEGA MINI · PENDING JOIN REQUESTS\n─────────────────────\nPending · ${requests.length}\n\n${lines.join("\n")}${requests.length > 50 ? "\n…and more." : ""}`,
+          nativeTable: table,
+        };
+      },
+    },
+    {
+      name: "approve",
+      aliases: [],
+      description: "Show the safe bulk-approval command; never queues an operation.",
+      ownerOnly: true,
+      run: async () => commandUsageCard({ title: "Approval Commands", command: ".approveall", commandSyntax: ".approveall | .approveamt <amount> | .approvecountry <country> <amount|all>", note: "Every bulk approval requires a native Confirm step." }),
+    },
+    {
+      name: "reject",
+      aliases: [],
+      description: "Show the safe bulk-rejection command; never queues an operation.",
+      ownerOnly: true,
+      run: async () => commandUsageCard({ title: "Rejection Commands", command: ".rejectall", commandSyntax: ".rejectall | .rejectamt <amount> | .rejectcountry <country> <amount|all>", note: "Every bulk rejection requires a native Confirm step." }),
+    },
+    {
+      name: "approveall",
+      aliases: [],
+      description: "Approve all pending WhatsApp group join requests.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const { requests } = await pendingApprovalRequests(ctx);
+        if (!requests.length) return "There are no pending WhatsApp join requests to approve.";
+        return approvalConfirmationReply(ctx, "approve", requests, "all pending requests");
+      },
+    },
+    {
+      name: "rejectall",
+      aliases: [],
+      description: "Reject all pending WhatsApp group join requests.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const { requests } = await pendingApprovalRequests(ctx);
+        if (!requests.length) return "There are no pending WhatsApp join requests to reject.";
+        return approvalConfirmationReply(ctx, "reject", requests, "all pending requests");
+      },
+    },
+    {
+      name: "approveamt",
+      aliases: ["approveamount"],
+      description: "Approve the first N pending join requests.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const amount = Number(ctx.args[0]);
+        if (!Number.isInteger(amount) || amount < 1) return commandUsageCard({ title: "Approve Amount", command: ".approveamt", commandSyntax: ".approveamt <positive-amount>", note: "A native Confirm step is required before approval." });
+        const { requests } = await pendingApprovalRequests(ctx);
+        const selected = requests.slice(0, Math.min(amount, MAX_GROUP_CONTROL_PARTICIPANTS));
+        if (!selected.length) return "There are no pending WhatsApp join requests to approve.";
+        return approvalConfirmationReply(ctx, "approve", selected, `first ${selected.length} pending requests`);
+      },
+    },
+    {
+      name: "rejectamt",
+      aliases: ["rejectamount"],
+      description: "Reject the first N pending join requests.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const amount = Number(ctx.args[0]);
+        if (!Number.isInteger(amount) || amount < 1) return commandUsageCard({ title: "Reject Amount", command: ".rejectamt", commandSyntax: ".rejectamt <positive-amount>", note: "A native Confirm step is required before rejection." });
+        const { requests } = await pendingApprovalRequests(ctx);
+        const selected = requests.slice(0, Math.min(amount, MAX_GROUP_CONTROL_PARTICIPANTS));
+        if (!selected.length) return "There are no pending WhatsApp join requests to reject.";
+        return approvalConfirmationReply(ctx, "reject", selected, `first ${selected.length} pending requests`);
+      },
+    },
+    {
+      name: "approvecountry",
+      aliases: ["approvebycountry"],
+      description: "Approve pending requests by phone country code.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const country = (ctx.args[0] ?? "").replace(/\D/g, "");
+        if (!country) return commandUsageCard({ title: "Approve Country", command: ".approvecountry", commandSyntax: ".approvecountry <country-code> <amount|all>", note: "A native Confirm step is required before approval." });
+        const amountToken = (ctx.args[1] ?? "").toLowerCase();
+        const amount = amountToken === "all" ? MAX_GROUP_CONTROL_PARTICIPANTS : Number(amountToken);
+        if (!Number.isInteger(amount) || amount < 1) return commandUsageCard({ title: "Approve Country", command: ".approvecountry", commandSyntax: ".approvecountry <country-code> <amount|all>", note: "Use a positive amount or all. A native Confirm step is required." });
+        const { requests } = await pendingApprovalRequests(ctx);
+        const selected = requests.filter((request) => approvalCountry(request).startsWith(country)).slice(0, amount);
+        if (!selected.length) return "No pending requests with that country code were found; unresolved LID-only requests are not guessed.";
+        return approvalConfirmationReply(ctx, "approve", selected, `country +${country} · up to ${amountToken}`);
+      },
+    },
+    {
+      name: "rejectcountry",
+      aliases: ["rejectbycountry"],
+      description: "Reject pending requests by phone country code.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const country = (ctx.args[0] ?? "").replace(/\D/g, "");
+        if (!country) return commandUsageCard({ title: "Reject Country", command: ".rejectcountry", commandSyntax: ".rejectcountry <country-code> [amount|all]", note: "A native Confirm step is required before rejection." });
+        const amountToken = (ctx.args[1] ?? "all").toLowerCase();
+        const amount = amountToken === "all" ? MAX_GROUP_CONTROL_PARTICIPANTS : Number(amountToken);
+        if (!Number.isInteger(amount) || amount < 1) return commandUsageCard({ title: "Reject Country", command: ".rejectcountry", commandSyntax: ".rejectcountry <country-code> [amount|all]", note: "Use a positive amount or all. A native Confirm step is required." });
+        const { requests } = await pendingApprovalRequests(ctx);
+        const selected = requests.filter((request) => approvalCountry(request).startsWith(country)).slice(0, amount);
+        if (!selected.length) return "No pending requests with that country code were found; unresolved LID-only requests are not guessed.";
+        return approvalConfirmationReply(ctx, "reject", selected, `country +${country} · up to ${amountToken}`);
+      },
+    },
+    {
+      name: "reqamt",
+      aliases: ["joincount"],
+      description: "Count pending join requests by phone country code.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const country = (ctx.args[0] ?? "").replace(/\D/g, "");
+        if (!country) return commandUsageCard({ title: "Request Count", command: ".reqamt", commandSyntax: ".reqamt <country-code>", examples: [".reqamt 234"], note: "Shows pending join requests for the selected country." });
+        const { requests } = await pendingApprovalRequests(ctx);
+        const count = requests.filter((request) => approvalCountry(request).startsWith(country)).length;
+        return `Pending requests for country ${country}: ${count}. LID-only requests are excluded.`;
+      },
+    },
+    {
+      name: "kickall",
+      aliases: ["kickbatch", "removeall"],
+      description: "Queue one protected batch to remove all eligible non-admin members.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const { groupJid, targets } = await eligibleMemberTargets(ctx);
+        if (!targets.length) return "No eligible non-admin members matched this action.";
+        return memberConfirmationReply(ctx, groupJid, "remove", targets, "all eligible non-admin members");
+      },
+    },
+    {
+      name: "kickamt",
+      aliases: ["removeamt"],
+      description: "Queue one protected batch to remove the first N eligible members.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const amount = Number(ctx.args[0]);
+        if (!Number.isInteger(amount) || amount < 1) return commandUsageCard({ title: "Kick Amount", command: ".kickamt", commandSyntax: ".kickamt <positive-amount> confirm", note: "This bulk removal requires native Confirm and a fresh admin check." });
+        const { groupJid, targets } = await eligibleMemberTargets(ctx);
+        const selected = targets.slice(0, Math.min(amount, MAX_GROUP_CONTROL_PARTICIPANTS));
+        if (!selected.length) return "No eligible non-admin members matched this action.";
+        return memberConfirmationReply(ctx, groupJid, "remove", selected, `first ${selected.length} eligible non-admin members`);
+      },
+    },
+    {
+      name: "kickcountry",
+      aliases: ["removecountry"],
+      description: "Queue one protected batch to remove eligible members by phone country code.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const country = (ctx.args[0] ?? "").replace(/\D/g, "");
+        const amountToken = (ctx.args[1] ?? "").toLowerCase();
+        const amount = amountToken === "all" ? MAX_GROUP_CONTROL_PARTICIPANTS : Number(amountToken);
+        if (!country || !Number.isInteger(amount) || amount < 1)
+          return commandUsageCard({ title: "Kick Country", command: ".kickcountry", commandSyntax: ".kickcountry <country-code> <amount|all> confirm", note: "This bounded bulk removal excludes protected administrators and requires native Confirm." });
+        const { groupJid, targets } = await eligibleMemberTargets(ctx);
+        const selected = targets
+          .filter((participant) => (participant.phoneNumber ?? "").replace(/\D/g, "").startsWith(country))
+          .slice(0, Math.min(amount, MAX_GROUP_CONTROL_PARTICIPANTS));
+        if (!selected.length) return "No eligible phone-number members matched that country code.";
+        return memberConfirmationReply(ctx, groupJid, "remove", selected, `country +${country} · up to ${amountToken}`);
       },
     },
     {
@@ -675,7 +1272,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           return "WhatsApp transport is unavailable.";
         const text = mediaCommandPayload(ctx);
         if (!text && !ctx.media)
-          return "Usage: .pstatus <text or media> (or reply to a message).";
+          return commandUsageCard({ title: "Personal Status", command: ".pstatus", commandSyntax: ".pstatus <text or media>", howToUse: ["Send text or attach media.", "You may reply to a message to use its payload."], note: "Personal status is separate from group status." });
         await ctx.sendCurrentPersonalStatus({ text });
         return "Personal status posted successfully.";
       },
@@ -692,7 +1289,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           return "WhatsApp transport is unavailable.";
         const { repeat, text } = repeatAndPayload(ctx, false);
         if (!text && !ctx.media)
-          return "Usage: .dgstatus <text or media> (or reply to a message).";
+          return commandUsageCard({ title: "Designed Group Status", command: ".dgstatus", commandSyntax: ".dgstatus <text or media>", howToUse: ["Send text or attach media.", "You may reply to a message to use its payload."], note: "Designed group status applies a per-group visual treatment." });
         await ctx.sendCurrentColorGroupStatus({ text, repeat });
         return "";
       },
@@ -714,8 +1311,8 @@ export function createCommandRegistry(): RegisteredCommand[] {
         );
         if (!text && !ctx.media)
           return repeat > 1
-            ? "Usage: .gstatusx <count> <text or media> (or reply to a message)."
-            : "Usage: .gstatus <text or media> (or reply to a message).";
+            ? commandUsageCard({ title: "Group Status X", command: ".gstatusx", commandSyntax: ".gstatusx <count> <text or media>", note: "Send text/media or reply to a message." })
+            : commandUsageCard({ title: "Group Status", command: ".gstatus", commandSyntax: ".gstatus <text or media>", note: "Send text/media or reply to a message." });
         await ctx.sendCurrentGroupStatus({ text, repeat });
         return "";
       },
@@ -732,7 +1329,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           return "WhatsApp transport is unavailable.";
         const { repeat, text } = repeatAndPayload(ctx, true);
         if (!text && !ctx.media)
-          return "Usage: .gstatusx <count> <text or media> (or reply to a message).";
+          return commandUsageCard({ title: "Group Status X", command: ".gstatusx", commandSyntax: ".gstatusx <count> <text or media>", note: "Send text/media or reply to a message." });
         await ctx.sendCurrentGroupStatus({ text, repeat });
         return "";
       },
@@ -759,7 +1356,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           ctx.invokedName === "allchatx",
         );
         if (!text && !ctx.media)
-          return "Usage: .allchat [repeat] <text or media>.";
+          return commandUsageCard({ title: "All Chat", command: ".allchat", commandSyntax: ".allchat [repeat] <text or media>", note: "Broadcasts the payload through one bounded durable job." });
         const queued = await ctx.enqueueJob({
           kind: "allchat",
           payload: { text, count: repeat },
@@ -776,7 +1373,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
         if (!ctx.enqueueJob) return "Queue runtime is unavailable.";
         const { repeat, text } = repeatAndPayload(ctx, true);
         if (!text && !ctx.media)
-          return "Usage: .allchatx [repeat] <text or media>.";
+          return commandUsageCard({ title: "All Chat X", command: ".allchatx", commandSyntax: ".allchatx [repeat] <text or media>", note: "Runs the configured repeated group-chat broadcast." });
         const queued = await ctx.enqueueJob({
           kind: "allchat",
           payload: { text, count: repeat },
@@ -812,7 +1409,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           ? mediaCommandPayload({ ...ctx, args: [], rawPayload: "" })
           : mediaCommandPayload(ctx);
         if (!text && !ctx.media && numericCount === undefined)
-          return "Usage: .tag <payload or media> or .tag <member-count>.";
+          return commandUsageCard({ title: "Tag Command", command: ".tag", commandSyntax: ".tag <payload or media> | .tag <member-count>", note: "Use a payload/media or a bounded member count." });
         await ctx.sendCurrentGroupHidetag({
           text,
           ...(numericCount !== undefined
@@ -833,7 +1430,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
         if (!ctx.sendCurrentGroupHidetag)
           return "WhatsApp transport is unavailable.";
         const text = mediaCommandPayload(ctx);
-        if (!text && !ctx.media) return "Usage: .stag <payload or media>.";
+        if (!text && !ctx.media) return commandUsageCard({ title: "Staged Tag", command: ".stag", commandSyntax: ".stag <payload or media>", note: "Provide text/media or reply to a payload." });
         await ctx.sendCurrentGroupHidetag({ text });
         return "";
       },
@@ -869,34 +1466,37 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const offset = global ? 1 : 0;
         const action = ctx.args[offset]?.toLowerCase();
         if (global && action === "list") {
-          const identities = getWorkspaceSudo(ctx.workspaceId);
-          return identities.length
-            ? `Global sudo identities:\n${identities.join("\n")}`
-            : "No global sudo identities configured.";
+                      const identities = getWorkspaceSudo(ctx.workspaceId)
+              .map((identity) => firstVerifiedPhone(identity))
+              .filter((identity): identity is string => Boolean(identity));
+            return identities.length
+              ? `Global sudo phone identities:\n${identities.map((identity) => `+${identity}`).join("\n")}`
+              : "No verified global sudo phone identities configured.";
+
         }
-        if (!global && action === "list")
-          return session(ctx).sudoList.length
-            ? `Session sudo identities:\n${session(ctx).sudoList.join("\n")}`
-            : "No session sudo identities configured.";
-        const suppliedIdentity =
-          ctx.mentionedJids?.[0] ?? ctx.quotedSenderJid ?? ctx.args[offset + 1];
-        const identityValue = suppliedIdentity
-          ?.replace(/[^0-9A-Za-z:_.@-]/g, "")
-          .trim();
-        const identity = identityValue && /^\d+$/.test(identityValue)
-          ? `${identityValue}@s.whatsapp.net`
-          : identityValue;
+        if (!global && action === "list") {
+          const identities = session(ctx).sudoList
+            .map((identity) => firstVerifiedPhone(identity))
+            .filter((identity): identity is string => Boolean(identity));
+          return identities.length
+            ? `Session sudo phone identities:\n${identities.map((identity) => `+${identity}`).join("\n")}`
+            : "No verified session sudo phone identities configured.";
+        }
+        const identityDigits = verifiedTargetPhone(
+          global ? ctx.args.slice(offset + 1) : ctx.args.slice(offset + 1),
+          ctx.mentionedJids,
+          ctx.quotedSenderJid,
+        );
+        const identity = phoneJidFromIdentity(identityDigits);
         if (!identity || !["add", "remove"].includes(action ?? ""))
-          return "Usage: reply to a WhatsApp user or mention them with .setsudo add|remove, or use .setsudo global add|remove <phone number>.";
-        if (identity.endsWith("@lid") || identity.endsWith("@hosted.lid"))
-          return "That WhatsApp identity is still a LID and could not be mapped to a phone JID. Reply to the user again after the session refreshes its identity map.";
+          return commandUsageCard({ title: "Sudo Command", command: ".setsudo", commandSyntax: ".setsudo add|remove <target> | global add|remove <phone>", acceptedTargets: ["Tag / Mention · Real WhatsApp mention", "Reply · Reply to a verified phone identity", "Phone · Explicit international number for global scope"], note: "LID-only identities are not accepted." });
         if (global) {
           const next = updateWorkspaceSudo(
             ctx.workspaceId,
             action as "add" | "remove",
             identity,
           );
-          return `Global sudo ${action} complete for ${identity}.\nInherited by ${next.length} configured identity${next.length === 1 ? "" : "ies"}.`;
+          return `Global sudo ${action} complete for +${identityDigits}.\nInherited by ${next.length} configured phone identity${next.length === 1 ? "" : "ies"}.`;
         }
         const current = session(ctx).sudoList;
         const next =
@@ -904,18 +1504,54 @@ export function createCommandRegistry(): RegisteredCommand[] {
             ? [...new Set([...current, identity])]
             : current.filter((item) => item !== identity);
         updateSession(ctx.workspaceId, ctx.sessionId, { sudoList: next });
-        return `Session sudo ${action} complete for ${identity}.`;
+        return `Session sudo ${action} complete for +${identityDigits}.`;
       },
     },
   ];
+}
+
+export async function handleGroupControlInteraction(
+  interactionId: string,
+  ctx: CommandContext,
+): Promise<string | WhatsAppCommandReply | undefined> {
+  const match = /^group-control:(confirm|cancel):([a-z0-9]+)$/iu.exec(interactionId.trim());
+  if (!match || !ctx.chatJid?.endsWith("@g.us")) return undefined;
+  const action = match[1]?.toLowerCase();
+  const token = match[2] ?? "";
+  const senderJid = ctx.senderJid ?? "";
+  if (!senderJid) return "This confirmation could not verify the requesting identity.";
+  const pending = consumeGroupControlConfirmation(ctx.workspaceId, ctx.sessionId, ctx.chatJid, senderJid, token);
+  if (!pending) return "This confirmation expired, was cancelled, or belongs to another WhatsApp identity.";
+  if (action === "cancel") return "✅ Group operation cancelled. No batch job was queued.";
+  if (pending.operation === "moderation") {
+    return applyModerationConfirmation(ctx, pending.moderationAction ?? "unmute", pending.participants[0]);
+  }
+  if (pending.operation === "participant") {
+    const freshGroup = await getGroupModerationSnapshot(ctx.workspaceId, ctx.sessionId, pending.groupJid, { fresh: true });
+    if (!freshGroup.isAdmin) return "This WhatsApp identity is no longer an administrator in this group; the action was not queued.";
+    const currentPhones = new Set(freshGroup.participants.map((participant) => firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id)).filter((phone): phone is string => Boolean(phone)));
+    const stillMembers = pending.participants.filter((participant) => {
+      const phone = firstVerifiedPhone(participant);
+      return Boolean(phone && currentPhones.has(phone));
+    });
+    if (!stillMembers.length) return "No confirmed verified-phone target remains in this group; the action was not queued.";
+    return queueMemberOperation(ctx, pending.groupJid, pending.participantAction ?? "remove", stillMembers);
+  }
+  const fresh = await pendingApprovalRequests(ctx);
+  const current = new Set(fresh.requests.map((request) => request.jid));
+  const participants = pending.participants.filter((participant) => current.has(participant));
+  if (!participants.length) return `No selected pending requests remain; the ${pending.operation} action was not queued.`;
+  return queueApprovalOperation(ctx, pending.operation, participants);
 }
 
 export async function executeCommand(
   registry: RegisteredCommand[],
   raw: string,
   ctx: CommandContext,
-): Promise<string> {
+): Promise<string | WhatsAppCommandReply> {
   const normalizedRaw = raw.trim();
+  if (/^group-control:(?:confirm|cancel):[a-z0-9]+$/iu.test(normalizedRaw))
+    return (await handleGroupControlInteraction(normalizedRaw, ctx)) ?? "This interaction is no longer available.";
   const commandMatch = /^(\S+)(?:\s+|$)/.exec(normalizedRaw);
   const name = commandMatch?.[1] ?? "";
   const payloadStart = commandMatch?.[0]?.length ?? normalizedRaw.length;

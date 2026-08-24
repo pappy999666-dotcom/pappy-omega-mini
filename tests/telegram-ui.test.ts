@@ -18,8 +18,17 @@ import {
   autoPromoteText,
   joinManagerKeyboard,
   menuMediaPickerKeyboard,
+  helpKeyboard,
+  helpSectionKeyboard,
+  helpSectionText,
   pageText,
+  antiConfigCardText,
+  pairingHelpCardText,
+  sessionPairingCardText,
+  sessionStatusCardText,
+  memberBatchJobCardText,
   sessionKeyboard,
+  sessionGroupKeyboard,
   validatorLiveKeyboard,
   validatorLiveText,
 } from "../src/telegram/ui.js";
@@ -71,6 +80,54 @@ describe("Telegram UI authorization", () => {
     expect(pageText("Status", "Ready")).toContain(
       "<blockquote>Ready</blockquote>",
     );
+  });
+
+  it("renders the requested CONFIG, HELP, SESSION, and MEMBER BATCH card templates", () => {
+    const anti = antiConfigCardText({
+      name: "AntiLink",
+      enabled: false,
+      action: "off",
+      note: "Available only for this group.",
+      usage: [
+        ".antilink delete  (Removes link messages)",
+        ".antilink warn 3  (Gives 3 warnings)",
+        ".antilink kick    (Removes the sender)",
+        ".antilink off     (Disables protection)",
+      ],
+    });
+    expect(anti).toContain("ANTILINK CONFIG");
+    expect(anti).toContain("Disabled [ off ]");
+    expect(anti).toContain("How to use:");
+    expect(anti).toContain(".antilink warn 3");
+    expect(pairingHelpCardText()).toContain("PAIRING HELP");
+    expect(pairingHelpCardText()).toContain(".pair &lt;label&gt; &lt;number&gt;");
+    const pairing = sessionPairingCardText({ ...session, sessionName: "pappy" }, "2348012345678", "PAPPYBOT");
+    expect(pairing).toContain("SESSION PAIRING");
+    expect(pairing).toContain("PAPPYBOT");
+    expect(sessionStatusCardText({ ...session, sessionName: "Pappy", connectedAt: 1692834236000 })).toContain("SESSION STATUS");
+    const job = memberBatchJobCardText({ action: "promote", selected: 1, jobId: "64164CFD" });
+    expect(job).toContain("MEMBER BATCH JOB");
+    expect(job).toContain("Job ID");
+  });
+
+  it("renders the complete PAPPY-native categorized help hub", () => {
+    const main = JSON.stringify(helpKeyboard());
+    expect(main).toContain("help:section:session");
+    expect(main).toContain("help:section:groups");
+    expect(main).toContain("help:section:broadcast");
+    expect(helpSectionText("broadcast")).toContain(".allstatus");
+    expect(JSON.stringify(helpSectionKeyboard("broadcast"))).toContain("help:main");
+  });
+
+  it("renders the complete PAPPY-native group detail submenu", () => {
+    const group = JSON.stringify(sessionGroupKeyboard("session-1", 3));
+    expect(group).toContain("session:session-1:group:name:3");
+    expect(group).toContain("session:session-1:group:description:3");
+    expect(group).toContain("session:session-1:group:picture:3");
+    expect(group).toContain("session:session-1:group:picture:get:3");
+    expect(group).toContain("session:session-1:group:moderation:3");
+    expect(group).toContain("session:session-1:group:invite:3");
+    expect(group).toContain("session:session-1:group:leave:3");
   });
 
   it("renders real Force Join user and owner controls", () => {

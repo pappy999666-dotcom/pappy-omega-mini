@@ -9,8 +9,13 @@ export function isHealthyWhatsAppSession(
   now = Date.now(),
 ): boolean {
   if (session.status !== "ACTIVE") return false;
-  if (session.authHealth === "INVALID") return false;
-  if ((session.validatorRetiredUntil ?? 0) > now) return false;
+  if (session.authHealth !== "VALID") return false;
+  const legacyRateRetirement =
+    (session.validatorRetireReason?.toLowerCase().includes("rate-limited") ??
+      false) &&
+    (session.validatorConsecutiveRateLimitCount ?? 0) < 3;
+  if ((session.validatorRetiredUntil ?? 0) > now && !legacyRateRetirement)
+    return false;
   const lastHealthy = session.lastHealthyAt ?? session.connectedAt;
   return !lastHealthy || now - lastHealthy <= HEALTH_WINDOW_MS;
 }

@@ -1,5 +1,6 @@
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
+import { attachRedisErrorHandler } from "../core/redis-events.js";
 import {
   LinkBucketStore,
   type LinkBucket,
@@ -12,11 +13,14 @@ export interface ValidatorSnapshot {
   capturedAt: number;
 }
 
-const redis = new Redis(env.REDIS_URL, {
-  maxRetriesPerRequest: 1,
-  connectTimeout: 1200,
-  lazyConnect: false,
-});
+const redis = attachRedisErrorHandler(
+  new Redis(env.REDIS_URL, {
+    maxRetriesPerRequest: 1,
+    connectTimeout: 1200,
+    lazyConnect: false,
+  }),
+  "validator-snapshot",
+);
 const store = new LinkBucketStore(redis);
 
 export async function getValidatorSnapshot(

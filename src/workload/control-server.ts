@@ -6,6 +6,7 @@ import { env } from "../config/env.js";
 import {
   authenticateWorkloadWorker,
   getAuthorizedWorkloadAssignment,
+  isWorkloadWorkerAuthorizedForWorkspace,
   completeWorkloadCommand,
   disconnectWorkloadWorker,
   markUnreachableWorkloadWorkers,
@@ -13,6 +14,8 @@ import {
   recordWorkloadHeartbeat,
   recordWorkloadSessionStatus,
   registerWorkloadWorker,
+  queueWorkloadCommand,
+  waitForWorkloadCommand,
   workloadControlSummary,
 } from "./service.js";
 import { handleWorkloadInboundEvent } from "./events.js";
@@ -21,7 +24,15 @@ import type { WorkloadInboundEvent, WorkloadRegistrationRequest } from "./types.
 import { getBroadcastProgress, isBroadcastCancellationRequested, saveBroadcastProgress } from "./broadcast-progress.js";
 import { readJobMedia } from "../whatsapp/job-media-store.js";
 import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
-import { prepareCanonicalPreviewContent } from "../whatsapp/baileys-native-preview.js";
+import { getRuntimeHealthSnapshot } from "../core/runtime-health.js";
+import { inboundAdmissionSnapshot } from "../whatsapp/inbound-admission.js";
+import { outboundAdmissionSnapshot } from "../whatsapp/outbound-admission.js";
+import { listGroups } from "../whatsapp/transport-adapter.js";
+import {
+  getPreviewDebugSnapshot,
+  prepareCanonicalPreviewContent,
+  type PreviewSocket,
+} from "../whatsapp/baileys-native-preview.js";
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_INBOUND_MEDIA_BYTES = 5 * 1024 * 1024;
@@ -69,6 +80,14 @@ function encode(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(encode);
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, encode(item)]));
   return value;
+}
+
+function previewThumbnailDigest(preview: Record<string, unknown> | undefined): string | undefined {
+  const value = preview?.jpegThumbnail;
+  if (Buffer.isBuffer(value)) return createHash("sha256").update(value).digest("hex");
+  if (value instanceof Uint8Array) return createHash("sha256").update(value).digest("hex");
+  if (typeof value === "string" && value) return createHash("sha256").update(Buffer.from(value, "base64")).digest("hex");
+  return undefined;
 }
 
 function stringField(input: Record<string, unknown>, key: string): string {
@@ -120,7 +139,13 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
   const path = new URL(request.url ?? "/", "http://localhost").pathname;
   try {
     if (method === "GET" && path === "/workload/health") {
-      json(response, 200, { ok: true, ...workloadControlSummary() });
+      json(response, 200, {
+        ok: true,
+        ...workloadControlSummary(),
+        runtime: getRuntimeHealthSnapshot(),
+        inbound: inboundAdmissionSnapshot(),
+        outbound: outboundAdmissionSnapshot(),
+      });
       return;
     }
     if (method !== "POST") {
@@ -142,6 +167,177 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       return;
     }
     const credential = bearer(request);
+    if (path === "/internal/panel-inventory-debug") {
+      const token = request.headers["x-pappy-preview-debug-token"];
+      const localAddress = request.socket.remoteAddress;
+      if (
+        env.NODE_ENV === "production" &&
+        (typeof token !== "string" || token !== env.ENCRYPTION_SECRET || !["127.0.0.1", "::1"].includes(localAddress ?? ""))
+      ) {
+        json(response, 403, { ok: false, error: "Local panel inventory diagnostic authorization required." });
+        return;
+      }
+      const input = await body(request);
+      const workspaceId = stringField(input, "workspaceId");
+      const sessionId = stringField(input, "sessionId");
+      const groups = await listGroups(workspaceId, sessionId);
+      const totalMembers = groups.reduce((sum, group) => sum + Math.max(0, group.participantCount), 0);
+      const zeroMemberGroups = groups.filter((group) => group.participantCount === 0).length;
+      json(response, 200, {
+        ok: true,
+        totalGroups: groups.length,
+        totalMembers,
+        zeroMemberGroups,
+        sample: groups.slice(0, 10),
+      });
+      return;
+    }
+    if (path === "/internal/pappy-group-selection-debug") {
+      const token = request.headers["x-pappy-preview-debug-token"];
+      const localAddress = request.socket.remoteAddress;
+      if (
+        env.NODE_ENV === "production" &&
+        (typeof token !== "string" || token !== env.ENCRYPTION_SECRET || !["127.0.0.1", "::1"].includes(localAddress ?? ""))
+      ) {
+        json(response, 403, { ok: false, error: "Local group selection diagnostic authorization required." });
+        return;
+      }
+      const input = await body(request);
+      const workspaceId = stringField(input, "workspaceId");
+      const sessionId = stringField(input, "sessionId");
+      const groupJid = stringField(input, "groupJid");
+      if (!groupJid.endsWith("@g.us") || groupJid.length > 160)
+        throw new Error("groupJid must be a WhatsApp group identifier.");
+      const startedAt = Date.now();
+      const command = await queueWorkloadCommand(
+        workspaceId,
+        sessionId,
+        "bridge.command",
+        { method: "groupMetadata", args: [groupJid] },
+        45_000,
+      );
+      const completed = await waitForWorkloadCommand(command.commandId, 50_000);
+      const result = completed.result && typeof completed.result === "object"
+        ? completed.result as Record<string, unknown>
+        : {};
+      const returnedId = typeof result.id === "string" ? result.id : typeof result.jid === "string" ? result.jid : "";
+      const participants = Array.isArray(result.participants) ? result.participants : [];
+      json(response, 200, {
+        ok: true,
+        elapsedMs: Date.now() - startedAt,
+        status: completed.status,
+        exactGroupMatch: returnedId === groupJid,
+        participantCount: participants.length,
+      });
+      return;
+    }
+    if (path === "/internal/preview-debug") {
+      const token = request.headers["x-pappy-preview-debug-token"];
+      const localAddress = request.socket.remoteAddress;
+      if (
+        env.NODE_ENV === "production" &&
+        (typeof token !== "string" || token !== env.ENCRYPTION_SECRET || !["127.0.0.1", "::1"].includes(localAddress ?? ""))
+      ) {
+        json(response, 403, { ok: false, error: "Local preview diagnostic authorization required." });
+        return;
+      }
+      const input = await body(request);
+      const workspaceId = stringField(input, "workspaceId");
+      const sessionId = stringField(input, "sessionId");
+      const urls = input.urls;
+      if (!Array.isArray(urls) || urls.length !== 2 || urls.some((value) => typeof value !== "string" || !value.trim()))
+        throw new Error("urls must contain exactly two URLs.");
+      const socket = getWhatsAppSocket(workspaceId, sessionId);
+      const livePreviewSocket = socket as unknown as PreviewSocket;
+      const liveGroupGetInviteInfo = livePreviewSocket.groupGetInviteInfo?.bind(socket);
+      if (!liveGroupGetInviteInfo) throw new Error("Active socket does not expose group invite lookup.");
+      const observed: Array<Record<string, unknown>> = [];
+      const previewSocket: PreviewSocket = {
+        groupGetInviteInfo: async (code: string): Promise<Record<string, unknown>> => {
+          const attempt: Record<string, unknown> = { code };
+          try {
+            const result = await liveGroupGetInviteInfo(code);
+            const record = result as unknown as Record<string, unknown>;
+            observed.push({
+              ...attempt,
+              ok: true,
+              id: typeof record.id === "string" ? record.id : undefined,
+              subject: typeof record.subject === "string" ? record.subject : undefined,
+              size: typeof record.size === "number" ? record.size : undefined,
+            });
+            return record;
+          } catch (error) {
+            observed.push({
+              ...attempt,
+              ok: false,
+              error: error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240),
+            });
+            throw error;
+          }
+        },
+        ...(livePreviewSocket.profilePictureUrl ? { profilePictureUrl: livePreviewSocket.profilePictureUrl.bind(socket) } : {}),
+      };
+      const directInviteInfo: Array<Record<string, unknown>> = [];
+      for (const rawUrl of urls as string[]) {
+        const code = new URL(rawUrl).pathname.split("/").filter(Boolean)[0];
+        if (!code) {
+          directInviteInfo.push({ inputUrl: rawUrl, error: "No invite code in URL." });
+          continue;
+        }
+        try {
+          const info = await previewSocket.groupGetInviteInfo!(code);
+          directInviteInfo.push({
+            inputUrl: rawUrl,
+            code,
+            ok: true,
+            id: info.id,
+            subject: info.subject,
+            size: info.size,
+          });
+        } catch (error) {
+          directInviteInfo.push({
+            inputUrl: rawUrl,
+            code,
+            ok: false,
+            error: error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240),
+          });
+        }
+      }
+      const run = async (url: string, label: string) => {
+        const scope = `${workspaceId}:${sessionId}:preview-debug:${label}:${Date.now()}:${Math.random()}`;
+        const prepared = await prepareCanonicalPreviewContent({
+          text: url,
+          content: { text: url },
+          socket: previewSocket,
+          cacheScope: scope,
+        });
+        const preview = prepared.linkPreview && typeof prepared.linkPreview === "object"
+          ? prepared.linkPreview as Record<string, unknown>
+          : undefined;
+        const debug = getPreviewDebugSnapshot(scope);
+        return {
+          inputUrl: url,
+          matchedText: typeof preview?.["matched-text"] === "string" ? preview["matched-text"] : undefined,
+          canonicalUrl: typeof preview?.["canonical-url"] === "string" ? preview["canonical-url"] : undefined,
+          title: typeof preview?.title === "string" ? preview.title : undefined,
+          description: typeof preview?.description === "string" ? preview.description : undefined,
+          thumbnailSha256: previewThumbnailDigest(preview),
+          cache: debug?.cache,
+          result: debug?.result,
+          reason: debug?.reason,
+        };
+      };
+      const sequential = [
+        await run(String(urls[0]), "sequential-1"),
+        await run(String(urls[1]), "sequential-2"),
+      ];
+      const concurrent = await Promise.all([
+        run(String(urls[0]), "concurrent-1"),
+        run(String(urls[1]), "concurrent-2"),
+      ]);
+      json(response, 200, { ok: true, directInviteInfo, observedInviteInfo: observed, sequential, concurrent });
+      return;
+    }
     if (!credential) {
       json(response, 401, { ok: false, error: "Bearer workload credential required." });
       return;
@@ -188,7 +384,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       const sessionId = stringField(input, "sessionId");
       const assignment = await getAuthorizedWorkloadAssignment(worker.workerId, sessionId);
       if (assignment.workspaceId !== workspaceId) throw new Error("Progress workspace mismatch.");
-      const state = enumField(input, "state", ["QUEUED", "RUNNING", "PAUSED", "COMPLETED", "PARTIAL", "FAILED", "CANCELLED"] as const);
+      const state = enumField(input, "state", ["QUEUED", "RUNNING", "WAITING_FOR_SESSION", "PAUSED", "COMPLETED", "PARTIAL", "FAILED", "CANCELLED"] as const);
       const numeric = (name: string): number => {
         const value = input[name];
         if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error(`${name} must be a non-negative number.`);
@@ -204,6 +400,8 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         failed: numeric("failed"),
         skipped: numeric("skipped"),
         ...(typeof input.currentGroup === "string" ? { currentGroup: input.currentGroup.slice(0, 120) } : {}),
+        ...(typeof input.currentAction === "string" ? { currentAction: input.currentAction.slice(0, 240) } : {}),
+        ...(typeof input.lastResult === "string" ? { lastResult: input.lastResult.slice(0, 500) } : {}),
         ...(typeof input.nextActionAt === "number" ? { nextActionAt: input.nextActionAt } : {}),
         ...(typeof input.error === "string" ? { error: input.error.slice(0, 500) } : {}),
         updatedAt: Date.now(),
@@ -228,7 +426,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       const reference = input.mediaRef;
       if (!reference || typeof reference !== "object" || Array.isArray(reference)) throw new Error("mediaRef is required.");
       const referenceValue = reference as Record<string, unknown>;
-      if (referenceValue.workspaceId !== worker.workspaceId) throw new Error("Media workspace mismatch.");
+      if (typeof referenceValue.workspaceId !== "string" || !(await isWorkloadWorkerAuthorizedForWorkspace(worker.workerId, referenceValue.workspaceId))) throw new Error("Media workspace is not shared with this worker.");
       const media = await readJobMedia(reference as Parameters<typeof readJobMedia>[0]);
       json(response, 200, { ok: true, media: encode({
         kind: referenceValue.kind,
@@ -243,9 +441,9 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       const input = await body(request);
       const { worker } = await authenticateWorkloadWorker(credential, { allowDisabled: true });
       const workspaceId = stringField(input, "workspaceId");
-      if (workspaceId !== worker.workspaceId) throw new Error("Preview workspace mismatch.");
       const sessionId = stringField(input, "sessionId");
-      await getAuthorizedWorkloadAssignment(worker.workerId, sessionId);
+      const assignment = await getAuthorizedWorkloadAssignment(worker.workerId, sessionId);
+      if (assignment.workspaceId !== workspaceId) throw new Error("Preview workspace mismatch.");
       const text = stringField(input, "text").slice(0, 12_000);
       const prepared = await prepareCanonicalPreviewContent({
         text,
@@ -328,7 +526,15 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     }
     if (path === "/workload/health") {
       const { worker } = await authenticateWorkloadWorker(credential);
-      json(response, 200, { ok: true, workerId: worker.workerId, status: worker.status, ...workloadControlSummary() });
+      json(response, 200, {
+        ok: true,
+        workerId: worker.workerId,
+        status: worker.status,
+        ...workloadControlSummary(),
+        runtime: getRuntimeHealthSnapshot(),
+        inbound: inboundAdmissionSnapshot(),
+        outbound: outboundAdmissionSnapshot(),
+      });
       return;
     }
     json(response, 404, { ok: false, error: "Workload route not found." });
@@ -341,11 +547,16 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
 
 let server: Server | undefined;
 let healthTimer: NodeJS.Timeout | undefined;
+const activeControlSockets = new Set<import("node:net").Socket>();
 
 export async function startWorkloadControlServer(): Promise<void> {
   if (!env.WORKLOAD_CONTROL_ENABLED || server) return;
   server = createServer((request, response) => {
     void handle(request, response);
+  });
+  server.on("connection", (socket) => {
+    activeControlSockets.add(socket);
+    socket.once("close", () => activeControlSockets.delete(socket));
   });
   await new Promise<void>((resolve, reject) => {
     server?.once("error", reject);
@@ -366,5 +577,7 @@ export async function stopWorkloadControlServer(): Promise<void> {
   const current = server;
   server = undefined;
   if (!current) return;
+  for (const socket of activeControlSockets) socket.destroy();
+  activeControlSockets.clear();
   await new Promise<void>((resolve) => current.close(() => resolve()));
 }

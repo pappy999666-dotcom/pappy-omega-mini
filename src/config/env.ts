@@ -27,6 +27,7 @@ const envSchema = z.object({
     .default(50 * 1024 * 1024),
   QUEUE_CONCURRENCY: z.coerce.number().int().positive().max(32).default(16),
   VALIDATOR_CONCURRENCY: z.coerce.number().int().positive().max(32).default(16),
+  VALIDATOR_DURABLE_DUAL_WRITE: z.coerce.boolean().default(false),
   BROADCAST_CONCURRENCY: z.coerce.number().int().positive().max(16).default(8),
   PAIRING_CUSTOM_CODE: z.string().default("PAPPYBOT"),
   PAIRING_REQUEST_TTL_MS: z.coerce
@@ -48,11 +49,11 @@ const envSchema = z.object({
   ),
   WORKLOAD_CONTROL_BIND: z.string().default("127.0.0.1"),
   WORKLOAD_CONTROL_PORT: z.coerce.number().int().positive().max(65535).default(8787),
-  WORKLOAD_PACKAGE_VERSION: z.string().default("1.2.53"),
+  WORKLOAD_PACKAGE_VERSION: z.string().default("1.2.86"),
   WORKLOAD_MIN_WORKER_VERSION: z.string().default("1.0.0"),
   WORKLOAD_RELEASE_PATH: z.string().default("./worker-package/index.js"),
   WORKLOAD_RELEASE_PRIVATE_KEY_PATH: z.string().default("./.secrets/worker-release-private.pem"),
-  WORKLOAD_RELEASE_VERSION: z.string().default("1.2.53"),
+  WORKLOAD_RELEASE_VERSION: z.string().default("1.2.86"),
   WORKLOAD_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().min(30_000).max(10 * 60_000).default(75_000),
 });
 

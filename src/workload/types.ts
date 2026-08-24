@@ -69,6 +69,28 @@ export interface WorkloadEnrollmentRecord {
   createdAt: number;
 }
 
+export type WorkloadShareStatus = "PENDING" | "ACTIVE" | "BLOCKED" | "REVOKED";
+
+export interface WorkloadShareRecord {
+  shareId: string;
+  workerId: string;
+  ownerWorkspaceId: string;
+  ownerTelegramUserId: string;
+  recipientWorkspaceId?: string;
+  recipientTelegramUserId?: string;
+  recipientDisplayName?: string;
+  recipientUsername?: string;
+  tokenHash: string;
+  status: WorkloadShareStatus;
+  expiresAt: number;
+  consumedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+  revokedAt?: number;
+  blockedAt?: number;
+  unblockedAt?: number;
+}
+
 export interface WorkloadAssignmentRecord {
   assignmentId: string;
   workspaceId: string;
@@ -164,10 +186,11 @@ export interface WorkloadBroadcastIntent {
   mediaRef?: Record<string, unknown>;
   delayMs: number;
   repeat: number;
+  styled?: boolean;
   sourceChatJid?: string;
 }
 
-export type WorkloadBroadcastState = "QUEUED" | "RUNNING" | "PAUSED" | "COMPLETED" | "PARTIAL" | "FAILED" | "CANCELLED";
+export type WorkloadBroadcastState = "QUEUED" | "RUNNING" | "WAITING_FOR_SESSION" | "PAUSED" | "COMPLETED" | "PARTIAL" | "FAILED" | "CANCELLED";
 
 export interface WorkloadBroadcastProgress {
   jobId: string;
@@ -178,6 +201,8 @@ export interface WorkloadBroadcastProgress {
   failed: number;
   skipped: number;
   currentGroup?: string;
+  currentAction?: string;
+  lastResult?: string;
   nextActionAt?: number;
   error?: string;
   updatedAt: number;
@@ -202,6 +227,7 @@ export interface WorkloadInboundEvent {
   remoteJid: string;
   senderJid: string;
   text: string;
+  interactionId?: string;
   quotedText?: string;
   quotedSenderJid?: string;
   mentionedJids?: string[];

@@ -33,21 +33,24 @@ MCowBQYDK2VwAyEAe+FnOPhHDo9y8pJ5rqwldSHwXUHKDG9HlTBqStHtRso=
 const secretPath = join(DATA_DIR, ".secret");
 const CONTROL_POLL_MS = 2_000;
 const HEARTBEAT_MS = 20_000;
+const GROUP_SUMMARY_CACHE_MS = 60_000;
 const workerStatePath = join(DATA_DIR, "worker.json");
 const pendingReleasePath = join(DATA_DIR, ".pappy-update-state.json");
 const broadcastDataDir = join(DATA_DIR, "broadcasts");
+const broadcastInventoryPath = join(DATA_DIR, "broadcast-inventory.json");
 const runtimes = new Map();
 const assignedSessions = new Set();
 const reconnectTimers = new Map();
 const reconnectAttempts = new Map();
 const intentionallyStopped = new Set();
+const terminalSessions = new Set();
 const commandChains = new Map();
 const backgroundCommandChains = new Map();
 const broadcastCommandChains = new Map();
 function isBackgroundCommand(command) {
   if (command?.kind !== "bridge.command") return false;
   const method = String(command?.payload?.method ?? "");
-  return method === "groupGetInviteInfo" || method === "groupAcceptInvite";
+  return method === "groupGetInviteInfo" || method === "groupAcceptInvite" || method === "groupMetadata" || method === "listGroupSummaries";
 }
 function commandChainFor(command) {
   if (command?.kind === "broadcast.start" || command?.kind === "broadcast.cancel") return broadcastCommandChains;
@@ -56,8 +59,45 @@ function commandChainFor(command) {
 }
 const broadcastRunners = new Map();
 const broadcastGroupCache = new Map();
+const broadcastGroupLastKnown = new Map();
+const broadcastGroupInflight = new Map();
+const broadcastInventoryRecords = new Map();
+let broadcastInventoryLoadPromise;
+let broadcastInventoryWrite = Promise.resolve();
 const groupSummaryCache = new Map();
+const groupSummaryLastKnown = new Map();
 const groupSummaryInflight = new Map();
+function clearSessionInventoryState(sessionId) {
+  broadcastGroupCache.delete(sessionId);
+  broadcastGroupLastKnown.delete(sessionId);
+  broadcastGroupInflight.delete(sessionId);
+  for (const cache of [groupSummaryCache, groupSummaryLastKnown, groupSummaryInflight]) {
+    for (const key of cache.keys()) if (key === sessionId || key.startsWith(`${sessionId}:`)) cache.delete(key);
+  }
+}
+async function purgeLocalSessionData(workspaceId, sessionId) {
+  await rm(join(DATA_DIR, "sessions", workspaceId, sessionId), { recursive: true, force: true });
+  let entries = [];
+  try { entries = await readdir(broadcastDataDir); } catch { entries = []; }
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    const path = join(broadcastDataDir, entry);
+    try {
+      const checkpoint = decrypt(await readFile(path, "utf8"));
+      if (checkpoint?.workspaceId === workspaceId && checkpoint?.sessionId === sessionId) await unlink(path).catch(() => undefined);
+    } catch {
+      // An unreadable checkpoint is retained; it cannot be safely attributed.
+    }
+  }
+  if (!broadcastInventoryRecords.delete(sessionId)) return;
+  broadcastInventoryWrite = broadcastInventoryWrite.catch(() => undefined).then(async () => {
+    await mkdir(dirname(broadcastInventoryPath), { recursive: true });
+    const temp = `${broadcastInventoryPath}.tmp-${process.pid}-${randomUUID()}`;
+    await writeFile(temp, encrypt(Object.fromEntries(broadcastInventoryRecords.entries())), { mode: 0o600 });
+    await rename(temp, broadcastInventoryPath);
+  });
+  await broadcastInventoryWrite;
+}
 let credentialState;
 let stopping = false;
 const matrix = { state: "BOOTING", lastHeartbeatAt: 0, lastControlAt: 0, lastAction: "starting", lastError: "none", lastRenderAt: 0 };
@@ -215,6 +255,108 @@ async function loadState() {
   } catch {
     return undefined;
   }
+}
+async function saveWorkerState() {
+  if (!credentialState) return;
+  await saveState({ ...credentialState, terminalSessionIds: [...terminalSessions].slice(-2_000) });
+}
+
+const BROADCAST_INVENTORY_MAX_AGE_MS = 5 * 60_000;
+const GROUP_SUMMARY_SNAPSHOT_MAX_AGE_MS = 10 * 60_000;
+const groupSummaryInventoryPath = join(DATA_DIR, "group-summary-inventory.json");
+let groupSummaryInventoryLoadPromise;
+let groupSummaryInventoryWrite = Promise.resolve();
+const groupSummarySnapshotRecords = new Map();
+async function loadGroupSummarySnapshots() {
+  if (!groupSummaryInventoryLoadPromise) {
+    groupSummaryInventoryLoadPromise = (async () => {
+      try {
+        const raw = decrypt(await readFile(groupSummaryInventoryPath, "utf8"));
+        if (!raw || typeof raw !== "object") return;
+        for (const [sessionId, record] of Object.entries(raw)) {
+          if (!record || typeof record !== "object") continue;
+          const groups = Array.isArray(record.groups)
+            ? record.groups.filter((item) => item && typeof item === "object" && typeof item.jid === "string" && item.jid.endsWith("@g.us"))
+            : [];
+          const fetchedAt = Number(record.fetchedAt ?? 0);
+          if (groups.length && Number.isFinite(fetchedAt) && fetchedAt > 0)
+            groupSummarySnapshotRecords.set(sessionId, { groups, fetchedAt });
+        }
+      } catch {
+        // A missing or unreadable summary snapshot is safe; the connected socket refreshes it.
+      }
+    })();
+  }
+  await groupSummaryInventoryLoadPromise;
+}
+async function saveGroupSummarySnapshot(sessionId, groups) {
+  const normalized = (Array.isArray(groups) ? groups : []).filter((item) => item && typeof item === "object" && typeof item.jid === "string" && item.jid.endsWith("@g.us"));
+  if (!normalized.length) return;
+  groupSummarySnapshotRecords.set(sessionId, { groups: normalized, fetchedAt: Date.now() });
+  groupSummaryInventoryWrite = groupSummaryInventoryWrite.catch(() => undefined).then(async () => {
+    await mkdir(dirname(groupSummaryInventoryPath), { recursive: true });
+    const value = Object.fromEntries(groupSummarySnapshotRecords.entries());
+    const temp = `${groupSummaryInventoryPath}.tmp-${process.pid}-${randomUUID()}`;
+    await writeFile(temp, encrypt(value), { mode: 0o600 });
+    await rename(temp, groupSummaryInventoryPath);
+  });
+  await groupSummaryInventoryWrite;
+}
+async function deleteGroupSummarySnapshot(sessionId) {
+  await loadGroupSummarySnapshots();
+  if (!groupSummarySnapshotRecords.delete(sessionId)) return;
+  groupSummaryInventoryWrite = groupSummaryInventoryWrite.catch(() => undefined).then(async () => {
+    await mkdir(dirname(groupSummaryInventoryPath), { recursive: true });
+    const value = Object.fromEntries(groupSummarySnapshotRecords.entries());
+    const temp = `${groupSummaryInventoryPath}.tmp-${process.pid}-${randomUUID()}`;
+    await writeFile(temp, encrypt(value), { mode: 0o600 });
+    await rename(temp, groupSummaryInventoryPath);
+  });
+  await groupSummaryInventoryWrite;
+}
+async function loadBroadcastInventorySnapshots() {
+  if (!broadcastInventoryLoadPromise) {
+    broadcastInventoryLoadPromise = (async () => {
+      try {
+        const raw = decrypt(await readFile(broadcastInventoryPath, "utf8"));
+        if (!raw || typeof raw !== "object") return;
+        for (const [sessionId, record] of Object.entries(raw)) {
+          if (!record || typeof record !== "object") continue;
+          const groups = Array.isArray(record.groups)
+            ? record.groups.filter((jid) => typeof jid === "string" && jid.endsWith("@g.us"))
+            : [];
+          const fetchedAt = Number(record.fetchedAt ?? 0);
+          if (groups.length && Number.isFinite(fetchedAt) && fetchedAt > 0)
+            broadcastInventoryRecords.set(sessionId, { groups: [...new Set(groups)], fetchedAt });
+        }
+      } catch {
+        // A missing or unreadable snapshot is safe; the connected socket will refresh it.
+      }
+    })();
+  }
+  await broadcastInventoryLoadPromise;
+}
+async function saveBroadcastInventorySnapshot(sessionId, groups) {
+  const normalized = [...new Set((Array.isArray(groups) ? groups : []).filter((jid) => typeof jid === "string" && jid.endsWith("@g.us")))];
+  if (!normalized.length) return;
+  broadcastInventoryRecords.set(sessionId, { groups: normalized, fetchedAt: Date.now() });
+  broadcastInventoryWrite = broadcastInventoryWrite.catch(() => undefined).then(async () => {
+    await mkdir(dirname(broadcastInventoryPath), { recursive: true });
+    const value = Object.fromEntries(broadcastInventoryRecords.entries());
+    const temp = `${broadcastInventoryPath}.tmp-${process.pid}-${randomUUID()}`;
+    await writeFile(temp, encrypt(value), { mode: 0o600 });
+    await rename(temp, broadcastInventoryPath);
+  });
+  await broadcastInventoryWrite;
+}
+function usableBroadcastInventorySnapshot(sessionId) {
+  const record = broadcastInventoryRecords.get(sessionId);
+  if (!record || Date.now() - record.fetchedAt > BROADCAST_INVENTORY_MAX_AGE_MS) return undefined;
+  return [...record.groups];
+}
+function latestBroadcastInventorySnapshot(sessionId) {
+  const record = broadcastInventoryRecords.get(sessionId);
+  return record?.groups?.length ? [...record.groups] : undefined;
 }
 
 function encode(value) {
@@ -386,6 +528,7 @@ async function reportSessionStatus(runtime, status, authHealth, reason) {
   }, credentialState.credential).catch((error) => noteError(error, "session status failed"));
 }
 async function startSession(workspaceId, sessionId, waitForReady = true) {
+  if (terminalSessions.has(sessionId)) throw new Error("Session is logged out; a new pairing request is required.");
   intentionallyStopped.delete(sessionId);
   const existing = runtimes.get(sessionId);
   if (existing && !waitForReady) return existing;
@@ -442,8 +585,12 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
       matrix.lastError = "none";
       renderMatrix(true);
       void reportSessionStatus(runtime, "ACTIVE", "VALID");
-      void localBroadcastGroups(runtime)
-        .then((groups) => {
+      void loadGroupSummaries(runtime)
+        .then(async (summaries) => {
+          const groups = [...new Set(summaries.map((item) => item.jid).filter((jid) => typeof jid === "string" && jid.endsWith("@g.us")))];
+          broadcastGroupLastKnown.set(sessionId, groups);
+          broadcastGroupCache.set(sessionId, { expiresAt: Date.now() + BROADCAST_INVENTORY_MAX_AGE_MS, groups });
+          void saveBroadcastInventorySnapshot(sessionId, groups).catch((error) => noteError(error, "inventory snapshot persistence failed"));
           matrix.lastAction = `group inventory cached · ${groups.length} groups`;
           matrix.lastError = "none";
           renderMatrix(true);
@@ -464,10 +611,17 @@ async function startSession(workspaceId, sessionId, waitForReady = true) {
       if (loggedOut) {
         assignedSessions.delete(sessionId);
         intentionallyStopped.add(sessionId);
-        void reportSessionStatus(runtime, "LOGGED_OUT", "INVALID", closeReason);
+        terminalSessions.add(sessionId);
+        void (async () => {
+          await runtime.store.flush().catch(() => undefined);
+          await purgeLocalSessionData(workspaceId, sessionId);
+          await deleteGroupSummarySnapshot(sessionId).catch(() => undefined);
+          await reportSessionStatus(runtime, "LOGGED_OUT", "INVALID", closeReason);
+        })().catch((error) => noteError(error, "logged-out session cleanup failed"));
       } else {
         void reportSessionStatus(runtime, "DEGRADED", "DEGRADED", closeReason);
       }
+      clearSessionInventoryState(sessionId);
       runtimes.delete(sessionId);
       renderMatrix(true);
       const restartable = !loggedOut && Boolean(state.creds.registered || state.creds.me || state.creds.pairingCode);
@@ -507,6 +661,44 @@ function normalizedMessage(message) {
   }
   return current;
 }
+function interactionIdFromMessage(message) {
+  const content = normalizedMessage(message);
+  const textValue = (value) => typeof value === "string" ? value : "";
+  const parseParams = (value) => {
+    if (value && typeof value === "object") return value;
+    if (typeof value !== "string" || !value) return undefined;
+    try {
+      const first = JSON.parse(value);
+      if (typeof first === "string") {
+        try { return JSON.parse(first); } catch { return undefined; }
+      }
+      return first && typeof first === "object" ? first : undefined;
+    } catch { return undefined; }
+  };
+  const interactive = content?.interactiveResponseMessage;
+  const native = interactive?.nativeFlowResponseMessage;
+  if (native && typeof native === "object") {
+    const params = parseParams(native.paramsJson ?? native.buttonParamsJson ?? native.params);
+    const id = textValue(params?.id) || textValue(native.id) || textValue(native.buttonId);
+    if (id) return id.slice(0, 240);
+  }
+  const list = content?.listResponseMessage?.singleSelectReply;
+  if (list && typeof list === "object") {
+    const id = textValue(list.selectedRowId);
+    if (id) return id.slice(0, 240);
+  }
+  const buttons = content?.buttonsResponseMessage;
+  if (buttons && typeof buttons === "object") {
+    const id = textValue(buttons.selectedButtonId) || textValue(buttons.selectedId) || textValue(buttons.buttonId);
+    if (id) return id.slice(0, 240);
+  }
+  const template = content?.templateButtonReplyMessage;
+  if (template && typeof template === "object") {
+    const id = textValue(template.selectedId) || textValue(template.selectedButtonId) || textValue(template.buttonId);
+    if (id) return id.slice(0, 240);
+  }
+  return undefined;
+}
 function mediaKind(message) {
   const content = normalizedMessage(message);
   for (const kind of ["image", "video", "audio", "document", "sticker"]) {
@@ -543,11 +735,12 @@ async function emitInbound(runtime, message) {
   const key = message?.key ?? {};
   const remoteJid = key.remoteJid;
   if (typeof remoteJid !== "string" || !message.message) return;
+  const interactionId = interactionIdFromMessage(message.message);
   const text = messageText(message.message);
   const context = message.message.extendedTextMessage?.contextInfo ?? message.message.imageMessage?.contextInfo ?? message.message.videoMessage?.contextInfo ?? message.message.documentMessage?.contextInfo;
   const quotedMessage = context?.quotedMessage;
   const quotedText = messageText(quotedMessage);
-  if (!text && !quotedText) return;
+  if (!text && !quotedText && !interactionId) return;
   const directMediaKind = mediaKind(message.message);
   const quotedMediaKind = quotedMessage ? mediaKind(quotedMessage) : undefined;
   const directMedia = directMediaKind
@@ -564,7 +757,8 @@ async function emitInbound(runtime, message) {
     ...(typeof key.id === "string" ? { messageId: key.id } : {}),
     remoteJid,
     senderJid,
-    text,
+    text: interactionId ? "" : text,
+    ...(interactionId ? { interactionId } : {}),
     ...(quotedText ? { quotedText } : {}),
     ...(typeof context?.participant === "string" ? { quotedSenderJid: context.participant } : {}),
     ...(Array.isArray(context?.mentionedJid) ? { mentionedJids: context.mentionedJid.slice(0, 100) } : {}),
@@ -591,6 +785,7 @@ async function stopSession(sessionId) {
   if (!runtime) return;
   await runtime.store.flush().catch(() => undefined);
   runtime.socket.end?.(new Error("Workload command requested session stop."));
+  clearSessionInventoryState(sessionId);
   runtimes.delete(sessionId);
   assignedSessions.delete(sessionId);
 }
@@ -629,6 +824,58 @@ async function getStatusJidList(runtime) {
   if (self) recipients.add(self.replace(/:\d+(?=@)/, ""));
   return [...recipients];
 }
+async function loadGroupSummaries(runtime, options = {}) {
+  const snapshotKey = runtime.sessionId;
+  const hint = typeof options.identityHint === "string" ? options.identityHint.trim().toLowerCase() : "";
+  const cacheKey = `${snapshotKey}:${hint || "no-identity"}`;
+  const allowStale = Boolean(options.staleWhileRevalidate) && !hint;
+  await loadGroupSummarySnapshots();
+  const persisted = groupSummarySnapshotRecords.get(snapshotKey);
+  if (persisted && Date.now() - persisted.fetchedAt <= GROUP_SUMMARY_SNAPSHOT_MAX_AGE_MS)
+    groupSummaryLastKnown.set(cacheKey, persisted.groups);
+  const cached = groupSummaryCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.groups;
+  const pending = groupSummaryInflight.get(cacheKey);
+  if (pending) {
+    if (allowStale && groupSummaryLastKnown.has(cacheKey)) return groupSummaryLastKnown.get(cacheKey);
+    return pending;
+  }
+  const request = (async () => {
+    try {
+      const raw = normalizeGroupInventory(await fetchParticipatingGroups(runtime, 15_000));
+      const user = runtime.socket.user ?? {};
+      const liveIdentity = await workerParticipantJid({ id: user.id ?? user.jid ?? user.lid }, runtime).catch(() => "");
+      const hintedIdentity = typeof options.identityHint === "string" ? options.identityHint : "";
+      const hintedValues = hintedIdentity && !hintedIdentity.includes("@") ? [hintedIdentity, `${hintedIdentity}@s.whatsapp.net`] : [hintedIdentity];
+      const identities = new Set([user.id, user.jid, user.lid, liveIdentity, ...hintedValues].flatMap(workerJidVariants));
+      const entries = Object.entries(raw).filter(([jid]) => jid.endsWith("@g.us"));
+      const groups = await Promise.all(entries.map(async ([jid, metadata]) => {
+        const item = metadata && typeof metadata === "object" ? metadata : {};
+        return {
+          jid,
+          subject: typeof item.subject === "string" && item.subject ? item.subject : jid,
+          participantCount: participantCountFromMetadata(item),
+          isAdmin: await workerOwnAdminRole(item, runtime, identities),
+        };
+      }));
+      groupSummaryLastKnown.set(cacheKey, groups);
+      groupSummaryCache.set(cacheKey, { expiresAt: Date.now() + GROUP_SUMMARY_CACHE_MS, groups });
+      void saveGroupSummarySnapshot(snapshotKey, groups).catch(() => undefined);
+      return groups;
+    } catch (error) {
+      const stale = groupSummaryLastKnown.get(cacheKey);
+      if (stale) return stale;
+      throw error;
+    }
+  })().finally(() => groupSummaryInflight.delete(cacheKey));
+  groupSummaryInflight.set(cacheKey, request);
+  if (allowStale && groupSummaryLastKnown.has(cacheKey)) {
+    void request.catch(() => undefined);
+    return groupSummaryLastKnown.get(cacheKey);
+  }
+  return request;
+}
+
 async function executeTransport(runtime, method, encodedArgs) {
   if (!/^[A-Za-z][A-Za-z0-9]*$/.test(method) || ["constructor", "end", "ev", "ws", "auth", "authState", "user"].includes(method))
     throw new Error(`Unsafe workload transport method: ${method}`);
@@ -636,6 +883,14 @@ async function executeTransport(runtime, method, encodedArgs) {
   if (method === "getStatusJidList") return getStatusJidList(runtime);
   if (method === "sendGroup" || method === "sendGroupText") {
     const [jid, content] = args;
+    const table = content && typeof content === "object" && !Array.isArray(content) ? content.nativeTable : undefined;
+    if (table && typeof runtime.socket.sendInteractiveTable === "function") return runtime.socket.sendInteractiveTable(jid, table);
+    return runtime.socket.sendMessage(jid, materializeWorkloadContent(content));
+  }
+  if (method === "sendMessage") {
+    const [jid, content] = args;
+    const table = content && typeof content === "object" && !Array.isArray(content) ? content.nativeTable : undefined;
+    if (table && typeof runtime.socket.sendInteractiveTable === "function") return runtime.socket.sendInteractiveTable(jid, table);
     return runtime.socket.sendMessage(jid, materializeWorkloadContent(content));
   }
   if (method === "sendGroupStatus") {
@@ -652,29 +907,7 @@ async function executeTransport(runtime, method, encodedArgs) {
     const [jid, content] = args;
     return runtime.socket.sendMessage(jid, content);
   }
-  if (method === "listGroupSummaries") {
-    const cacheKey = runtime.sessionId;
-    const cached = groupSummaryCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) return cached.groups;
-    const pending = groupSummaryInflight.get(cacheKey);
-    if (pending) return pending;
-    const request = (async () => {
-      const raw = await runtime.socket.groupFetchAllParticipating();
-      const groups = Object.entries(raw ?? {}).map(([jid, metadata]) => {
-        const item = metadata && typeof metadata === "object" ? metadata : {};
-        const participants = Array.isArray(item.participants) ? item.participants.length : 0;
-        return {
-          jid,
-          subject: typeof item.subject === "string" && item.subject ? item.subject : jid,
-          participantCount: participants,
-        };
-      });
-      groupSummaryCache.set(cacheKey, { expiresAt: Date.now() + 30_000, groups });
-      return groups;
-    })().finally(() => groupSummaryInflight.delete(cacheKey));
-    groupSummaryInflight.set(cacheKey, request);
-    return request;
-  }
+  if (method === "listGroupSummaries") return loadGroupSummaries(runtime, { staleWhileRevalidate: true, identityHint: typeof args[0] === "string" ? args[0] : "" });
   if (method === "previewUpload") {
     const [encodedBytes, options] = args;
     if (!Buffer.isBuffer(encodedBytes)) throw new Error("Preview upload requires encoded thumbnail bytes.");
@@ -727,13 +960,130 @@ function broadcastInaccessible(message) {
 function broadcastTransient(message) {
   return /rate|over.?limit|429|timeout|tempor|network|closed|not connected|unavailable|5\d\d/i.test(String(message));
 }
+function broadcastSocketClosed(message) {
+  return /connection closed|connection reset|socket closed|not connected|connection lost|closed before|stream ended/i.test(String(message));
+}
+async function waitForBroadcastRuntime(runtime) {
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    const current = runtimes.get(runtime.sessionId);
+    if (current?.ready) return current;
+    if (!current && !reconnectTimers.has(runtime.sessionId)) {
+      try {
+        const reconnected = await startSession(runtime.workspaceId, runtime.sessionId, true);
+        if (reconnected?.ready) return reconnected;
+      } catch {
+        // The normal connection-update reconnect loop may still be in progress.
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  throw new Error("WhatsApp session did not reconnect while the broadcast was waiting.");
+}
+function workerJidVariants(value) {
+  if (typeof value !== "string") return [];
+  const normalized = value.trim().toLowerCase().replace(/:\\d+(?=@)/, "");
+  if (!normalized) return [];
+  const parts = normalized.split("@");
+  return parts[0] && parts[1] ? [normalized, parts[0]] : [normalized];
+}
+function workerParticipantValues(source) {
+  if (Array.isArray(source)) return source;
+  if (source instanceof Map) return [...source.values()];
+  if (source && typeof source === "object") {
+    return Object.entries(source).map(([key, value]) => {
+      if (value && typeof value === "object") return { ...value, id: value.id ?? value.jid ?? key };
+      return { id: key, admin: value };
+    });
+  }
+  return [];
+}
+async function workerOwnAdminRole(item, runtime, identities) {
+  const matchesIdentity = async (values) => {
+    let candidates = values.filter((value) => typeof value === "string").flatMap(workerJidVariants);
+    const hasLid = values.some((value) => typeof value === "string" && (value.endsWith("@lid") || value.endsWith("@hosted.lid")));
+    if (hasLid || !candidates.length) {
+      const resolved = await workerParticipantJid({ id: values.find((value) => typeof value === "string" && value) ?? "" }, runtime).catch(() => "");
+      candidates = [...candidates, ...workerJidVariants(resolved)];
+    }
+    return candidates.some((candidate) => identities.has(candidate));
+  };
+  const ownerValues = [item?.owner, item?.subjectOwner, item?.descOwner].filter((value) => typeof value === "string");
+  if (ownerValues.length && await matchesIdentity(ownerValues)) return true;
+  const participants = workerParticipantValues(item?.participants);
+  for (const participant of participants) {
+    if (!participant || typeof participant !== "object") continue;
+    const role = String(participant.admin ?? participant.role ?? "").toLowerCase();
+    if (role !== "admin" && role !== "superadmin" && participant.isAdmin !== true && participant.isSuperAdmin !== true) continue;
+    const values = [participant.phoneNumber, participant.pn, participant.id, participant.jid, participant.lid, participant.participant, participant.userJid].filter((value) => typeof value === "string");
+    if (await matchesIdentity(values)) return true;
+  }
+  return false;
+}
+function participantCountFromMetadata(item) {
+  const participants = item?.participants;
+  if (Array.isArray(participants)) return participants.length;
+  if (participants instanceof Map) return participants.size;
+  if (participants && typeof participants === "object") return Object.keys(participants).length;
+  for (const key of ["participantCount", "participantsCount", "size", "count"]) {
+    const value = Number(item?.[key]);
+    if (Number.isFinite(value) && value >= 0) return Math.floor(value);
+  }
+  return 0;
+}
+function normalizeGroupInventory(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  if (raw.groups && typeof raw.groups === "object" && !Array.isArray(raw.groups)) return raw.groups;
+  return raw;
+}
+function inventoryTransient(message) {
+  return /rate|over.?limit|429|timeout|tempor|network|closed|not connected|unavailable|5\d\d/i.test(String(message));
+}
+async function fetchParticipatingGroups(runtime, timeoutMs) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await Promise.race([
+        runtime.socket.groupFetchAllParticipating(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("WhatsApp group inventory timed out; retrying.")), timeoutMs)),
+      ]);
+    } catch (error) {
+      lastError = error;
+      if (!inventoryTransient(error) || attempt === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("WhatsApp group inventory failed.");
+}
 async function localBroadcastGroups(runtime) {
-  const cached = broadcastGroupCache.get(runtime.sessionId);
+  const cacheKey = runtime.sessionId;
+  await loadBroadcastInventorySnapshots();
+  const cached = broadcastGroupCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return [...cached.groups];
-  const raw = await runtime.socket.groupFetchAllParticipating();
-  const groups = Object.keys(raw ?? {}).filter((jid) => jid.endsWith("@g.us"));
-  broadcastGroupCache.set(runtime.sessionId, { expiresAt: Date.now() + 5 * 60_000, groups });
-  return [...groups];
+  const snapshot = usableBroadcastInventorySnapshot(cacheKey);
+  if (snapshot?.length) {
+    broadcastGroupLastKnown.set(cacheKey, snapshot);
+    broadcastGroupCache.set(cacheKey, { expiresAt: Date.now() + BROADCAST_INVENTORY_MAX_AGE_MS, groups: snapshot });
+    return snapshot;
+  }
+  const pending = broadcastGroupInflight.get(cacheKey);
+  if (pending) return [...await pending];
+  const request = (async () => {
+    try {
+      const raw = normalizeGroupInventory(await fetchParticipatingGroups(runtime, 20_000));
+      const groups = Object.keys(raw).filter((jid) => jid.endsWith("@g.us"));
+      broadcastGroupLastKnown.set(cacheKey, groups);
+      void saveBroadcastInventorySnapshot(cacheKey, groups).catch((error) => noteError(error, "inventory snapshot persistence failed"));
+      broadcastGroupCache.set(cacheKey, { expiresAt: Date.now() + BROADCAST_INVENTORY_MAX_AGE_MS, groups });
+      return groups;
+    } catch (error) {
+      const stale = broadcastGroupLastKnown.get(cacheKey) ?? broadcastInventoryRecords.get(cacheKey)?.groups;
+      if (stale?.length) return [...stale];
+      throw error;
+    }
+  })().finally(() => broadcastGroupInflight.delete(cacheKey));
+  broadcastGroupInflight.set(cacheKey, request);
+  return [...await request];
 }
 async function loadBroadcastMedia(intent) {
   if (!intent.mediaRef || typeof intent.mediaRef !== "object") return undefined;
@@ -756,17 +1106,19 @@ async function workerParticipantJid(participant, runtime) {
   return jid.includes("@") ? jid : `${jid}@s.whatsapp.net`;
 }
 const broadcastPreviewCache = new Map();
-const statusDesignBackgrounds = ["#2563EB", "#7C3AED", "#C026D3", "#DB2777", "#EA580C", "#D97706", "#16A34A", "#0D9488", "#0891B2", "#4F46E5"];
-const statusDesignTextTemplates = [
-  (name, text) => `╭────── ✦ ${name} ✦ ──────╮\n\n${text}\n\n╰───────────────╯`,
-  (name, text) => `┌───── ♡ ${name} ♡ ─────┐\n\n        ${text}\n\n└────────────────────┘`,
-  (name, text) => `⌜────── ${name} ──────⌝\n\n      ${text}\n\n⌞────────────────⌟`,
-  (name, text) => `╭─── ◈ ${name} ◈ ───╮\n\n${text}\n\n╰─────────────────╯`,
-];
+const broadcastPreviewInflight = new Map();
+const BROADCAST_PREVIEW_CACHE_MAX = 256;
+const statusDesignBackgrounds = ["#6D5DFB", "#C2509E", "#0EA5A8", "#D97706", "#DB2777", "#2563EB", "#7C3AED", "#0F766E", "#BE185D", "#4F46E5", "#B45309", "#0891B2"];
 const statusDesignUrlTemplates = [
-  (name, text) => `╭──── ✦ ${name} ✦ ────╮\n\n${text}\n\n╰────── ⟡ ──────╯`,
-  (name, text) => `┌─── ♡ ${name} ♡ ───┐\n\n${text}\n\n└─────── ✧ ───────┘`,
-  (name, text) => `⌜──── ${name} ────⌝\n\n   ${text}\n\n⌞──── OPEN LINK ────⌟`,
+  (name, text) => `┈┈┈ 𓍢ִ໋✧ ${name} ✧𓍢ִ໋ ┈┈┈\n   ${text}\n┈┈┈┈┈┈┈ ₊˚⊹ ┈┈┈┈┈┈┈`,
+  (name, text) => `˚.✦ ── ${name} ── ✦.˚\n   ${text}\n˚.✦ ────── ⋆ ────── ✦.˚`,
+  (name, text) => `─── ᰔ Ɛゝ ${name} Ɛゝ ᰔ ───\n   ${text}\n───────── 𖦹 ─────────`,
+  (name, text) => `╭─ Ɛゝ ${name} Ϧ3 ─╮\n   ${text}\n╰─── ⋆⋅☆⋅⋆ ───╯`,
+  (name, text) => `┈─𓏲 ${name} 𓏲─┈\n   ${text}\n┈─┈─ ᰔ ─┈─┈`,
+  (name, text) => `⟡─── Ɛゝ ${name} ───⟡\n   ${text}\n⟡──────── ✧ ────────⟡`,
+  (name, text) => `⋆˚࿔ ${name} ࿔˚⋆\n   ${text}\n───── ⋆⋅☆⋅⋆ ─────`,
+  (name, text) => `.・゜-: ✧ ${name} ✧ :-゜・.\n   ${text}\n.・゜-: ─────── :-゜・.`,
+  (name, text) => `~〜~ ✧ ${name} ✧ ~〜~\n   ${text}\n~〜~〜~〜 𖦹 ~〜~〜~〜`,
 ];
 function statusDesignHash(input) {
   let value = 2166136261;
@@ -780,14 +1132,22 @@ function createWorkerStatusDesign(groupName, text, seed, title = groupName) {
   const sourceText = String(text ?? '').trim();
   const cleanTitle = String(title || groupName || 'WhatsApp Group').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 36) || 'WhatsApp Group';
   const mode = /https?:\/\/\S+/i.test(sourceText) ? 'url' : 'text';
-  const templates = mode === 'url' ? statusDesignUrlTemplates : statusDesignTextTemplates;
+  const templates = statusDesignUrlTemplates;
   const value = statusDesignHash(`${seed}:${groupName}:${cleanTitle}:${sourceText}:${mode}`);
-  const template = templates[value % templates.length] ?? templates[0];
+  const template = mode === 'url' ? (templates[value % templates.length] ?? templates[0]) : ((name, text) => `${name}\n${text}`);
+  const body = mode === 'url' ? sourceText.replace(/\r?\n/g, '\n   ') : sourceText || ' ';
   return {
-    text: template(cleanTitle, sourceText || ' '),
+    text: template(cleanTitle, body),
     backgroundColor: statusDesignBackgrounds[(value >>> 8) % statusDesignBackgrounds.length] ?? statusDesignBackgrounds[0],
     font: value % 10,
   };
+}
+function saveBroadcastPreview(cacheKey, preview, ttlMs) {
+  if (!broadcastPreviewCache.has(cacheKey) && broadcastPreviewCache.size >= BROADCAST_PREVIEW_CACHE_MAX) {
+    const oldest = broadcastPreviewCache.keys().next().value;
+    if (oldest) broadcastPreviewCache.delete(oldest);
+  }
+  broadcastPreviewCache.set(cacheKey, { expiresAt: Date.now() + ttlMs, preview });
 }
 async function resolveBroadcastPreview(runtime, intent) {
   const text = typeof intent.text === "string" ? intent.text : "";
@@ -795,22 +1155,30 @@ async function resolveBroadcastPreview(runtime, intent) {
   const cacheKey = `${runtime.sessionId}:${text}`;
   const cached = broadcastPreviewCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.preview;
-  try {
-    const response = await control("/workload/preview", {
-      workspaceId: runtime.workspaceId,
-      sessionId: runtime.sessionId,
-      text,
-    }, credentialState.credential);
-    const preview = response.preview ? decode(response.preview) : undefined;
-    broadcastPreviewCache.set(cacheKey, { expiresAt: Date.now() + 60_000, preview });
-    return preview;
-  } catch (error) {
-    noteError(error, "broadcast preview resolution failed");
-    broadcastPreviewCache.set(cacheKey, { expiresAt: Date.now() + 5_000, preview: undefined });
-    return undefined;
-  }
+  const inflight = broadcastPreviewInflight.get(cacheKey);
+  if (inflight) return inflight;
+  const request = (async () => {
+    try {
+      const response = await control("/workload/preview", {
+        workspaceId: runtime.workspaceId,
+        sessionId: runtime.sessionId,
+        text,
+      }, credentialState.credential);
+      const preview = response.preview ? decode(response.preview) : undefined;
+      saveBroadcastPreview(cacheKey, preview, 60_000);
+      return preview;
+    } catch (error) {
+      noteError(error, "broadcast preview resolution failed");
+      saveBroadcastPreview(cacheKey, undefined, 5_000);
+      return undefined;
+    } finally {
+      if (broadcastPreviewInflight.get(cacheKey) === request) broadcastPreviewInflight.delete(cacheKey);
+    }
+  })();
+  broadcastPreviewInflight.set(cacheKey, request);
+  return request;
 }
-async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview) {
+async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview, executionSeed) {
   const text = typeof intent.text === "string" ? intent.text : "";
   const mediaCaption = typeof media?.caption === "string" ? media.caption.trim() : "";
   const detectorText = text || mediaCaption;
@@ -825,7 +1193,7 @@ async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview) {
       // A missing group subject must never block the styled status delivery.
     }
     const previewTitle = typeof linkPreview?.title === "string" ? linkPreview.title.trim() : "";
-    const design = createWorkerStatusDesign(groupName, detectorText, `${runtime.sessionId}:${jid}:${Date.now()}`, previewTitle || groupName);
+    const design = createWorkerStatusDesign(groupName, detectorText, `${executionSeed}:${jid}`, previewTitle || groupName);
     statusText = design.text;
     styleOptions = { backgroundColor: design.backgroundColor, font: design.font };
   }
@@ -874,6 +1242,8 @@ async function reportLocalBroadcast(runtime, checkpoint) {
     failed: checkpoint.failed,
     skipped: checkpoint.skipped,
     ...(checkpoint.currentGroup ? { currentGroup: checkpoint.currentGroup } : {}),
+    ...(checkpoint.currentAction ? { currentAction: String(checkpoint.currentAction).slice(0, 240) } : {}),
+    ...(checkpoint.lastResult ? { lastResult: String(checkpoint.lastResult).slice(0, 500) } : {}),
     ...(checkpoint.nextActionAt ? { nextActionAt: checkpoint.nextActionAt } : {}),
     ...(checkpoint.error ? { error: String(checkpoint.error).slice(0, 500) } : {}),
     updatedAt: Date.now(),
@@ -882,62 +1252,117 @@ async function reportLocalBroadcast(runtime, checkpoint) {
 async function runLocalBroadcast(runtime, intent, groups, media) {
   const repeat = Math.max(1, Math.min(20, Number(intent.repeat ?? 1)));
   const delayMs = Math.max(1_000, Math.min(120_000, Number(intent.delayMs ?? 20_000)));
+  let activeRuntime = runtime;
+  const executionSeed = `${intent.jobId}:${runtime.sessionId}:${Date.now()}`;
   const previous = await readBroadcastCheckpoint(intent.jobId);
   const checkpoint = previous && previous.jobId === intent.jobId
-    ? { ...previous, groups: Array.isArray(previous.groups) ? previous.groups : groups, totalGroups: Number(previous.totalGroups ?? groups.length), nextDelivery: Number(previous.nextDelivery ?? (Number(previous.completed ?? 0) + Number(previous.failed ?? 0) + Number(previous.skipped ?? 0))), state: "RUNNING" }
-    : { jobId: intent.jobId, workspaceId: runtime.workspaceId, sessionId: runtime.sessionId,       kind: intent.kind, text: intent.text, mediaRef: intent.mediaRef, styled: intent.styled === true, delayMs, repeat, groups, totalGroups: groups.length, nextDelivery: 0, completed: 0, failed: 0, skipped: 0, state: "RUNNING", updatedAt: Date.now() };
+    ? { ...previous, groups: Array.isArray(previous.groups) ? previous.groups : groups, totalGroups: Number(previous.totalGroups ?? groups.length), nextDelivery: Number(previous.nextDelivery ?? (Number(previous.completed ?? 0) + Number(previous.failed ?? 0) + Number(previous.skipped ?? 0))), state: "RUNNING", currentAction: "resuming broadcast" }
+    : { jobId: intent.jobId, workspaceId: runtime.workspaceId, sessionId: runtime.sessionId,       kind: intent.kind, text: intent.text, mediaRef: intent.mediaRef, styled: intent.styled === true, delayMs, repeat, groups, totalGroups: groups.length, nextDelivery: 0, completed: 0, failed: 0, skipped: 0, state: "RUNNING", currentAction: "preparing broadcast", lastResult: "Broadcast worker started.", updatedAt: Date.now() };
   await writeBroadcastCheckpoint(checkpoint);
-  await reportLocalBroadcast(runtime, checkpoint);
+  await reportLocalBroadcast(activeRuntime, checkpoint);
+  checkpoint.currentAction = "resolving link preview";
+  checkpoint.lastResult = "Preparing the exact content for delivery.";
+  await writeBroadcastCheckpoint(checkpoint);
+  await reportLocalBroadcast(activeRuntime, checkpoint);
   const linkPreview = await resolveBroadcastPreview(runtime, intent);
+  checkpoint.currentAction = "broadcast ready";
+  checkpoint.lastResult = `Resolved ${checkpoint.totalGroups} target group(s); starting delivery.`;
+  await writeBroadcastCheckpoint(checkpoint);
+  await reportLocalBroadcast(activeRuntime, checkpoint);
   let lastPostAt = 0;
   let lastReportAt = 0;
   const totalDeliveries = checkpoint.totalGroups * repeat;
   for (let delivery = Number(checkpoint.nextDelivery ?? 0); delivery < totalDeliveries; delivery += 1) {
-    if (broadcastCancelRequested.has(intent.jobId) || await remoteBroadcastCancelled(runtime, intent.jobId)) {
+    if (broadcastCancelRequested.has(intent.jobId) || await remoteBroadcastCancelled(activeRuntime, intent.jobId)) {
       checkpoint.state = "CANCELLED";
       checkpoint.nextDelivery = delivery;
       await writeBroadcastCheckpoint(checkpoint);
-      await reportLocalBroadcast(runtime, checkpoint);
+      await reportLocalBroadcast(activeRuntime, checkpoint);
       return checkpoint;
     }
     if (lastPostAt) {
       const waitMs = Math.max(0, delayMs - (Date.now() - lastPostAt));
-      if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
+      if (waitMs) {
+        checkpoint.currentAction = `waiting ${Math.ceil(waitMs / 1000)}s before next post`;
+        checkpoint.lastResult = `Pacing protection active after delivery ${delivery} of ${totalDeliveries}.`;
+        checkpoint.nextActionAt = Date.now() + waitMs;
+        await writeBroadcastCheckpoint(checkpoint);
+        await reportLocalBroadcast(activeRuntime, checkpoint);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
     }
     const index = Math.floor(delivery / repeat);
     const jid = groups[index];
     checkpoint.currentGroup = jid;
+    checkpoint.currentAction = "posting to group";
+    checkpoint.lastResult = `Sending delivery ${delivery + 1} of ${totalDeliveries}.`;
     checkpoint.nextActionAt = Date.now() + delayMs;
+    await writeBroadcastCheckpoint(checkpoint);
+    await reportLocalBroadcast(activeRuntime, checkpoint);
     let delivered = false;
     let lastError = "";
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
+    let transportAttempts = 0;
+    while (!delivered && transportAttempts < 3) {
+      transportAttempts += 1;
       try {
-        await sendLocalBroadcast(runtime, intent, jid, media, linkPreview);
+        await sendLocalBroadcast(activeRuntime, intent, jid, media, linkPreview, executionSeed);
         delivered = true;
         break;
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
         if (broadcastInaccessible(lastError)) break;
-        if (!broadcastTransient(lastError) && attempt >= 3) break;
-        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, Math.min(10_000, 1_000 * attempt)));
+        if (broadcastSocketClosed(lastError)) {
+          checkpoint.state = "WAITING_FOR_SESSION";
+          checkpoint.error = "WhatsApp session disconnected; waiting for automatic reconnect.";
+          checkpoint.nextActionAt = Date.now() + 1_000;
+          await writeBroadcastCheckpoint(checkpoint);
+          await reportLocalBroadcast(activeRuntime, checkpoint);
+          try {
+            activeRuntime = await waitForBroadcastRuntime(activeRuntime);
+            checkpoint.state = "RUNNING";
+            checkpoint.error = undefined;
+            lastError = "";
+            transportAttempts -= 1;
+            continue;
+          } catch (reconnectError) {
+            lastError = reconnectError instanceof Error ? reconnectError.message : String(reconnectError);
+            break;
+          }
+        }
+        if (!broadcastTransient(lastError) && transportAttempts >= 3) break;
+        if (transportAttempts < 3) await new Promise((resolve) => setTimeout(resolve, Math.min(10_000, 1_000 * transportAttempts)));
       }
     }
-    if (delivered) checkpoint.completed += 1;
-    else if (broadcastInaccessible(lastError)) checkpoint.skipped += 1;
-    else { checkpoint.failed += 1; checkpoint.error = lastError.slice(0, 500); }
+    if (delivered) {
+      checkpoint.completed += 1;
+      checkpoint.currentAction = "posted successfully";
+      checkpoint.lastResult = `Posted to ${jid}.`;
+      checkpoint.error = undefined;
+    } else if (broadcastInaccessible(lastError)) {
+      checkpoint.skipped += 1;
+      checkpoint.currentAction = "skipped inaccessible group";
+      checkpoint.lastResult = `Group ${jid} was inaccessible; no further retry was possible.`;
+    } else {
+      checkpoint.failed += 1;
+      checkpoint.currentAction = "post failed";
+      checkpoint.lastResult = lastError.slice(0, 500);
+      checkpoint.error = lastError.slice(0, 500);
+    }
     lastPostAt = Date.now();
     checkpoint.nextDelivery = delivery + 1;
     checkpoint.updatedAt = Date.now();
     await writeBroadcastCheckpoint(checkpoint);
     if (Date.now() - lastReportAt >= 2_000 || checkpoint.nextDelivery >= totalDeliveries) {
       lastReportAt = Date.now();
-      await reportLocalBroadcast(runtime, checkpoint);
+      await reportLocalBroadcast(activeRuntime, checkpoint);
     }
   }
   checkpoint.state = checkpoint.failed > 0 ? "PARTIAL" : "COMPLETED";
+  checkpoint.currentAction = checkpoint.failed > 0 ? "completed with failures" : "completed successfully";
+  checkpoint.lastResult = `Finished ${checkpoint.completed} of ${totalDeliveries} delivery target(s).`;
   checkpoint.nextActionAt = Date.now();
   await writeBroadcastCheckpoint(checkpoint);
-  await reportLocalBroadcast(runtime, checkpoint);
+  await reportLocalBroadcast(activeRuntime, checkpoint);
   broadcastCancelRequested.delete(intent.jobId);
   return checkpoint;
 }
@@ -949,7 +1374,15 @@ async function startLocalBroadcast(runtime, intent) {
   const current = broadcastRunners.get(intent.jobId);
   if (current) return current.ready;
   const previous = await readBroadcastCheckpoint(intent.jobId);
-  const cachedGroups = previous && Array.isArray(previous.groups) && previous.groups.length ? previous.groups : undefined;
+  await loadBroadcastInventorySnapshots();
+  const freshSnapshot = usableBroadcastInventorySnapshot(runtime.sessionId);
+  const staleSnapshot = latestBroadcastInventorySnapshot(runtime.sessionId);
+  const cachedGroups = previous && Array.isArray(previous.groups) && previous.groups.length
+    ? previous.groups
+    : freshSnapshot ?? staleSnapshot;
+  if (!previous && staleSnapshot && !freshSnapshot) {
+    void localBroadcastGroups(runtime).catch((error) => noteError(error, "background group inventory refresh failed"));
+  }
   const delayMs = Math.max(1_000, Math.min(120_000, Number(intent.delayMs ?? 20_000)));
   const repeat = Math.max(1, Math.min(20, Number(intent.repeat ?? 1)));
   const ready = Promise.resolve({ accepted: true, jobId: intent.jobId, totalGroups: cachedGroups?.length ?? 0, totalPosts: (cachedGroups?.length ?? 0) * repeat, delayMs });
@@ -986,6 +1419,9 @@ async function resumeBroadcastsForSession(workspaceId, sessionId) {
 async function execute(command) {
   if (trafficPaused) throw new Error("Panel traffic is paused by the administrator.");
   if (command.kind === "session.start") {
+    terminalSessions.delete(command.sessionId);
+    intentionallyStopped.delete(command.sessionId);
+    await saveWorkerState();
     const runtime = await startSession(command.workspaceId, command.sessionId);
     return { status: "ACTIVE", userId: runtime.socket.user?.id ?? null };
   }
@@ -995,6 +1431,8 @@ async function execute(command) {
   }
   if (command.kind === "session.purge") {
     await stopSession(command.sessionId);
+    terminalSessions.add(command.sessionId);
+    await saveWorkerState();
     await rm(join(DATA_DIR, "sessions", command.workspaceId, command.sessionId), { recursive: true, force: true });
     assignedSessions.delete(command.sessionId);
     return { status: "PURGED" };
@@ -1013,6 +1451,9 @@ async function execute(command) {
     return { accepted: true, jobId };
   }
   if (command.kind === "session.pair.request") {
+    terminalSessions.delete(command.sessionId);
+    intentionallyStopped.delete(command.sessionId);
+    await saveWorkerState();
     const runtime = await startSession(command.workspaceId, command.sessionId, false);
     runtime.pairingNoticePending = true;
     await runtime.pairingReady;
@@ -1035,7 +1476,12 @@ async function execute(command) {
 }
 async function register() {
   const existing = await loadState();
-  if (existing?.credential && existing.workerId) { credentialState = existing; return; }
+  if (existing?.credential && existing.workerId) {
+    credentialState = existing;
+    for (const sessionId of Array.isArray(existing.terminalSessionIds) ? existing.terminalSessionIds : [])
+      if (typeof sessionId === "string" && sessionId) terminalSessions.add(sessionId);
+    return;
+  }
   await ensurePanelPairingCode();
   const registration = await control("/workload/register", {
     pairingCode: PANEL_PAIRING_CODE,
@@ -1044,7 +1490,7 @@ async function register() {
     capabilities: ["baileys", "group-transport", "media", "pairing"],
   });
   credentialState = { workerId: registration.workerId, workerName: registration.workerName, workloadCode: registration.workloadCode, displayKey: registration.displayKey, credential: registration.credential };
-  await saveState(credentialState);
+  await saveWorkerState();
   matrix.state = "ACTIVE";
   matrix.lastAction = "registered; awaiting assignment";
   matrix.lastError = "none";
@@ -1059,11 +1505,11 @@ async function heartbeat() {
   }, credentialState.credential);
   trafficPaused = result.status === "DISABLED";
   const restoredSessionIds = Array.isArray(result.assignedSessionIds)
-    ? result.assignedSessionIds.filter((value) => typeof value === "string")
+    ? result.assignedSessionIds.filter((value) => typeof value === "string" && !terminalSessions.has(value))
     : [];
   for (const sessionId of restoredSessionIds) assignedSessions.add(sessionId);
   if (typeof result.workspaceId === "string" && result.workspaceId) credentialState.workspaceId = result.workspaceId;
-  await saveState(credentialState);
+  await saveWorkerState();
   if (credentialState.workspaceId) {
     for (const sessionId of restoredSessionIds) {
       if (!runtimes.has(sessionId) && !intentionallyStopped.has(sessionId)) {
@@ -1118,6 +1564,7 @@ async function run() {
   pino = logger.default;
   WORKER_NAME = normalizeWorkerName(WORKER_NAME);
   await ensureStorageSecret();
+  await loadBroadcastInventorySnapshots();
   assertConfig();
   await mkdir(DATA_DIR, { recursive: true });
   startPendingReleaseWatchdog();

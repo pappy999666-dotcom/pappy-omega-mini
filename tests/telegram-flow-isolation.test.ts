@@ -14,6 +14,13 @@ describe("Telegram guided-flow isolation", () => {
     );
   });
 
+  it("makes callback edit failures visible instead of silently returning", async () => {
+    const source = await readFile(botSourcePath, "utf8");
+    expect(source).toContain("This view could not be updated. Tap Refresh to try again.");
+    expect(source).toContain("async function showGroupSelectionExpired");
+    expect(source).toContain("↻ Reload My Groups");
+  });
+
   it("clears persisted pairing state when a new guided flow claims input", async () => {
     const source = await readFile(botSourcePath, "utf8");
     expect(source).toContain("clearPendingPairing(userId);");

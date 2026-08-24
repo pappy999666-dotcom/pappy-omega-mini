@@ -7,6 +7,7 @@ import {
   listSessions,
   listVisibleSessions,
   listAllSessions,
+  refreshSessionRegistry,
   createSession,
   getSession,
   getSessionJoinSettings,
@@ -49,6 +50,7 @@ import type {
 } from "../autopromote/types.js";
 import type { JobMediaReference } from "../whatsapp/job-media-store.js";
 import type { WhatsAppMediaPayload } from "../whatsapp/media-payload.js";
+import { firstVerifiedPhone, phoneDigitsFromIdentity, maskedPhoneLabel } from "../whatsapp/identity-normalization.js";
 import { persistJobMedia } from "../whatsapp/job-media-store.js";
 import {
   getEmergencyState,
@@ -105,18 +107,35 @@ import {
   createWhatsAppGroup,
   getGroupInviteCode,
   updateGroupDescription,
+  listGroupJoinRequests,
+  getGroupModerationSnapshot,
+  revokeGroupInvite,
+  setGroupChatMode,
+  setGroupEphemeral,
+  setGroupInfoMode,
+  updateParticipantBlockStatus,
+  getGroupProfilePictureUrl,
   getProfilePictureUrl,
   leaveWhatsAppGroup,
+  listAdminGroups,
   listGroups,
   removeProfilePicture,
   sendDirectText,
   updateGroupProfilePicture,
+  updateGroupJoinRequests,
+  setGroupJoinApprovalMode,
+  setGroupMemberAddMode,
+  updateGroupParticipantRole,
+  updateWhatsAppGroupSubject,
   updateProfileBio,
   updateProfileName,
   updateProfilePicture,
 } from "../whatsapp/transport-adapter.js";
+import { StableSelectionStore } from "./group-selection.js";
+import { telegramSafeText } from "./text-safety.js";
 import { routeWhatsAppText } from "../whatsapp/message-router.js";
 import { effectiveSessionStatus } from "../menus/menu-model.js";
+import { isHealthyWhatsAppSession } from "../whatsapp/session-allocator.js";
 import {
   installModeratorCommands,
   installModeratorProtection,
@@ -127,6 +146,7 @@ import {
   adminKeyboard,
   adminJobsKeyboard,
   adminJobsText,
+  sessionGroupKeyboard,
   adminForceJoinKeyboard,
   adminForceJoinText,
   adminAuditKeyboard,
@@ -157,6 +177,9 @@ import {
   globalBridgeResultText,
   validatorLiveKeyboard,
   validatorLiveText,
+  helpKeyboard,
+  helpSectionKeyboard,
+  helpSectionText,
   helpText,
   joinManagerKeyboard,
   jobLiveKeyboard,
@@ -187,6 +210,8 @@ import {
   workloadText,
   workloadPanelText,
   workloadPanelKeyboard,
+  workloadShareUsersText,
+  workloadShareUsersKeyboard,
   workloadLoggerText,
   workloadLoggerKeyboard,
   workloadGuideText,
@@ -194,6 +219,12 @@ import {
   adminWorkloadKeyboard,
   adminWorkloadWorkerText,
   adminWorkloadWorkerKeyboard,
+  antiConfigCardText,
+  pairingHelpCardText,
+  sessionPairingCardText,
+  sessionStatusCardText,
+  memberBatchJobCardText,
+  telegramCommandUsageCardText,
   ui,
 } from "./ui.js";
 import {
@@ -205,13 +236,21 @@ import {
 import {
   assignWorkloadSession,
   createWorkloadPairingCode,
+  createWorkloadShareCode,
   getWorkloadMode,
   getOwnerWorkloadWorkerByDisplayKey,
   getOwnerWorkloadWorkerByCode,
   getWorkloadLoggerSnapshot,
+  getAccessibleWorkspaceWorkloadWorkerByDisplayKey,
+  getAccessibleWorkspaceWorkloadWorkerByCode,
   getWorkspaceWorkloadWorkerByDisplayKey,
   getWorkspaceWorkloadWorkerByCode,
+  listAccessibleWorkspaceWorkloadWorkers,
+  listOwnerWorkloadShareRecipients,
+  setOwnerSharedUserAccessByShare,
   listWorkspaceWorkloadWorkers,
+  redeemWorkloadShareCode,
+  revokeSharedWorkloadAccess,
   revokeWorkloadWorker,
   setWorkloadMode,
   setWorkloadNotifier,
@@ -236,6 +275,7 @@ const pendingAdminInput = new Map<
   | "broadcast:compose"
   | "menu:caption"
   | "workload:name"
+  | "workload:share"
 >();
 const pendingForceJoin = new Map<
   string,
@@ -265,7 +305,8 @@ type AutoPromoteWizard = {
   payloadMedia?: JobMediaReference;
   payloadCaption?: string;
   payloadQuoted?: { messageId?: string; remoteJid?: string; text?: string };
-  stage: "scope" | "command" | "days" | "times" | "posts" | "payload" | "confirm";
+  stage:
+    "scope" | "command" | "days" | "times" | "posts" | "payload" | "confirm";
   chatId?: number | undefined;
   messageId?: number | undefined;
 };
@@ -273,7 +314,16 @@ const pendingAutoPromote = new Map<string, AutoPromoteWizard>();
 const pendingSupportInput = new Map<string, { workspaceId: string }>();
 const pendingSupportReply = new Map<string, { ticketId: string }>();
 const pendingWorkloadKey = new Map<string, { workspaceId: string }>();
-const preferredWorkloadWorker = new Map<string, { workspaceId: string; workerId: string; workloadCode: string; displayKey: string }>();
+const pendingWorkloadShare = new Map<string, { workspaceId: string }>();
+const preferredWorkloadWorker = new Map<
+  string,
+  {
+    workspaceId: string;
+    workerId: string;
+    workloadCode: string;
+    displayKey: string;
+  }
+>();
 const pendingGroupCreate = new Map<
   string,
   {
@@ -295,6 +345,50 @@ const pendingSessionSudo = new Map<
 const pendingGroupPicture = new Map<
   string,
   { workspaceId: string; sessionId: string; groupJid?: string }
+>();
+type AdminGroupSelection = Awaited<ReturnType<typeof listAdminGroups>>[number];
+const ADMIN_GROUP_SELECTION_CACHE_MS = 2 * 60_000;
+const adminGroupSelectionTokens = new StableSelectionStore<AdminGroupSelection>(ADMIN_GROUP_SELECTION_CACHE_MS);
+const pendingGroupSetting = new Map<
+  string,
+  {
+    workspaceId: string;
+    sessionId: string;
+    groupJid: string;
+    action: "name" | "description";
+    index: number;
+  }
+>();
+type GroupModerationInputAction =
+  | "promote"
+  | "demote"
+  | "approveAmount"
+  | "approveCountry"
+  | "rejectAmount"
+  | "rejectCountry"
+  | "removeCountry"
+  | "blockCountry";
+const pendingGroupModerationInput = new Map<
+  string,
+  {
+    workspaceId: string;
+    sessionId: string;
+    groupJid: string;
+    action: GroupModerationInputAction;
+    index: number;
+  }
+>();
+const pendingGroupCountryConfirmation = new Map<
+  string,
+  {
+    workspaceId: string;
+    sessionId: string;
+    groupJid: string;
+    index: number;
+    action: "remove" | "block";
+    participants: string[];
+    countryCode: string;
+  }
 >();
 const pendingGroupLeave = new Map<
   string,
@@ -378,9 +472,9 @@ function startJobLiveLoop(
     const job = await getWorkerRuntime()?.getByCode(workspaceId, code);
     const terminal = Boolean(
       job &&
-        ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED", "EXPIRED"].includes(
-          job.state,
-        ),
+      ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED", "EXPIRED"].includes(
+        job.state,
+      ),
     );
     await ctx.telegram.editMessageText(
       chatId,
@@ -398,6 +492,17 @@ function startJobLiveLoop(
   setTimeout(() => stopJobLiveLoop(loopKey), 30 * 60_000).unref?.();
 }
 
+async function withTelegramTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    timer.unref?.();
+    promise.then(resolve, reject).finally(() => clearTimeout(timer));
+  });
+}
 function clearPendingInputs(userId: string): void {
   pendingMedia.delete(userId);
   pendingAdminInput.delete(userId);
@@ -408,10 +513,14 @@ function clearPendingInputs(userId: string): void {
   pendingSupportInput.delete(userId);
   pendingSupportReply.delete(userId);
   pendingWorkloadKey.delete(userId);
+  pendingWorkloadShare.delete(userId);
   pendingGroupCreate.delete(userId);
   pendingProfilePicture.delete(userId);
   pendingSessionSudo.delete(userId);
   pendingGroupPicture.delete(userId);
+  pendingGroupSetting.delete(userId);
+  pendingGroupModerationInput.delete(userId);
+  pendingGroupCountryConfirmation.delete(userId);
   pendingGroupLeave.delete(userId);
   pendingSessionSetting.delete(userId);
   pendingJoinSettingInput.delete(userId);
@@ -453,7 +562,10 @@ async function registerTelegramCommandSuggestions(
     { command: "menu", description: "Open the main menu" },
     { command: "pair", description: "Pair a WhatsApp session" },
     { command: "sessions", description: "List your WhatsApp sessions" },
-    { command: "autopromote", description: "Schedule durable WhatsApp promotions" },
+    {
+      command: "autopromote",
+      description: "Schedule durable WhatsApp promotions",
+    },
   ];
   const groupCommands = [
     { command: "help", description: "Show available commands" },
@@ -481,18 +593,36 @@ export function createTelegramBot(): Telegraf<Context> {
   if (!env.TELEGRAM_BOT_TOKEN)
     throw new Error("TELEGRAM_BOT_TOKEN is not configured.");
   const bot = new Telegraf<Context>(env.TELEGRAM_BOT_TOKEN);
+  bot.catch((error, ctx) => {
+    const updateId = ctx.update.update_id;
+    console.error(
+      `[pappy-omega-mini] Telegram update failed update=${updateId}:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  });
   bot.use(async (ctx, next) => {
     if (ctx.from?.id !== undefined) {
       const userId = String(ctx.from.id);
       const message = ctx.message;
-      const isNewCommand = Boolean(message && "text" in message && typeof message.text === "string" && message.text.trim().startsWith("/"));
+      const isNewCommand = Boolean(
+        message &&
+        "text" in message &&
+        typeof message.text === "string" &&
+        message.text.trim().startsWith("/"),
+      );
       if (isNewCommand) {
         clearPendingInputs(userId);
         passiveIntakeSuspended.delete(userId);
       }
       if (ctx.callbackQuery) {
-        const callbackData = "data" in ctx.callbackQuery ? String(ctx.callbackQuery.data ?? "") : "";
-        if (!isAutoPromoteWizardContinuation(callbackData)) {
+        const callbackData =
+          "data" in ctx.callbackQuery
+            ? String(ctx.callbackQuery.data ?? "")
+            : "";
+        if (
+          !isAutoPromoteWizardContinuation(callbackData) &&
+          !callbackData.includes(":group:moderation:members:country:confirm")
+        ) {
           clearPendingInputs(userId);
           passiveIntakeSuspended.delete(userId);
         }
@@ -511,17 +641,25 @@ export function createTelegramBot(): Telegraf<Context> {
     );
   });
   setWorkloadNotifier(async (notification: WorkloadNotification) => {
-    const title = notification.state === "CONNECTED"
-      ? "Workload Connected"
-      : notification.state === "RECOVERED"
-        ? "Workload Recovered"
-        : notification.state === "OFFLINE"
-          ? "Workload Offline"
-          : notification.state === "UNREACHABLE"
-            ? "Workload Heartbeat Lost"
-            : "Workload Error";
-    const icon = notification.state === "CONNECTED" || notification.state === "RECOVERED" ? "🟢" : notification.state === "ERROR" ? "🔴" : "🟡";
-    const detail = notification.reason ? `\n<b>Reason:</b> ${escapeHtml(notification.reason)}` : "";
+    const title =
+      notification.state === "CONNECTED"
+        ? "Workload Connected"
+        : notification.state === "RECOVERED"
+          ? "Workload Recovered"
+          : notification.state === "OFFLINE"
+            ? "Workload Offline"
+            : notification.state === "UNREACHABLE"
+              ? "Workload Heartbeat Lost"
+              : "Workload Error";
+    const icon =
+      notification.state === "CONNECTED" || notification.state === "RECOVERED"
+        ? "🟢"
+        : notification.state === "ERROR"
+          ? "🔴"
+          : "🟡";
+    const detail = notification.reason
+      ? `\n<b>Reason:</b> ${escapeHtml(notification.reason)}`
+      : "";
     await bot.telegram.sendMessage(
       notification.ownerTelegramUserId,
       `✦ <b>PAPPY OMEGA MINI</b>\n──────────────────────────────\n\n${icon} <b>${title}</b>\n\n<blockquote><b>Panel:</b> ${escapeHtml(notification.workerName)}\n<b>Code:</b> <code>${escapeHtml(notification.workloadCode)}</code>\n<b>Version:</b> <code>${escapeHtml(notification.workerVersion)}</code>\n<b>Sessions:</b> ${notification.assignedSessionCount}${detail}</blockquote>\n\n${notification.state === "CONNECTED" ? "Your panel is ready. Open Workload to select it for pairing." : notification.state === "RECOVERED" ? "The panel is healthy again and its assigned sessions can continue." : "Open Workload → Refresh Status for the latest panel state."}`,
@@ -537,14 +675,18 @@ export function createTelegramBot(): Telegraf<Context> {
       sourceChatJid?: string;
       sourceTransport?: "whatsapp";
     };
-    const totalGroups = job.progress.total ?? new Set(payload.groups ?? []).size;
+    const totalGroups =
+      job.progress.total ?? new Set(payload.groups ?? []).size;
     const repeat = Math.max(1, Math.min(20, Number(payload.count ?? 1)));
     const expectedPosts = totalGroups * repeat;
     const progress = job.progress;
     const elapsedSeconds = Math.max(0, Math.ceil(progress.elapsedMs / 1000));
     const minutes = Math.floor(elapsedSeconds / 60);
     const seconds = elapsedSeconds % 60;
-    const delay = Math.max(1, Math.round(Number(payload.delayMs ?? 20000) / 1000));
+    const delay = Math.max(
+      1,
+      Math.round(Number(payload.delayMs ?? 10000) / 1000),
+    );
     const code = job.jobCode ?? job.jobId.slice(0, 8);
     const kindLabel = job.kind === "allstatus" ? "ALL-STATUS" : "ALL-CHAT";
     const terminalLabel =
@@ -553,7 +695,11 @@ export function createTelegramBot(): Telegraf<Context> {
         : job.state === "PARTIAL"
           ? "PARTIAL"
           : "FAILED";
-    if (job.sessionId && payload.sourceTransport === "whatsapp" && payload.sourceChatJid) {
+    if (
+      job.sessionId &&
+      payload.sourceTransport === "whatsapp" &&
+      payload.sourceChatJid
+    ) {
       const whatsappReport = [
         `✦ PAPPY OMEGA MINI · ${kindLabel} ${terminalLabel}`,
         "─────────────────────",
@@ -738,7 +884,13 @@ export function createTelegramBot(): Telegraf<Context> {
       stage: "command",
     });
     await ctx.reply(
-      pageText("Auto Promote", infoResponse("Choose Command", "Select the canonical operation to schedule.")),
+      pageText(
+        "Auto Promote",
+        infoResponse(
+          "Choose Command",
+          "Select the canonical operation to schedule.",
+        ),
+      ),
       { parse_mode: "HTML", reply_markup: autoPromoteCommandKeyboard() },
     );
   });
@@ -761,24 +913,45 @@ export function createTelegramBot(): Telegraf<Context> {
       );
       if (text.toLowerCase() === "cancel") {
         pendingAutoPromote.delete(userId);
-        await ctx.reply(pageText("Auto Promote", infoResponse("Cancelled", "No Auto Promote configuration was created.")), { parse_mode: "HTML" });
+        await ctx.reply(
+          pageText(
+            "Auto Promote",
+            infoResponse(
+              "Cancelled",
+              "No Auto Promote configuration was created.",
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
         return;
       }
-      const quotedText = ctx.message.reply_to_message && "text" in ctx.message.reply_to_message
-        ? ctx.message.reply_to_message.text
-        : undefined;
+      const quotedText =
+        ctx.message.reply_to_message && "text" in ctx.message.reply_to_message
+          ? ctx.message.reply_to_message.text
+          : undefined;
       try {
         pendingAutoPromote.set(userId, {
           ...autoPromote,
           payloadText: ctx.message.text,
           payloadCaption: ctx.message.text,
           ...(ctx.message.reply_to_message
-            ? { payloadQuoted: { messageId: String(ctx.message.reply_to_message.message_id), ...(quotedText ? { text: quotedText } : {}) } }
+            ? {
+                payloadQuoted: {
+                  messageId: String(ctx.message.reply_to_message.message_id),
+                  ...(quotedText ? { text: quotedText } : {}),
+                },
+              }
             : {}),
           stage: "confirm",
         });
         await ctx.reply(
-          pageText("Auto Promote · Confirm", autoPromoteWizardSummary({ ...autoPromote, payloadText: ctx.message.text })),
+          pageText(
+            "Auto Promote · Confirm",
+            autoPromoteWizardSummary({
+              ...autoPromote,
+              payloadText: ctx.message.text,
+            }),
+          ),
           { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() },
         );
       } catch (error) {
@@ -786,7 +959,11 @@ export function createTelegramBot(): Telegraf<Context> {
           `[pappy-omega-mini] Auto Promote payload handling failed user=${userId}:`,
           error instanceof Error ? error.message : String(error),
         );
-        await ctx.reply("Payload received, but the confirmation screen could not be delivered. Press Auto Promote again to retry.").catch(() => undefined);
+        await ctx
+          .reply(
+            "Payload received, but the confirmation screen could not be delivered. Press Auto Promote again to retry.",
+          )
+          .catch(() => undefined);
       }
       return;
     }
@@ -800,11 +977,19 @@ export function createTelegramBot(): Telegraf<Context> {
             joinInput.chatId,
             joinInput.messageId,
             undefined,
-            pageText("Join Manager · Settings", infoResponse("Cancelled", "No setting was changed.")),
+            pageText(
+              "Join Manager · Settings",
+              infoResponse("Cancelled", "No setting was changed."),
+            ),
             {
               parse_mode: "HTML",
               reply_markup: keyboard([
-                [btn("⚙ Join Settings", `session:${session.sessionId}:join:settings`)],
+                [
+                  btn(
+                    "⚙ Join Settings",
+                    `session:${session.sessionId}:join:settings`,
+                  ),
+                ],
                 [btn("‹ Join Manager", `session:${session.sessionId}:joinmgr`)],
               ]),
             },
@@ -812,7 +997,11 @@ export function createTelegramBot(): Telegraf<Context> {
           .catch(() => undefined);
         return;
       }
-      const parsed = parseJoinSetting(joinInput.field, text, getSessionJoinSettings(session.workspaceId, session.sessionId));
+      const parsed = parseJoinSetting(
+        joinInput.field,
+        text,
+        getSessionJoinSettings(session.workspaceId, session.sessionId),
+      );
       if (!parsed.patch) {
         await ctx.telegram
           .editMessageText(
@@ -828,7 +1017,9 @@ export function createTelegramBot(): Telegraf<Context> {
             ),
             {
               parse_mode: "HTML",
-              reply_markup: keyboard([[btn("✖ Cancel", `session:${session.sessionId}:join:settings`)] ]),
+              reply_markup: keyboard([
+                [btn("✖ Cancel", `session:${session.sessionId}:join:settings`)],
+              ]),
             },
           )
           .catch(() => undefined);
@@ -840,7 +1031,9 @@ export function createTelegramBot(): Telegraf<Context> {
         parsed.patch,
       );
       pendingJoinSettingInput.delete(userId);
-      const settings = next.joinSettings ?? getSessionJoinSettings(session.workspaceId, session.sessionId);
+      const settings =
+        next.joinSettings ??
+        getSessionJoinSettings(session.workspaceId, session.sessionId);
       await ctx.telegram
         .editMessageText(
           joinInput.chatId,
@@ -856,7 +1049,12 @@ export function createTelegramBot(): Telegraf<Context> {
           {
             parse_mode: "HTML",
             reply_markup: keyboard([
-              [btn("⚙ More Settings", `session:${session.sessionId}:join:settings`)],
+              [
+                btn(
+                  "⚙ More Settings",
+                  `session:${session.sessionId}:join:settings`,
+                ),
+              ],
               [btn("‹ Join Manager", `session:${session.sessionId}:joinmgr`)],
             ]),
           },
@@ -864,35 +1062,146 @@ export function createTelegramBot(): Telegraf<Context> {
         .catch(() => undefined);
       return;
     }
+    const sharedWorkloadInput = pendingWorkloadShare.get(userId);
+    if (sharedWorkloadInput && !ctx.message.text.startsWith("/")) {
+      const shareCode = ctx.message.text.trim();
+      if (shareCode.toLowerCase() === "cancel") {
+        pendingWorkloadShare.delete(userId);
+        await ctx.reply(
+          pageText(
+            "Workload",
+            infoResponse("Cancelled", "No shared panel was added."),
+          ),
+          { parse_mode: "HTML", reply_markup: workloadKeyboard(false) },
+        );
+        return;
+      }
+      try {
+        const sharedWorker = await redeemWorkloadShareCode(
+          sharedWorkloadInput.workspaceId,
+          String(ctx.from.id),
+          shareCode,
+          {
+            ...([ctx.from.first_name, ctx.from.last_name]
+              .filter(Boolean)
+              .join(" ")
+              ? {
+                  displayName: [ctx.from.first_name, ctx.from.last_name]
+                    .filter(Boolean)
+                    .join(" "),
+                }
+              : {}),
+            ...(ctx.from.username ? { username: ctx.from.username } : {}),
+          },
+        );
+        pendingWorkloadShare.delete(userId);
+        await ctx.reply(workloadPanelText(sharedWorker), {
+          parse_mode: "HTML",
+          reply_markup: workloadPanelKeyboard(
+            sharedWorker.workloadCode ?? sharedWorker.displayKey,
+            true,
+          ),
+        });
+      } catch (error) {
+        await ctx.reply(
+          pageText(
+            "Workload · Add Shared Panel",
+            dangerResponse(
+              "Share code not accepted",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [btn(ui.close, "workload:menu", "danger")],
+            ]),
+          },
+        );
+      }
+      return;
+    }
     const workloadInput = pendingWorkloadKey.get(userId);
     if (workloadInput && !ctx.message.text.startsWith("/")) {
       const workloadCode = ctx.message.text.trim().toLowerCase();
       if (workloadCode === "cancel") {
         pendingWorkloadKey.delete(userId);
-        await ctx.reply(pageText("Workload", infoResponse("Cancelled", "No panel was added.")), { parse_mode: "HTML", reply_markup: workloadKeyboard(false) });
+        await ctx.reply(
+          pageText(
+            "Workload",
+            infoResponse("Cancelled", "No panel was added."),
+          ),
+          { parse_mode: "HTML", reply_markup: workloadKeyboard(false) },
+        );
         return;
       }
-      if (!/^[a-z0-9][a-z0-9-]{2,47}$/.test(workloadCode) && !/^\d{5}$/.test(workloadCode)) {
-        await ctx.reply(pageText("Workload", dangerResponse("Use Add Workload", "Tap <b>Add Workload</b> in Telegram to receive a pairing code and the exact <code>index.js</code> file. This screen no longer accepts a permanent panel code.")), { parse_mode: "HTML" });
+      if (
+        !/^[a-z0-9][a-z0-9-]{2,47}$/.test(workloadCode) &&
+        !/^\d{5}$/.test(workloadCode)
+      ) {
+        await ctx.reply(
+          pageText(
+            "Workload",
+            dangerResponse(
+              "Use Add Workload",
+              "Tap <b>Add Workload</b> in Telegram to receive a pairing code and the exact <code>index.js</code> file. This screen no longer accepts a permanent panel code.",
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
         return;
       }
-      const ownerTelegramUserId = String(ctx.from.id);
       const worker = /^\d{5}$/.test(workloadCode)
-        ? (await getWorkspaceWorkloadWorkerByDisplayKey(workloadInput.workspaceId, workloadCode))
-          ?? (await getOwnerWorkloadWorkerByDisplayKey(ownerTelegramUserId, workloadCode))
-        : (await getWorkspaceWorkloadWorkerByCode(workloadInput.workspaceId, workloadCode))
-          ?? (await getOwnerWorkloadWorkerByCode(ownerTelegramUserId, workloadCode));
+        ? await getAccessibleWorkspaceWorkloadWorkerByDisplayKey(
+            workloadInput.workspaceId,
+            workloadCode,
+          )
+        : await getAccessibleWorkspaceWorkloadWorkerByCode(
+            workloadInput.workspaceId,
+            workloadCode,
+          );
       if (!worker) {
-        await ctx.reply(pageText("Workload", dangerResponse("Use Add Workload", "Start again from <b>Add Workload</b>. Telegram will create a pairing code, send <code>index.js</code>, and show where to paste the code after you click Start on your panel.")), { parse_mode: "HTML" });
+        await ctx.reply(
+          pageText(
+            "Workload",
+            dangerResponse(
+              "Use Add Workload",
+              "Start again from <b>Add Workload</b>. Telegram will create a pairing code, send <code>index.js</code>, and show where to paste the code after you click Start on your panel.",
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
         return;
       }
       if (!isWorkloadWorkerReady(worker)) {
-        await ctx.reply(pageText("Workload", dangerResponse("Panel is not ready", "The worker must be ACTIVE, compatible, and have a fresh heartbeat before it can host a session.")), { parse_mode: "HTML" });
+        await ctx.reply(
+          pageText(
+            "Workload",
+            dangerResponse(
+              "Panel is not ready",
+              "The worker must be ACTIVE, compatible, and have a fresh heartbeat before it can host a session.",
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
         return;
       }
       pendingWorkloadKey.delete(userId);
-      preferredWorkloadWorker.set(userId, { workspaceId: worker.workspaceId, workerId: worker.workerId, workloadCode: worker.workloadCode ?? worker.displayKey, displayKey: worker.displayKey });
-      await ctx.reply(workloadPanelText(worker), { parse_mode: "HTML", reply_markup: workloadPanelKeyboard(worker.workloadCode ?? worker.displayKey) });
+      preferredWorkloadWorker.set(userId, {
+        workspaceId: worker.workspaceId,
+        workerId: worker.workerId,
+        workloadCode: worker.workloadCode ?? worker.displayKey,
+        displayKey: worker.displayKey,
+      });
+      await ctx.reply(workloadPanelText(worker), {
+        parse_mode: "HTML",
+        reply_markup: workloadPanelKeyboard(
+          worker.workloadCode ?? worker.displayKey,
+          worker.shared,
+        ),
+      });
       return;
     }
     const pairing =
@@ -948,6 +1257,363 @@ export function createTelegramBot(): Telegraf<Context> {
       );
       return;
     }
+    const groupModerationInput = pendingGroupModerationInput.get(userId);
+    if (groupModerationInput && !ctx.message.text.startsWith("/")) {
+      pendingGroupModerationInput.delete(userId);
+      const value = ctx.message.text.trim();
+      const session = ownedSession(ctx, groupModerationInput.sessionId);
+      if (!session) return deny(ctx);
+      if (value.toLowerCase() === "cancel") {
+        await ctx.reply(
+          pageText(
+            "Group Moderation",
+            infoResponse("Cancelled", "No moderation action was executed."),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [
+                btn(
+                  "‹ Moderation",
+                  `session:${session.sessionId}:group:moderation:${groupModerationInput.index}`,
+                ),
+              ],
+            ]),
+          },
+        );
+        return;
+      }
+      try {
+        const snapshot = await getGroupModerationSnapshot(
+          session.workspaceId,
+          session.sessionId,
+          groupModerationInput.groupJid,
+        );
+        if (!snapshot.isAdmin)
+          throw new Error(
+            "This WhatsApp identity is no longer an administrator in the group.",
+          );
+        if (
+          groupModerationInput.action === "removeCountry" ||
+          groupModerationInput.action === "blockCountry"
+        ) {
+          const countryDigits = value.replace(/\D/g, "");
+          if (!/^\d{1,15}$/.test(countryDigits))
+            throw new Error("Send a country calling code such as +234, +1, or +44.");
+          const participants = snapshot.participants.filter((participant) => {
+            if (participant.admin) return false;
+            const digits = firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id) ?? "";
+            return digits.startsWith(countryDigits);
+          });
+          if (!participants.length)
+            throw new Error("No non-admin members exposed a phone number matching that country code.");
+          const action = groupModerationInput.action === "blockCountry" ? "block" : "remove";
+          pendingGroupCountryConfirmation.set(userId, {
+            workspaceId: session.workspaceId,
+            sessionId: session.sessionId,
+            groupJid: groupModerationInput.groupJid,
+            index: groupModerationInput.index,
+            action,
+            participants: participants.map((participant) => participant.id),
+            countryCode: countryDigits,
+          });
+          const preview = participants.slice(0, 20).map((participant, index) => escapeHtml(maskedPhoneLabel(firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id), index))).join("\n");
+          await ctx.reply(
+            pageText(
+              "Group Members · Confirmation",
+              dangerResponse(
+                `${action === "block" ? "Block" : "Remove"} by Country`,
+                `<b>Country:</b> +${countryDigits}\n<b>Matching non-admins:</b> ${participants.length}\n\n<code>${preview}</code>${participants.length > 20 ? "\n…and more" : ""}\n\nThis action is destructive and will run as a durable job only after confirmation.`,
+              ),
+            ),
+            {
+              parse_mode: "HTML",
+              reply_markup: keyboard([
+                [btn("⚠ Confirm", `session:${session.sessionId}:group:moderation:members:country:confirm`, "danger")],
+                [btn("Cancel", `session:${session.sessionId}:group:moderation:members:${groupModerationInput.index}`)],
+              ]),
+            },
+          );
+          return;
+        }
+        if (
+          groupModerationInput.action === "approveAmount" ||
+          groupModerationInput.action === "approveCountry" ||
+          groupModerationInput.action === "rejectAmount" ||
+          groupModerationInput.action === "rejectCountry"
+        ) {
+          let requests = await listGroupJoinRequests(
+            session.workspaceId,
+            session.sessionId,
+            groupModerationInput.groupJid,
+          );
+          if (
+            groupModerationInput.action === "approveAmount" ||
+            groupModerationInput.action === "rejectAmount"
+          ) {
+            if (!/^\\d+$/.test(value))
+              throw new Error(
+                "Send a whole number of pending requests, or send cancel.",
+              );
+            const amount = Number(value);
+            if (
+              !Number.isInteger(amount) ||
+              amount < 1 ||
+              amount > requests.length
+            )
+              throw new Error(
+                `Amount must be between 1 and ${requests.length}.`,
+              );
+            requests = requests.slice(0, amount);
+          } else {
+            const countryDigits = value.replace(/\\D/g, "");
+            if (!/^\\d{1,15}$/.test(countryDigits))
+              throw new Error(
+                "Send a country calling code such as +234, +1, or +44.",
+              );
+            requests = requests.filter((request) => {
+              const digits = firstVerifiedPhone(request.phoneNumber, request.jid) ?? "";
+              return digits.startsWith(countryDigits);
+            });
+            if (!requests.length)
+              throw new Error(
+                "No pending request exposed a phone number matching that country code.",
+              );
+          }
+          const operation =
+            groupModerationInput.action.startsWith("reject") ? "reject" : "approve";
+          const job = await enqueueGroupControlJob({
+            workspaceId: session.workspaceId,
+            sessionId: session.sessionId,
+            groupJid: groupModerationInput.groupJid,
+            operation,
+            participants: requests.map((request) => request.jid),
+          });
+          const response = await ctx.reply(
+            pageText(
+              `Group Moderation · ${operation === "approve" ? "Approval" : "Rejection"} Job`,
+              infoResponse(
+              `${operation === "approve" ? "Approval" : "Rejection"} Job Queued`,
+              `<b>Selected:</b> ${requests.length}\n<b>Operation:</b> ${operation}\n<b>Job:</b> <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>\nThe durable worker will process requests one by one and preserve partial progress across recovery.`,
+              ),
+            ),
+            {
+              parse_mode: "HTML",
+              reply_markup: keyboard([
+                [btn("↻ Live Progress", `job:live:${job.jobCode ?? job.jobId.slice(0, 8)}`, "primary")],
+                [btn("↻ Refresh Moderation", `session:${session.sessionId}:group:moderation:${groupModerationInput.index}`, "primary")],
+              ]),
+            },
+          );
+          if (job.jobCode && response && "chat" in response && "message_id" in response)
+            startJobLiveLoop(
+              ctx,
+              session.workspaceId,
+              job.jobCode,
+              response.chat.id,
+              response.message_id,
+            );
+          return;
+        }
+        const requestedDigits = phoneDigitsFromIdentity(value) ?? "";
+        const participant = requestedDigits
+          ? snapshot.participants.find((item) => firstVerifiedPhone(item.phoneNumber, item.jid, item.id) === requestedDigits)
+          : undefined;
+        if (!participant)
+          throw new Error(
+            "That WhatsApp member was not matched by a verified phone number. Send an international phone number or use a real WhatsApp mention.",
+          );
+        const participantIsAdmin = Boolean(participant.admin);
+        if (groupModerationInput.action === "promote" && participantIsAdmin)
+          throw new Error("That member is already an administrator.");
+        if (
+          groupModerationInput.action === "demote" &&
+          participant.admin !== "admin"
+        )
+          throw new Error(
+            "Only a removable administrator can be demoted; the group owner is protected.",
+          );
+        const participantAction = groupModerationInput.action === "promote" ? "promote" : "demote";
+        const job = await enqueueGroupControlJob({
+          workspaceId: session.workspaceId,
+          sessionId: session.sessionId,
+          groupJid: groupModerationInput.groupJid,
+          operation: "participant",
+          participants: [participant.id],
+          participantAction,
+        });
+        const response = await ctx.reply(
+          pageText(
+            "Group Moderation · Member Job",
+            infoResponse(
+              "Member Action Queued",
+              `<b>Action:</b> ${participantAction}\n<b>Member:</b> <code>${escapeHtml(maskedPhoneLabel(firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id)))}</code>\n<b>Job:</b> <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>`,
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [btn("↻ Live Progress", `job:live:${job.jobCode ?? job.jobId.slice(0, 8)}`, "primary")],
+              [btn("↻ Refresh Moderation", `session:${session.sessionId}:group:moderation:${groupModerationInput.index}`, "primary")],
+            ]),
+          },
+        );
+        if (job.jobCode && response && "chat" in response && "message_id" in response)
+          startJobLiveLoop(
+            ctx,
+            session.workspaceId,
+            job.jobCode,
+            response.chat.id,
+            response.message_id,
+          );
+      } catch (error) {
+        await ctx.reply(
+          pageText(
+            "Group Moderation",
+            dangerResponse(
+              "Action Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [
+                btn(
+                  "↻ Moderation",
+                  `session:${session.sessionId}:group:moderation:${groupModerationInput.index}`,
+                ),
+              ],
+            ]),
+          },
+        );
+      }
+      return;
+    }
+    const groupSetting = pendingGroupSetting.get(userId);
+    if (groupSetting && !ctx.message.text.startsWith("/")) {
+      pendingGroupSetting.delete(userId);
+      const value = ctx.message.text.trim();
+      const session = ownedSession(ctx, groupSetting.sessionId);
+      if (!session) return deny(ctx);
+      if (value.toLowerCase() === "cancel") {
+        await ctx.reply(
+          pageText(
+            "Group Settings",
+            infoResponse("Cancelled", "No group setting was changed."),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [
+                btn(
+                  "‹ Group",
+                  `session:${session.sessionId}:group:view:${groupSetting.index}`,
+                ),
+              ],
+            ]),
+          },
+        );
+        return;
+      }
+      const valid =
+        groupSetting.action === "name"
+          ? value.length >= 1 && value.length <= 100
+          : value.length <= 2048;
+      if (!valid) {
+        await ctx.reply(
+          pageText(
+            `Group · ${groupSetting.action}`,
+            dangerResponse(
+              "Invalid Value",
+              groupSetting.action === "name"
+                ? "The group name must contain 1–100 characters. Send a new value or <code>cancel</code>."
+                : "The group description must be at most 2,048 characters. Send a new value or <code>cancel</code>.",
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [
+                btn(
+                  "Cancel",
+                  `session:${session.sessionId}:group:view:${groupSetting.index}`,
+                ),
+              ],
+            ]),
+          },
+        );
+        return;
+      }
+      try {
+        if (groupSetting.action === "name")
+          await updateWhatsAppGroupSubject(
+            groupSetting.workspaceId,
+            groupSetting.sessionId,
+            groupSetting.groupJid,
+            value,
+          );
+        else
+          await updateGroupDescription(
+            groupSetting.workspaceId,
+            groupSetting.sessionId,
+            groupSetting.groupJid,
+            value,
+          );
+        await ctx.reply(
+          pageText(
+            "Group Settings",
+            successResponse(
+              groupSetting.action === "name"
+                ? "Name Updated"
+                : "Description Updated",
+              `<b>Group:</b> <code>${escapeHtml(groupSetting.groupJid)}</code>\nThe change was sent to WhatsApp successfully.`,
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [
+                btn(
+                  "↻ Open Group",
+                  `session:${session.sessionId}:group:view:${groupSetting.index}`,
+                ),
+                btn(
+                  "‹ My Groups",
+                  `session:${session.sessionId}:section:groups`,
+                ),
+              ],
+            ]),
+          },
+        );
+      } catch (error) {
+        await ctx.reply(
+          pageText(
+            "Group Settings",
+            dangerResponse(
+              "Update Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [
+                btn(
+                  "↻ Try Again",
+                  `session:${session.sessionId}:group:view:${groupSetting.index}`,
+                ),
+              ],
+            ]),
+          },
+        );
+      }
+      return;
+    }
     const groupPicture = pendingGroupPicture.get(userId);
     if (groupPicture && !ctx.message.text.startsWith("/")) {
       pendingGroupPicture.delete(userId);
@@ -959,7 +1625,7 @@ export function createTelegramBot(): Telegraf<Context> {
           throw new Error(
             groupPicture.groupJid
               ? "Send one HTTPS image URL."
-              : "Usage: send <groupJid> <https image URL>.",
+              : telegramCommandUsageCardText({ title: "Group Picture", command: "send", syntax: "send <group> <https image URL>", note: "Provide a group reference and one HTTPS image URL." }),
           );
         await updateGroupProfilePicture(
           groupPicture.workspaceId,
@@ -1001,9 +1667,15 @@ export function createTelegramBot(): Telegraf<Context> {
         await ctx.reply(
           pageText(
             "Broadcast Delay",
-            dangerResponse("Invalid delay", "Send a whole number from 1 to 60."),
+            dangerResponse(
+              "Invalid delay",
+              "Send a whole number from 1 to 60.",
+            ),
           ),
-          { parse_mode: "HTML", reply_markup: keyboard([[btn("Cancel", "settings:menu")]]) },
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([[btn("Cancel", "settings:menu")]]),
+          },
         );
         return;
       }
@@ -1018,7 +1690,10 @@ export function createTelegramBot(): Telegraf<Context> {
             `Allchat/allstatus delay is now <b>${Math.round(next.defaultBroadcastDelayMs / 1000)}s</b>.`,
           ),
         ),
-        { parse_mode: "HTML", reply_markup: keyboard([[btn("‹ Settings", "settings:menu")]]) },
+        {
+          parse_mode: "HTML",
+          reply_markup: keyboard([[btn("‹ Settings", "settings:menu")]]),
+        },
       );
       return;
     }
@@ -1274,13 +1949,21 @@ export function createTelegramBot(): Telegraf<Context> {
             adminGlobalBridge.messageId,
             undefined,
             adminBridgeText(activeAllSessions()),
-            { parse_mode: "HTML", reply_markup: adminBridgeKeyboard(activeAllSessions(), selected) },
-          )
-          .catch(async () => {
-            await ctx.reply(adminBridgeText(activeAllSessions()), {
+            {
               parse_mode: "HTML",
               reply_markup: adminBridgeKeyboard(activeAllSessions(), selected),
-            }).catch(() => undefined);
+            },
+          )
+          .catch(async () => {
+            await ctx
+              .reply(adminBridgeText(activeAllSessions()), {
+                parse_mode: "HTML",
+                reply_markup: adminBridgeKeyboard(
+                  activeAllSessions(),
+                  selected,
+                ),
+              })
+              .catch(() => undefined);
           });
         return;
       }
@@ -1293,11 +1976,17 @@ export function createTelegramBot(): Telegraf<Context> {
             ? quoted.caption
             : undefined
         : undefined;
-      const quotedMedia = await resolveTelegramQuotedMedia(ctx).catch(() => undefined);
+      const quotedMedia = await resolveTelegramQuotedMedia(ctx).catch(
+        () => undefined,
+      );
       const targets = activeAllSessions().filter((item) =>
         selected.has(adminBridgeTargetToken(item.workspaceId, item.sessionId)),
       );
-      const results: Array<{ sessionName: string; ok: boolean; output: string }> = [];
+      const results: Array<{
+        sessionName: string;
+        ok: boolean;
+        output: string;
+      }> = [];
       for (const session of targets) {
         try {
           const command = normalizeBridgeCommand(input, session.prefix);
@@ -1317,7 +2006,9 @@ export function createTelegramBot(): Telegraf<Context> {
             output: accepted
               ? typeof routed === "string"
                 ? routed
-                : (routed?.text ?? routed?.caption ?? "Command completed without text output.")
+                : (routed?.text ??
+                  routed?.caption ??
+                  "Command completed without text output.")
               : "No recognized command was dispatched to this session.",
           });
         } catch (error) {
@@ -1343,13 +2034,21 @@ export function createTelegramBot(): Telegraf<Context> {
           },
         )
         .catch(async () => {
-          await ctx.reply(globalBridgeResultText(input, results, userId), {
-            parse_mode: "HTML",
-            reply_markup: keyboard([
-              [btn("↻ Run Another Command", "admin:bridge:command", "primary")],
-              [btn("‹ Admin Global Bridge", "admin:bridge")],
-            ]),
-          }).catch(() => undefined);
+          await ctx
+            .reply(globalBridgeResultText(input, results, userId), {
+              parse_mode: "HTML",
+              reply_markup: keyboard([
+                [
+                  btn(
+                    "↻ Run Another Command",
+                    "admin:bridge:command",
+                    "primary",
+                  ),
+                ],
+                [btn("‹ Admin Global Bridge", "admin:bridge")],
+              ]),
+            })
+            .catch(() => undefined);
         });
       return;
     }
@@ -1372,7 +2071,9 @@ export function createTelegramBot(): Telegraf<Context> {
             ? quoted.caption
             : undefined
         : undefined;
-      const quotedMedia = await resolveTelegramQuotedMedia(ctx).catch(() => undefined);
+      const quotedMedia = await resolveTelegramQuotedMedia(ctx).catch(
+        () => undefined,
+      );
       const command = normalizeBridgeCommand(input, session.prefix);
       try {
         const result = await routeWhatsAppText({
@@ -1470,7 +2171,9 @@ export function createTelegramBot(): Telegraf<Context> {
             ? quoted.caption
             : undefined
         : undefined;
-      const quotedMedia = await resolveTelegramQuotedMedia(ctx).catch(() => undefined);
+      const quotedMedia = await resolveTelegramQuotedMedia(ctx).catch(
+        () => undefined,
+      );
       if (input.toLowerCase() === "cancel") {
         await ctx.telegram
           .editMessageText(
@@ -1641,14 +2344,26 @@ export function createTelegramBot(): Telegraf<Context> {
       pendingAdminInput.delete(userId);
       const workerName = ctx.message.text.trim();
       if (!/^[a-zA-Z0-9][a-zA-Z0-9 _-]{1,31}$/.test(workerName)) {
-        await ctx.reply(pageText("Workload · Name Panel", dangerResponse("Invalid workload name", "Use 2–32 letters, numbers, spaces, hyphens, or underscores. Send the name again or use /cancel.")), { parse_mode: "HTML" });
+        await ctx.reply(
+          pageText(
+            "Workload · Name Panel",
+            dangerResponse(
+              "Invalid workload name",
+              "Use 2–32 letters, numbers, spaces, hyphens, or underscores. Send the name again or use /cancel.",
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
         pendingAdminInput.set(userId, "workload:name");
         return;
       }
       await deliverWorkloadPairingCode(ctx, workerName);
       return;
     }
-    if (adminInput === "forcejoin:target" && !ctx.message.text.startsWith("/")) {
+    if (
+      adminInput === "forcejoin:target" &&
+      !ctx.message.text.startsWith("/")
+    ) {
       await handleForceJoinTargetInput(ctx, ctx.message.text.trim());
       return;
     }
@@ -1656,7 +2371,10 @@ export function createTelegramBot(): Telegraf<Context> {
       await handleForceJoinNameInput(ctx, ctx.message.text.trim());
       return;
     }
-    if (adminInput === "forcejoin:button" && !ctx.message.text.startsWith("/")) {
+    if (
+      adminInput === "forcejoin:button" &&
+      !ctx.message.text.startsWith("/")
+    ) {
       await handleForceJoinButtonInput(ctx, ctx.message.text.trim());
       return;
     }
@@ -1726,8 +2444,9 @@ export function createTelegramBot(): Telegraf<Context> {
     const user = resolveTelegramUser(ctx);
     if (user.workspaceId !== pending.workspaceId) return;
     const selected =
-      globalBridgeSelections.get(String(ctx.from?.id ?? "")) ?? new Set<string>();
-    const sessions = activeWorkspaceSessions(user.workspaceId).filter((session) =>
+      globalBridgeSelections.get(String(ctx.from?.id ?? "")) ??
+      new Set<string>();
+    const sessions = globalBridgeSessions(ctx).filter((session) =>
       selected.has(session.sessionId),
     );
     if (!sessions.length) {
@@ -1738,26 +2457,50 @@ export function createTelegramBot(): Telegraf<Context> {
           pending.messageId,
           undefined,
           globalBridgeResultText(ctx.message.text, [
-            { sessionName: "Bridge", ok: false, output: "No selected ACTIVE session is available; no command was dispatched." },
+            {
+              sessionName: "Bridge",
+              ok: false,
+              output:
+                "No selected ACTIVE session is available; no command was dispatched.",
+            },
           ]),
-          { parse_mode: "HTML", reply_markup: keyboard([[btn("‹ Global Command Desk", "bridge:global")]]) },
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [btn("‹ Global Command Desk", "bridge:global")],
+            ]),
+          },
         )
         .catch(() => undefined);
       return;
     }
-    await ctx.telegram.editMessageText(
-      pending.chatId,
-      pending.messageId,
-      undefined,
-      pageText("Global Bridge · Processing", infoResponse("Command dispatched", `<b>Targets:</b> ${sessions.length} ACTIVE session${sessions.length === 1 ? "" : "s"}\n\n⏳ Waiting for transport responses…`)),
-      { parse_mode: "HTML", reply_markup: keyboard([[btn("✖ Close Bridge", "bridge:global")]]) },
-    ).catch(() => undefined);
+    await ctx.telegram
+      .editMessageText(
+        pending.chatId,
+        pending.messageId,
+        undefined,
+        pageText(
+          "Global Bridge · Processing",
+          infoResponse(
+            "Command dispatched",
+            `<b>Targets:</b> ${sessions.length} ACTIVE session${sessions.length === 1 ? "" : "s"}\n\n⏳ Waiting for transport responses…`,
+          ),
+        ),
+        {
+          parse_mode: "HTML",
+          reply_markup: keyboard([[btn("✖ Close Bridge", "bridge:global")]]),
+        },
+      )
+      .catch(() => undefined);
     const results = await Promise.all(
       sessions.map(async (session) => {
         try {
-          const command = normalizeBridgeCommand(ctx.message.text, session.prefix);
+          const command = normalizeBridgeCommand(
+            ctx.message.text,
+            session.prefix,
+          );
           const routed = await routeWhatsAppText({
-            workspaceId: user.workspaceId,
+            workspaceId: session.workspaceId,
             sessionId: session.sessionId,
             senderJid: session.phoneNumber ?? "telegram-bridge",
             text: command,
@@ -1767,7 +2510,9 @@ export function createTelegramBot(): Telegraf<Context> {
           const output = accepted
             ? typeof routed === "string"
               ? routed
-              : (routed?.text ?? routed?.caption ?? "Command completed without text output.")
+              : (routed?.text ??
+                routed?.caption ??
+                "Command completed without text output.")
             : "No recognized command was dispatched to this session.";
           return { sessionName: session.sessionName, ok: accepted, output };
         } catch (error) {
@@ -1809,11 +2554,28 @@ export function createTelegramBot(): Telegraf<Context> {
         kind: "document",
         bytes: Buffer.from(await response.arrayBuffer()),
         mimeType: document.mime_type ?? "application/octet-stream",
-        fileName: document.file_name ?? `autopromote-${document.file_unique_id}.bin`,
+        fileName:
+          document.file_name ?? `autopromote-${document.file_unique_id}.bin`,
       });
       const caption = ctx.message.caption ?? "";
-      pendingAutoPromote.set(userId, { ...autoPromote, payloadMedia: media, payloadText: caption, payloadCaption: caption, stage: "confirm" });
-      await ctx.reply(pageText("Auto Promote · Confirm", autoPromoteWizardSummary({ ...autoPromote, payloadMedia: media, payloadText: caption })), { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() });
+      pendingAutoPromote.set(userId, {
+        ...autoPromote,
+        payloadMedia: media,
+        payloadText: caption,
+        payloadCaption: caption,
+        stage: "confirm",
+      });
+      await ctx.reply(
+        pageText(
+          "Auto Promote · Confirm",
+          autoPromoteWizardSummary({
+            ...autoPromote,
+            payloadMedia: media,
+            payloadText: caption,
+          }),
+        ),
+        { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() },
+      );
       return;
     }
     const fileName = document.file_name ?? "document.txt";
@@ -1962,7 +2724,17 @@ export function createTelegramBot(): Telegraf<Context> {
         payloadCaption: caption,
         stage: "confirm",
       });
-      await ctx.reply(pageText("Auto Promote · Confirm", autoPromoteWizardSummary({ ...autoPromote, payloadMedia: media, payloadText: caption })), { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() });
+      await ctx.reply(
+        pageText(
+          "Auto Promote · Confirm",
+          autoPromoteWizardSummary({
+            ...autoPromote,
+            payloadMedia: media,
+            payloadText: caption,
+          }),
+        ),
+        { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() },
+      );
       return;
     }
     const profilePicture = pendingProfilePicture.get(userId);
@@ -2051,8 +2823,24 @@ export function createTelegramBot(): Telegraf<Context> {
         fileName: `autopromote-${ctx.message.video.file_unique_id}.mp4`,
       });
       const caption = ctx.message.caption ?? "";
-      pendingAutoPromote.set(userId, { ...autoPromote, payloadMedia: media, payloadText: caption, payloadCaption: caption, stage: "confirm" });
-      await ctx.reply(pageText("Auto Promote · Confirm", autoPromoteWizardSummary({ ...autoPromote, payloadMedia: media, payloadText: caption })), { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() });
+      pendingAutoPromote.set(userId, {
+        ...autoPromote,
+        payloadMedia: media,
+        payloadText: caption,
+        payloadCaption: caption,
+        stage: "confirm",
+      });
+      await ctx.reply(
+        pageText(
+          "Auto Promote · Confirm",
+          autoPromoteWizardSummary({
+            ...autoPromote,
+            payloadMedia: media,
+            payloadText: caption,
+          }),
+        ),
+        { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() },
+      );
       return;
     }
     if (!requireAdmin(ctx)) return;
@@ -2093,14 +2881,34 @@ export function createTelegramBot(): Telegraf<Context> {
         kind: "audio",
         bytes: Buffer.from(await response.arrayBuffer()),
         mimeType: ctx.message.audio.mime_type ?? "audio/mpeg",
-        fileName: ctx.message.audio.file_name ?? `autopromote-${ctx.message.audio.file_unique_id}.audio`,
+        fileName:
+          ctx.message.audio.file_name ??
+          `autopromote-${ctx.message.audio.file_unique_id}.audio`,
       });
       const caption = ctx.message.caption ?? "";
-      pendingAutoPromote.set(userId, { ...autoPromote, payloadMedia: media, payloadText: caption, payloadCaption: caption, stage: "confirm" });
-      await ctx.reply(pageText("Auto Promote · Confirm", autoPromoteWizardSummary({ ...autoPromote, payloadMedia: media, payloadText: caption })), { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() });
+      pendingAutoPromote.set(userId, {
+        ...autoPromote,
+        payloadMedia: media,
+        payloadText: caption,
+        payloadCaption: caption,
+        stage: "confirm",
+      });
+      await ctx.reply(
+        pageText(
+          "Auto Promote · Confirm",
+          autoPromoteWizardSummary({
+            ...autoPromote,
+            payloadMedia: media,
+            payloadText: caption,
+          }),
+        ),
+        { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() },
+      );
       return;
     }
-    await ctx.reply("Audio is accepted by Auto Promote only while its payload step is open.");
+    await ctx.reply(
+      "Audio is accepted by Auto Promote only while its payload step is open.",
+    );
   });
 
   bot.action("menu:main", async (ctx) => {
@@ -2121,11 +2929,19 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.action("help:main", async (ctx) => {
     await ctx.answerCbQuery();
-    await edit(ctx, helpText(), keyboard([[btn(ui.back, "menu:main")]]));
+    await edit(ctx, helpText(), helpKeyboard());
+  });
+  bot.action(/^help:section:([a-z-]+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    await edit(
+      ctx,
+      helpSectionText(ctx.match[1] ?? ""),
+      helpSectionKeyboard(ctx.match[1] ?? ""),
+    );
   });
   bot.action("ui:help", async (ctx) => {
     await ctx.answerCbQuery();
-    await edit(ctx, helpText(), keyboard([[btn(ui.back, "menu:main")]]));
+    await edit(ctx, helpText(), helpKeyboard());
   });
 
   bot.action("session:new", async (ctx) => {
@@ -2137,21 +2953,58 @@ export function createTelegramBot(): Telegraf<Context> {
     const user = resolveTelegramUser(ctx);
     const token = ctx.match[1] ?? "";
     const worker = /^\d{5}$/.test(token)
-      ? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, token)
-      : await getWorkspaceWorkloadWorkerByCode(user.workspaceId, token);
+      ? await getAccessibleWorkspaceWorkloadWorkerByDisplayKey(
+          user.workspaceId,
+          token,
+        )
+      : await getAccessibleWorkspaceWorkloadWorkerByCode(
+          user.workspaceId,
+          token,
+        );
     if (!worker || !isWorkloadWorkerReady(worker)) {
-      await edit(ctx, pageText("Pairing", dangerResponse("Workload is not ready", "Choose an ACTIVE workload with a fresh heartbeat.")), keyboard([[btn("◌ Workload", "workload:menu")], [btn(ui.back, "menu:main")]]));
+      await edit(
+        ctx,
+        pageText(
+          "Pairing",
+          dangerResponse(
+            "Workload is not ready",
+            "Choose an ACTIVE workload with a fresh heartbeat.",
+          ),
+        ),
+        keyboard([
+          [btn("◌ Workload", "workload:menu")],
+          [btn(ui.back, "menu:main")],
+        ]),
+      );
       return;
     }
     const code = worker.workloadCode ?? worker.displayKey;
-    preferredWorkloadWorker.set(String(ctx.from?.id ?? ""), { workspaceId: worker.workspaceId, workerId: worker.workerId, workloadCode: code, displayKey: worker.displayKey });
+    preferredWorkloadWorker.set(String(ctx.from?.id ?? ""), {
+      workspaceId: user.workspaceId,
+      workerId: worker.workerId,
+      workloadCode: code,
+      displayKey: worker.displayKey,
+    });
     await beginPairingWizard(ctx, true);
   });
   bot.action("pair:local", async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
-    if (await getWorkloadMode(user.workspaceId) === "OFF") {
-      await edit(ctx, pageText("Pairing", dangerResponse("Central workload is OFF", "Deploy or select an external panel workload to pair this WhatsApp session. Your existing sessions are preserved.")), keyboard([[btn("◌ Workload Panels", "workload:menu")], [btn(ui.back, "menu:main")]]));
+    if ((await getWorkloadMode(user.workspaceId)) === "OFF") {
+      await edit(
+        ctx,
+        pageText(
+          "Pairing",
+          dangerResponse(
+            "Central workload is OFF",
+            "Deploy or select an external panel workload to pair this WhatsApp session. Your existing sessions are preserved.",
+          ),
+        ),
+        keyboard([
+          [btn("◌ Workload Panels", "workload:menu")],
+          [btn(ui.back, "menu:main")],
+        ]),
+      );
       return;
     }
     preferredWorkloadWorker.delete(String(ctx.from?.id ?? ""));
@@ -2310,6 +3163,8 @@ export function createTelegramBot(): Telegraf<Context> {
           jobs: purged.jobs,
           links: purged.links,
           traces: purged.traces,
+          autoPromoteConfigs: purged.autoPromoteConfigs,
+          autoPromoteRuns: purged.autoPromoteRuns,
         },
       });
       await edit(
@@ -2317,8 +3172,10 @@ export function createTelegramBot(): Telegraf<Context> {
         pageText(
           "Session Purged",
           successResponse(
-            purged.remoteCleanup === "CONFIRMED" ? "Encrypted Auth Removed" : "Central Purge Completed",
-            `Session <b>${escapeHtml(session.sessionName)}</b> was stopped and removed from the control plane.\n\n<b>Deleted:</b> ${purged.jobs} jobs · ${purged.links} collected links · ${purged.traces} message traces · ${purged.remoteCleanup === "CONFIRMED" ? "panel encrypted auth" : "central auth record"}\n\n${purged.remoteCleanup === "CONFIRMED" ? "Panel auth was confirmed removed." : "The panel was unreachable, so its auth directory could not be confirmed removed; the assignment was revoked and it cannot reconnect this session."}\n\nYou can create a new session from Sessions.`,
+            purged.remoteCleanup === "CONFIRMED"
+              ? "Encrypted Auth Removed"
+              : "Central Purge Completed",
+            `Session <b>${escapeHtml(session.sessionName)}</b> was stopped and removed from the control plane.\n\n<b>Deleted:</b> ${purged.jobs} jobs · ${purged.links} collected links · ${purged.traces} message traces · ${purged.autoPromoteRuns} Auto Promote runs · ${purged.autoPromoteConfigs} session Auto Promote configs · ${purged.remoteCleanup === "CONFIRMED" ? "panel encrypted auth" : "central auth record"}\n\n${purged.remoteCleanup === "CONFIRMED" ? "Panel auth was confirmed removed." : "The panel was unreachable, so its auth directory could not be confirmed removed; the assignment was revoked and it cannot reconnect this session."}\n\nYou can create a new session from Sessions.`,
           ),
         ),
         keyboard([[btn("‹ Sessions", "sessions:list:0", "success")]]),
@@ -2429,7 +3286,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const index = Number(ctx.match[2] ?? -1);
     try {
       const group = await getSessionGroupAt(ctx, session.sessionId, index);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       await edit(
         ctx,
         pageText(
@@ -2439,26 +3296,7 @@ export function createTelegramBot(): Telegraf<Context> {
             `<b>Subject:</b> ${escapeHtml(group.subject)}\n<b>JID:</b> <code>${escapeHtml(group.jid)}</code>\n<b>Members:</b> ${group.participantCount}\n\nChoose one action for this group.`,
           ),
         ),
-        keyboard([
-          [
-            btn(
-              "🔗 Invite Link",
-              `session:${session.sessionId}:group:invite:${index}`,
-            ),
-            btn(
-              "▣ Group Picture",
-              `session:${session.sessionId}:group:picture:${index}`,
-            ),
-          ],
-          [
-            btn(
-              "↪ Leave Group",
-              `session:${session.sessionId}:group:leave:${index}`,
-              "danger",
-            ),
-          ],
-          [btn("‹ My Groups", `session:${session.sessionId}:section:groups`)],
-        ]),
+        sessionGroupKeyboard(session.sessionId, index),
       );
     } catch (error) {
       await edit(
@@ -2522,6 +3360,1219 @@ export function createTelegramBot(): Telegraf<Context> {
         keyboard([
           [btn("‹ My Groups", `session:${session.sessionId}:section:groups`)],
         ]),
+      );
+    }
+  });
+  bot.action(
+    /^session:([^:]+):group:(name|description):(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const action = ctx.match[2] === "description" ? "description" : "name";
+      const index = Number(ctx.match[3] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      beginExclusiveInput(String(ctx.from?.id ?? ""));
+      pendingGroupSetting.set(String(ctx.from?.id ?? ""), {
+        workspaceId: session.workspaceId,
+        sessionId: session.sessionId,
+        groupJid: group.jid,
+        action,
+        index,
+      });
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Group ${action}`,
+          infoResponse(
+            action === "name" ? "Edit Group Name" : "Edit Group Description",
+            `<b>Group:</b> ${escapeHtml(group.subject)}\nSend the new ${action}, or send <code>cancel</code>.${action === "name" ? " Maximum 100 characters." : " Maximum 2,048 characters."}`,
+          ),
+        ),
+        keyboard([
+          [btn("Cancel", `session:${session.sessionId}:group:view:${index}`)],
+        ]),
+      );
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:(chat|info):(admins|all):(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery("Updating…");
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[4] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      try {
+        const snapshot = await getGroupModerationSnapshot(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+        );
+        if (!snapshot.isAdmin)
+          throw new Error(
+            "This WhatsApp identity is no longer an administrator in the group.",
+          );
+        const adminsOnly = ctx.match[3] === "admins";
+        if (ctx.match[2] === "chat")
+          await setGroupChatMode(
+            session.workspaceId,
+            session.sessionId,
+            group.jid,
+            adminsOnly,
+          );
+        else
+          await setGroupInfoMode(
+            session.workspaceId,
+            session.sessionId,
+            group.jid,
+            adminsOnly,
+          );
+        await showGroupModeration(ctx, session.sessionId, index);
+      } catch (error) {
+        await edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Moderation`,
+            dangerResponse(
+              "Group Mode Update Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          keyboard([
+            [
+              btn(
+                "↻ Retry",
+                `session:${session.sessionId}:group:moderation:${index}`,
+                "primary",
+              ),
+            ],
+          ]),
+        );
+      }
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:ephemeral:(off|24h|7d|90d):(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery("Updating…");
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[3] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      const secondsByMode = {
+        off: 0,
+        "24h": 86_400,
+        "7d": 604_800,
+        "90d": 7_776_000,
+      } as const;
+      try {
+        const snapshot = await getGroupModerationSnapshot(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+        );
+        if (!snapshot.isAdmin)
+          throw new Error(
+            "This WhatsApp identity is no longer an administrator in the group.",
+          );
+        await setGroupEphemeral(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+          secondsByMode[ctx.match[2] as keyof typeof secondsByMode],
+        );
+        await showGroupModeration(ctx, session.sessionId, index);
+      } catch (error) {
+        await edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Moderation`,
+            dangerResponse(
+              "Disappearing Messages Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          keyboard([
+            [
+              btn(
+                "↻ Retry",
+                `session:${session.sessionId}:group:moderation:${index}`,
+                "primary",
+              ),
+            ],
+          ]),
+        );
+      }
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:revoke-invite:(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[2] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Moderation`,
+          dangerResponse(
+            "Confirm Invite Rotation",
+            `Revoke the current invite link for <b>${escapeHtml(group.subject)}</b>? Existing invite links will stop working.`,
+          ),
+        ),
+        keyboard([
+          [
+            btn(
+              "✅ Revoke Invite",
+              `session:${session.sessionId}:group:moderation:revoke-invite:run:${index}`,
+              "danger",
+            ),
+            btn(
+              "Cancel",
+              `session:${session.sessionId}:group:moderation:${index}`,
+            ),
+          ],
+        ]),
+      );
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:revoke-invite:run:(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery("Rotating invite…");
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[2] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      try {
+        const snapshot = await getGroupModerationSnapshot(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+        );
+        if (!snapshot.isAdmin)
+          throw new Error(
+            "This WhatsApp identity is no longer an administrator in the group.",
+          );
+        await revokeGroupInvite(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+        );
+        await edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Moderation`,
+            successResponse(
+              "Invite Revoked",
+              "The previous group invite has been invalidated. Open Invite Link from the group dashboard to obtain the replacement link.",
+            ),
+          ),
+          keyboard([
+            [
+              btn(
+                "↻ Moderation",
+                `session:${session.sessionId}:group:moderation:${index}`,
+                "primary",
+              ),
+            ],
+          ]),
+        );
+      } catch (error) {
+        await edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Moderation`,
+            dangerResponse(
+              "Invite Rotation Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          keyboard([
+            [
+              btn(
+                "↻ Retry",
+                `session:${session.sessionId}:group:moderation:revoke-invite:${index}`,
+                "primary",
+              ),
+            ],
+          ]),
+        );
+      }
+    },
+  );
+  bot.action(/^session:([^:]+):group:moderation:bulk:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+    if (!session) return deny(ctx);
+    const index = Number(ctx.match[2] ?? -1);
+    const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(
+      () => undefined,
+    );
+    if (!group) return showSessionGroups(ctx, session.sessionId);
+    await edit(
+      ctx,
+      pageText(
+        `${session.sessionName} · Bulk Moderation`,
+        warningResponse(
+          "Destructive Group Actions",
+          `These actions affect multiple WhatsApp members in <b>${escapeHtml(group.subject)}</b>. Every operation requires a second confirmation and protects the group owner and this bot.`,
+        ),
+      ),
+      keyboard([
+        [
+          btn(
+            "Remove All Non-Admins",
+            `session:${session.sessionId}:group:moderation:bulk:remove:${index}`,
+            "danger",
+          ),
+        ],
+        [
+          btn(
+            "Block All Non-Admins",
+            `session:${session.sessionId}:group:moderation:bulk:block:${index}`,
+            "danger",
+          ),
+        ],
+        [
+          btn(
+            "Demote Removable Admins",
+            `session:${session.sessionId}:group:moderation:bulk:demote:${index}`,
+            "danger",
+          ),
+        ],
+        [
+          btn(
+            "‹ Moderation",
+            `session:${session.sessionId}:group:moderation:${index}`,
+          ),
+        ],
+      ]),
+    );
+  });
+  bot.action(
+    /^session:([^:]+):group:moderation:bulk:(block|remove|demote):(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[3] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      const labels = {
+        block: "block all non-admins",
+        remove: "remove all non-admins",
+        demote: "demote all removable admins",
+      } as const;
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Bulk Moderation`,
+          dangerResponse(
+            "Confirm Bulk Action",
+            `This will <b>${labels[ctx.match[2] as keyof typeof labels]}</b> in <b>${escapeHtml(group.subject)}</b>. The action may be irreversible. Continue?`,
+          ),
+        ),
+        keyboard([
+          [
+            btn(
+              "✅ Confirm",
+              `session:${session.sessionId}:group:moderation:bulk:run:${ctx.match[2]}:${index}`,
+              "danger",
+            ),
+            btn(
+              "Cancel",
+              `session:${session.sessionId}:group:moderation:bulk:${index}`,
+            ),
+          ],
+        ]),
+      );
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:bulk:run:(block|remove|demote):(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery("Processing…");
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[3] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      try {
+        const snapshot = await getGroupModerationSnapshot(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+        );
+        if (!snapshot.isAdmin)
+          throw new Error(
+            "This WhatsApp identity is no longer an administrator in the group.",
+          );
+        const selfDigits = (session.phoneNumber ?? "").replace(/\\D/g, "");
+        const targets = snapshot.participants
+          .filter((participant) => {
+            const participantDigits = [
+              participant.phoneNumber,
+              participant.id,
+              participant.jid,
+            ]
+              .filter(Boolean)
+              .join(" ")
+              .replace(/\\D/g, "");
+            const isSelf =
+              selfDigits.length >= 7 && participantDigits.includes(selfDigits);
+            if (ctx.match[2] === "demote")
+              return participant.admin === "admin" && !isSelf;
+            return !participant.admin && !isSelf;
+          })
+          .slice(0, 500);
+        if (!targets.length)
+          throw new Error("No eligible participants matched this bulk action.");
+        const participantAction = ctx.match[2] === "block"
+          ? "block"
+          : ctx.match[2] === "demote"
+            ? "demote"
+            : "remove";
+        const job = await enqueueGroupControlJob({
+          workspaceId: session.workspaceId,
+          sessionId: session.sessionId,
+          groupJid: group.jid,
+          operation: "participant",
+          participants: targets.map((participant) => participant.id),
+          participantAction,
+        });
+        const response = await ctx.reply(
+          pageText(
+            `${session.sessionName} · Bulk Moderation`,
+            infoResponse(
+              "Bulk Action Queued",
+              `<b>Selected:</b> ${targets.length}\n<b>Action:</b> ${participantAction}\n<b>Job:</b> <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>\nThe durable worker will process the protected selection with pause, cancellation, heartbeat, and partial-result tracking.`,
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [btn("↻ Live Progress", `job:live:${job.jobCode ?? job.jobId.slice(0, 8)}`, "primary")],
+              [btn("↻ Moderation", `session:${session.sessionId}:group:moderation:${index}`, "primary")],
+            ]),
+          },
+        );
+        if (job.jobCode && response && "chat" in response && "message_id" in response)
+          startJobLiveLoop(
+            ctx,
+            session.workspaceId,
+            job.jobCode,
+            response.chat.id,
+            response.message_id,
+          );
+      } catch (error) {
+        await edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Bulk Moderation`,
+            dangerResponse(
+              "Bulk Action Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          keyboard([
+            [
+              btn(
+                "↻ Bulk Actions",
+                `session:${session.sessionId}:group:moderation:bulk:${index}`,
+                "primary",
+              ),
+            ],
+          ]),
+        );
+      }
+    },
+  );
+  bot.action(/^session:([^:]+):group:moderation:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    await showGroupModeration(
+      ctx,
+      String(ctx.match[1] ?? ""),
+      Number(ctx.match[2] ?? -1),
+    );
+  });
+  bot.action(
+    /^session:([^:]+):group:moderation:members:country:confirm$/,
+    async (ctx) => {
+      await ctx.answerCbQuery("Queueing member action…");
+      const userId = String(ctx.from?.id ?? "");
+      const pending = pendingGroupCountryConfirmation.get(userId);
+      if (!pending) {
+        await edit(ctx, pageText("Group Members", infoResponse("Confirmation Expired", "Start the country filter again to review the current members.")), keyboard([[btn("‹ Groups", "menu:main")]]));
+        return;
+      }
+      pendingGroupCountryConfirmation.delete(userId);
+      const session = ownedSession(ctx, pending.sessionId);
+      if (!session) return deny(ctx);
+      try {
+        const job = await enqueueGroupControlJob({
+          workspaceId: pending.workspaceId,
+          sessionId: pending.sessionId,
+          groupJid: pending.groupJid,
+          operation: "participant",
+          participants: pending.participants,
+          participantAction: pending.action,
+        });
+        const response = await ctx.reply(
+          pageText(
+            `${session.sessionName} · Members`,
+            infoResponse(
+              `${pending.action === "block" ? "Block" : "Remove"} by Country Queued`,
+              `<b>Country:</b> +${pending.countryCode}\n<b>Selected:</b> ${pending.participants.length}\n<b>Job:</b> <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>\nThe worker will revalidate admin access and process the protected selection with partial-result tracking.`,
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [btn("↻ Live Progress", `job:live:${job.jobCode ?? job.jobId.slice(0, 8)}`, "primary")],
+              [btn("↻ Members", `session:${session.sessionId}:group:moderation:members:${pending.index}`, "primary")],
+            ]),
+          },
+        );
+        if (job.jobCode && response && "chat" in response && "message_id" in response)
+          startJobLiveLoop(ctx, session.workspaceId, job.jobCode, response.chat.id, response.message_id);
+      } catch (error) {
+        await edit(
+          ctx,
+          pageText(`${session.sessionName} · Members`, dangerResponse("Member Action Failed", escapeHtml(error instanceof Error ? error.message : String(error)))),
+          keyboard([[btn("↻ Members", `session:${session.sessionId}:group:moderation:members:${pending.index}`, "primary")]]),
+        );
+      }
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:members:(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[2] ?? -1);
+      const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      try {
+        const snapshot = await getGroupModerationSnapshot(session.workspaceId, session.sessionId, group.jid, { fresh: false });
+        if (!snapshot.isAdmin) throw new Error("This WhatsApp identity is no longer an administrator in the group.");
+        const nonAdmins = snapshot.participants.filter((participant) => !participant.admin);
+        const preview = snapshot.participants.slice(0, 20).map((participant) =>
+          `• ${escapeHtml(participant.id)}${participant.admin ? " · admin" : ""}`,
+        ).join("\n") || "No participants returned.";
+        await edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Members`,
+            infoResponse(
+              "Group Members",
+              `<b>Group:</b> ${escapeHtml(snapshot.subject)}\n<b>Total:</b> ${snapshot.participants.length}\n<b>Admins:</b> ${snapshot.participants.length - nonAdmins.length}\n<b>Non-admins:</b> ${nonAdmins.length}\n\n<b>Preview</b>\n${preview}`,
+            ),
+          ),
+          keyboard([
+            [btn("Remove by Country", `session:${session.sessionId}:group:moderation:members:country:remove:${index}`, "danger")],
+            [btn("Block by Country", `session:${session.sessionId}:group:moderation:members:country:block:${index}`, "danger")],
+            [btn("⚠ Bulk Actions", `session:${session.sessionId}:group:moderation:bulk:${index}`, "danger")],
+            [btn("‹ Moderation", `session:${session.sessionId}:group:moderation:${index}`)],
+          ]),
+        );
+      } catch (error) {
+        await edit(
+          ctx,
+          pageText(`${session.sessionName} · Members`, dangerResponse("Member List Failed", escapeHtml(error instanceof Error ? error.message : String(error)))),
+          keyboard([[btn("↻ Retry", `session:${session.sessionId}:group:moderation:members:${index}`, "primary")], [btn("‹ Moderation", `session:${session.sessionId}:group:moderation:${index}`)]]),
+        );
+      }
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:members:country:(remove|block):(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[3] ?? -1);
+      const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      beginExclusiveInput(String(ctx.from?.id ?? ""));
+      pendingGroupModerationInput.set(String(ctx.from?.id ?? ""), {
+        workspaceId: session.workspaceId,
+        sessionId: session.sessionId,
+        groupJid: group.jid,
+        action: ctx.match[2] === "block" ? "blockCountry" : "removeCountry",
+        index,
+      });
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Members`,
+          warningResponse(
+            `${ctx.match[2] === "block" ? "Block" : "Remove"} by Country`,
+            `<b>Group:</b> ${escapeHtml(group.subject)}\nSend a country calling code such as <code>+234</code>, <code>+1</code>, or <code>+44</code>. The matching non-admin members will be shown for confirmation before any job is queued.`,
+          ),
+        ),
+        keyboard([[btn("Cancel", `session:${session.sessionId}:group:moderation:members:${index}`)]]),
+      );
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:(promote|demote):(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[3] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      const snapshot = await getGroupModerationSnapshot(
+        session.workspaceId,
+        session.sessionId,
+        group.jid,
+      ).catch(() => undefined);
+      if (!snapshot?.isAdmin)
+        return showGroupModeration(ctx, session.sessionId, index);
+      const action = ctx.match[2] === "demote" ? "demote" : "promote";
+      beginExclusiveInput(String(ctx.from?.id ?? ""));
+      pendingGroupModerationInput.set(String(ctx.from?.id ?? ""), {
+        workspaceId: session.workspaceId,
+        sessionId: session.sessionId,
+        groupJid: group.jid,
+        action,
+        index,
+      });
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · ${action}`,
+          infoResponse(
+            action === "promote" ? "Promote Member" : "Demote Administrator",
+            `<b>Group:</b> ${escapeHtml(group.subject)}\nSend the member’s full WhatsApp number or participant JID, or send <code>cancel</code>. The current group membership and administrator role will be checked again before the change.`,
+          ),
+        ),
+        keyboard([
+          [
+            btn(
+              "Cancel",
+              `session:${session.sessionId}:group:moderation:${index}`,
+            ),
+          ],
+        ]),
+      );
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:approval:(on|off):(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery("Updating…");
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[3] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      try {
+        const snapshot = await getGroupModerationSnapshot(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+        );
+        if (!snapshot.isAdmin)
+          throw new Error(
+            "This WhatsApp identity is no longer an administrator in the group.",
+          );
+        const enabled = ctx.match[2] === "on";
+        await setGroupJoinApprovalMode(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+          enabled,
+        );
+        await showGroupModeration(ctx, session.sessionId, index);
+      } catch (error) {
+        await edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Moderation`,
+            dangerResponse(
+              "Join Approval Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          keyboard([
+            [
+              btn(
+                "↻ Retry",
+                `session:${session.sessionId}:group:moderation:${index}`,
+                "primary",
+              ),
+            ],
+          ]),
+        );
+      }
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:memberadd:(all|admins):(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery("Updating…");
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[3] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      try {
+        const snapshot = await getGroupModerationSnapshot(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+        );
+        if (!snapshot.isAdmin)
+          throw new Error(
+            "This WhatsApp identity is no longer an administrator in the group.",
+          );
+        await setGroupMemberAddMode(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+          ctx.match[2] === "all",
+        );
+        await showGroupModeration(ctx, session.sessionId, index);
+      } catch (error) {
+        await edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Moderation`,
+            dangerResponse(
+              "Member Add Mode Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          keyboard([
+            [
+              btn(
+                "↻ Retry",
+                `session:${session.sessionId}:group:moderation:${index}`,
+                "primary",
+              ),
+            ],
+          ]),
+        );
+      }
+    },
+  );
+  bot.action(/^session:([^:]+):group:moderation:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Opening moderation…");
+    const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+    if (!session) return deny(ctx);
+    const index = Number(ctx.match[2] ?? -1);
+    await edit(
+      ctx,
+      pageText(
+        `${session.sessionName} · Moderation`,
+        infoResponse(
+          "Loading Moderation",
+          "Reading the selected group’s live settings and pending requests…",
+        ),
+      ),
+      keyboard([
+        [btn("‹ Group", `session:${session.sessionId}:group:view:${index}`)],
+      ]),
+    );
+    try {
+      await showGroupModeration(ctx, session.sessionId, index);
+    } catch (error) {
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Moderation`,
+          dangerResponse(
+            "Moderation Unavailable",
+            `${escapeHtml(error instanceof Error ? error.message : String(error))}\n\nTap Retry to try the live panel again.`,
+          ),
+        ),
+        keyboard([
+          [
+            btn(
+              "↻ Retry Moderation",
+              `session:${session.sessionId}:group:moderation:${index}`,
+              "primary",
+            ),
+          ],
+          [btn("‹ Group", `session:${session.sessionId}:group:view:${index}`)],
+        ]),
+      );
+    }
+  });
+  bot.action(
+    /^session:([^:]+):group:moderation:approve:(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[2] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      try {
+        const snapshot = await getGroupModerationSnapshot(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+        );
+        if (!snapshot.isAdmin)
+          throw new Error(
+            "This WhatsApp identity is no longer an administrator in the group.",
+          );
+        const requests = await listGroupJoinRequests(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+        );
+        await edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Approvals`,
+            infoResponse(
+              "Pending Join Requests",
+              `<b>Group:</b> ${escapeHtml(group.subject)}\n<b>Pending:</b> ${requests.length}\n\nChoose a bounded approval operation. Country approval uses the phone number exposed by WhatsApp; LID-only requests are not guessed.`,
+            ),
+          ),
+          keyboard([
+            [
+              btn(
+                `Approve All (${requests.length})`,
+                `session:${session.sessionId}:group:moderation:approve:all:${index}`,
+                "success",
+              ),
+            ],
+            [
+              btn(
+                "Approve by Amount",
+                `session:${session.sessionId}:group:moderation:approve:amount:${index}`,
+                "success",
+              ),
+              btn(
+                "Approve by Country",
+                `session:${session.sessionId}:group:moderation:approve:country:${index}`,
+                "success",
+              ),
+            ],
+            [
+              btn(
+                `Reject All (${requests.length})`,
+                `session:${session.sessionId}:group:moderation:reject:all:${index}`,
+                "danger",
+              ),
+            ],
+            [
+              btn(
+                "Reject by Amount",
+                `session:${session.sessionId}:group:moderation:reject:amount:${index}`,
+                "danger",
+              ),
+              btn(
+                "Reject by Country",
+                `session:${session.sessionId}:group:moderation:reject:country:${index}`,
+                "danger",
+              ),
+            ],
+            [
+              btn(
+                "↻ Refresh",
+                `session:${session.sessionId}:group:moderation:approve:${index}`,
+                "primary",
+              ),
+            ],
+            [
+              btn(
+                "‹ Moderation",
+                `session:${session.sessionId}:group:moderation:${index}`,
+              ),
+            ],
+          ]),
+        );
+      } catch (error) {
+        await edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Approvals`,
+            dangerResponse(
+              "Approval List Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          keyboard([
+            [
+              btn(
+                "↻ Retry",
+                `session:${session.sessionId}:group:moderation:approve:${index}`,
+                "primary",
+              ),
+            ],
+          ]),
+        );
+      }
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:reject:all:(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[2] ?? -1);
+      const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      const requests = await listGroupJoinRequests(session.workspaceId, session.sessionId, group.jid).catch(() => []);
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Reject All`,
+          dangerResponse(
+            "Confirm Rejection",
+            `Reject all <b>${requests.length}</b> pending join requests in <b>${escapeHtml(group.subject)}</b>?`,
+          ),
+        ),
+        keyboard([
+          [
+            btn("✅ Confirm Reject All", `session:${session.sessionId}:group:moderation:reject:all:run:${index}`, "danger"),
+            btn("Cancel", `session:${session.sessionId}:group:moderation:approve:${index}`),
+          ],
+        ]),
+      );
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:reject:all:run:(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery("Rejecting…");
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[2] ?? -1);
+      const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      try {
+        const snapshot = await getGroupModerationSnapshot(session.workspaceId, session.sessionId, group.jid);
+        if (!snapshot.isAdmin) throw new Error("This WhatsApp identity is no longer an administrator in the group.");
+        const requests = await listGroupJoinRequests(session.workspaceId, session.sessionId, group.jid);
+        if (!requests.length) throw new Error("There are no pending join requests to reject.");
+        const job = await enqueueGroupControlJob({
+          workspaceId: session.workspaceId,
+          sessionId: session.sessionId,
+          groupJid: group.jid,
+          operation: "reject",
+          participants: requests.map((request) => request.jid),
+        });
+        const response = await ctx.reply(
+          pageText(
+            `${session.sessionName} · Rejections`,
+            infoResponse(
+              "Rejection Job Queued",
+              `<b>Selected:</b> ${requests.length}\n<b>Job:</b> <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>\nThe durable worker will process each request with partial-result tracking.`,
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [btn("↻ Live Progress", `job:live:${job.jobCode ?? job.jobId.slice(0, 8)}`, "primary")],
+              [btn("↻ Moderation", `session:${session.sessionId}:group:moderation:${index}`, "primary")],
+            ]),
+          },
+        );
+        if (job.jobCode && response && "chat" in response && "message_id" in response)
+          startJobLiveLoop(ctx, session.workspaceId, job.jobCode, response.chat.id, response.message_id);
+      } catch (error) {
+        await edit(
+          ctx,
+          pageText(`${session.sessionName} · Rejections`, dangerResponse("Rejection Failed", escapeHtml(error instanceof Error ? error.message : String(error)))),
+          keyboard([[btn("↻ Rejections", `session:${session.sessionId}:group:moderation:approve:${index}`, "primary")]]),
+        );
+      }
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:approve:all:(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[2] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      const requests = await listGroupJoinRequests(
+        session.workspaceId,
+        session.sessionId,
+        group.jid,
+      ).catch(() => []);
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Approve All`,
+          dangerResponse(
+            "Confirm Approval",
+            `Approve all <b>${requests.length}</b> pending join requests in <b>${escapeHtml(group.subject)}</b>?`,
+          ),
+        ),
+        keyboard([
+          [
+            btn(
+              "✅ Confirm Approve All",
+              `session:${session.sessionId}:group:moderation:approve:all:run:${index}`,
+              "success",
+            ),
+            btn(
+              "Cancel",
+              `session:${session.sessionId}:group:moderation:approve:${index}`,
+            ),
+          ],
+        ]),
+      );
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:approve:all:run:(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery("Approving…");
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const index = Number(ctx.match[2] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      try {
+        const snapshot = await getGroupModerationSnapshot(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+        );
+        if (!snapshot.isAdmin)
+          throw new Error(
+            "This WhatsApp identity is no longer an administrator in the group.",
+          );
+        const requests = await listGroupJoinRequests(
+          session.workspaceId,
+          session.sessionId,
+          group.jid,
+        );
+        if (!requests.length)
+          throw new Error("There are no pending join requests to approve.");
+        const job = await enqueueGroupControlJob({
+          workspaceId: session.workspaceId,
+          sessionId: session.sessionId,
+          groupJid: group.jid,
+          operation: "approve",
+          participants: requests.map((request) => request.jid),
+        });
+        const response = await ctx.reply(
+          pageText(
+            `${session.sessionName} · Approvals`,
+            infoResponse(
+              "Approval Job Queued",
+              `<b>Selected:</b> ${requests.length}\n<b>Job:</b> <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>\nThe durable worker will revalidate the session and process each request with partial-result tracking.`,
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [btn("↻ Live Progress", `job:live:${job.jobCode ?? job.jobId.slice(0, 8)}`, "primary")],
+              [btn("↻ Moderation", `session:${session.sessionId}:group:moderation:${index}`, "primary")],
+            ]),
+          },
+        );
+        if (job.jobCode && response && "chat" in response && "message_id" in response)
+          startJobLiveLoop(
+            ctx,
+            session.workspaceId,
+            job.jobCode,
+            response.chat.id,
+            response.message_id,
+          );
+      } catch (error) {
+        await edit(
+          ctx,
+          pageText(
+            `${session.sessionName} · Approvals`,
+            dangerResponse(
+              "Approval Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
+          ),
+          keyboard([
+            [
+              btn(
+                "↻ Approvals",
+                `session:${session.sessionId}:group:moderation:approve:${index}`,
+                "primary",
+              ),
+            ],
+          ]),
+        );
+      }
+    },
+  );
+  bot.action(
+    /^session:([^:]+):group:moderation:(approve|reject):(amount|country):(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const operationRoute = ctx.match[1] === "reject" ? "reject" : "approve";
+      const index = Number(ctx.match[4] ?? -1);
+      const group = await getSessionGroupAt(
+        ctx,
+        session.sessionId,
+        index,
+      ).catch(() => undefined);
+      if (!group) return showSessionGroups(ctx, session.sessionId);
+      const action =
+        ctx.match[1] === "reject"
+          ? ctx.match[2] === "country" ? "rejectCountry" : "rejectAmount"
+          : ctx.match[2] === "country" ? "approveCountry" : "approveAmount";
+      beginExclusiveInput(String(ctx.from?.id ?? ""));
+      pendingGroupModerationInput.set(String(ctx.from?.id ?? ""), {
+        workspaceId: session.workspaceId,
+        sessionId: session.sessionId,
+        groupJid: group.jid,
+        action,
+        index,
+      });
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · ${action.startsWith("reject") ? "Rejections" : "Approvals"}`,
+          infoResponse(
+            action === "approveCountry" || action === "rejectCountry"
+              ? `${action.startsWith("reject") ? "Reject" : "Approve"} by Country`
+              : `${action.startsWith("reject") ? "Reject" : "Approve"} by Amount`,
+            action === "approveCountry" || action === "rejectCountry"
+              ? `<b>Group:</b> ${escapeHtml(group.subject)}\nSend a country calling code such as <code>+234</code>, <code>+1</code>, or <code>+44</code>.`
+              : `<b>Group:</b> ${escapeHtml(group.subject)}\nSend the number of pending requests to ${action.startsWith("reject") ? "reject" : "approve"}.`,
+          ),
+        ),
+        keyboard([
+          [
+            btn(
+              "Cancel",
+              `session:${session.sessionId}:group:moderation:${operationRoute}:${index}`,
+            ),
+          ],
+        ]),
+      );
+    },
+  );
+  bot.action(/^session:${session.sessionId}:group:picture:get:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+    if (!session) return deny(ctx);
+    const index = Number(ctx.match[2] ?? -1);
+    const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(
+      () => undefined,
+    );
+    if (!group) return showSessionGroups(ctx, session.sessionId);
+    try {
+      const url = await getGroupProfilePictureUrl(
+        session.workspaceId,
+        session.sessionId,
+        group.jid,
+      );
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Group Picture`,
+          infoResponse(
+            "Current Group Picture",
+            url
+              ? `<b>Group:</b> ${escapeHtml(group.subject)}\n<a href="${escapeHtml(url)}">Open group picture</a>`
+              : `<b>Group:</b> ${escapeHtml(group.subject)}\nNo group picture is currently set.`,
+          ),
+        ),
+        sessionGroupKeyboard(session.sessionId, index),
+      );
+    } catch (error) {
+      return edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Group Picture`,
+          dangerResponse(
+            "Picture Unavailable",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        sessionGroupKeyboard(session.sessionId, index),
       );
     }
   });
@@ -2770,7 +4821,13 @@ export function createTelegramBot(): Telegraf<Context> {
                 ),
           ),
           keyboard([
-            [btn("↻ Try Reconnect Again", `session:${session.sessionId}:action:reconnect`, "primary")],
+            [
+              btn(
+                "↻ Try Reconnect Again",
+                `session:${session.sessionId}:action:reconnect`,
+                "primary",
+              ),
+            ],
             [btn("‹ Session", `session:${session.sessionId}:menu`)],
           ]),
         );
@@ -2785,7 +4842,13 @@ export function createTelegramBot(): Telegraf<Context> {
             ),
           ),
           keyboard([
-            [btn("↻ Try Again", `session:${session.sessionId}:action:reconnect`, "primary")],
+            [
+              btn(
+                "↻ Try Again",
+                `session:${session.sessionId}:action:reconnect`,
+                "primary",
+              ),
+            ],
             [btn("‹ Session", `session:${session.sessionId}:menu`)],
           ]),
         );
@@ -2991,52 +5054,86 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.action("bridge:global", async (ctx) => {
     await ctx.answerCbQuery();
+    await refreshSessionRegistryForUi();
     await showGlobalBridge(ctx);
   });
   bot.action("ui:bridge", async (ctx) => {
     await ctx.answerCbQuery();
+    await refreshSessionRegistryForUi();
     await showGlobalBridge(ctx);
   });
   bot.action("bridge:global:select", async (ctx) => {
     await ctx.answerCbQuery();
+    await refreshSessionRegistryForUi();
     const user = resolveTelegramUser(ctx);
-    const selected = globalBridgeSelections.get(String(ctx.from?.id ?? "")) ?? new Set<string>();
+    const selected =
+      globalBridgeSelections.get(String(ctx.from?.id ?? "")) ??
+      new Set<string>();
     await edit(
       ctx,
       pageText(
         "Global Bridge · Choose Sessions",
-        infoResponse("Active Session Bridge", "Select the ACTIVE WhatsApp sessions that should receive the next command, then press Send Command."),
+        infoResponse(
+          "Active Session Bridge",
+          "Select the ACTIVE WhatsApp sessions that should receive the next command, then press Send Command.",
+        ),
       ),
-      bridgeSessionPicker(activeWorkspaceSessions(user.workspaceId), selected),
+      bridgeSessionPicker(globalBridgeSessions(ctx), selected),
     );
   });
   bot.action("bridge:global:select:all", async (ctx) => {
     await ctx.answerCbQuery("All ACTIVE sessions selected");
+    await refreshSessionRegistryForUi();
     const user = resolveTelegramUser(ctx);
-    const active = activeWorkspaceSessions(user.workspaceId);
-    globalBridgeSelections.set(String(ctx.from?.id ?? ""), new Set(active.map((session) => session.sessionId)));
+    const active = globalBridgeSessions(ctx);
+    globalBridgeSelections.set(
+      String(ctx.from?.id ?? ""),
+      new Set(active.map((session) => session.sessionId)),
+    );
     await edit(
       ctx,
-      pageText("Global Bridge · Choose Sessions", infoResponse("All ACTIVE Sessions Selected", `${active.length} ACTIVE session${active.length === 1 ? "" : "s"} selected.`)),
-      bridgeSessionPicker(active, new Set(active.map((session) => session.sessionId))),
+      pageText(
+        "Global Bridge · Choose Sessions",
+        infoResponse(
+          "All ACTIVE Sessions Selected",
+          `${active.length} ACTIVE session${active.length === 1 ? "" : "s"} selected.`,
+        ),
+      ),
+      bridgeSessionPicker(
+        active,
+        new Set(active.map((session) => session.sessionId)),
+      ),
     );
   });
   bot.action(/^bridge:global:toggle:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
+    await refreshSessionRegistryForUi();
     const user = resolveTelegramUser(ctx);
-    const session = ownedSession(ctx, ctx.match[1] ?? "");
-    if (!session || !isBridgeReadySession(session)) {
-      await ctx.answerCbQuery("Only ACTIVE sessions can be bridged.", { show_alert: true });
+    const session = globalBridgeSessions(ctx).find(
+      (item) => item.sessionId === (ctx.match[1] ?? ""),
+    );
+    if (!session) {
+      await ctx.answerCbQuery("Only ACTIVE sessions can be bridged.", {
+        show_alert: true,
+      });
       return;
     }
-    const selected = globalBridgeSelections.get(String(ctx.from?.id ?? "")) ?? new Set<string>();
+    const selected =
+      globalBridgeSelections.get(String(ctx.from?.id ?? "")) ??
+      new Set<string>();
     if (selected.has(session.sessionId)) selected.delete(session.sessionId);
     else selected.add(session.sessionId);
     globalBridgeSelections.set(String(ctx.from?.id ?? ""), selected);
     await edit(
       ctx,
-      pageText("Global Bridge · Choose Sessions", infoResponse("Selection Updated", `${selected.size} ACTIVE session${selected.size === 1 ? "" : "s"} selected.`)),
-      bridgeSessionPicker(activeWorkspaceSessions(user.workspaceId), selected),
+      pageText(
+        "Global Bridge · Choose Sessions",
+        infoResponse(
+          "Selection Updated",
+          `${selected.size} ACTIVE session${selected.size === 1 ? "" : "s"} selected.`,
+        ),
+      ),
+      bridgeSessionPicker(globalBridgeSessions(ctx), selected),
     );
   });
   bot.action("bridge:global:clear", async (ctx) => {
@@ -3046,13 +5143,21 @@ export function createTelegramBot(): Telegraf<Context> {
   });
   bot.action("bridge:global:command", async (ctx) => {
     await ctx.answerCbQuery();
+    await refreshSessionRegistryForUi();
     const user = resolveTelegramUser(ctx);
-    const active = activeWorkspaceSessions(user.workspaceId);
-    const selected = globalBridgeSelections.get(String(ctx.from?.id ?? "")) ?? new Set<string>();
+    const active = globalBridgeSessions(ctx);
+    const selected =
+      globalBridgeSelections.get(String(ctx.from?.id ?? "")) ??
+      new Set<string>();
     for (const id of [...selected])
-      if (!active.some((session) => session.sessionId === id)) selected.delete(id);
+      if (!active.some((session) => session.sessionId === id))
+        selected.delete(id);
     if (!selected.size)
-      return edit(ctx, globalBridgeText(0, false), bridgeSessionPicker(active, selected));
+      return edit(
+        ctx,
+        globalBridgeText(0, false),
+        bridgeSessionPicker(active, selected),
+      );
     const message = ctx.callbackQuery?.message;
     const chatId = ctx.chat?.id;
     if (!message || !("message_id" in message) || !chatId) return;
@@ -3063,12 +5168,19 @@ export function createTelegramBot(): Telegraf<Context> {
     });
     await edit(
       ctx,
-      globalBridgeText(selected.size, true).replace("</blockquote>", "\n\n✍️ Send one WhatsApp command now.</blockquote>"),
+      globalBridgeText(selected.size, true).replace(
+        "</blockquote>",
+        "\n\n✍️ Send one WhatsApp command now.</blockquote>",
+      ),
       keyboard([[btn("✖ Close Bridge", "bridge:global")]]),
     );
   });
   // Compatibility routes for old messages: the new Bridge has no start/stop protocol.
-  for (const action of ["bridge:global:toggle", "bridge:global:start", "bridge:global:stop"] as const) {
+  for (const action of [
+    "bridge:global:toggle",
+    "bridge:global:start",
+    "bridge:global:stop",
+  ] as const) {
     bot.action(action, async (ctx) => {
       await ctx.answerCbQuery();
       if (action === "bridge:global:stop") {
@@ -3256,53 +5368,62 @@ export function createTelegramBot(): Telegraf<Context> {
       }
     },
   );
-  bot.action(/^bucket:view:(main|validating|active|dead|error)$/, async (ctx) => {
-    await ctx.answerCbQuery();
-    if (!requireAdmin(ctx)) return;
-    const user = resolveTelegramUser(ctx);
-    const bucket = (ctx.match[1] ?? "main") as ValidatorBucket;
-    try {
-      const records = await listValidatorBucket(GLOBAL_VALIDATOR_SCOPE, bucket, 30);
-      const body = records.length
-        ? records
-            .map(
-              (record, index) =>
-                `${index + 1}. <code>${escapeHtml(record.canonicalUrl.slice(0, 100))}</code>\n   <i>${escapeHtml(record.bucket)} · checked ${record.lastCheckedAt ? new Date(record.lastCheckedAt).toISOString() : "not checked"}</i>`,
-            )
-            .join("\n")
-        : "This bucket is empty.";
-      await edit(
-        ctx,
-        pageText(
-          `Validator Hub · ${bucket}`,
-          infoResponse(
-            `${bucket.toUpperCase()} · ${records.length} shown`,
-            body,
+  bot.action(
+    /^bucket:view:(main|validating|active|dead|error)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      if (!requireAdmin(ctx)) return;
+      const user = resolveTelegramUser(ctx);
+      const bucket = (ctx.match[1] ?? "main") as ValidatorBucket;
+      try {
+        const records = await listValidatorBucket(
+          GLOBAL_VALIDATOR_SCOPE,
+          bucket,
+          30,
+        );
+        const body = records.length
+          ? records
+              .map(
+                (record, index) =>
+                  `${index + 1}. <code>${escapeHtml(record.canonicalUrl.slice(0, 100))}</code>\n   <i>${escapeHtml(record.bucket)} · checked ${record.lastCheckedAt ? new Date(record.lastCheckedAt).toISOString() : "not checked"}</i>`,
+              )
+              .join("\n")
+          : "This bucket is empty.";
+        await edit(
+          ctx,
+          pageText(
+            `Validator Hub · ${bucket}`,
+            infoResponse(
+              `${bucket.toUpperCase()} · ${records.length} shown`,
+              body,
+            ),
           ),
-        ),
-        keyboard([
-          [
-            btn("⬇ TXT", `bucket:download:${bucket}:txt`),
-            btn("⬇ HTML", `bucket:download:${bucket}:html`),
-          ],
-          [btn("↻ Refresh", `bucket:view:${bucket}`)],
-          [btn("‹ Validator Hub", "bucket:status")],
-        ]),
-      );
-    } catch (error) {
-      await edit(
-        ctx,
-        pageText(
-          "Validator Hub",
-          dangerResponse(
-            "Bucket Read Failed",
-            escapeHtml(error instanceof Error ? error.message : String(error)),
+          keyboard([
+            [
+              btn("⬇ TXT", `bucket:download:${bucket}:txt`),
+              btn("⬇ HTML", `bucket:download:${bucket}:html`),
+            ],
+            [btn("↻ Refresh", `bucket:view:${bucket}`)],
+            [btn("‹ Validator Hub", "bucket:status")],
+          ]),
+        );
+      } catch (error) {
+        await edit(
+          ctx,
+          pageText(
+            "Validator Hub",
+            dangerResponse(
+              "Bucket Read Failed",
+              escapeHtml(
+                error instanceof Error ? error.message : String(error),
+              ),
+            ),
           ),
-        ),
-        bucketKeyboard(),
-      );
-    }
-  });
+          bucketKeyboard(),
+        );
+      }
+    },
+  );
   bot.action("bucket:merge:main", async (ctx) => {
     await ctx.answerCbQuery("Merging active and error links…");
     if (!requireAdmin(ctx)) return;
@@ -3531,7 +5652,10 @@ export function createTelegramBot(): Telegraf<Context> {
       ctx,
       pageText(
         "Broadcast Delay",
-        infoResponse("Send exact delay", "Send a whole number from <b>1</b> to <b>60</b> seconds."),
+        infoResponse(
+          "Send exact delay",
+          "Send a whole number from <b>1</b> to <b>60</b> seconds.",
+        ),
       ),
       keyboard([[btn("Cancel", "settings:menu")]]),
     );
@@ -3542,8 +5666,9 @@ export function createTelegramBot(): Telegraf<Context> {
     const current = getWorkspaceDefaults(user.workspaceId);
     const values = [1000, 5000, 10000, 20000, 30000, 45000, 60000];
     const nextValue =
-      values[(values.indexOf(current.defaultBroadcastDelayMs) + 1) % values.length] ??
-      20000;
+      values[
+        (values.indexOf(current.defaultBroadcastDelayMs) + 1) % values.length
+      ] ?? 10000;
     const next = updateWorkspaceDefaults(user.workspaceId, {
       defaultBroadcastDelayMs: nextValue,
     });
@@ -3764,16 +5889,22 @@ export function createTelegramBot(): Telegraf<Context> {
       if (!session) return deny(ctx);
       const field = ctx.match[2] as JoinSettingField;
       const message = ctx.callbackQuery?.message;
-      const chatId = ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : undefined);
-      const messageId = message && "message_id" in message ? message.message_id : undefined;
+      const chatId =
+        ctx.chat?.id ??
+        (message && "chat" in message ? message.chat.id : undefined);
+      const messageId =
+        message && "message_id" in message ? message.message_id : undefined;
       if (!chatId || !messageId) return;
       beginExclusiveInput(String(ctx.from?.id ?? ""));
-      const current = getSessionJoinSettings(session.workspaceId, session.sessionId);
+      const current = getSessionJoinSettings(
+        session.workspaceId,
+        session.sessionId,
+      );
       const instructions: Record<JoinSettingField, string> = {
         target: `Send the target link count as a whole number from 1 to 10,000. Current: <code>${current.targetCount}</code>.`,
-        delay: `Send the base delay in seconds from 0 to 600. Use 0 for Immediate mode. Current: <code>${Math.round(current.delayMs / 1000)}s</code>.`,
-        minDelay: `Send the minimum delay in seconds from 0 to 600. It cannot exceed Max Delay (${Math.round(current.maxDelayMs / 1000)}s).`,
-        maxDelay: `Send the maximum delay in seconds from 0 to 600. It cannot be below Min Delay (${Math.round(current.minDelayMs / 1000)}s).`,
+        delay: `Send the base delay in whole seconds from 1 to 60. Current: <code>${Math.round(current.delayMs / 1000)}s</code>.`,
+        minDelay: `Send the minimum delay in whole seconds from 1 to 60. It cannot exceed Max Delay (${Math.round(current.maxDelayMs / 1000)}s).`,
+        maxDelay: `Send the maximum delay in whole seconds from 1 to 60. It cannot be below Min Delay (${Math.round(current.minDelayMs / 1000)}s).`,
         batch: `Send batch cycles as a whole number from 1 to 20. Current: <code>${current.batchCycles}</code>.`,
         retry: `Send retry attempts as a whole number from 0 to 5. Current: <code>${current.retryLimit}</code>.`,
         retryBase: `Send retry backoff in seconds from 1 to 600. Current: <code>${Math.round(current.retryBaseMs / 1000)}s</code>.`,
@@ -3831,7 +5962,10 @@ export function createTelegramBot(): Telegraf<Context> {
           user.workspaceId,
           session.sessionId,
         );
-        const activeLinks = await countValidatorBucket(GLOBAL_VALIDATOR_SCOPE, "active").catch(() => 0);
+        const activeLinks = await countValidatorBucket(
+          GLOBAL_VALIDATOR_SCOPE,
+          "active",
+        ).catch(() => 0);
         if (activeLinks === 0) {
           joinStates.set(key, "idle");
           return edit(
@@ -3906,8 +6040,14 @@ export function createTelegramBot(): Telegraf<Context> {
           ),
           keyboard([
             [
-              btn("🎯 Edit Target", `session:${session.sessionId}:join:edit:target`),
-              btn("⏱ Edit Delay", `session:${session.sessionId}:join:edit:delay`),
+              btn(
+                "🎯 Edit Target",
+                `session:${session.sessionId}:join:edit:target`,
+              ),
+              btn(
+                "⏱ Edit Delay",
+                `session:${session.sessionId}:join:edit:delay`,
+              ),
             ],
             [
               btn(
@@ -3920,8 +6060,14 @@ export function createTelegramBot(): Telegraf<Context> {
               ),
             ],
             [
-              btn("🔁 Edit Batch", `session:${session.sessionId}:join:edit:batch`),
-              btn("↻ Edit Retries", `session:${session.sessionId}:join:edit:retry`),
+              btn(
+                "🔁 Edit Batch",
+                `session:${session.sessionId}:join:edit:batch`,
+              ),
+              btn(
+                "↻ Edit Retries",
+                `session:${session.sessionId}:join:edit:retry`,
+              ),
             ],
             [
               btn(
@@ -3943,7 +6089,12 @@ export function createTelegramBot(): Telegraf<Context> {
                 `session:${session.sessionId}:join:edit:restriction`,
               ),
             ],
-            [btn("⇄ Edit Join Mode", `session:${session.sessionId}:join:edit:mode`)],
+            [
+              btn(
+                "⇄ Edit Join Mode",
+                `session:${session.sessionId}:join:edit:mode`,
+              ),
+            ],
             [btn("‹ Join Manager", `session:${session.sessionId}:joinmgr`)],
           ]),
         );
@@ -3993,7 +6144,7 @@ export function createTelegramBot(): Telegraf<Context> {
             : operation === "setdelay"
               ? {
                   defaultJoinDelayMs:
-                      [0, 5000, 10000, 30000, 60000][
+                    [0, 5000, 10000, 30000, 60000][
                       ([0, 5000, 10000, 30000, 60000].indexOf(
                         current.defaultJoinDelayMs,
                       ) +
@@ -4189,22 +6340,33 @@ export function createTelegramBot(): Telegraf<Context> {
       sessionId: session.sessionId,
       stage: "command",
       chatId: ctx.chat?.id,
-      messageId: ctx.callbackQuery?.message && "message_id" in ctx.callbackQuery.message ? ctx.callbackQuery.message.message_id : undefined,
+      messageId:
+        ctx.callbackQuery?.message && "message_id" in ctx.callbackQuery.message
+          ? ctx.callbackQuery.message.message_id
+          : undefined,
     });
     await edit(
       ctx,
-      pageText("Session Auto Promote", infoResponse("Choose Command", `<b>Session:</b> ${escapeHtml(session.sessionName)}\nThis configuration affects only this WhatsApp session.`)),
+      pageText(
+        "Session Auto Promote",
+        infoResponse(
+          "Choose Command",
+          `<b>Session:</b> ${escapeHtml(session.sessionName)}\nThis configuration affects only this WhatsApp session.`,
+        ),
+      ),
       autoPromoteCommandKeyboard(),
     );
   });
   bot.action("admin:autopromote", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
+    await refreshSessionRegistryForUi();
     await showOwnerAutoPromoteDashboard(ctx);
   });
   bot.action("admin:autopromote:new", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
+    await refreshSessionRegistryForUi();
     const user = resolveTelegramUser(ctx);
     const userId = String(ctx.from?.id ?? "");
     beginExclusiveInput(userId);
@@ -4216,7 +6378,10 @@ export function createTelegramBot(): Telegraf<Context> {
       allFutureSessions: true,
       stage: "command",
       chatId: ctx.chat?.id,
-      messageId: ctx.callbackQuery?.message && "message_id" in ctx.callbackQuery.message ? ctx.callbackQuery.message.message_id : undefined,
+      messageId:
+        ctx.callbackQuery?.message && "message_id" in ctx.callbackQuery.message
+          ? ctx.callbackQuery.message.message_id
+          : undefined,
     });
     await edit(
       ctx,
@@ -4233,58 +6398,114 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("admin:autopromote:targets:refresh", async (ctx) => {
     await ctx.answerCbQuery("Refreshing ACTIVE sessions…");
     if (!requireAdmin(ctx)) return;
+    await refreshSessionRegistryForUi();
     const userId = String(ctx.from?.id ?? "");
     const current = pendingAutoPromote.get(userId);
     if (!current || current.scope !== "GLOBAL") return;
     const activeSessions = activeAllSessions();
-    const activeIds = new Set(activeSessions.map((session) => session.sessionId));
+    const activeIds = new Set(
+      activeSessions.map((session) => session.sessionId),
+    );
     const selected = current.allFutureSessions
       ? new Set(activeSessions.map((session) => session.sessionId))
-      : new Set((current.targetSessionIds ?? []).filter((id) => activeIds.has(id)));
-    pendingAutoPromote.set(userId, { ...current, targetSessionIds: current.allFutureSessions ? undefined : [...selected] });
+      : new Set(
+          (current.targetSessionIds ?? []).filter((id) => activeIds.has(id)),
+        );
+    pendingAutoPromote.set(userId, {
+      ...current,
+      targetSessionIds: current.allFutureSessions ? undefined : [...selected],
+    });
     await edit(
       ctx,
-      pageText("Global Auto Promote", infoResponse("Choose Target Sessions", `<b>Selected:</b> ${selected.size} active session(s)\n<b>Available:</b> ${activeSessions.length} ACTIVE session(s)`)),
+      pageText(
+        "Global Auto Promote",
+        infoResponse(
+          "Choose Target Sessions",
+          `<b>Selected:</b> ${selected.size} active session(s)\n<b>Available:</b> ${activeSessions.length} ACTIVE session(s)`,
+        ),
+      ),
       autoPromoteGlobalTargetsKeyboard(activeSessions, selected),
     );
   });
   bot.action(/^autopromote:global:toggle:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
+    await refreshSessionRegistryForUi();
     const userId = String(ctx.from?.id ?? "");
     const current = pendingAutoPromote.get(userId);
     if (!current || current.scope !== "GLOBAL") return;
     const selected = new Set(current.targetSessionIds ?? []);
     const sessionId = ctx.match[1] ?? "";
-    if (selected.has(sessionId)) selected.delete(sessionId); else selected.add(sessionId);
-    pendingAutoPromote.set(userId, { ...current, targetSessionIds: [...selected], allFutureSessions: false });
+    if (selected.has(sessionId)) selected.delete(sessionId);
+    else selected.add(sessionId);
+    pendingAutoPromote.set(userId, {
+      ...current,
+      targetSessionIds: [...selected],
+      allFutureSessions: false,
+    });
     const activeSessions = activeAllSessions();
-    await edit(ctx, pageText("Global Auto Promote", infoResponse("Choose Target Sessions", `<b>Selected:</b> ${selected.size} active session(s)`)), autoPromoteGlobalTargetsKeyboard(activeSessions, selected));
+    await edit(
+      ctx,
+      pageText(
+        "Global Auto Promote",
+        infoResponse(
+          "Choose Target Sessions",
+          `<b>Selected:</b> ${selected.size} active session(s)`,
+        ),
+      ),
+      autoPromoteGlobalTargetsKeyboard(activeSessions, selected),
+    );
   });
   bot.action("autopromote:global:all", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
+    await refreshSessionRegistryForUi();
     const userId = String(ctx.from?.id ?? "");
     const current = pendingAutoPromote.get(userId);
     if (!current || current.scope !== "GLOBAL") return;
     const activeSessions = activeAllSessions();
     const selected = activeSessions.map((session) => session.sessionId);
-    pendingAutoPromote.set(userId, { ...current, targetSessionIds: undefined, allFutureSessions: true });
-    await edit(ctx, pageText("Global Auto Promote", infoResponse("All ACTIVE + Future Sessions", "Newly paired ACTIVE sessions will be added automatically on the next scheduled occurrence.")), autoPromoteGlobalTargetsKeyboard(activeSessions, new Set(selected)));
+    pendingAutoPromote.set(userId, {
+      ...current,
+      targetSessionIds: undefined,
+      allFutureSessions: true,
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Global Auto Promote",
+        infoResponse(
+          "All ACTIVE + Future Sessions",
+          "Newly paired ACTIVE sessions will be added automatically on the next scheduled occurrence.",
+        ),
+      ),
+      autoPromoteGlobalTargetsKeyboard(activeSessions, new Set(selected)),
+    );
   });
   bot.action("autopromote:global:ready", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
+    await refreshSessionRegistryForUi();
     const userId = String(ctx.from?.id ?? "");
     const current = pendingAutoPromote.get(userId);
-    if (!current || current.scope !== "GLOBAL" || (!current.allFutureSessions && !(current.targetSessionIds?.length))) {
+    if (
+      !current ||
+      current.scope !== "GLOBAL" ||
+      (!current.allFutureSessions && !current.targetSessionIds?.length)
+    ) {
       await edit(
         ctx,
         pageText(
           "Global Auto Promote",
-          infoResponse("Select at least one session", "Choose one or more ACTIVE sessions, then press Use Selected Sessions."),
+          infoResponse(
+            "Select at least one session",
+            "Choose one or more ACTIVE sessions, then press Use Selected Sessions.",
+          ),
         ),
-        autoPromoteGlobalTargetsKeyboard(activeAllSessions(), new Set(current?.targetSessionIds ?? [])),
+        autoPromoteGlobalTargetsKeyboard(
+          activeAllSessions(),
+          new Set(current?.targetSessionIds ?? []),
+        ),
       );
       return;
     }
@@ -4307,41 +6528,91 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!session) return deny(ctx);
     const current = pendingAutoPromote.get(String(ctx.from?.id ?? ""));
     if (!current) return;
-    pendingAutoPromote.set(String(ctx.from?.id ?? ""), { ...current, scope: "SESSION", sessionId: session.sessionId, stage: "command" });
-    await edit(ctx, pageText("Auto Promote", infoResponse("Choose Command", `<b>Session:</b> ${escapeHtml(session.sessionName)}`)), autoPromoteCommandKeyboard());
+    pendingAutoPromote.set(String(ctx.from?.id ?? ""), {
+      ...current,
+      scope: "SESSION",
+      sessionId: session.sessionId,
+      stage: "command",
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Auto Promote",
+        infoResponse(
+          "Choose Command",
+          `<b>Session:</b> ${escapeHtml(session.sessionName)}`,
+        ),
+      ),
+      autoPromoteCommandKeyboard(),
+    );
   });
   bot.action("autopromote:scope:USER", async (ctx) => {
     await ctx.answerCbQuery();
     const current = pendingAutoPromote.get(String(ctx.from?.id ?? ""));
     if (!current) return;
-    pendingAutoPromote.set(String(ctx.from?.id ?? ""), { ...current, scope: "USER", sessionId: undefined, stage: "command" });
-    await edit(ctx, pageText("Auto Promote", infoResponse("Choose Command", "This configuration targets all WhatsApp sessions owned by you.")), autoPromoteCommandKeyboard());
+    pendingAutoPromote.set(String(ctx.from?.id ?? ""), {
+      ...current,
+      scope: "USER",
+      sessionId: undefined,
+      stage: "command",
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Auto Promote",
+        infoResponse(
+          "Choose Command",
+          "This configuration targets all WhatsApp sessions owned by you.",
+        ),
+      ),
+      autoPromoteCommandKeyboard(),
+    );
   });
-  bot.action(/^autopromote:command:(allstatus|allchat|allstatusx)$/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const userId = String(ctx.from?.id ?? "");
-    const current = pendingAutoPromote.get(userId);
-    if (!current) return;
-    const command = ctx.match[1] as AutoPromoteCommand;
-    pendingAutoPromote.set(userId, { ...current, command, stage: current.scope === "GLOBAL" ? "scope" : "days" });
-    if (current.scope === "GLOBAL") {
-      const activeSessions = activeAllSessions();
-      const selected = new Set(current.targetSessionIds ?? activeSessions.map((session) => session.sessionId));
+  bot.action(
+    /^autopromote:command:(allstatus|allstatusd|allchat|allstatusx)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery();
+      const userId = String(ctx.from?.id ?? "");
+      const current = pendingAutoPromote.get(userId);
+      if (!current) return;
+      const command = ctx.match[1] as AutoPromoteCommand;
+      pendingAutoPromote.set(userId, {
+        ...current,
+        command,
+        stage: current.scope === "GLOBAL" ? "scope" : "days",
+      });
+      if (current.scope === "GLOBAL") {
+        const activeSessions = activeAllSessions();
+        const selected = new Set(
+          current.targetSessionIds ??
+            activeSessions.map((session) => session.sessionId),
+        );
+        await edit(
+          ctx,
+          pageText(
+            "Global Auto Promote",
+            infoResponse(
+              "Review Target Sessions",
+              `<b>Command:</b> <code>${escapeHtml(command)}</code>\n<b>Selected:</b> ${current.allFutureSessions ? "ALL ACTIVE + FUTURE sessions" : `${selected.size} ACTIVE session(s)`}\n\nAdjust the selection if needed, then press Continue to Duration.`,
+            ),
+          ),
+          autoPromoteGlobalTargetsKeyboard(activeSessions, selected),
+        );
+        return;
+      }
       await edit(
         ctx,
         pageText(
-          "Global Auto Promote",
+          "Auto Promote",
           infoResponse(
-            "Review Target Sessions",
-            `<b>Command:</b> <code>${escapeHtml(command)}</code>\n<b>Selected:</b> ${current.allFutureSessions ? "ALL ACTIVE + FUTURE sessions" : `${selected.size} ACTIVE session(s)`}\n\nAdjust the selection if needed, then press Continue to Duration.`,
+            "Duration",
+            "How many days should this Auto Promote job run? Choose 2–30 days.",
           ),
         ),
-        autoPromoteGlobalTargetsKeyboard(activeSessions, selected),
+        autoPromoteDaysKeyboard(),
       );
-      return;
-    }
-    await edit(ctx, pageText("Auto Promote", infoResponse("Duration", "How many days should this Auto Promote job run? Choose 2–30 days.")), autoPromoteDaysKeyboard());
-  });
+    },
+  );
   bot.action(/^autopromote:days:(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const userId = String(ctx.from?.id ?? "");
@@ -4349,7 +6620,17 @@ export function createTelegramBot(): Telegraf<Context> {
     const days = Number(ctx.match[1]);
     if (!current || days < 2 || days > 30) return;
     pendingAutoPromote.set(userId, { ...current, days, stage: "times" });
-    await edit(ctx, pageText("Auto Promote", infoResponse("Times Per Day", "How many times should the payload post each day?")), autoPromoteTimesKeyboard());
+    await edit(
+      ctx,
+      pageText(
+        "Auto Promote",
+        infoResponse(
+          "Times Per Day",
+          "How many times should the payload post each day?",
+        ),
+      ),
+      autoPromoteTimesKeyboard(),
+    );
   });
   bot.action(/^autopromote:times:([1-5])$/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -4357,9 +6638,30 @@ export function createTelegramBot(): Telegraf<Context> {
     const current = pendingAutoPromote.get(userId);
     const timesPerDay = Number(ctx.match[1]);
     if (!current) return;
-    const next = { ...current, timesPerDay, stage: current.command === "allstatusx" ? "posts" as const : "payload" as const };
+    const next = {
+      ...current,
+      timesPerDay,
+      stage:
+        current.command === "allstatusx"
+          ? ("posts" as const)
+          : ("payload" as const),
+    };
     pendingAutoPromote.set(userId, next);
-    await edit(ctx, pageText("Auto Promote", infoResponse(next.stage === "posts" ? "Posts Per Group" : "Payload", next.stage === "posts" ? "How many times should the payload be posted to each group before moving to the next group?" : "Send the original text, link, or caption payload now. It will be preserved exactly.")), next.stage === "posts" ? autoPromotePostsKeyboard() : keyboard([[btn("Cancel", "autopromote:cancel", "danger")]]));
+    await edit(
+      ctx,
+      pageText(
+        "Auto Promote",
+        infoResponse(
+          next.stage === "posts" ? "Posts Per Group" : "Payload",
+          next.stage === "posts"
+            ? "How many times should the payload be posted to each group before moving to the next group?"
+            : "Send the original text, link, or caption payload now. It will be preserved exactly.",
+        ),
+      ),
+      next.stage === "posts"
+        ? autoPromotePostsKeyboard()
+        : keyboard([[btn("Cancel", "autopromote:cancel", "danger")]]),
+    );
   });
   bot.action(/^autopromote:posts:(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -4367,33 +6669,71 @@ export function createTelegramBot(): Telegraf<Context> {
     const current = pendingAutoPromote.get(userId);
     const posts = Number(ctx.match[1]);
     if (!current || posts < 1 || posts > 10) return;
-    pendingAutoPromote.set(userId, { ...current, allstatusxPostsPerGroup: posts, stage: "payload" });
-    await edit(ctx, pageText("Auto Promote", infoResponse("Payload", "Send the original text, link, or caption payload now. It will be preserved exactly.")), keyboard([[btn("Cancel", "autopromote:cancel", "danger")]]));
+    pendingAutoPromote.set(userId, {
+      ...current,
+      allstatusxPostsPerGroup: posts,
+      stage: "payload",
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Auto Promote",
+        infoResponse(
+          "Payload",
+          "Send the original text, link, or caption payload now. It will be preserved exactly.",
+        ),
+      ),
+      keyboard([[btn("Cancel", "autopromote:cancel", "danger")]]),
+    );
   });
   bot.action("autopromote:confirm", async (ctx) => {
     await ctx.answerCbQuery("Creating Auto Promote…");
     const userId = String(ctx.from?.id ?? "");
     const current = pendingAutoPromote.get(userId);
-    if (!current?.command || !current.days || !current.timesPerDay || current.payloadText === undefined) return;
+    if (
+      !current?.command ||
+      !current.days ||
+      !current.timesPerDay ||
+      current.payloadText === undefined
+    )
+      return;
     const config = await createAutoPromoteConfig({
       scope: current.scope,
       ownerTelegramUserId: userId,
       ownerWorkspaceId: current.workspaceId,
       ...(current.sessionId ? { sessionId: current.sessionId } : {}),
-      ...(current.targetSessionIds ? { targetSessionIds: current.targetSessionIds } : {}),
+      ...(current.targetSessionIds
+        ? { targetSessionIds: current.targetSessionIds }
+        : {}),
       command: current.command,
       payload: {
-        ...(current.payloadText !== undefined ? { text: current.payloadText } : {}),
+        ...(current.payloadText !== undefined
+          ? { text: current.payloadText }
+          : {}),
         ...(current.payloadMedia ? { media: current.payloadMedia } : {}),
-        ...(current.payloadCaption !== undefined ? { caption: current.payloadCaption } : {}),
+        ...(current.payloadCaption !== undefined
+          ? { caption: current.payloadCaption }
+          : {}),
         ...(current.payloadQuoted ? { quoted: current.payloadQuoted } : {}),
       },
       days: current.days,
       timesPerDay: current.timesPerDay,
-      ...(current.allstatusxPostsPerGroup !== undefined ? { allstatusxPostsPerGroup: current.allstatusxPostsPerGroup } : {}),
+      ...(current.allstatusxPostsPerGroup !== undefined
+        ? { allstatusxPostsPerGroup: current.allstatusxPostsPerGroup }
+        : {}),
     });
     pendingAutoPromote.delete(userId);
-    recordAudit({ workspaceId: current.workspaceId, actorTelegramUserId: userId, action: "autopromote.create", success: true, metadata: { configId: config.id, scope: config.scope, command: config.command } });
+    recordAudit({
+      workspaceId: current.workspaceId,
+      actorTelegramUserId: userId,
+      action: "autopromote.create",
+      success: true,
+      metadata: {
+        configId: config.id,
+        scope: config.scope,
+        command: config.command,
+      },
+    });
     await showAutoPromoteDashboard(ctx, userId, current.workspaceId);
   });
   bot.action("autopromote:edit", async (ctx) => {
@@ -4402,12 +6742,29 @@ export function createTelegramBot(): Telegraf<Context> {
     const current = pendingAutoPromote.get(userId);
     if (!current) return;
     pendingAutoPromote.set(userId, { ...current, stage: "command" });
-    await edit(ctx, pageText("Auto Promote", infoResponse("Choose Command", "Restart the wizard from the command step.")), autoPromoteCommandKeyboard());
+    await edit(
+      ctx,
+      pageText(
+        "Auto Promote",
+        infoResponse(
+          "Choose Command",
+          "Restart the wizard from the command step.",
+        ),
+      ),
+      autoPromoteCommandKeyboard(),
+    );
   });
   bot.action("autopromote:cancel", async (ctx) => {
     await ctx.answerCbQuery("Cancelled");
     pendingAutoPromote.delete(String(ctx.from?.id ?? ""));
-    await edit(ctx, pageText("Auto Promote", infoResponse("Cancelled", "No Auto Promote configuration was created.")), keyboard([[btn(ui.back, "menu:main")]]));
+    await edit(
+      ctx,
+      pageText(
+        "Auto Promote",
+        infoResponse("Cancelled", "No Auto Promote configuration was created."),
+      ),
+      keyboard([[btn(ui.back, "menu:main")]]),
+    );
   });
   bot.action("autopromote:new", async (ctx) => {
     await ctx.answerCbQuery();
@@ -4418,14 +6775,21 @@ export function createTelegramBot(): Telegraf<Context> {
       scope: "USER",
       stage: "scope",
       chatId: ctx.chat?.id,
-      messageId: ctx.callbackQuery?.message && "message_id" in ctx.callbackQuery.message
-        ? ctx.callbackQuery.message.message_id
-        : undefined,
+      messageId:
+        ctx.callbackQuery?.message && "message_id" in ctx.callbackQuery.message
+          ? ctx.callbackQuery.message.message_id
+          : undefined,
     });
     const sessions = activeWorkspaceSessions(user.workspaceId);
     await edit(
       ctx,
-      pageText("Auto Promote", infoResponse("Choose Scope", "Choose one WhatsApp session or apply the schedule to all your ACTIVE sessions.")),
+      pageText(
+        "Auto Promote",
+        infoResponse(
+          "Choose Scope",
+          "Choose one WhatsApp session or apply the schedule to all your ACTIVE sessions.",
+        ),
+      ),
       autoPromoteScopeKeyboard(undefined, sessions),
     );
   });
@@ -4433,29 +6797,55 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     const config = await getAutoPromoteConfig(ctx.match[1] ?? "");
     const user = resolveTelegramUser(ctx);
-    if (!config || (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))) return deny(ctx);
+    if (
+      !config ||
+      (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))
+    )
+      return deny(ctx);
     const runs = await listAutoPromoteRuns({ configId: config.id, limit: 20 });
-    await edit(ctx, autoPromoteText([config], runs), keyboard([
-      [btn(config.state === "PAUSED" ? "▶ Resume" : "Ⅱ Pause", `autopromote:${config.state === "PAUSED" ? "resume" : "pause"}:${config.id}`, config.state === "PAUSED" ? "success" : "primary")],
-      [btn(config.enabled ? "■ Cancel Job" : "□ Disabled", `autopromote:disable:${config.id}`, "danger")],
-      [btn("🗑 Delete Job", `autopromote:delete:${config.id}`, "danger")],
-      [btn(ui.back, "autopromote:user")],
-    ]));
+    await edit(
+      ctx,
+      autoPromoteText([config], runs),
+      keyboard([
+        [
+          btn(
+            config.state === "PAUSED" ? "▶ Resume" : "Ⅱ Pause",
+            `autopromote:${config.state === "PAUSED" ? "resume" : "pause"}:${config.id}`,
+            config.state === "PAUSED" ? "success" : "primary",
+          ),
+        ],
+        [
+          btn(
+            config.enabled ? "■ Cancel Job" : "□ Disabled",
+            `autopromote:disable:${config.id}`,
+            "danger",
+          ),
+        ],
+        [btn("🗑 Delete Job", `autopromote:delete:${config.id}`, "danger")],
+        [btn(ui.back, "autopromote:user")],
+      ]),
+    );
   });
   bot.action(/^autopromote:(pause|resume):([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const configId = ctx.match[2] ?? "";
     const config = await getAutoPromoteConfig(configId);
     const user = resolveTelegramUser(ctx);
-    if (!config || (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))) return deny(ctx);
+    if (
+      !config ||
+      (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))
+    )
+      return deny(ctx);
     const runs = await listAutoPromoteRuns({ configId, limit: 100 });
     const runtime = getWorkerRuntime();
     if (ctx.match[1] === "pause") {
       await pauseAutoPromoteConfig(configId);
-      for (const run of runs) if (run.jobId) await runtime?.pause(run.jobId).catch(() => undefined);
+      for (const run of runs)
+        if (run.jobId) await runtime?.pause(run.jobId).catch(() => undefined);
     } else {
       await resumeAutoPromoteConfig(configId);
-      for (const run of runs) if (run.jobId) await runtime?.resume(run.jobId).catch(() => undefined);
+      for (const run of runs)
+        if (run.jobId) await runtime?.resume(run.jobId).catch(() => undefined);
     }
     await showAutoPromoteDashboard(ctx, user.telegramUserId, user.workspaceId);
   });
@@ -4464,11 +6854,16 @@ export function createTelegramBot(): Telegraf<Context> {
     const configId = ctx.match[1] ?? "";
     const config = await getAutoPromoteConfig(configId);
     const user = resolveTelegramUser(ctx);
-    if (!config || (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))) return deny(ctx);
+    if (
+      !config ||
+      (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))
+    )
+      return deny(ctx);
     await cancelAutoPromoteConfig(configId);
     const runtime = getWorkerRuntime();
     const runs = await listAutoPromoteRuns({ configId, limit: 100 });
-    for (const run of runs) if (run.jobId) await runtime?.cancel(run.jobId).catch(() => undefined);
+    for (const run of runs)
+      if (run.jobId) await runtime?.cancel(run.jobId).catch(() => undefined);
     await showAutoPromoteDashboard(ctx, user.telegramUserId, user.workspaceId);
   });
   bot.action(/^autopromote:delete:([^:]+)$/, async (ctx) => {
@@ -4476,7 +6871,11 @@ export function createTelegramBot(): Telegraf<Context> {
     const configId = ctx.match[1] ?? "";
     const config = await getAutoPromoteConfig(configId);
     const user = resolveTelegramUser(ctx);
-    if (!config || (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))) return deny(ctx);
+    if (
+      !config ||
+      (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))
+    )
+      return deny(ctx);
     const runs = await listAutoPromoteRuns({ configId, limit: 100 });
     await edit(
       ctx,
@@ -4488,7 +6887,13 @@ export function createTelegramBot(): Telegraf<Context> {
         ),
       ),
       keyboard([
-        [btn("🗑 Confirm Delete", `autopromote:delete:confirm:${config.id}`, "danger")],
+        [
+          btn(
+            "🗑 Confirm Delete",
+            `autopromote:delete:confirm:${config.id}`,
+            "danger",
+          ),
+        ],
         [btn("‹ Keep Job", `autopromote:view:${config.id}`)],
       ]),
     );
@@ -4498,14 +6903,22 @@ export function createTelegramBot(): Telegraf<Context> {
     const configId = ctx.match[1] ?? "";
     const config = await getAutoPromoteConfig(configId);
     const user = resolveTelegramUser(ctx);
-    if (!config || (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))) return deny(ctx);
+    if (
+      !config ||
+      (config.ownerTelegramUserId !== user.telegramUserId && !requireAdmin(ctx))
+    )
+      return deny(ctx);
     await deleteAutoPromoteConfig(configId, getWorkerRuntime());
     recordAudit({
       workspaceId: user.workspaceId,
       actorTelegramUserId: user.telegramUserId,
       action: "autopromote.delete",
       success: true,
-      metadata: { configId: config.id, scope: config.scope, command: config.command },
+      metadata: {
+        configId: config.id,
+        scope: config.scope,
+        command: config.command,
+      },
     });
     await showAutoPromoteDashboard(ctx, user.telegramUserId, user.workspaceId);
   });
@@ -4515,25 +6928,39 @@ export function createTelegramBot(): Telegraf<Context> {
     const user = resolveTelegramUser(ctx);
     const [mode, workers] = await Promise.all([
       getWorkloadMode(user.workspaceId),
-      listWorkspaceWorkloadWorkers(user.workspaceId),
+      listAccessibleWorkspaceWorkloadWorkers(user.workspaceId),
     ]);
-    await edit(ctx, workloadText(mode, workers), workloadKeyboard(workers.length > 0));
+    await edit(
+      ctx,
+      workloadText(mode, workers),
+      workloadKeyboard(workers.length > 0),
+    );
   });
   bot.action("workload:status", async (ctx) => {
     await ctx.answerCbQuery("Checking panel status…");
     const user = resolveTelegramUser(ctx);
     const [mode, workers] = await Promise.all([
       getWorkloadMode(user.workspaceId),
-      listWorkspaceWorkloadWorkers(user.workspaceId),
+      listAccessibleWorkspaceWorkloadWorkers(user.workspaceId),
     ]);
-    await edit(ctx, workloadText(mode, workers), workloadKeyboard(workers.length > 0));
+    await edit(
+      ctx,
+      workloadText(mode, workers),
+      workloadKeyboard(workers.length > 0),
+    );
   });
   bot.action("workload:list", async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
-    const workers = await listWorkspaceWorkloadWorkers(user.workspaceId);
+    const workers = await listAccessibleWorkspaceWorkloadWorkers(
+      user.workspaceId,
+    );
     if (!workers.length) {
-      await edit(ctx, workloadText(await getWorkloadMode(user.workspaceId), []), workloadKeyboard(false));
+      await edit(
+        ctx,
+        workloadText(await getWorkloadMode(user.workspaceId), []),
+        workloadKeyboard(false),
+      );
       return;
     }
     await edit(
@@ -4542,7 +6969,13 @@ export function createTelegramBot(): Telegraf<Context> {
       keyboard([
         ...workers.map((worker) => {
           const code = worker.workloadCode ?? worker.displayKey;
-          return [btn(`▣ ${worker.workerName ?? "Panel"} · ${code} · ${worker.status}`, `workload:select:${code}`)];
+          return [
+            btn(
+              `▣ ${worker.workerName ?? "Panel"} · ${worker.status}`,
+              `workload:select:${code}`,
+            ),
+            copyBtn(code, code, "success"),
+          ];
         }),
         [btn("➕ Add Workload", "workload:add", "success")],
         [btn(ui.back, "workload:menu")],
@@ -4558,35 +6991,282 @@ export function createTelegramBot(): Telegraf<Context> {
       ctx,
       pageText(
         "Workload · Name Panel",
-        infoResponse("Choose a permanent panel name", "Send a short name for this panel, for example <code>paddy</code>, <code>marketing-01</code>, or <code>home-panel</code>. Telegram will then create a code in the form <code>name-random</code>.\n\nUse /cancel to close this request."),
+        infoResponse(
+          "Choose a permanent panel name",
+          "Send a short name for this panel, for example <code>paddy</code>, <code>marketing-01</code>, or <code>home-panel</code>. Telegram will then create a code in the form <code>name-random</code>.\n\nUse /cancel to close this request.",
+        ),
+      ),
+      keyboard([[btn(ui.close, "workload:menu", "danger")]]),
+    );
+  });
+  bot.action("workload:share:add", async (ctx) => {
+    await ctx.answerCbQuery("Paste a share code…");
+    const userId = String(ctx.from?.id ?? "");
+    beginExclusiveInput(userId);
+    pendingWorkloadShare.set(userId, {
+      workspaceId: resolveTelegramUser(ctx).workspaceId,
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Workload · Add Shared Panel",
+        infoResponse(
+          "Paste a panel share code",
+          "Ask the panel owner for a share code, then paste it here. The shared panel can access only sessions created in your workspace; the owner’s sessions and admin controls stay private. Send <code>cancel</code> to close this request.",
+        ),
       ),
       keyboard([[btn(ui.close, "workload:menu", "danger")]]),
     );
   });
   bot.action("workload:enroll", async (ctx) => {
     await ctx.answerCbQuery("Opening Add Workload…");
-    await edit(ctx, pageText("Workload · Add Workload", infoResponse("Use the new pairing flow", "Tap <b>Add Workload</b>. Telegram will create a copyable pairing code, send <code>index.js</code>, and show the exact steps for your panel.")), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn(ui.back, "workload:menu")]]));
+    await edit(
+      ctx,
+      pageText(
+        "Workload · Add Workload",
+        infoResponse(
+          "Use the new pairing flow",
+          "Tap <b>Add Workload</b>. Telegram will create a copyable pairing code, send <code>index.js</code>, and show the exact steps for your panel.",
+        ),
+      ),
+      keyboard([
+        [btn("➕ Add Workload", "workload:add", "success")],
+        [btn(ui.back, "workload:menu")],
+      ]),
+    );
   });
   bot.action("workload:guide", async (ctx) => {
     await ctx.answerCbQuery();
-    await edit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn(ui.back, "workload:menu")]]));
+    await edit(
+      ctx,
+      workloadGuideText(env.WORKLOAD_CONTROL_URL),
+      keyboard([
+        [btn("➕ Add Workload", "workload:add", "success")],
+        [btn(ui.back, "workload:menu")],
+      ]),
+    );
   });
   bot.action("workload:download", async (ctx) => {
     await ctx.answerCbQuery("Use Add Workload to receive the panel file.");
-    await edit(ctx, pageText("Workload · Add Workload", infoResponse("Files are sent only with Add Workload", "Tap <b>Add Workload</b>, choose your permanent panel name, and Telegram will send the current <code>index.js</code> only after creating the pairing enrollment.")), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn("📖 Open Setup Guide", "workload:guide")], [btn(ui.back, "workload:menu")]]));
+    await edit(
+      ctx,
+      pageText(
+        "Workload · Add Workload",
+        infoResponse(
+          "Files are sent only with Add Workload",
+          "Tap <b>Add Workload</b>, choose your permanent panel name, and Telegram will send the current <code>index.js</code> only after creating the pairing enrollment.",
+        ),
+      ),
+      keyboard([
+        [btn("➕ Add Workload", "workload:add", "success")],
+        [btn("📖 Open Setup Guide", "workload:guide")],
+        [btn(ui.back, "workload:menu")],
+      ]),
+    );
   });
   bot.action(/^workload:select:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const user = resolveTelegramUser(ctx);
     const token = ctx.match[1] ?? "";
     const worker = /^\d{5}$/.test(token)
-      ? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, token)
-      : await getWorkspaceWorkloadWorkerByCode(user.workspaceId, token);
+      ? await getAccessibleWorkspaceWorkloadWorkerByDisplayKey(
+          user.workspaceId,
+          token,
+        )
+      : await getAccessibleWorkspaceWorkloadWorkerByCode(
+          user.workspaceId,
+          token,
+        );
     if (!worker) {
-      await edit(ctx, pageText("Workload", dangerResponse("Workload not found", "Refresh your workload list and try again.")), workloadKeyboard(false));
+      await edit(
+        ctx,
+        pageText(
+          "Workload",
+          dangerResponse(
+            "Workload not found",
+            "Refresh your workload list and try again.",
+          ),
+        ),
+        workloadKeyboard(false),
+      );
       return;
     }
-    await edit(ctx, workloadPanelText(worker), workloadPanelKeyboard(worker.workloadCode ?? worker.displayKey));
+    await edit(
+      ctx,
+      workloadPanelText(worker),
+      workloadPanelKeyboard(
+        worker.workloadCode ?? worker.displayKey,
+        worker.shared,
+      ),
+    );
+  });
+  bot.action(/^workload:share:users:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Loading shared users…");
+    const user = resolveTelegramUser(ctx);
+    const token = ctx.match[1] ?? "";
+    const worker = /^\d{5}$/.test(token)
+      ? await getOwnerWorkloadWorkerByDisplayKey(user.telegramUserId, token)
+      : await getOwnerWorkloadWorkerByCode(user.telegramUserId, token);
+    if (!worker) {
+      await edit(
+        ctx,
+        pageText(
+          "Workload · Shared Users",
+          dangerResponse(
+            "Panel not found",
+            "Only the panel owner can manage shared users.",
+          ),
+        ),
+        keyboard([[btn(ui.back, "workload:list")]]),
+      );
+      return;
+    }
+    try {
+      const recipients = await listOwnerWorkloadShareRecipients(
+        user.workspaceId,
+        worker.workerId,
+      );
+      await edit(
+        ctx,
+        workloadShareUsersText(worker, recipients),
+        workloadShareUsersKeyboard(
+          worker.workloadCode ?? worker.displayKey,
+          recipients,
+        ),
+      );
+    } catch (error) {
+      await edit(
+        ctx,
+        pageText(
+          "Workload · Shared Users",
+          dangerResponse(
+            "Shared-user list unavailable",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        keyboard([
+          [
+            btn(
+              ui.back,
+              `workload:select:${worker.workloadCode ?? worker.displayKey}`,
+            ),
+          ],
+        ]),
+      );
+    }
+  });
+  bot.action(/^workload:share:(block|unblock):([^:]+)$/, async (ctx) => {
+    const action =
+      ctx.match[1] === "block" ? ("BLOCKED" as const) : ("ACTIVE" as const);
+    await ctx.answerCbQuery(
+      action === "BLOCKED"
+        ? "Blocking shared user…"
+        : "Restoring shared access…",
+    );
+    const user = resolveTelegramUser(ctx);
+    const shareId = ctx.match[2] ?? "";
+    try {
+      const updated = await setOwnerSharedUserAccessByShare(
+        user.workspaceId,
+        shareId,
+        action,
+      );
+      const recipients = await listOwnerWorkloadShareRecipients(
+        user.workspaceId,
+        updated.workerId,
+      );
+      await edit(
+        ctx,
+        workloadShareUsersText(
+          {
+            workerName: updated.workerName,
+            workloadCode: updated.workloadCode,
+            displayKey: updated.workloadCode,
+          },
+          recipients,
+        ),
+        workloadShareUsersKeyboard(updated.workloadCode, recipients),
+      );
+    } catch (error) {
+      await edit(
+        ctx,
+        pageText(
+          "Workload · Shared Users",
+          dangerResponse(
+            "Access update failed",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        keyboard([[btn(ui.back, "workload:list")]]),
+      );
+    }
+  });
+  bot.action(/^workload:share:([^:]+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Creating share code…");
+    const user = resolveTelegramUser(ctx);
+    const token = ctx.match[1] ?? "";
+    const worker = /^\d{5}$/.test(token)
+      ? await getOwnerWorkloadWorkerByDisplayKey(user.telegramUserId, token)
+      : await getOwnerWorkloadWorkerByCode(user.telegramUserId, token);
+    if (!worker) {
+      await edit(
+        ctx,
+        pageText(
+          "Workload · Share Panel",
+          dangerResponse(
+            "Panel not found",
+            "Only the panel owner can create a share code.",
+          ),
+        ),
+        keyboard([[btn(ui.back, "workload:list")]]),
+      );
+      return;
+    }
+    try {
+      const share = await createWorkloadShareCode(
+        user.workspaceId,
+        user.telegramUserId,
+        worker.workerId,
+      );
+      await edit(
+        ctx,
+        pageText(
+          "Workload · Share Panel",
+          successResponse(
+            "Share code ready",
+            `<b>Panel:</b> ${escapeHtml(share.workerName)}\n<b>Share code:</b> <code>${escapeHtml(share.shareCode)}</code>\n\nGive this one-time code to the other user. They will see only sessions created in their own workspace. Your sessions, workload credential, admin controls, and other recipients remain private.\n\nThis code expires in 24 hours and can be used once.`,
+          ),
+        ),
+        keyboard([
+          [copyBtn(`📋 ${share.shareCode}`, share.shareCode, "success")],
+          [
+            btn(
+              ui.back,
+              `workload:select:${worker.workloadCode ?? worker.displayKey}`,
+            ),
+          ],
+        ]),
+      );
+    } catch (error) {
+      await edit(
+        ctx,
+        pageText(
+          "Workload · Share Panel",
+          dangerResponse(
+            "Could not create share code",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        keyboard([
+          [
+            btn(
+              ui.back,
+              `workload:select:${worker.workloadCode ?? worker.displayKey}`,
+            ),
+          ],
+        ]),
+      );
+    }
   });
   bot.action(/^workload:logger:(refresh:)?(.+)$/, async (ctx) => {
     await ctx.answerCbQuery("Refreshing logger…");
@@ -4596,14 +7276,44 @@ export function createTelegramBot(): Telegraf<Context> {
       ? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, token)
       : await getWorkspaceWorkloadWorkerByCode(user.workspaceId, token);
     if (!worker) {
-      await edit(ctx, pageText("Workload · Logger", dangerResponse("Panel not found", "Refresh Workload and open Logger again.")), keyboard([[btn(ui.back, "workload:list")] ]));
+      await edit(
+        ctx,
+        pageText(
+          "Workload · Logger",
+          dangerResponse(
+            "Panel not found",
+            "Refresh Workload and open Logger again.",
+          ),
+        ),
+        keyboard([[btn(ui.back, "workload:list")]]),
+      );
       return;
     }
     try {
-      const snapshot = await getWorkloadLoggerSnapshot(user.workspaceId, worker.workerId);
-      await edit(ctx, workloadLoggerText(snapshot), workloadLoggerKeyboard(worker.workloadCode ?? worker.displayKey));
+      const snapshot = await getWorkloadLoggerSnapshot(
+        user.workspaceId,
+        worker.workerId,
+      );
+      await edit(
+        ctx,
+        workloadLoggerText(snapshot),
+        workloadLoggerKeyboard(worker.workloadCode ?? worker.displayKey),
+      );
     } catch (error) {
-      await edit(ctx, pageText("Workload · Logger", dangerResponse("Logger unavailable", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn("↻ Retry Logger", `workload:logger:${token}`)], [btn(ui.back, "workload:list")]]));
+      await edit(
+        ctx,
+        pageText(
+          "Workload · Logger",
+          dangerResponse(
+            "Logger unavailable",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        keyboard([
+          [btn("↻ Retry Logger", `workload:logger:${token}`)],
+          [btn(ui.back, "workload:list")],
+        ]),
+      );
     }
   });
   bot.action(/^workload:use:(.+)$/, async (ctx) => {
@@ -4611,15 +7321,90 @@ export function createTelegramBot(): Telegraf<Context> {
     const user = resolveTelegramUser(ctx);
     const token = ctx.match[1] ?? "";
     const worker = /^\d{5}$/.test(token)
-      ? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, token)
-      : await getWorkspaceWorkloadWorkerByCode(user.workspaceId, token);
+      ? await getAccessibleWorkspaceWorkloadWorkerByDisplayKey(
+          user.workspaceId,
+          token,
+        )
+      : await getAccessibleWorkspaceWorkloadWorkerByCode(
+          user.workspaceId,
+          token,
+        );
     if (!worker || !isWorkloadWorkerReady(worker)) {
-      await edit(ctx, pageText("Workload", dangerResponse("Workload is not ready", "Only an ACTIVE, compatible workload with a fresh heartbeat can host a session.")), workloadKeyboard(Boolean(worker)));
+      await edit(
+        ctx,
+        pageText(
+          "Workload",
+          dangerResponse(
+            "Workload is not ready",
+            "Only an ACTIVE, compatible workload with a fresh heartbeat can host a session.",
+          ),
+        ),
+        workloadKeyboard(Boolean(worker)),
+      );
       return;
     }
     const code = worker.workloadCode ?? worker.displayKey;
-    preferredWorkloadWorker.set(String(ctx.from?.id ?? ""), { workspaceId: worker.workspaceId, workerId: worker.workerId, workloadCode: code, displayKey: worker.displayKey });
-    await edit(ctx, pageText("Workload", successResponse("Workload selected", `New pairing will use <code>${escapeHtml(code)}</code>. Tap Pair Number when ready.`)), keyboard([[btn("⚡ Pair Number", "session:new", "success")], [btn(ui.back, "workload:menu")]]));
+    preferredWorkloadWorker.set(String(ctx.from?.id ?? ""), {
+      workspaceId: user.workspaceId,
+      workerId: worker.workerId,
+      workloadCode: code,
+      displayKey: worker.displayKey,
+    });
+    await edit(
+      ctx,
+      pageText(
+        "Workload",
+        successResponse(
+          "Workload selected",
+          `New pairing will use <code>${escapeHtml(code)}</code>. Tap Pair Number when ready.`,
+        ),
+      ),
+      keyboard([
+        [btn("⚡ Pair Number", "session:new", "success")],
+        [btn(ui.back, "workload:menu")],
+      ]),
+    );
+  });
+  bot.action(/^workload:share:remove:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Unlinking shared panel…");
+    const user = resolveTelegramUser(ctx);
+    const token = ctx.match[1] ?? "";
+    const worker = /^\d{5}$/.test(token)
+      ? await getAccessibleWorkspaceWorkloadWorkerByDisplayKey(
+          user.workspaceId,
+          token,
+        )
+      : await getAccessibleWorkspaceWorkloadWorkerByCode(
+          user.workspaceId,
+          token,
+        );
+    if (!worker?.shared || !worker.shareId) {
+      await edit(
+        ctx,
+        pageText(
+          "Workload",
+          dangerResponse(
+            "Shared panel not found",
+            "Refresh your workload list and try again.",
+          ),
+        ),
+        workloadKeyboard(false),
+      );
+      return;
+    }
+    await revokeSharedWorkloadAccess(user.workspaceId, worker.shareId);
+    preferredWorkloadWorker.delete(String(ctx.from?.id ?? ""));
+    await edit(
+      ctx,
+      pageText(
+        "Workload",
+        successResponse(
+          "Shared panel unlinked",
+          "Only this workspace’s shared access was removed. The owner’s panel and other users are unchanged.",
+        ),
+      ),
+      workloadKeyboard(false),
+    );
   });
   bot.action(/^workload:remove:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery("Removing workload…");
@@ -4630,14 +7415,31 @@ export function createTelegramBot(): Telegraf<Context> {
       : await getWorkspaceWorkloadWorkerByCode(user.workspaceId, token);
     if (worker) await revokeWorkloadWorker(worker.workerId);
     preferredWorkloadWorker.delete(String(ctx.from?.id ?? ""));
-    await edit(ctx, pageText("Workload", successResponse("Workload removed", "The workload credential and code were deleted immediately. Existing session metadata and WhatsApp auth are preserved.")), workloadKeyboard(false));
+    await edit(
+      ctx,
+      pageText(
+        "Workload",
+        successResponse(
+          "Workload removed",
+          "The workload credential and code were deleted immediately. Existing session metadata and WhatsApp auth are preserved.",
+        ),
+      ),
+      workloadKeyboard(false),
+    );
   });
   bot.action("admin:workload", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
     const user = resolveTelegramUser(ctx);
-    const [mode, workers] = await Promise.all([getWorkloadMode(user.workspaceId), listWorkspaceWorkloadWorkers(user.workspaceId)]);
-    await edit(ctx, adminWorkloadText(mode, workers), adminWorkloadKeyboard(mode, workers));
+    const [mode, workers] = await Promise.all([
+      getWorkloadMode(user.workspaceId),
+      listWorkspaceWorkloadWorkers(user.workspaceId),
+    ]);
+    await edit(
+      ctx,
+      adminWorkloadText(mode, workers),
+      adminWorkloadKeyboard(mode, workers),
+    );
   });
   bot.action("admin:workload:toggle", async (ctx) => {
     await ctx.answerCbQuery("Updating workload mode…");
@@ -4646,38 +7448,91 @@ export function createTelegramBot(): Telegraf<Context> {
     const current = await getWorkloadMode(user.workspaceId);
     const next = current === "ON" ? "OFF" : "ON";
     await setWorkloadMode(user.workspaceId, next);
-    recordAudit({ workspaceId: user.workspaceId, actorTelegramUserId: user.telegramUserId, action: "admin.workload.mode", success: true, metadata: { previous: current, next } });
+    recordAudit({
+      workspaceId: user.workspaceId,
+      actorTelegramUserId: user.telegramUserId,
+      action: "admin.workload.mode",
+      success: true,
+      metadata: { previous: current, next },
+    });
     const workers = await listWorkspaceWorkloadWorkers(user.workspaceId);
-    await edit(ctx, adminWorkloadText(next, workers), adminWorkloadKeyboard(next, workers));
+    await edit(
+      ctx,
+      adminWorkloadText(next, workers),
+      adminWorkloadKeyboard(next, workers),
+    );
   });
   bot.action(/^admin:workload:worker:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
     const user = resolveTelegramUser(ctx);
-    const worker = (await listWorkspaceWorkloadWorkers(user.workspaceId)).find((item) => item.workerId === ctx.match[1]);
+    const worker = (await listWorkspaceWorkloadWorkers(user.workspaceId)).find(
+      (item) => item.workerId === ctx.match[1],
+    );
     if (!worker) {
-      await edit(ctx, pageText("Admin · Workload", dangerResponse("Worker not found", "Refresh the registry and try again.")), keyboard([[btn(ui.back, "admin:workload")]]));
+      await edit(
+        ctx,
+        pageText(
+          "Admin · Workload",
+          dangerResponse(
+            "Worker not found",
+            "Refresh the registry and try again.",
+          ),
+        ),
+        keyboard([[btn(ui.back, "admin:workload")]]),
+      );
       return;
     }
-    await edit(ctx, adminWorkloadWorkerText(worker), adminWorkloadWorkerKeyboard(worker.workerId, worker.status === "DISABLED"));
+    await edit(
+      ctx,
+      adminWorkloadWorkerText(worker),
+      adminWorkloadWorkerKeyboard(
+        worker.workerId,
+        worker.status === "DISABLED",
+      ),
+    );
   });
   bot.action(/^admin:workload:worker:toggle:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery("Updating worker…");
     if (!requireAdmin(ctx)) return;
     const user = resolveTelegramUser(ctx);
-    const worker = (await listWorkspaceWorkloadWorkers(user.workspaceId)).find((item) => item.workerId === ctx.match[1]);
+    const worker = (await listWorkspaceWorkloadWorkers(user.workspaceId)).find(
+      (item) => item.workerId === ctx.match[1],
+    );
     if (!worker) return;
     const updated = await toggleWorkloadWorker(worker.workerId);
-    recordAudit({ workspaceId: user.workspaceId, actorTelegramUserId: user.telegramUserId, action: "admin.workload.worker.toggle", success: true, metadata: { workerId: worker.workerId, status: updated.status } });
-    await edit(ctx, adminWorkloadWorkerText(updated), adminWorkloadWorkerKeyboard(updated.workerId, updated.status === "DISABLED"));
+    recordAudit({
+      workspaceId: user.workspaceId,
+      actorTelegramUserId: user.telegramUserId,
+      action: "admin.workload.worker.toggle",
+      success: true,
+      metadata: { workerId: worker.workerId, status: updated.status },
+    });
+    await edit(
+      ctx,
+      adminWorkloadWorkerText(updated),
+      adminWorkloadWorkerKeyboard(
+        updated.workerId,
+        updated.status === "DISABLED",
+      ),
+    );
   });
   bot.action(/^admin:workload:worker:check:([^:]+)$/, async (ctx) => {
     await ctx.answerCbQuery("Refreshing worker state…");
     if (!requireAdmin(ctx)) return;
     const user = resolveTelegramUser(ctx);
-    const worker = (await listWorkspaceWorkloadWorkers(user.workspaceId)).find((item) => item.workerId === ctx.match[1]);
+    const worker = (await listWorkspaceWorkloadWorkers(user.workspaceId)).find(
+      (item) => item.workerId === ctx.match[1],
+    );
     if (!worker) return;
-    await edit(ctx, adminWorkloadWorkerText(worker), adminWorkloadWorkerKeyboard(worker.workerId, worker.status === "DISABLED"));
+    await edit(
+      ctx,
+      adminWorkloadWorkerText(worker),
+      adminWorkloadWorkerKeyboard(
+        worker.workerId,
+        worker.status === "DISABLED",
+      ),
+    );
   });
   bot.action("admin:panel", async (ctx) => {
     await ctx.answerCbQuery();
@@ -4697,7 +7552,11 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("admin:inceptor", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
-    await edit(ctx, adminInceptorText(getInceptorSnapshot()), adminInceptorKeyboard());
+    await edit(
+      ctx,
+      adminInceptorText(getInceptorSnapshot()),
+      adminInceptorKeyboard(),
+    );
   });
   bot.action("admin:inceptor:run", async (ctx) => {
     await ctx.answerCbQuery("Inceptor sweep running…");
@@ -4710,7 +7569,14 @@ export function createTelegramBot(): Telegraf<Context> {
       action: "admin.inceptor.sweep",
       success: Boolean(snapshot),
       metadata: snapshot
-        ? { scanned: snapshot.scanned, recovered: snapshot.recovered, flushed: snapshot.flushedDeadSessionJobs, flushedMissing: snapshot.flushedMissingSessionJobs, flushedStuck: snapshot.flushedStuckJobs, pruned: snapshot.prunedTerminalJobs }
+        ? {
+            scanned: snapshot.scanned,
+            recovered: snapshot.recovered,
+            flushed: snapshot.flushedDeadSessionJobs,
+            flushedMissing: snapshot.flushedMissingSessionJobs,
+            flushedStuck: snapshot.flushedStuckJobs,
+            pruned: snapshot.prunedTerminalJobs,
+          }
         : { unavailable: true },
     });
     await edit(ctx, adminInceptorText(snapshot), adminInceptorKeyboard());
@@ -4763,16 +7629,24 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("admin:bridge", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
+    await refreshSessionRegistryForUi();
     const userId = String(ctx.from?.id ?? "");
     pendingAdminGlobalBridge.delete(userId);
     pendingAdminBridge.delete(userId);
     const sessions = activeAllSessions();
-    const selected = adminBridgeSelections.get(String(ctx.from?.id ?? "")) ?? new Set<string>();
-    await edit(ctx, adminBridgeText(sessions), adminBridgeKeyboard(sessions, selected));
+    const selected =
+      adminBridgeSelections.get(String(ctx.from?.id ?? "")) ??
+      new Set<string>();
+    await edit(
+      ctx,
+      adminBridgeText(sessions),
+      adminBridgeKeyboard(sessions, selected),
+    );
   });
   bot.action("admin:bridge:clear", async (ctx) => {
     await ctx.answerCbQuery("Selection cleared");
     if (!requireAdmin(ctx)) return;
+    await refreshSessionRegistryForUi();
     const userId = String(ctx.from?.id ?? "");
     adminBridgeSelections.delete(userId);
     await edit(
@@ -4784,9 +7658,14 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("admin:bridge:all", async (ctx) => {
     await ctx.answerCbQuery("All ACTIVE sessions selected");
     if (!requireAdmin(ctx)) return;
+    await refreshSessionRegistryForUi();
     const userId = String(ctx.from?.id ?? "");
     const active = activeAllSessions();
-    const selected = new Set(active.map((session) => adminBridgeTargetToken(session.workspaceId, session.sessionId)));
+    const selected = new Set(
+      active.map((session) =>
+        adminBridgeTargetToken(session.workspaceId, session.sessionId),
+      ),
+    );
     adminBridgeSelections.set(userId, selected);
     await edit(
       ctx,
@@ -4797,13 +7676,17 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action(/^admin:bridge:toggle:([A-Z0-9]+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
+    await refreshSessionRegistryForUi();
     const userId = String(ctx.from?.id ?? "");
     const token = String(ctx.match[1] ?? "").toUpperCase();
     const session = activeAllSessions().find(
-      (item) => adminBridgeTargetToken(item.workspaceId, item.sessionId) === token,
+      (item) =>
+        adminBridgeTargetToken(item.workspaceId, item.sessionId) === token,
     );
     if (!session) {
-      await ctx.answerCbQuery("Session target is no longer available.", { show_alert: true });
+      await ctx.answerCbQuery("Session target is no longer available.", {
+        show_alert: true,
+      });
       return;
     }
     const selected = adminBridgeSelections.get(userId) ?? new Set<string>();
@@ -4819,6 +7702,7 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.action("admin:bridge:command", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;
+    await refreshSessionRegistryForUi();
     const userId = String(ctx.from?.id ?? "");
     const selected = adminBridgeSelections.get(userId) ?? new Set<string>();
     const targets = activeAllSessions().filter((item) =>
@@ -4829,15 +7713,21 @@ export function createTelegramBot(): Telegraf<Context> {
         ctx,
         pageText(
           "Admin · Global Bridge",
-          warningResponse("Select at least one session", "Choose one or more session targets before sending a command."),
+          warningResponse(
+            "Select at least one session",
+            "Choose one or more session targets before sending a command.",
+          ),
         ),
         adminBridgeKeyboard(activeAllSessions(), selected),
       );
       return;
     }
     const message = ctx.callbackQuery?.message;
-    const chatId = ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : undefined);
-    const messageId = message && "message_id" in message ? message.message_id : undefined;
+    const chatId =
+      ctx.chat?.id ??
+      (message && "chat" in message ? message.chat.id : undefined);
+    const messageId =
+      message && "message_id" in message ? message.message_id : undefined;
     if (!chatId || !messageId) return;
     beginExclusiveInput(userId);
     pendingAdminGlobalBridge.set(userId, { chatId, messageId });
@@ -4858,7 +7748,8 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!requireAdmin(ctx)) return;
     const token = String(ctx.match[1] ?? "").toUpperCase();
     const session = activeAllSessions().find(
-      (item) => adminBridgeTargetToken(item.workspaceId, item.sessionId) === token,
+      (item) =>
+        adminBridgeTargetToken(item.workspaceId, item.sessionId) === token,
     );
     if (!session) return deny(ctx);
     await edit(
@@ -4881,12 +7772,16 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!requireAdmin(ctx)) return;
     const token = String(ctx.match[1] ?? "").toUpperCase();
     const session = activeAllSessions().find(
-      (item) => adminBridgeTargetToken(item.workspaceId, item.sessionId) === token,
+      (item) =>
+        adminBridgeTargetToken(item.workspaceId, item.sessionId) === token,
     );
     if (!session) return deny(ctx);
     const message = ctx.callbackQuery?.message;
-    const chatId = ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : undefined);
-    const messageId = message && "message_id" in message ? message.message_id : undefined;
+    const chatId =
+      ctx.chat?.id ??
+      (message && "chat" in message ? message.chat.id : undefined);
+    const messageId =
+      message && "message_id" in message ? message.message_id : undefined;
     if (!chatId || !messageId) return;
     beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingAdminBridge.set(String(ctx.from?.id ?? ""), {
@@ -5075,11 +7970,18 @@ export function createTelegramBot(): Telegraf<Context> {
         ctx,
         pageText(
           "Membership Gate",
-          infoResponse("No policy is active", "The owner has not configured a required channel or group yet."),
+          infoResponse(
+            "No policy is active",
+            "The owner has not configured a required channel or group yet.",
+          ),
         ),
         keyboard([[btn(ui.back, "menu:main")]]),
       );
-    await edit(ctx, forceJoinText(gate.targets, gate.passed), forceJoinKeyboard(gate.targets));
+    await edit(
+      ctx,
+      forceJoinText(gate.targets, gate.passed),
+      forceJoinKeyboard(gate.targets),
+    );
   });
   bot.action("forcejoin:check", async (ctx) => {
     await ctx.answerCbQuery();
@@ -5133,7 +8035,13 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!runtime) {
       await edit(
         ctx,
-        pageText("Clear All Jobs", dangerResponse("Unavailable", "The Pappy worker runtime is not available.")),
+        pageText(
+          "Clear All Jobs",
+          dangerResponse(
+            "Unavailable",
+            "The Pappy worker runtime is not available.",
+          ),
+        ),
         keyboard([[btn("‹ Admin Panel", "admin:panel")]]),
       );
       return;
@@ -5413,17 +8321,49 @@ async function startPairing(
   const workloadMode = await getWorkloadMode(user.workspaceId);
   const preferred = preferredWorkloadWorker.get(userId);
   if (workloadMode === "OFF" && !preferred) {
-    await sendOrEdit(ctx, pageText("Pairing", warningResponse("Central workload is OFF", "New WhatsApp sessions cannot use your VPS while Admin Workload is OFF. Deploy or select an external panel workload instead. Existing sessions are preserved.")), keyboard([[btn("▣ Workload Panels", "workload:menu")], [btn(ui.back, "menu:main")]]));
+    await sendOrEdit(
+      ctx,
+      pageText(
+        "Pairing",
+        warningResponse(
+          "Central workload is OFF",
+          "New WhatsApp sessions cannot use your VPS while Admin Workload is OFF. Deploy or select an external panel workload instead. Existing sessions are preserved.",
+        ),
+      ),
+      keyboard([
+        [btn("▣ Workload Panels", "workload:menu")],
+        [btn(ui.back, "menu:main")],
+      ]),
+    );
     return;
   }
   let targetWorker = preferred
-    ? await getWorkspaceWorkloadWorkerByCode(user.workspaceId, preferred.workloadCode)
-      ?? await getWorkspaceWorkloadWorkerByDisplayKey(user.workspaceId, preferred.displayKey)
+    ? ((await getAccessibleWorkspaceWorkloadWorkerByCode(
+        user.workspaceId,
+        preferred.workloadCode,
+      )) ??
+      (await getAccessibleWorkspaceWorkloadWorkerByDisplayKey(
+        user.workspaceId,
+        preferred.displayKey,
+      )))
     : undefined;
   if (preferred && (!targetWorker || !isWorkloadWorkerReady(targetWorker))) {
     preferredWorkloadWorker.delete(userId);
     targetWorker = undefined;
-    await sendOrEdit(ctx, pageText("Pairing", dangerResponse("Selected panel is offline", "Check the panel status or choose another panel before pairing.")), keyboard([[btn("◌ Workload", "workload:menu")], [btn(ui.back, "menu:main")]]));
+    await sendOrEdit(
+      ctx,
+      pageText(
+        "Pairing",
+        dangerResponse(
+          "Selected panel is offline",
+          "Check the panel status or choose another panel before pairing.",
+        ),
+      ),
+      keyboard([
+        [btn("◌ Workload", "workload:menu")],
+        [btn(ui.back, "menu:main")],
+      ]),
+    );
     return;
   }
   const normalizedName = requestedName.trim().replace(/\s+/g, "-");
@@ -5447,10 +8387,29 @@ async function startPairing(
   });
   if (targetWorker) {
     try {
-      await assignWorkloadSession(user.workspaceId, session.sessionId, targetWorker.workerId);
+      await assignWorkloadSession(
+        user.workspaceId,
+        session.sessionId,
+        targetWorker.workerId,
+      );
     } catch (error) {
-      await purgeWhatsAppSession(user.workspaceId, session.sessionId).catch(() => undefined);
-      await sendOrEdit(ctx, pageText("Pairing", dangerResponse("Panel assignment failed", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn("◌ Workload", "workload:menu")], [btn(ui.back, "menu:main")]]));
+      await purgeWhatsAppSession(user.workspaceId, session.sessionId).catch(
+        () => undefined,
+      );
+      await sendOrEdit(
+        ctx,
+        pageText(
+          "Pairing",
+          dangerResponse(
+            "Panel assignment failed",
+            escapeHtml(error instanceof Error ? error.message : String(error)),
+          ),
+        ),
+        keyboard([
+          [btn("◌ Workload", "workload:menu")],
+          [btn(ui.back, "menu:main")],
+        ]),
+      );
       return;
     }
   }
@@ -5461,35 +8420,62 @@ async function startPairing(
   });
   await sendOrEdit(
     ctx,
-    pageText(
-      "Pairing · Phone Number",
-      infoResponse(
-        "Session Created",
-        `<b>${escapeHtml(session.sessionName)}</b> is ready. Send the full WhatsApp number in country-code format, for example <code>2348012345678</code>.`,
-      ),
-    ),
+      `${pairingHelpCardText()}\n\n<b>Next:</b> Send the full WhatsApp number in country-code format, for example <code>2348012345678</code>.\n<b>Session:</b> ${escapeHtml(session.sessionName)}` ,
     keyboard([[btn(ui.close, "menu:main", "danger")]]),
   );
 }
 
-async function beginPairingWizard(ctx: Context, workloadSelected = false): Promise<void> {
+async function beginPairingWizard(
+  ctx: Context,
+  workloadSelected = false,
+): Promise<void> {
   const user = resolveTelegramUser(ctx);
   beginExclusiveInput(String(ctx.from?.id ?? ""));
   if (!workloadSelected) {
     const workloadMode = await getWorkloadMode(user.workspaceId);
-    const workers = await listWorkspaceWorkloadWorkers(user.workspaceId);
-    const readyWorkers = workers.filter((worker) => isWorkloadWorkerReady(worker));
-    const rows = readyWorkers.map((worker) => {
+    const workers = await listAccessibleWorkspaceWorkloadWorkers(
+      user.workspaceId,
+    );
+    const rows = workers.map((worker) => {
       const code = worker.workloadCode ?? worker.displayKey;
-      return [btn(`▣ ${worker.workerName ?? "Panel"} · ${code}`, `pair:workload:${code}`, "success")];
+      const ready = isWorkloadWorkerReady(worker);
+      const label = worker.shared ? "🔗 Shared" : "▣ Panel";
+      const state = ready ? "READY" : `${worker.status} · heartbeat stale`;
+      return [
+        btn(
+          `${ready ? label : "⛔"} · ${worker.workerName ?? "Panel"} · ${state}`,
+          `pair:workload:${code}`,
+          ready ? "success" : "danger",
+        ),
+      ];
     });
-    if (workloadMode === "ON") rows.push([btn("▣ Use Central Workload", "pair:local")]);
+    if (workloadMode === "ON")
+      rows.push([btn("▣ Use Central Workload", "pair:local")]);
     if (!rows.length) {
-      await sendOrEdit(ctx, workloadGuideText(env.WORKLOAD_CONTROL_URL), keyboard([[btn("➕ Add Workload", "workload:add", "success")], [btn("⬇ Download Panel Worker", "workload:download")], [btn(ui.back, "menu:main")]]));
+      await sendOrEdit(
+        ctx,
+        workloadGuideText(env.WORKLOAD_CONTROL_URL),
+        keyboard([
+          [btn("➕ Add Workload", "workload:add", "success")],
+          [btn("⬇ Download Panel Worker", "workload:download")],
+          [btn(ui.back, "menu:main")],
+        ]),
+      );
       return;
     }
     rows.push([btn(ui.close, "menu:main", "danger")]);
-    await sendOrEdit(ctx, pageText("Pairing · Choose Workload", infoResponse("Where should this new WhatsApp session run?", "Choose one of your ACTIVE workloads. Your choice applies only to this new pairing.")), keyboard(rows));
+    await sendOrEdit(
+      ctx,
+      pageText(
+        "Pairing · Choose Workload",
+        infoResponse(
+          "Where should this new WhatsApp session run?",
+          "Your owned and shared panels are shown with their live state. READY panels can host this pairing now; an offline or stale panel must reconnect before it can be selected. Your choice applies only to this new pairing.",
+        ),
+      ),
+      keyboard(rows),
+    );
+
     return;
   }
   const message = ctx.callbackQuery?.message;
@@ -5504,13 +8490,7 @@ async function beginPairingWizard(ctx: Context, workloadSelected = false): Promi
   });
   await sendOrEdit(
     ctx,
-    pageText(
-      "New WhatsApp Session",
-      infoResponse(
-        "Step 1 of 2 · Session Label",
-        "Send a short label such as <code>main</code>, <code>business</code>, or <code>support-1</code>. You will then enter the WhatsApp number.",
-      ),
-    ),
+      `${pairingHelpCardText()}\n\n<b>Step 1 of 2:</b> Send a short label such as <code>main</code>, <code>business</code>, or <code>support-1</code>. You will then enter the WhatsApp number.`,
     keyboard([[btn(ui.close, "menu:main", "danger")]]),
   );
 }
@@ -5542,13 +8522,7 @@ async function handlePairingText(
   if (!/^[1-9][0-9]{6,14}$/.test(normalizedPhone)) {
     await sendOrEdit(
       ctx,
-      pageText(
-        "Pairing · Phone Number",
-        dangerResponse(
-          "Invalid Number",
-          "Send digits only in international country-code format, for example <code>2348012345678</code>.",
-        ),
-      ),
+      `${pairingHelpCardText()}\n\n» <b>Error:</b> Send digits only in international country-code format, for example <code>2348012345678</code>.`,
       keyboard([[btn(ui.close, "menu:main", "danger")]]),
     );
     return;
@@ -5571,13 +8545,7 @@ async function handlePairingText(
     preferredWorkloadWorker.delete(userId);
     await sendOrEdit(
       ctx,
-      pageText(
-        "Pairing · Code Ready",
-        successResponse(
-          "Enter This Code in WhatsApp",
-          `<b>${escapeHtml(session.sessionName)}</b> is waiting for pairing.\n\n<code>${escapeHtml(code)}</code>\n\nOpen WhatsApp → Linked Devices → Link a Device → Link with phone number, then enter the code. This screen will remain recoverable if the network is temporarily unavailable.`,
-        ),
-      ),
+      sessionPairingCardText(session, normalizedPhone, code),
       keyboard([
         [copyBtn("📋 Copy pairing code", code, "success")],
         [btn("↻ Session Status", `session:${session.sessionId}:menu`)],
@@ -5676,9 +8644,10 @@ async function showAdminForceJoin(ctx: Context): Promise<void> {
   await edit(ctx, adminForceJoinText(targets), adminForceJoinKeyboard(targets));
 }
 
-function inferForceJoinType(
-  raw: string,
-): { target: string; targetType: "channel" | "group" } {
+function inferForceJoinType(raw: string): {
+  target: string;
+  targetType: "channel" | "group";
+} {
   const explicit = raw.match(/^(channel|group)\s*\|\s*(.+)$/i);
   if (explicit?.[2])
     return {
@@ -5703,7 +8672,10 @@ async function handleForceJoinTargetInput(
       ctx,
       pageText(
         "Admin · Force Join",
-        dangerResponse("Invalid Target", "Send one valid Telegram channel or group link, username, or chat ID."),
+        dangerResponse(
+          "Invalid Target",
+          "Send one valid Telegram channel or group link, username, or chat ID.",
+        ),
       ),
       keyboard([[btn("↻ Try Target Again", "admin:forcejoin:add", "success")]]),
     );
@@ -5734,7 +8706,13 @@ async function handleForceJoinNameInput(
   if (!draft || !text || text.length > 120) {
     await edit(
       ctx,
-      pageText("Admin · Force Join", dangerResponse("Invalid Name", "Send a display name between 1 and 120 characters.")),
+      pageText(
+        "Admin · Force Join",
+        dangerResponse(
+          "Invalid Name",
+          "Send a display name between 1 and 120 characters.",
+        ),
+      ),
       keyboard([[btn("↻ Try Name Again", "admin:forcejoin:add", "success")]]),
     );
     return;
@@ -5760,10 +8738,22 @@ async function handleForceJoinButtonInput(
 ): Promise<void> {
   const actorId = String(ctx.from?.id ?? "");
   const draft = pendingForceJoin.get(actorId);
-  if (!draft?.target || !draft.targetType || !draft.displayName || !text || text.length > 80) {
+  if (
+    !draft?.target ||
+    !draft.targetType ||
+    !draft.displayName ||
+    !text ||
+    text.length > 80
+  ) {
     await edit(
       ctx,
-      pageText("Admin · Force Join", dangerResponse("Invalid Button Text", "Send a button label between 1 and 80 characters.")),
+      pageText(
+        "Admin · Force Join",
+        dangerResponse(
+          "Invalid Button Text",
+          "Send a button label between 1 and 80 characters.",
+        ),
+      ),
       keyboard([[btn("↻ Try Button Again", "admin:forcejoin:add", "success")]]),
     );
     return;
@@ -5792,21 +8782,36 @@ async function handleForceJoinButtonInput(
     ctx,
     pageText(
       "Admin · Force Join",
-      successResponse("Policy Saved", `${escapeHtml(draft.displayName)} is now required for users. The user Membership Gate button will show it immediately.`),
+      successResponse(
+        "Policy Saved",
+        `${escapeHtml(draft.displayName)} is now required for users. The user Membership Gate button will show it immediately.`,
+      ),
     ),
     adminForceJoinKeyboard(await listForceJoinTargets()),
   );
 }
 
-async function handleMenuCaptionInput(ctx: Context, text: string): Promise<void> {
+async function handleMenuCaptionInput(
+  ctx: Context,
+  text: string,
+): Promise<void> {
   const actorId = String(ctx.from?.id ?? "");
   pendingAdminInput.delete(actorId);
   const workspaceId = resolveTelegramUser(ctx).workspaceId;
-  const caption = text.toLowerCase() === "clear" ? "Choose a session and send a command." : text;
+  const caption =
+    text.toLowerCase() === "clear"
+      ? "Choose a session and send a command."
+      : text;
   if (!caption || caption.length > 1024) {
     await edit(
       ctx,
-      pageText("Admin · Menu Caption", dangerResponse("Invalid Caption", "Send 1–1024 characters or <code>clear</code>.")),
+      pageText(
+        "Admin · Menu Caption",
+        dangerResponse(
+          "Invalid Caption",
+          "Send 1–1024 characters or <code>clear</code>.",
+        ),
+      ),
       keyboard([[btn("↻ Try Again", "admin:media:caption", "success")]]),
     );
     return;
@@ -5814,7 +8819,13 @@ async function handleMenuCaptionInput(ctx: Context, text: string): Promise<void>
   updateWhatsappMenuCaption(workspaceId, caption);
   await edit(
     ctx,
-    pageText("Admin · Menu Caption", successResponse("Shared Caption Saved", "Every workspace user’s next WhatsApp <code>.menu</code> will use this caption.")),
+    pageText(
+      "Admin · Menu Caption",
+      successResponse(
+        "Shared Caption Saved",
+        "Every workspace user’s next WhatsApp <code>.menu</code> will use this caption.",
+      ),
+    ),
     mediaKeyboard(),
   );
 }
@@ -5858,11 +8869,36 @@ async function getSessionGroupAt(
   ctx: Context,
   sessionId: string,
   index: number,
-): Promise<Awaited<ReturnType<typeof listGroups>>[number] | undefined> {
+): Promise<Awaited<ReturnType<typeof listAdminGroups>>[number] | undefined> {
   const session = ownedSession(ctx, sessionId);
   if (!session) return undefined;
-  const groups = await listGroups(session.workspaceId, session.sessionId);
-  return groups[index];
+  const now = Date.now();
+  const tokenCached = adminGroupSelectionTokens.resolve(
+    `${session.workspaceId}:${session.sessionId}`,
+    String(index),
+    now,
+  );
+  if (tokenCached) return tokenCached;
+  // New buttons always carry an exact token. Never re-index a fresh list on a
+  // token miss: a changed ordering could open the wrong group. The caller
+  // renders an explicit expired-selection state instead.
+  return undefined;
+}
+async function showGroupSelectionExpired(ctx: Context, sessionId: string): Promise<void> {
+  await edit(
+    ctx,
+    pageText(
+      "Group Selection Expired",
+      dangerResponse(
+        "Selection Expired",
+        "This group button is no longer valid. Reload My Groups and choose the group again.",
+      ),
+    ),
+    keyboard([
+      [btn("↻ Reload My Groups", `session:${sessionId}:groups:0`, "primary")],
+      [btn("‹ Session", `session:${sessionId}:menu`)],
+    ]),
+  );
 }
 
 async function showSessionGroups(
@@ -5873,7 +8909,22 @@ async function showSessionGroups(
   const session = ownedSession(ctx, sessionId);
   if (!session) return deny(ctx);
   try {
-    const groups = await listGroups(session.workspaceId, session.sessionId);
+    const groups = await listAdminGroups(
+      session.workspaceId,
+      session.sessionId,
+    );
+    const now = Date.now();
+    const selectionTokens = new Map<number, string>();
+    for (const [index, group] of groups.entries()) {
+      selectionTokens.set(
+        index,
+        adminGroupSelectionTokens.issue(
+          `${session.workspaceId}:${session.sessionId}`,
+          group,
+          now,
+        ),
+      );
+    }
     const pageSize = 20;
     const pageCount = Math.max(1, Math.ceil(groups.length / pageSize));
     const safePage = Math.max(0, Math.min(pageCount - 1, Math.floor(page)));
@@ -5883,28 +8934,35 @@ async function showSessionGroups(
       ? visible
           .map(
             (group, index) =>
-              `<b>${start + index + 1}. ${escapeHtml(group.subject || "Unnamed group")}</b> · ${group.participantCount} participants`,
+              `<b>${start + index + 1}. ${escapeHtml(telegramSafeText(group.subject || "Unnamed group"))}</b> · ${group.participantCount} participants`,
           )
           .join("\n")
       : "No groups were returned by the connected WhatsApp session.";
     const groupRows = visible.map((group, index) => [
       btn(
-        `${String(start + index + 1).padStart(2, "0")} · ${(group.subject || "Unnamed group").replace(/\s+/g, " ").slice(0, 28)}`,
-        `session:${session.sessionId}:group:view:${start + index}`,
+        `${String(start + index + 1).padStart(2, "0")} · ${telegramSafeText(group.subject || "Unnamed group", 128).replace(/\s+/g, " ").slice(0, 28)}`,
+        `session:${session.sessionId}:group:view:${selectionTokens.get(start + index) ?? start + index}`,
       ),
     ]);
     const pageControls: Array<ReturnType<typeof btn>> = [];
     if (safePage > 0)
-      pageControls.push(btn("‹ Previous", `session:${session.sessionId}:groups:${safePage - 1}`));
+      pageControls.push(
+        btn(
+          "‹ Previous",
+          `session:${session.sessionId}:groups:${safePage - 1}`,
+        ),
+      );
     if (safePage + 1 < pageCount)
-      pageControls.push(btn("Next ›", `session:${session.sessionId}:groups:${safePage + 1}`));
+      pageControls.push(
+        btn("Next ›", `session:${session.sessionId}:groups:${safePage + 1}`),
+      );
     await edit(
       ctx,
       pageText(
-        `${session.sessionName} · My Groups`,
+        `${session.sessionName} · Admin Groups`,
         infoResponse(
-          "Selectable Group Inventory",
-          `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Groups:</b> ${groups.length}\n<b>Page:</b> ${safePage + 1}/${pageCount}\n\n${body}\n\nSelect a group to open its detail submenu.`,
+          "Administrator Group Inventory",
+          `<b>Session:</b> ${escapeHtml(session.sessionName)}\n<b>Admin groups:</b> ${groups.length}\n<b>Page:</b> ${safePage + 1}/${pageCount}\n\n${body}\n\nOnly groups where this WhatsApp identity is an administrator or owner are shown. Select a group to open its moderation and control submenu.`,
         ),
       ),
       keyboard([
@@ -5943,8 +9001,218 @@ async function showSessionGroups(
         ),
       ),
       keyboard([
-        [btn("↻ Retry Groups", `session:${session.sessionId}:groups:0`, "primary")],
+        [
+          btn(
+            "↻ Retry Groups",
+            `session:${session.sessionId}:groups:0`,
+            "primary",
+          ),
+        ],
         [btn("‹ Session", `session:${session.sessionId}:menu`)],
+      ]),
+    );
+  }
+}
+
+async function showGroupModeration(
+  ctx: Context,
+  sessionId: string,
+  index: number,
+): Promise<void> {
+  const session = ownedSession(ctx, sessionId);
+  if (!session) return deny(ctx);
+  const group = await getSessionGroupAt(ctx, sessionId, index).catch(
+    () => undefined,
+  );
+  if (!group) return showSessionGroups(ctx, sessionId);
+  try {
+    const snapshot = await withTelegramTimeout(
+      getGroupModerationSnapshot(
+        session.workspaceId,
+        session.sessionId,
+        group.jid,
+        { fresh: false },
+      ),
+      25_000,
+      "Moderation metadata timed out. The panel may be busy; tap Retry.",
+    );
+    if (!snapshot.isAdmin) {
+      await edit(
+        ctx,
+        pageText(
+          `${session.sessionName} · Moderation`,
+          dangerResponse(
+            "Admin Access Lost",
+            "This WhatsApp identity is no longer an administrator in the selected group. The group was removed from the admin-only view on the next refresh.",
+          ),
+        ),
+        keyboard([
+          [
+            btn(
+              "↻ Refresh Admin Groups",
+              `session:${session.sessionId}:groups:0`,
+              "primary",
+            ),
+          ],
+          [btn("‹ Session", `session:${session.sessionId}:menu`)],
+        ]),
+      );
+      return;
+    }
+    const requests = await withTelegramTimeout(
+      listGroupJoinRequests(session.workspaceId, session.sessionId, group.jid),
+      15_000,
+      "Pending join-request lookup timed out.",
+    ).catch(() => []);
+    const admins = snapshot.participants.filter((participant) =>
+      Boolean(participant.admin),
+    );
+    const approval =
+      snapshot.joinApprovalMode === undefined
+        ? "UNKNOWN"
+        : snapshot.joinApprovalMode
+          ? "ON"
+          : "OFF";
+    const memberAdd =
+      snapshot.memberAddMode === undefined
+        ? "UNKNOWN"
+        : snapshot.memberAddMode
+          ? "ALL MEMBERS"
+          : "ADMINS ONLY";
+    await edit(
+      ctx,
+      pageText(
+        `${session.sessionName} · Moderation`,
+        infoResponse(
+          "Per-Group Moderation",
+          `<b>Group:</b> ${escapeHtml(snapshot.subject)}\n<b>Members:</b> ${snapshot.participantCount}\n<b>Admins:</b> ${admins.length}\n<b>Join approval:</b> ${approval}\n<b>Member add:</b> ${memberAdd}\n<b>Pending requests:</b> ${requests.length}\n\nThis surface is available only because the WhatsApp identity is currently an administrator in this group. Every mutating action is checked again before execution.`,
+        ),
+      ),
+      keyboard([
+        [
+          btn(
+            `Join Approval ${approval === "ON" ? "OFF" : "ON"}`,
+            `session:${session.sessionId}:group:moderation:approval:${approval === "ON" ? "off" : "on"}:${index}`,
+            approval === "ON" ? "danger" : "success",
+          ),
+        ],
+        [
+          btn(
+            `Allow Adds: ${memberAdd === "ALL MEMBERS" ? "Admins Only" : "All Members"}`,
+            `session:${session.sessionId}:group:moderation:memberadd:${memberAdd === "ALL MEMBERS" ? "admins" : "all"}:${index}`,
+          ),
+        ],
+        [
+          btn(
+            "Chat: Admins Only",
+            `session:${session.sessionId}:group:moderation:chat:admins:${index}`,
+            "primary",
+          ),
+          btn(
+            "Chat: Everyone",
+            `session:${session.sessionId}:group:moderation:chat:all:${index}`,
+            "primary",
+          ),
+        ],
+        [
+          btn(
+            "Info: Admins Only",
+            `session:${session.sessionId}:group:moderation:info:admins:${index}`,
+            "primary",
+          ),
+          btn(
+            "Info: Everyone",
+            `session:${session.sessionId}:group:moderation:info:all:${index}`,
+            "primary",
+          ),
+        ],
+        [
+          btn(
+            "⬆ Promote Member",
+            `session:${session.sessionId}:group:moderation:promote:${index}`,
+            "success",
+          ),
+          btn(
+            "⬇ Demote Member",
+            `session:${session.sessionId}:group:moderation:demote:${index}`,
+            "danger",
+          ),
+        ],
+        [
+          btn(
+            `✅ Approve Requests (${requests.length})`,
+            `session:${session.sessionId}:group:moderation:approve:${index}`,
+            "success",
+          ),
+        ],
+        [
+          btn(
+            "👥 Members",
+            `session:${session.sessionId}:group:moderation:members:${index}`,
+            "primary",
+          ),
+        ],
+        [
+          btn(
+            "⏳ Disappearing: Off",
+            `session:${session.sessionId}:group:moderation:ephemeral:off:${index}`,
+          ),
+          btn(
+            "⏳ 24 hours",
+            `session:${session.sessionId}:group:moderation:ephemeral:24h:${index}`,
+          ),
+        ],
+        [
+          btn(
+            "⏳ 7 days",
+            `session:${session.sessionId}:group:moderation:ephemeral:7d:${index}`,
+          ),
+          btn(
+            "⏳ 90 days",
+            `session:${session.sessionId}:group:moderation:90d:${index}`,
+          ),
+        ],
+        [
+          btn(
+            "📎 Revoke Invite",
+            `session:${session.sessionId}:group:moderation:revoke-invite:${index}`,
+            "danger",
+          ),
+          btn(
+            "⚠ Bulk Actions",
+            `session:${session.sessionId}:group:moderation:bulk:${index}`,
+            "danger",
+          ),
+        ],
+        [
+          btn(
+            "↻ Refresh Moderation",
+            `session:${session.sessionId}:group:moderation:${index}`,
+            "primary",
+          ),
+        ],
+        [btn("‹ Group", `session:${session.sessionId}:group:view:${index}`)],
+      ]),
+    );
+  } catch (error) {
+    await edit(
+      ctx,
+      pageText(
+        `${session.sessionName} · Moderation`,
+        dangerResponse(
+          "Moderation Unavailable",
+          escapeHtml(error instanceof Error ? error.message : String(error)),
+        ),
+      ),
+      keyboard([
+        [
+          btn(
+            "↻ Retry",
+            `session:${session.sessionId}:group:moderation:${index}`,
+            "primary",
+          ),
+        ],
+        [btn("‹ Group", `session:${session.sessionId}:group:view:${index}`)],
       ]),
     );
   }
@@ -6282,20 +9550,39 @@ async function showValidatorHub(ctx: Context): Promise<void> {
 
 type ValidatorSessionSummaryBase = {
   capturedAt: number;
-  sample: Array<{ sessionId: string; sessionName: string; status: string; authHealth?: string }>;
+  sample: Array<{
+    sessionId: string;
+    sessionName: string;
+    status: string;
+    authHealth?: string;
+    validatorRetiredUntil?: number;
+    validatorRetireReason?: string;
+    validatorFailureCount?: number;
+  }>;
   totalSessions: number;
   eligibleSessions: number;
   retiredSessions: number;
 };
 
-const validatorSessionSummaryCache = new Map<string, ValidatorSessionSummaryBase>();
+const validatorSessionSummaryCache = new Map<
+  string,
+  ValidatorSessionSummaryBase
+>();
 
 function validatorSessionView(
   ctx: Context,
   jobs: Array<{ sessionId?: string }>,
   leaseSessionIds: string[] = [],
 ): {
-  sample: Array<{ sessionId: string; sessionName: string; status: string; authHealth?: string }>;
+  sample: Array<{
+    sessionId: string;
+    sessionName: string;
+    status: string;
+    authHealth?: string;
+    validatorRetiredUntil?: number;
+    validatorRetireReason?: string;
+    validatorFailureCount?: number;
+  }>;
   summary: {
     totalSessions: number;
     eligibleSessions: number;
@@ -6303,7 +9590,9 @@ function validatorSessionView(
     retiredSessions: number;
   };
 } {
-  const scope = isAdmin(ctx) ? "__admin__" : resolveTelegramUser(ctx).workspaceId;
+  const scope = isAdmin(ctx)
+    ? "__admin__"
+    : resolveTelegramUser(ctx).workspaceId;
   const now = Date.now();
   let base = validatorSessionSummaryCache.get(scope);
   if (!base || now - base.capturedAt > 5_000) {
@@ -6315,16 +9604,25 @@ function validatorSessionView(
         sessionName: session.sessionName,
         status: effectiveSessionStatus(session),
         ...(session.authHealth ? { authHealth: session.authHealth } : {}),
+        ...(session.validatorRetiredUntil
+          ? { validatorRetiredUntil: session.validatorRetiredUntil }
+          : {}),
+        ...(session.validatorRetireReason
+          ? { validatorRetireReason: session.validatorRetireReason }
+          : {}),
+        ...(session.validatorFailureCount
+          ? { validatorFailureCount: session.validatorFailureCount }
+          : {}),
       })),
       totalSessions: sessions.length,
-      eligibleSessions: sessions.filter(
-        (session) =>
-          session.status === "ACTIVE" &&
-          session.authHealth !== "INVALID" &&
-          (session.validatorRetiredUntil ?? 0) <= now,
+      eligibleSessions: sessions.filter((session) =>
+        isHealthyWhatsAppSession(session, now),
       ).length,
       retiredSessions: sessions.filter(
-        (session) => (session.validatorRetiredUntil ?? 0) > now,
+        (session) =>
+          session.status === "ACTIVE" &&
+          session.authHealth === "VALID" &&
+          !isHealthyWhatsAppSession(session, now),
       ).length,
     };
     validatorSessionSummaryCache.set(scope, base);
@@ -6363,12 +9661,20 @@ async function showValidatorLiveLog(
     ctx,
     jobs,
     snapshot.recent
-      .filter((record) => record.bucket === "validating" && record.sourceSessionId)
+      .filter(
+        (record) => record.bucket === "validating" && record.sourceSessionId,
+      )
       .map((record) => record.sourceSessionId as string),
   );
   await edit(
     ctx,
-    validatorLiveText(snapshot, active, jobs, validationSessionView.sample, validationSessionView.summary),
+    validatorLiveText(
+      snapshot,
+      active,
+      jobs,
+      validationSessionView.sample,
+      validationSessionView.summary,
+    ),
     validatorLiveKeyboard(active),
   );
   const message = ctx.callbackQuery?.message;
@@ -6403,7 +9709,10 @@ async function showValidatorLiveLog(
           ctx,
           nextJobs,
           nextSnapshot.recent
-            .filter((record) => record.bucket === "validating" && record.sourceSessionId)
+            .filter(
+              (record) =>
+                record.bucket === "validating" && record.sourceSessionId,
+            )
             .map((record) => record.sourceSessionId as string),
         );
         void ctx.telegram
@@ -6411,7 +9720,13 @@ async function showValidatorLiveLog(
             chatId,
             messageId,
             undefined,
-            validatorLiveText(nextSnapshot, true, nextJobs, nextValidationSessionView.sample, nextValidationSessionView.summary),
+            validatorLiveText(
+              nextSnapshot,
+              true,
+              nextJobs,
+              nextValidationSessionView.sample,
+              nextValidationSessionView.summary,
+            ),
             { parse_mode: "HTML", reply_markup: validatorLiveKeyboard(true) },
           )
           .catch(() => {
@@ -6454,7 +9769,7 @@ async function showGlobalBridge(ctx: Context): Promise<void> {
         "Select ACTIVE WhatsApp sessions, then press Send Command. The Bridge listens only while the command input view is open; closing it stops routing immediately.",
       ),
     ),
-    globalBridgeKeyboard(activeWorkspaceSessions(user.workspaceId).length),
+    globalBridgeKeyboard(globalBridgeSessions(ctx).length),
   );
 }
 
@@ -6507,7 +9822,9 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
   let totalGroups: number | undefined;
   let activeLinks: number | undefined;
   const inventoryPromise = Promise.all([
-    countValidatorBucket(GLOBAL_VALIDATOR_SCOPE, "active").catch(() => undefined),
+    countValidatorBucket(GLOBAL_VALIDATOR_SCOPE, "active").catch(
+      () => undefined,
+    ),
     listGroups(session.workspaceId, session.sessionId).catch(() => undefined),
   ]).then(([count, groups]) => {
     activeLinks = count;
@@ -6521,7 +9838,9 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
         candidate.workspaceId === user.workspaceId &&
         candidate.sessionId === session.sessionId &&
         candidate.kind === "join-manager" &&
-        ["QUEUED", "RUNNING", "PAUSED", "RETRYING", "CANCELLING"].includes(candidate.state),
+        ["QUEUED", "RUNNING", "PAUSED", "RETRYING", "CANCELLING"].includes(
+          candidate.state,
+        ),
     );
     if (job) {
       jobId = job.jobId;
@@ -6545,9 +9864,11 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
         : "AUTO";
     const code = currentJob?.jobCode ?? currentJob?.jobId?.slice(0, 8) ?? "—";
     const resolvedTarget = typeof target === "number" ? target : undefined;
-    const total = progress?.total ?? (activeLinks !== undefined
-      ? Math.min(activeLinks, resolvedTarget ?? activeLinks)
-      : target);
+    const total =
+      progress?.total ??
+      (activeLinks !== undefined
+        ? Math.min(activeLinks, resolvedTarget ?? activeLinks)
+        : target);
     const joined = progress?.joined ?? progress?.success ?? 0;
     const requested = progress?.requested ?? 0;
     const alreadyMember = progress?.alreadyMember ?? 0;
@@ -6588,13 +9909,10 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
   if (!jobId || !runtime) {
     void inventoryPromise.then(() =>
       ctx.telegram
-        .editMessageText(
-          chatId,
-          messageId,
-          undefined,
-          render(),
-          { parse_mode: "HTML", reply_markup: joinManagerKeyboard(session.sessionId, status) },
-        )
+        .editMessageText(chatId, messageId, undefined, render(), {
+          parse_mode: "HTML",
+          reply_markup: joinManagerKeyboard(session.sessionId, status),
+        })
         .catch(() => undefined),
     );
     return;
@@ -6605,9 +9923,12 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
   const interval = setInterval(() => {
     void Promise.all([
       runtime.get(jobId),
-      countValidatorBucket(GLOBAL_VALIDATOR_SCOPE, "active").catch(() => undefined),
+      countValidatorBucket(GLOBAL_VALIDATOR_SCOPE, "active").catch(
+        () => undefined,
+      ),
       listGroups(session.workspaceId, session.sessionId).catch(() => undefined),
-    ]).then(([nextJob, nextActiveLinks, nextGroups]) => {
+    ])
+      .then(([nextJob, nextActiveLinks, nextGroups]) => {
         activeLinks = nextActiveLinks;
         totalGroups = nextGroups?.length;
         if (!nextJob) return;
@@ -6679,11 +10000,28 @@ async function showFeature(
   );
 }
 
-async function deliverWorkloadPairingCode(ctx: Context, workerName: string): Promise<void> {
+async function deliverWorkloadPairingCode(
+  ctx: Context,
+  workerName: string,
+): Promise<void> {
   const user = resolveTelegramUser(ctx);
   try {
-    const pairing = await createWorkloadPairingCode(user.workspaceId, user.telegramUserId, workerName);
-    recordAudit({ workspaceId: user.workspaceId, actorTelegramUserId: user.telegramUserId, action: "workload.pairing.create", success: true, metadata: { enrollmentId: pairing.enrollmentId, expiresAt: pairing.expiresAt, workerName } });
+    const pairing = await createWorkloadPairingCode(
+      user.workspaceId,
+      user.telegramUserId,
+      workerName,
+    );
+    recordAudit({
+      workspaceId: user.workspaceId,
+      actorTelegramUserId: user.telegramUserId,
+      action: "workload.pairing.create",
+      success: true,
+      metadata: {
+        enrollmentId: pairing.enrollmentId,
+        expiresAt: pairing.expiresAt,
+        workerName,
+      },
+    });
     const pairingCode = pairing.pairingCode;
     await edit(
       ctx,
@@ -6691,19 +10029,31 @@ async function deliverWorkloadPairingCode(ctx: Context, workerName: string): Pro
         "Workload · Add Workload",
         successResponse(
           "Pairing code ready",
-          `<blockquote><b>Name:</b> <code>${escapeHtml(workerName.trim())}</code>\n<b>1.</b> Tap the copy button below and save this code.\n<b>2.</b> Save the <code>index.js</code> file Telegram sends next.\n<b>3.</b> Upload it to your Node.js panel. Rename it to exactly <code>index.js</code> if necessary.\n<b>4.</b> Click <b>Start</b>. The panel will ask for this code. Paste it in the panel console.\n<b>5.</b> Return here and tap <b>Refresh Status</b>.\n\nThe final workload code will be <code>${escapeHtml(workerName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "panel")}-&lt;random&gt;</code>. This pairing code expires after ${Math.round((pairing.expiresAt - Date.now()) / 60_000)} minutes and can be used once.</blockquote>`,
+          `<blockquote><b>Name:</b> <code>${escapeHtml(workerName.trim())}</code>\n<b>Pairing code:</b> <code>${escapeHtml(pairingCode)}</code>\n\n<b>Tap the code button below to copy this exact code.</b>\n\n<b>1.</b> Save the code before leaving this screen.\n<b>2.</b> Save the <code>index.js</code> file Telegram sends next.\n<b>3.</b> Upload it to your Node.js panel. Rename it to exactly <code>index.js</code> if necessary.\n<b>4.</b> Click <b>Start</b>. The panel will ask for this code. Paste it in the panel console.\n<b>5.</b> Return here and tap <b>Refresh Status</b>.\n\nThe final workload code will be generated after the panel registers. This pairing code expires after ${Math.round((pairing.expiresAt - Date.now()) / 60_000)} minutes and can be used once.</blockquote>`,
         ),
       ),
       keyboard([
-        [copyBtn("📋 Copy Pairing Code", pairingCode, "success")],
+        [copyBtn(`📋 ${pairingCode}`, pairingCode, "success")],
         [btn("↻ Refresh Registration", "workload:status")],
         [btn(ui.back, "workload:menu")],
       ]),
     );
-    const { readWorkloadPackageDocuments } = await import("../workload/package.js");
-    for (const document of await readWorkloadPackageDocuments()) await ctx.replyWithDocument(document);
+    const { readWorkloadPackageDocuments } =
+      await import("../workload/package.js");
+    for (const document of await readWorkloadPackageDocuments())
+      await ctx.replyWithDocument(document);
   } catch (error) {
-    await edit(ctx, pageText("Workload · Add Workload", dangerResponse("Could not create pairing code", escapeHtml(error instanceof Error ? error.message : String(error)))), keyboard([[btn(ui.back, "workload:menu")]]));
+    await edit(
+      ctx,
+      pageText(
+        "Workload · Add Workload",
+        dangerResponse(
+          "Could not create pairing code",
+          escapeHtml(error instanceof Error ? error.message : String(error)),
+        ),
+      ),
+      keyboard([[btn(ui.back, "workload:menu")]]),
+    );
   }
 }
 
@@ -6740,6 +10090,10 @@ async function edit(
       console.warn(
         `[pappy-omega-mini] Telegram callback view edit failed: ${error instanceof Error ? error.message : String(error)}`,
       );
+      await ctx.answerCbQuery(
+        "This view could not be updated. Tap Refresh to try again.",
+        { show_alert: true },
+      ).catch(() => undefined);
       return;
     }
     await ctx
@@ -6748,16 +10102,20 @@ async function edit(
   }
 }
 
-export function mergeTelegramQuotedText(primary: string, quotedText?: string): string {
+export function mergeTelegramQuotedText(
+  primary: string,
+  quotedText?: string,
+): string {
   return [quotedText?.trim(), primary.trim()].filter(Boolean).join("\n");
 }
 
 export async function resolveTelegramQuotedMedia(
   ctx: Context,
 ): Promise<WhatsAppMediaPayload | undefined> {
-  const quoted = ctx.message && "reply_to_message" in ctx.message
-    ? ctx.message.reply_to_message
-    : undefined;
+  const quoted =
+    ctx.message && "reply_to_message" in ctx.message
+      ? ctx.message.reply_to_message
+      : undefined;
   if (!quoted || typeof quoted !== "object") return undefined;
   const source = quoted as unknown as Record<string, unknown>;
   let kind: WhatsAppMediaPayload["kind"] | undefined;
@@ -6779,29 +10137,42 @@ export async function resolveTelegramQuotedMedia(
   } else if (video) {
     kind = "video";
     fileId = typeof video.file_id === "string" ? video.file_id : undefined;
-    mimeType = typeof video.mime_type === "string" ? video.mime_type : "video/mp4";
+    mimeType =
+      typeof video.mime_type === "string" ? video.mime_type : "video/mp4";
   } else if (document) {
     kind = "document";
-    fileId = typeof document.file_id === "string" ? document.file_id : undefined;
-    fileName = typeof document.file_name === "string" ? document.file_name : undefined;
-    mimeType = typeof document.mime_type === "string" ? document.mime_type : undefined;
+    fileId =
+      typeof document.file_id === "string" ? document.file_id : undefined;
+    fileName =
+      typeof document.file_name === "string" ? document.file_name : undefined;
+    mimeType =
+      typeof document.mime_type === "string" ? document.mime_type : undefined;
   } else if (audio) {
     kind = "audio";
     fileId = typeof audio.file_id === "string" ? audio.file_id : undefined;
-    fileName = typeof audio.file_name === "string" ? audio.file_name : undefined;
-    mimeType = typeof audio.mime_type === "string" ? audio.mime_type : "audio/mpeg";
+    fileName =
+      typeof audio.file_name === "string" ? audio.file_name : undefined;
+    mimeType =
+      typeof audio.mime_type === "string" ? audio.mime_type : "audio/mpeg";
     ptt = audio.voice === true;
   } else if (sticker) {
     kind = "sticker";
     fileId = typeof sticker.file_id === "string" ? sticker.file_id : undefined;
-    mimeType = typeof sticker.is_animated === "boolean" && sticker.is_animated ? "application/x-tgsticker" : "image/webp";
+    mimeType =
+      typeof sticker.is_animated === "boolean" && sticker.is_animated
+        ? "application/x-tgsticker"
+        : "image/webp";
   }
   if (!kind || !fileId) return undefined;
   const file = await ctx.telegram.getFileLink(fileId);
   const response = await fetch(file.href);
-  if (!response.ok) throw new Error(`Telegram quoted media download failed with ${response.status}.`);
+  if (!response.ok)
+    throw new Error(
+      `Telegram quoted media download failed with ${response.status}.`,
+    );
   const bytes = Buffer.from(await response.arrayBuffer());
-  const caption = typeof source.caption === "string" ? source.caption : undefined;
+  const caption =
+    typeof source.caption === "string" ? source.caption : undefined;
   return {
     kind,
     bytes,
@@ -6829,19 +10200,18 @@ function ownedSession(ctx: Context, sessionId: string) {
   }
 }
 
-function isBridgeReadySession(session: ReturnType<typeof listAllSessions>[number]): boolean {
-  return session.status === "ACTIVE";
+function isBridgeReadySession(
+  session: ReturnType<typeof listAllSessions>[number],
+): boolean {
+  return session.status === "ACTIVE" && session.authHealth === "VALID";
 }
 
 function normalizeBridgeCommand(input: string, sessionPrefix: string): string {
   const trimmed = input.trim();
-  const prefix = sessionPrefix || ".";
-  const body = trimmed.startsWith(prefix)
-    ? trimmed.slice(prefix.length)
-    : trimmed.startsWith(".")
-      ? trimmed.slice(1)
-      : trimmed;
-  return `${prefix}${body}`;
+  const prefix = sessionPrefix.trim();
+  if (prefix && trimmed.startsWith(prefix)) return trimmed.slice(prefix.length).trim();
+  if (trimmed.startsWith(".")) return trimmed.slice(1).trim();
+  return trimmed;
 }
 
 function activeWorkspaceSessions(workspaceId: string) {
@@ -6850,6 +10220,21 @@ function activeWorkspaceSessions(workspaceId: string) {
 
 function activeAllSessions() {
   return listAllSessions().filter(isBridgeReadySession);
+}
+
+function globalBridgeSessions(ctx: Context) {
+  return isAdmin(ctx)
+    ? activeAllSessions()
+    : activeWorkspaceSessions(resolveTelegramUser(ctx).workspaceId);
+}
+
+async function refreshSessionRegistryForUi(): Promise<void> {
+  await refreshSessionRegistry().catch((error) => {
+    console.error(
+      "[pappy-omega-mini] live session registry refresh failed:",
+      error instanceof Error ? error.message : String(error),
+    );
+  });
 }
 
 function isAdmin(ctx: Context): boolean {
@@ -6872,7 +10257,9 @@ function deny(ctx: Context): void {
       show_alert: true,
     });
   } else {
-    void ctx.reply("This action is not available for your workspace.").catch(() => undefined);
+    void ctx
+      .reply("This action is not available for your workspace.")
+      .catch(() => undefined);
   }
 }
 
@@ -6901,21 +10288,25 @@ function parseJoinSetting(
         : { patch: { targetCount: parsed } };
     }
     case "delay": {
-      const parsed = seconds(0, 600);
+      const parsed = seconds(1, 60);
       return parsed === undefined
-        ? { error: "Delay must be whole seconds from 0 to 600." }
+        ? { error: "Delay must be a whole number of seconds from 1 to 60." }
         : { patch: { delayMs: parsed } };
     }
     case "minDelay": {
-      const parsed = seconds(0, 600);
-      if (parsed === undefined) return { error: "Minimum delay must be whole seconds from 0 to 600." };
-      if (parsed > current.maxDelayMs) return { error: "Minimum delay cannot exceed maximum delay." };
+      const parsed = seconds(1, 60);
+      if (parsed === undefined)
+        return { error: "Minimum delay must be a whole number of seconds from 1 to 60." };
+      if (parsed > current.maxDelayMs)
+        return { error: "Minimum delay cannot exceed maximum delay." };
       return { patch: { minDelayMs: parsed } };
     }
     case "maxDelay": {
-      const parsed = seconds(0, 600);
-      if (parsed === undefined) return { error: "Maximum delay must be whole seconds from 0 to 600." };
-      if (parsed < current.minDelayMs) return { error: "Maximum delay cannot be below minimum delay." };
+      const parsed = seconds(1, 60);
+      if (parsed === undefined)
+        return { error: "Maximum delay must be a whole number of seconds from 1 to 60." };
+      if (parsed < current.minDelayMs)
+        return { error: "Maximum delay cannot be below minimum delay." };
       return { patch: { maxDelayMs: parsed } };
     }
     case "batch": {
@@ -6945,7 +10336,9 @@ function parseJoinSetting(
     case "restriction": {
       const parsed = wholeNumber(1, 20);
       return parsed === undefined
-        ? { error: "Restriction threshold must be a whole number from 1 to 20." }
+        ? {
+            error: "Restriction threshold must be a whole number from 1 to 20.",
+          }
         : { patch: { restrictionThreshold: parsed } };
     }
     case "concurrency": {
@@ -6956,7 +10349,9 @@ function parseJoinSetting(
     }
     case "mode": {
       const normalized = value.toLowerCase();
-      return normalized === "auto" || normalized === "immediate" || normalized === "request"
+      return normalized === "auto" ||
+        normalized === "immediate" ||
+        normalized === "request"
         ? { patch: { mode: normalized } }
         : { error: "Mode must be auto, immediate, or request." };
     }
@@ -6978,20 +10373,27 @@ async function enqueueValidatorJobs(
 ): Promise<JobRecord[]> {
   if (!urls.length) return [];
   await runValidatorSweepNow();
-  return (await getWorkerRuntime()?.listRecent(1000) ?? []).filter(
+  return ((await getWorkerRuntime()?.listRecent(1000)) ?? []).filter(
     (job) =>
       job.kind === "link-validation" &&
       ["QUEUED", "RUNNING", "RETRYING"].includes(job.state),
   );
 }
 
-
 async function showOwnerAutoPromoteDashboard(ctx: Context): Promise<void> {
   const [configs, runs] = await Promise.all([
     listAutoPromoteConfigs({ limit: 200 }),
     listAutoPromoteRuns({ limit: 50 }),
   ]);
-  await edit(ctx, autoPromoteText(configs, runs), autoPromoteDashboardKeyboard(configs, "admin:autopromote:new", "admin:panel"));
+  await edit(
+    ctx,
+    autoPromoteText(configs, runs),
+    autoPromoteDashboardKeyboard(
+      configs,
+      "admin:autopromote:new",
+      "admin:panel",
+    ),
+  );
 }
 
 async function showAutoPromoteDashboard(
@@ -7003,7 +10405,11 @@ async function showAutoPromoteDashboard(
     listAutoPromoteConfigs({ ownerTelegramUserId, limit: 100 }),
     listAutoPromoteRuns({ ownerTelegramUserId, limit: 20 }),
   ]);
-  await edit(ctx, autoPromoteText(configs, runs), autoPromoteDashboardKeyboard(configs));
+  await edit(
+    ctx,
+    autoPromoteText(configs, runs),
+    autoPromoteDashboardKeyboard(configs),
+  );
 }
 
 function autoPromoteWizardSummary(state: AutoPromoteWizard): string {
@@ -7024,17 +10430,20 @@ function autoPromoteWizardSummary(state: AutoPromoteWizard): string {
       `<b>Command:</b> ${escapeHtml(state.command?.toUpperCase() ?? "—")}\n` +
       `<b>Duration:</b> ${state.days ?? "—"} days\n` +
       `<b>Times/day:</b> ${state.timesPerDay ?? "—"}\n` +
-      (state.command === "allstatusx" ? `<b>Posts/group:</b> ${state.allstatusxPostsPerGroup ?? "—"}\n` : "") +
+      (state.command === "allstatusx"
+        ? `<b>Posts/group:</b> ${state.allstatusxPostsPerGroup ?? "—"}\n`
+        : "") +
       `<b>Timezone:</b> Africa/Lagos\n` +
       `<b>Schedule:</b> ${slots}\n` +
       `<b>Payload:</b> <blockquote>${escapeHtml(state.payloadText ?? "")}</blockquote>`,
   );
 }
 
-
 async function renderSessionOverview(
   ctx: Context,
-  session: ReturnType<typeof getSession> extends infer T ? Exclude<T, undefined> : never,
+  session: ReturnType<typeof getSession> extends infer T
+    ? Exclude<T, undefined>
+    : never,
 ): Promise<string> {
   const user = resolveTelegramUser(ctx);
   const [configs, runs] = await Promise.all([
@@ -7042,22 +10451,38 @@ async function renderSessionOverview(
     listAutoPromoteRuns({ sessionId: session.sessionId, limit: 200 }),
   ]);
   const sessionConfig = configs.find(
-    (config) => config.scope === "SESSION" && config.sessionId === session.sessionId,
+    (config) =>
+      config.scope === "SESSION" && config.sessionId === session.sessionId,
   );
   const userConfig = configs.find(
-    (config) => config.scope === "USER" && config.ownerTelegramUserId === user.telegramUserId,
+    (config) =>
+      config.scope === "USER" &&
+      config.ownerTelegramUserId === user.telegramUserId,
   );
   const globalConfig = configs.find(
-    (config) => config.scope === "GLOBAL" && (config.targetSessionIds ?? []).includes(session.sessionId),
+    (config) =>
+      config.scope === "GLOBAL" &&
+      (config.targetSessionIds ?? []).includes(session.sessionId),
   );
   const stateFor = (config: typeof sessionConfig): string => {
     if (!config) return "NONE";
-    const run = runs.find((item) => item.configId === config.id && ["RUNNING", "QUEUED", "COOLDOWN"].includes(item.status));
+    const run = runs.find(
+      (item) =>
+        item.configId === config.id &&
+        ["RUNNING", "QUEUED", "COOLDOWN"].includes(item.status),
+    );
     return run?.status ?? config.state;
   };
-  const relevantRuns = runs.filter((run) => [sessionConfig?.id, userConfig?.id, globalConfig?.id].includes(run.configId));
+  const relevantRuns = runs.filter((run) =>
+    [sessionConfig?.id, userConfig?.id, globalConfig?.id].includes(
+      run.configId,
+    ),
+  );
   const nextExecution = relevantRuns
-    .filter((run) => run.status === "SCHEDULED" || run.status === "WAITING_FOR_SESSION")
+    .filter(
+      (run) =>
+        run.status === "SCHEDULED" || run.status === "WAITING_FOR_SESSION",
+    )
     .map((run) => run.scheduledAt)
     .sort((a, b) => a - b)[0];
   const cooldownUntil = relevantRuns
@@ -7070,5 +10495,31 @@ async function renderSessionOverview(
     globalState: stateFor(globalConfig),
     ...(nextExecution ? { nextExecution } : {}),
     ...(cooldownUntil ? { cooldownUntil } : {}),
+  });
+}
+
+async function enqueueGroupControlJob(input: {
+  workspaceId: string;
+  sessionId: string;
+  groupJid: string;
+  operation: "approve" | "reject" | "participant";
+  participants: string[];
+  participantAction?: "promote" | "demote" | "remove" | "block";
+}): Promise<JobRecord> {
+  const runtime = getWorkerRuntime();
+  if (!runtime) throw new Error("The durable Group Control worker is unavailable.");
+  const participants = [...new Set(input.participants)].sort();
+  return runtime.enqueue({
+    workspaceId: input.workspaceId,
+    sessionId: input.sessionId,
+    kind: "group-control",
+    payload: {
+      groupJid: input.groupJid,
+      operation: input.operation,
+      participants,
+      ...(input.participantAction ? { participantAction: input.participantAction } : {}),
+    },
+    maxAttempts: 1,
+    idempotencyKey: `group-control:${input.workspaceId}:${input.sessionId}:${input.groupJid}:${input.operation}:${input.participantAction ?? "-"}:${participants.join(",")}`,
   });
 }

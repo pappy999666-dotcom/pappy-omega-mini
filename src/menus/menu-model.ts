@@ -34,6 +34,18 @@ function formatHealthAge(lastHealthyAt?: number, now = Date.now()): string {
   return `${hours}h ${minutes % 60}m`;
 }
 
+const ANTI_MENU_COMMANDS = [
+  "antistatus", "antilink", "linkpermit", "rmlinkpermit", "antilinkmsg",
+  "antibot", "botpermit", "rmbotpermit", "antispam", "spamlimit", "spampermit", "rmspampermit", "antispammsg",
+  "antipic", "picpermit", "rmpicpermit", "antivid", "vidpermit", "rmvidpermit", "antiaud", "audpermit", "rmaudpermit",
+  "antivn", "vnpermit", "rmvnpermit", "antivnmsg", "antitxt", "antiemoji", "emojipermit", "rmemojipermit", "antiemojimsg",
+  "antisticker", "sticpermit", "rmsticpermit", "antigroupcall", "antinsfw", "nsfwpermit", "rmnsfwpermit",
+  "antigroupmention", "antigm", "mentionpermit", "rmmentionpermit", "gmpermit", "rmgmpermit",
+  "antiwords", "antiaddword", "antirmword", "antiwordlist", "setantiwords", "rmantiwords", "clearantiwords", "antiwordsmsg",
+  "antipoll", "pollpermit", "rmpollpermit", "antiforward", "fwdpermit", "rmfwdpermit", "antichannel", "chanpermit", "rmchanpermit",
+  "antipromote", "antidemote", "silentactions", "antigroupmentionmsg", "antigmmsg", "antipollmsg", "antiforwardmsg", "antichannelmsg", "antigstatus", "antigstatusmsg",
+] as const;
+
 export function buildSessionMenu(
   session: WhatsAppSession,
   isOwner: boolean,
@@ -74,7 +86,38 @@ export function buildSessionMenu(
     { id: "stopchat", label: "Stop chat", command: "stopchat", description: "Stop active all-chat jobs.", ownerOnly: true },
     { id: "stopstag", label: "Stop smart tag", command: "stopstag", description: "Stop active smart-tag jobs.", ownerOnly: true },
     { id: "setsudo", label: "Sudo", command: "setsudo", description: "Manage session and global sudo identities.", ownerOnly: true },
+    { id: "pendingjoin", label: "Pending joins", command: "pendingjoin", description: "List pending group join requests.", ownerOnly: true },
+    { id: "approveall", label: "Approve all", command: "approveall", description: "Approve all pending group join requests.", ownerOnly: true },
+    { id: "approveamt", label: "Approve amount", command: "approveamt", description: "Approve the first N pending join requests.", ownerOnly: true },
+    { id: "approvecountry", label: "Approve country", command: "approvecountry", description: "Approve pending requests by country code.", ownerOnly: true },
+    { id: "rejectall", label: "Reject all", command: "rejectall", description: "Reject all pending group join requests.", ownerOnly: true },
+    { id: "rejectamt", label: "Reject amount", command: "rejectamt", description: "Reject the first N pending join requests.", ownerOnly: true },
+    { id: "rejectcountry", label: "Reject country", command: "rejectcountry", description: "Reject pending requests by country code.", ownerOnly: true },
+    { id: "reqamt", label: "Request count", command: "reqamt", description: "Count pending requests by country code.", ownerOnly: true },
+    { id: "kickall", label: "Kick all", command: "kickall", description: "Preview and queue one protected batch for eligible non-admin members.", ownerOnly: true },
+    { id: "kickamt", label: "Kick amount", command: "kickamt", description: "Preview and queue one protected member-removal batch.", ownerOnly: true },
+    { id: "kickcountry", label: "Kick country", command: "kickcountry", description: "Preview and queue one protected country-filtered removal batch.", ownerOnly: true },
+    { id: "kick", label: "Review kick", command: "kick", description: "Review removal of one verified member." },
+    { id: "promote", label: "Promote", command: "promote", description: "Review verified member promotion." },
+    { id: "demote", label: "Demote", command: "demote", description: "Review verified administrator demotion." },
+    { id: "dnkick", label: "Demote + kick", command: "dnkick", description: "Review sequential administrator demotion and removal." },
+    { id: "block", label: "Block", command: "block", description: "Review removal and WhatsApp block." },
+    { id: "unblock", label: "Unblock", command: "unblock", description: "Remove a WhatsApp block from a verified identity." },
+    { id: "ban", label: "Local ban", command: "ban", description: "Locally delete future messages from a verified member." },
+    { id: "unban", label: "Remove local ban", command: "unban", description: "Remove a local message restriction." },
+    { id: "banlist", label: "Ban list", command: "banlist", description: "Show masked local restrictions." },
+    { id: "warn", label: "Warn", command: "warn", description: "Issue a durable manual warning." },
+    { id: "unwarn", label: "Reset warning", command: "unwarn", description: "Reset durable manual warnings." },
+    { id: "warns", label: "Warnings", command: "warns", description: "Show a verified member warning count." },
+    { id: "mute", label: "Mute group", command: "mute", description: "Switch the group to administrators-only chat mode." },
+    { id: "unmute", label: "Unmute group", command: "unmute", description: "Reopen chat to all group members." },
+    { id: "filter", label: "Filter preview", command: "filter", description: "Read-only verified country-prefix count." },
+    { id: "filterout", label: "Filter out", command: "filterout", description: "Bounded native-confirmed removal by country prefix." },
+    { id: "poll", label: "Poll", command: "poll", description: "Create a native group poll." },
+    { id: "blockall", label: "Block all review", command: "blockall", description: "Bounded native confirmation for eligible non-admin members." },
+    { id: "deleteall", label: "Delete recent member messages", command: "deleteall", description: "Bounded native confirmation for recent tracked messages." },
     { id: "purge", label: "Purge", command: "purge", description: "Permanently remove this session.", ownerOnly: true },
+    ...ANTI_MENU_COMMANDS.map((command) => ({ id: `anti-${command}`, label: command, command, description: `Omega-V1 Anti System control: .${command}` })),
   ];
 
   return {
@@ -108,7 +151,9 @@ export function renderAsciiMenu(model: SessionMenuModel): string {
   const commandSet = new Set(["menu", "ping", "profile", "health", "support"]);
   const sessionSet = new Set(["autojoin", "join", "targetgs", "setprefix", "pfp", "setgpp", "setname", "setbio", "groups", "creategroup"]);
   const localSet = new Set(["pstatus", "gstatus", "dgstatus", "tag", "stag"]);
-  const ownerSet = new Set(["pair", "previewdebug", "broadcastdelay", "allstatus", "dallstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "stopstag", "iggc", "setsudo"]);
+  const ownerSet = new Set(["pair", "previewdebug", "broadcastdelay", "allstatus", "dallstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "stopstag", "iggc", "setsudo", "pendingjoin", "approveall", "approveamt", "approvecountry", "rejectall", "rejectamt", "rejectcountry", "reqamt", "kickall", "kickamt", "kickcountry"]);
+  const moderationSet = new Set(["kick", "promote", "demote", "dnkick", "block", "unblock", "ban", "unban", "banlist", "warn", "unwarn", "warns", "mute", "unmute", "filter", "filterout", "poll", "blockall", "deleteall"]);
+  const antiSet = new Set<string>(ANTI_MENU_COMMANDS);
   const commandIndent = "︎ ".repeat(15);
   const renderSection = (title: string, icon: string, set: Set<string>): string[] => {
     const commands = model.actions
@@ -138,5 +183,7 @@ export function renderAsciiMenu(model: SessionMenuModel): string {
     ...renderSection("SESSION", "🗝", sessionSet),
     ...renderSection("LOCAL", "⎔", localSet),
     ...renderSection("OWNER / SUDO", "𓋎⚇", ownerSet),
+    ...renderSection("MODERATION", "🛡", moderationSet),
+    ...renderSection("🛡 ANTI SYSTEM", "🛡", antiSet),
   ].join("\n").trim();
 }

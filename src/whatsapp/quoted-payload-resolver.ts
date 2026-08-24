@@ -9,6 +9,14 @@ export interface MessageEnvelope {
   message?: Record<string, unknown>;
 }
 
+export type WhatsAppInteractionKind = "native-flow" | "list" | "buttons" | "template";
+
+export interface WhatsAppInteraction {
+  kind: WhatsAppInteractionKind;
+  id: string | null;
+  displayText: string;
+}
+
 const MEDIA_KINDS: WhatsAppMediaKind[] = [
   "image",
   "video",
@@ -16,6 +24,56 @@ const MEDIA_KINDS: WhatsAppMediaKind[] = [
   "document",
   "sticker",
 ];
+
+export function extractWhatsAppInteraction(
+  message: Record<string, unknown> | undefined,
+): WhatsAppInteraction | undefined {
+  const content = normalizedContent(message);
+  if (!content) return undefined;
+  const stringValue = (value: unknown): string => typeof value === "string" ? value : "";
+  const parseParams = (value: unknown): Record<string, unknown> | undefined => {
+    if (value && typeof value === "object") return value as Record<string, unknown>;
+    if (typeof value !== "string" || !value) return undefined;
+    try {
+      const first: unknown = JSON.parse(value);
+      if (typeof first === "string") {
+        try {
+          const second: unknown = JSON.parse(first);
+          return second && typeof second === "object" ? second as Record<string, unknown> : undefined;
+        } catch { return undefined; }
+      }
+      return first && typeof first === "object" ? first as Record<string, unknown> : undefined;
+    } catch { return undefined; }
+  };
+  const interactive = isRecord(content.interactiveResponseMessage) ? content.interactiveResponseMessage : undefined;
+  const native = interactive && isRecord(interactive.nativeFlowResponseMessage) ? interactive.nativeFlowResponseMessage : undefined;
+  if (native) {
+    const params = parseParams(native.paramsJson ?? native.buttonParamsJson ?? native.params);
+    const id = stringValue(params?.id) || stringValue(native.id) || stringValue(native.buttonId);
+    const displayText = stringValue(params?.display_text) || stringValue(interactive?.body && isRecord(interactive.body) ? interactive.body.text : "");
+    if (id || displayText) return { kind: "native-flow", id: id || null, displayText };
+  }
+  const listReply = isRecord(content.listResponseMessage) && isRecord(content.listResponseMessage.singleSelectReply)
+    ? content.listResponseMessage.singleSelectReply : undefined;
+  if (listReply) {
+    const id = stringValue(listReply.selectedRowId);
+    const displayText = stringValue(listReply.selectedDisplayText);
+    if (id || displayText) return { kind: "list", id: id || null, displayText };
+  }
+  const buttonsReply = isRecord(content.buttonsResponseMessage) ? content.buttonsResponseMessage : undefined;
+  if (buttonsReply) {
+    const id = stringValue(buttonsReply.selectedButtonId) || stringValue(buttonsReply.selectedId) || stringValue(buttonsReply.buttonId);
+    const displayText = stringValue(buttonsReply.selectedDisplayText) || stringValue(buttonsReply.displayText) || stringValue(buttonsReply.text);
+    if (id || displayText) return { kind: "buttons", id: id || null, displayText };
+  }
+  const templateReply = isRecord(content.templateButtonReplyMessage) ? content.templateButtonReplyMessage : undefined;
+  if (templateReply) {
+    const id = stringValue(templateReply.selectedId) || stringValue(templateReply.selectedButtonId) || stringValue(templateReply.buttonId);
+    const displayText = stringValue(templateReply.selectedDisplayText) || stringValue(templateReply.displayText) || stringValue(templateReply.text);
+    if (id || displayText) return { kind: "template", id: id || null, displayText };
+  }
+  return undefined;
+}
 
 export function extractMessageText(
   message: Record<string, unknown> | undefined,

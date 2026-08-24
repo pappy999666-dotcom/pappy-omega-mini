@@ -62,13 +62,25 @@ describe("V2 hardening", () => {
     expect(renderSafeError(error)).not.toContain("private socket detail");
   });
 
-  it("classifies all critical WhatsApp disconnect families with recovery guidance", () => {
+  it("preserves auth for ambiguous transport codes and purges only explicit logout", () => {
     expect(classifyDisconnect({ output: { statusCode: 401 } })).toMatchObject({
+      code: 401,
+      label: "unauthorized-transient",
+      terminal: false,
+      status: "DEGRADED",
+    });
+    expect(classifyDisconnect({ output: { statusCode: 401 }, message: "logged out by WhatsApp" })).toMatchObject({
       code: 401,
       label: "logged-out",
       terminal: true,
       status: "LOGGED_OUT",
     });
+    for (const statusCode of [403, 405, 440, 500])
+      expect(classifyDisconnect({ output: { statusCode } })).toMatchObject({
+        code: statusCode,
+        terminal: false,
+        status: "DEGRADED",
+      });
     expect(classifyDisconnect({ output: { statusCode: 503 } })).toMatchObject({
       code: 503,
       label: "service-unavailable",
@@ -230,6 +242,12 @@ describe("Session-scoped Join Manager settings", () => {
     expect(first.createdAt).toEqual(expect.any(Number));
     expect(second.createdAt).toEqual(expect.any(Number));
     const beforeSecond = getSessionJoinSettings(workspaceId, second.sessionId);
+    expect(beforeSecond).toMatchObject({
+      delayMs: 5000,
+      minDelayMs: 5000,
+      maxDelayMs: 5000,
+      mode: "auto",
+    });
     updateSessionJoinSettings(workspaceId, first.sessionId, {
       targetCount: 1000,
       delayMs: 12000,
@@ -265,6 +283,7 @@ describe("Session-scoped Join Manager settings", () => {
     const workspaceId = `join-delay-${Date.now()}-${Math.random()}`;
     const session = createSession({ workspaceId, sessionName: "delay-test" });
     updateSessionJoinSettings(workspaceId, session.sessionId, {
+      mode: "immediate",
       delayMs: 0,
       minDelayMs: 0,
       maxDelayMs: 0,
