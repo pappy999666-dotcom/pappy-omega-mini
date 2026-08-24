@@ -824,15 +824,17 @@ function materializeWorkloadContent(payload) {
   return content;
 }
 async function getStatusJidList(runtime) {
-  const recipients = new Set();
   const contacts = runtime.contactStore?.contacts ?? runtime.socket.store?.contacts ?? {};
-  const entries = Array.isArray(contacts) ? contacts.map((value) => ["", value]) : Object.entries(contacts);
-  for (const [key, value] of entries) {
+  const rawEntries = Array.isArray(contacts) ? contacts.map((value) => ["", value]) : Object.entries(contacts);
+  // Status recipient resolution must never serialize thousands of LID lookups;
+  // one slow mapping should not hold the per-session command chain hostage.
+  const entries = rawEntries.slice(0, 5_000);
+  const resolved = await Promise.all(entries.map(async ([key, value]) => {
     const item = value && typeof value === "object" ? { ...value, id: value.id ?? key } : { id: value ?? key };
-    const jid = await workerParticipantJid(item, runtime);
-    if (jid) recipients.add(jid.replace(/:\d+(?=@)/, ""));
-  }
-  const self = await workerParticipantJid({ id: runtime.socket.user?.id }, runtime);
+    return workerParticipantJid(item, runtime).catch(() => "");
+  }));
+  const recipients = new Set(resolved.filter(Boolean).map((jid) => jid.replace(/:\d+(?=@)/, "")));
+  const self = await workerParticipantJid({ id: runtime.socket.user?.id }, runtime).catch(() => "");
   if (self) recipients.add(self.replace(/:\d+(?=@)/, ""));
   return [...recipients];
 }
@@ -1611,8 +1613,7 @@ async function run() {
     try {
       if (Date.now() >= nextHeartbeat) { await heartbeat(); nextHeartbeat = Date.now() + HEARTBEAT_MS; }
       if (Date.now() >= nextUpdateCheck) { await checkForUpdate(); nextUpdateCheck = Date.now() + UPDATE_CHECK_MS; }
-      const commandCount = await poll();
-      if (commandCount === 0) await new Promise((resolve) => setTimeout(resolve, CONTROL_POLL_MS));
+      await poll();
     } catch (error) {
       noteError(error, "control loop retrying");
       await new Promise((resolve) => setTimeout(resolve, Math.min(15_000, CONTROL_POLL_MS * 3)));
