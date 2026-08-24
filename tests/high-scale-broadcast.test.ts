@@ -115,6 +115,8 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("await workerParticipantJid({ id: context.participant }, runtime)");
     expect(source).toContain("quotedMessageKey ? { quotedMessageKey }");
     expect(source).toContain("runtime.socket.richMenu(jid, value.richMenu)");
+    expect(source).toContain("process.argv[1] ? resolve(process.argv[1]) : \"\"");
+    expect(source).toContain("const AUTO_UPDATE_ENABLED");
     expect(source).toContain("const { richMenu: _richMenu, ...safeContent } = value");
   });
 

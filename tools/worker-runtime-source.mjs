@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, verify } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const cliArgs = process.argv.slice(2);
 function cliValue(...names) {
@@ -26,7 +26,7 @@ const WORKER_VERSION = process.env.PAPPY_WORKER_VERSION ?? "__PAPPY_WORKER_VERSI
 const AUTO_UPDATE_ENABLED = !["0", "false", "off"].includes(String(process.env.PAPPY_WORKLOAD_AUTO_UPDATE ?? "true").toLowerCase());
 const UPDATE_CHECK_MS = 30_000;
 const PENDING_RELEASE_TIMEOUT_MS = 120_000;
-const ENTRYPOINT = process.env.PAPPY_WORKER_ENTRYPOINT ?? "";
+const ENTRYPOINT = process.env.PAPPY_WORKER_ENTRYPOINT || (process.argv[1] ? resolve(process.argv[1]) : "");
 const RELEASE_PUBLIC_KEY_PEM = process.env.PAPPY_WORKLOAD_RELEASE_PUBLIC_KEY ?? `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAe+FnOPhHDo9y8pJ5rqwldSHwXUHKDG9HlTBqStHtRso=
 -----END PUBLIC KEY-----\n`;
