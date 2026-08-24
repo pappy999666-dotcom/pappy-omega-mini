@@ -161,15 +161,18 @@ async function main(): Promise<void> {
         payload = result.media
           ? {
               [result.media.kind]: result.media.bytes,
-              caption: result.caption ?? "",
-              mimetype: result.media.mimeType,
+              ...(result.media.kind !== "audio" && (result.caption ?? "") ? { caption: result.caption } : {}),
+              ...(result.media.mimeType ? { mimetype: result.media.mimeType } : {}),
+              ...(result.media.kind === "video" || result.media.kind === "document" ? { fileName: result.media.fileName } : {}),
               ...(result.nativeFlow ? { nativeFlow: result.nativeFlow } : {}),
               ...(result.nativeTable ? { nativeTable: result.nativeTable } : {}),
+              ...(result.mentions?.length ? { mentions: result.mentions } : {}),
             }
           : {
               ...(result.text ? { text: result.text } : {}),
               ...(result.nativeFlow ? { nativeFlow: result.nativeFlow } : {}),
               ...(result.nativeTable ? { nativeTable: result.nativeTable } : {}),
+              ...(result.mentions?.length ? { mentions: result.mentions } : {}),
             };
       }
       await callAssignedWorkloadTransport(event.workspaceId, event.sessionId, "sendMessage", [event.remoteJid, payload]);

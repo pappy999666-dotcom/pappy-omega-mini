@@ -590,43 +590,34 @@ function classifyParticipantOperationResult(
   attempted: number,
   expectedParticipants: string[] = [],
 ): ParticipantOperationResult {
-  if (!Array.isArray(result))
+  if (result == null)
     return { attempted, succeeded: attempted, succeededJids: [...expectedParticipants], failed: 0, failures: [] };
-  const succeededJids = result.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const value = item as Record<string, unknown>;
+  const entries = Array.isArray(result) ? result : [result];
+  const succeededJids: string[] = [];
+  const failures: Array<{ jid?: string; status: string }> = [];
+  const returnedJids = new Set<string>();
+  entries.forEach((item, index) => {
+    const value = item && typeof item === "object" ? item as Record<string, unknown> : {};
     const status = String(value.status ?? value.error ?? "200");
-    return (status === "200" || status === "0") && typeof value.jid === "string"
-      ? [value.jid]
-      : [];
+    const echoedJid = typeof value.jid === "string" ? value.jid : undefined;
+    const positionalJid = expectedParticipants[index];
+    const jid = echoedJid ?? positionalJid;
+    if (jid) returnedJids.add(jid);
+    if (status === "200" || status === "0") {
+      if (jid) succeededJids.push(jid);
+    } else {
+      failures.push({ ...(jid ? { jid } : {}), status });
+    }
   });
-  const failures = result.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const value = item as Record<string, unknown>;
-    const status = String(value.status ?? value.error ?? "200");
-    return status === "200" || status === "0"
-      ? []
-      : [{
-          ...(typeof value.jid === "string" ? { jid: value.jid } : {}),
-          status,
-        }];
-  });
-  const returnedJids = new Set(
-    result.flatMap((item) =>
-      item && typeof item === "object" && typeof (item as Record<string, unknown>).jid === "string"
-        ? [String((item as Record<string, unknown>).jid)]
-        : [],
-    ),
-  );
   const missing = expectedParticipants.length
     ? expectedParticipants.filter((jid) => !returnedJids.has(jid) && !failures.some((failure) => failure.jid === jid))
-    : Array.from({ length: Math.max(0, attempted - result.length) }, () => undefined);
+    : Array.from({ length: Math.max(0, attempted - entries.length) }, () => undefined);
   const missingFailures = missing.map((jid) => ({
     ...(jid ? { jid } : {}),
     status: "not-returned",
   }));
   const allFailures = [...failures, ...missingFailures];
-  const succeeded = Math.max(0, result.length - failures.length);
+  const succeeded = Math.max(0, entries.length - failures.length);
   return {
     attempted,
     succeeded,

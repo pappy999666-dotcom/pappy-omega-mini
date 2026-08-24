@@ -108,6 +108,15 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("Preview thumbnail upload exceeds the 8 MiB safety limit.");
   });
 
+  it("forwards real mention metadata with panel-native button responses", async () => {
+    const source = await readFile(indexPath, "utf8");
+    expect(source).toContain("result.mentions?.length");
+    expect(source).toContain("mentions: result.mentions");
+    expect(source).toContain("result.nativeTable");
+    const router = await readFile(messageRouterPath, "utf8");
+    expect(router).toContain("sendCurrentText");
+  });
+
   it("persists and reloads encrypted inventory snapshots for instant panel totals", async () => {
     const source = await readFile(workerSourcePath, "utf8");
     expect(source).toContain('const broadcastInventoryPath = join(DATA_DIR, "broadcast-inventory.json")');

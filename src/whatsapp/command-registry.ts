@@ -17,7 +17,7 @@ import {
 } from "../menus/menu-model.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { firstVerifiedPhone, maskedPhoneLabel, phoneJidFromIdentity, verifiedTargetPhone } from "./identity-normalization.js";
-import { buildModerationActionResponse, buildModerationJobResponse, realMention } from "./moderation-response.js";
+import { buildModerationActionResponse, buildModerationJobResponse, buildModerationReviewResponse, realMention } from "./moderation-response.js";
 import { banUsageCard, commandUsageCard, pairingHelpCard, sessionPairingCard } from "./response-cards.js";
 import type { GroupControlTable } from "./group-control-confirmation.js";
 import { buildLyricsText, buildMediaJobText, buildPlayPreviewText, downloadPlay, fetchLyrics, playUsageText, resolvePlayMetadata, withMediaDownloadSlot, type PlayMode } from "./play-media.js";
@@ -303,7 +303,7 @@ async function memberConfirmationReply(
     senderJid,
     operation: "participant",
     participantAction,
-    participants: participants.map((participant) => phoneJidFromIdentity(firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id) ?? "")).filter((jid): jid is string => Boolean(jid)),
+    participants: participants.map((participant) => firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id)).filter((phone): phone is string => Boolean(phone)).map((phone) => phoneJidFromIdentity(phone)).filter((jid): jid is string => Boolean(jid)),
     table: {
       title: `Member Control · ${participantAction.toUpperCase()} Confirmation`,
       headers: ["Member", "Selection"],
@@ -316,17 +316,10 @@ async function memberConfirmationReply(
     { text: `✅ Confirm ${participantAction.toUpperCase()}`, id: `group-control:confirm:${pending.token}` },
     { text: "❌ Cancel", id: `group-control:cancel:${pending.token}` },
   ];
+  const phones = participants.map((participant) => firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id)).filter((phone): phone is string => Boolean(phone));
+  const response = buildModerationReviewResponse({ action: participantAction, selected: participants.length, scope: selectionLabel, phones });
   return {
-    text: [
-      "✦ PAPPY OMEGA MINI · MEMBER CONTROL REVIEW",
-      "─────────────────────",
-      `Action        · ${participantAction.toUpperCase()}`,
-      `Selected      · ${participants.length}`,
-      `Scope         · ${selectionLabel}`,
-      "Safety        · No action has been queued.",
-      "Action        · Use the native Confirm or Cancel button below.",
-    ].join("\n"),
-    mentions: participants.map((participant) => firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id)).filter((phone): phone is string => Boolean(phone)).map((phone) => phoneJidFromIdentity(phone)!).filter(Boolean),
+    ...response,
     nativeTable: pending.table,
     nativeFlow: pending.table.buttons,
   };

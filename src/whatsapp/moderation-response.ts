@@ -63,6 +63,27 @@ export function buildModerationActionResponse(input: {
   return withMentions(text, input.targetPhone ? [input.targetPhone] : []);
 }
 
+export function buildModerationReviewResponse(input: { action: string; selected: number; scope: string; phones?: string[] }): ModerationReply {
+  const phones = [...new Set(input.phones ?? [])].filter(Boolean);
+  const shownPhones = phones.slice(0, 20);
+  const targetText = shownPhones.length
+    ? shownPhones.map((phone) => realMention(phone)).join(", ") + (phones.length > shownPhones.length ? ` · +${phones.length - shownPhones.length} more` : "")
+    : "Verified members";
+  const text = [
+    "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
+    "",
+    `˗ˏˋ ⎔ ˎˊ˗  *${input.action.toUpperCase()} REVIEW*  ✦`,
+    "─────────────",
+    `⎔ Targets     · ⇆ ${targetText}`,
+    `⎔ Selected    · ⇆ ${input.selected}`,
+    `⎔ Scope       · ⇆ ${clean(input.scope, 120)}`,
+    "⎔ Status      · ⇆ Awaiting confirmation",
+    "─────────────",
+    "» *Note:* No action is queued until Confirm is tapped. This review expires in 90 seconds.",
+  ].join("\n");
+  return withMentions(text, shownPhones);
+}
+
 export function buildModerationJobResponse(input: { action: string; selected: number; jobId: string; phones?: string[] }): ModerationReply {
   const text = [
     "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",

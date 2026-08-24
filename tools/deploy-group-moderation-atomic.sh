@@ -31,6 +31,8 @@ grep -q 'pairingHelpCard' dist/src/whatsapp/response-cards.js
 grep -q 'play-download' dist/src/jobs/runtime.js
 grep -q 'buildDownloadArgs' dist/src/whatsapp/play-media.js
 grep -q 'MEDIA JOB' dist/src/whatsapp/play-media.js
+grep -q 'REMOVE REVIEW' dist/src/whatsapp/moderation-response.js
+grep -q 'result.mentions' dist/src/index.js
 ! grep -Rql 'local-pappy-approval-probe' dist
 test -s worker-package/index.js
 
@@ -75,6 +77,8 @@ grep -q 'pairingHelpCard' "$STAGE/dist/src/whatsapp/response-cards.js"
 grep -q 'play-download' "$STAGE/dist/src/jobs/runtime.js"
 grep -q 'buildDownloadArgs' "$STAGE/dist/src/whatsapp/play-media.js"
 grep -q 'MEDIA JOB' "$STAGE/dist/src/whatsapp/play-media.js"
+grep -q 'REMOVE REVIEW' "$STAGE/dist/src/whatsapp/moderation-response.js"
+grep -q 'result.mentions' "$STAGE/dist/src/index.js"
 ! grep -Rql 'local-pappy-approval-probe' "$STAGE/dist"
 test -s "$STAGE/worker-package/index.js"
 test "$(systemctl is-active pappy-panel-v3.service)" = active

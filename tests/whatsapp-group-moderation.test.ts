@@ -84,6 +84,20 @@ describe("WhatsApp remaining group moderation", () => {
     expect(mockedSnapshot).toHaveBeenCalledWith(ctx.workspaceId, ctx.sessionId, groupJid, { fresh: true });
   });
 
+  it("builds kick-all as a styled review with real mentions and queues verified phone removals after confirmation", async () => {
+    const ctx = context();
+    const preview = await executeCommand(createCommandRegistry(), "kickall", ctx);
+    const reply = preview as WhatsAppCommandReply;
+    expect(reply.text).toContain("REMOVE REVIEW");
+    expect(reply.text).toContain("@2348022222222");
+    expect(reply.text).toContain("@447700000003");
+    expect(reply.mentions).toEqual(["2348022222222@s.whatsapp.net", "447700000003@s.whatsapp.net"]);
+    expect(reply.nativeTable?.buttons?.some((button) => button.id?.includes(":confirm:"))).toBe(true);
+    expect(ctx.enqueueGroupControlJob).not.toHaveBeenCalled();
+    await confirmPreview(preview, ctx);
+    expect(ctx.enqueueGroupControlJob).toHaveBeenCalledWith({ groupJid, operation: "participant", participantAction: "remove", participants: ["2348022222222@s.whatsapp.net", "447700000003@s.whatsapp.net"] });
+  });
+
   it("maps dnkick to a real demote-then-remove durable action", async () => {
     const ctx = context();
     const preview = await executeCommand(createCommandRegistry(), "dnkick 2348099999999", ctx);
