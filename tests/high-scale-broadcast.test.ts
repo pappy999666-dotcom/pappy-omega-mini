@@ -112,6 +112,7 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("associatedChildMessage");
     expect(source).toContain("mentionedJids: context.mentionedJid.slice(0, 100)");
     expect(source).toContain("const quotedMessageKey = typeof context?.stanzaId === \"string\"");
+    expect(source).toContain("await workerParticipantJid({ id: context.participant }, runtime)");
     expect(source).toContain("quotedMessageKey ? { quotedMessageKey }");
     expect(source).toContain("runtime.socket.richMenu(jid, value.richMenu)");
     expect(source).toContain("const { richMenu: _richMenu, ...safeContent } = value");

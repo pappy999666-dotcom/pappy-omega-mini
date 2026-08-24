@@ -44,13 +44,15 @@ EXPECTED_ENGINE=$(sha256sum dist/src/whatsapp/anti-system/engine.js | cut -d' ' 
 EXPECTED_RUNTIME=$(sha256sum dist/src/jobs/runtime.js | cut -d' ' -f1)
 EXPECTED_SESSION=$(sha256sum dist/src/whatsapp/session-manager.js | cut -d' ' -f1)
 EXPECTED_WORKER=$(sha256sum worker-package/index.js | cut -d' ' -f1)
+RELEASE_VERSION=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' worker-package/package.json | head -1)
+[[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 tar -czf "$ARCHIVE" dist worker-package/index.js
 
 : "${SSHPASS:?SSHPASS must be provided by the caller}"
 sshpass -e scp -q -o StrictHostKeyChecking=no -o ConnectTimeout=15 "$ARCHIVE" "root@${HOST}:/tmp/"
-sshpass -e ssh -q -o StrictHostKeyChecking=no -o ConnectTimeout=15 "root@${HOST}" bash -s -- "$LABEL" "$EXPECTED_INDEX" "$EXPECTED_COMMAND" "$EXPECTED_ENGINE" "$EXPECTED_RUNTIME" "$EXPECTED_SESSION" "$EXPECTED_WORKER" <<'REMOTE'
+sshpass -e ssh -q -o StrictHostKeyChecking=no -o ConnectTimeout=15 "root@${HOST}" bash -s -- "$LABEL" "$EXPECTED_INDEX" "$EXPECTED_COMMAND" "$EXPECTED_ENGINE" "$EXPECTED_RUNTIME" "$EXPECTED_SESSION" "$EXPECTED_WORKER" "$RELEASE_VERSION" <<'REMOTE'
 set -euo pipefail
-LABEL="$1"; EXPECTED_INDEX="$2"; EXPECTED_COMMAND="$3"; EXPECTED_ENGINE="$4"; EXPECTED_RUNTIME="$5"; EXPECTED_SESSION="$6"; EXPECTED_WORKER="$7"
+LABEL="$1"; EXPECTED_INDEX="$2"; EXPECTED_COMMAND="$3"; EXPECTED_ENGINE="$4"; EXPECTED_RUNTIME="$5"; EXPECTED_SESSION="$6"; EXPECTED_WORKER="$7"; RELEASE_VERSION="$8"
 cd /opt/pappy-omega-mini
 STAGE="/tmp/${LABEL}-stage"
 rm -rf "$STAGE"
@@ -91,6 +93,7 @@ command -v ffprobe >/dev/null
 mkdir -p .deploy-backups
 if [ -d dist ]; then tar -czf ".deploy-backups/${LABEL}-dist.tar.gz" dist; fi
 if [ -f worker-package/index.js ]; then cp -a worker-package/index.js ".deploy-backups/${LABEL}-worker-index.js"; fi
+if [ -f .env ]; then cp -a .env ".deploy-backups/${LABEL}-env"; fi
 rollback() {
   set +e
   systemctl mask --runtime pappy-omega-mini.service >/dev/null 2>&1 || true
@@ -102,6 +105,7 @@ rollback() {
     rm -rf "$RESTORE_DIR"
   fi
   if [ -f ".deploy-backups/${LABEL}-worker-index.js" ]; then cp -a ".deploy-backups/${LABEL}-worker-index.js" worker-package/index.js; fi
+  if [ -f ".deploy-backups/${LABEL}-env" ]; then cp -a ".deploy-backups/${LABEL}-env" .env; fi
   chown pappy-omega:pappy-omega worker-package/index.js 2>/dev/null || true
   chmod 0600 worker-package/index.js 2>/dev/null || true
   systemctl unmask pappy-omega-mini.service >/dev/null 2>&1 || true
@@ -118,6 +122,8 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 test "$(systemctl is-active pappy-omega-mini.service 2>/dev/null || true)" = inactive
+if grep -q '^WORKLOAD_PACKAGE_VERSION=' .env; then sed -i -E "s/^WORKLOAD_PACKAGE_VERSION=.*/WORKLOAD_PACKAGE_VERSION=${RELEASE_VERSION}/" .env; else printf '\nWORKLOAD_PACKAGE_VERSION=%s\n' "$RELEASE_VERSION" >> .env; fi
+if grep -q '^WORKLOAD_RELEASE_VERSION=' .env; then sed -i -E "s/^WORKLOAD_RELEASE_VERSION=.*/WORKLOAD_RELEASE_VERSION=${RELEASE_VERSION}/" .env; else printf 'WORKLOAD_RELEASE_VERSION=%s\n' "$RELEASE_VERSION" >> .env; fi
 cp -a "$STAGE/dist/." dist/
 install -o pappy-omega -g pappy-omega -m 0600 "$STAGE/worker-package/index.js" worker-package/index.js
 systemctl unmask pappy-omega-mini.service
@@ -149,6 +155,7 @@ printf 'panel=%s\n' "$(systemctl is-active pappy-panel-v3.service)"
 printf 'health_ok=true\n'
 printf 'moderation_markers=present\n'
 printf 'worker_hash=match\n'
+printf 'release_version=%s\n' "$RELEASE_VERSION"
 printf 'status_envelope=verified\n'
 printf 'probe_absent=true\n'
 rm -rf "$STAGE"

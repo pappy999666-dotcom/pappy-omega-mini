@@ -741,11 +741,14 @@ async function emitInbound(runtime, message) {
   const context = normalized.extendedTextMessage?.contextInfo ?? normalized.imageMessage?.contextInfo ?? normalized.videoMessage?.contextInfo ?? normalized.audioMessage?.contextInfo ?? normalized.documentMessage?.contextInfo;
   const quotedMessage = context?.quotedMessage;
   const quotedText = messageText(quotedMessage);
+  const quotedSenderJid = typeof context?.participant === "string"
+    ? await workerParticipantJid({ id: context.participant }, runtime).catch(() => "")
+    : "";
   const quotedMessageKey = typeof context?.stanzaId === "string" && context.stanzaId && remoteJid
     ? {
         remoteJid,
         id: context.stanzaId,
-        ...(typeof context?.participant === "string" && context.participant ? { participant: context.participant } : {}),
+        ...(quotedSenderJid ? { participant: quotedSenderJid } : {}),
       }
     : undefined;
   if (!text && !quotedText && !interactionId) return;
@@ -768,7 +771,7 @@ async function emitInbound(runtime, message) {
     text: interactionId ? "" : text,
     ...(interactionId ? { interactionId } : {}),
     ...(quotedText ? { quotedText } : {}),
-    ...(typeof context?.participant === "string" ? { quotedSenderJid: context.participant } : {}),
+    ...(quotedSenderJid ? { quotedSenderJid } : {}),
     ...(quotedMessageKey ? { quotedMessageKey } : {}),
     ...(Array.isArray(context?.mentionedJid) ? { mentionedJids: context.mentionedJid.slice(0, 100) } : {}),
     ...(inboundMedia ? { media: inboundMedia } : {}),
