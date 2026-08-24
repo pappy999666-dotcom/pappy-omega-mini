@@ -168,6 +168,11 @@ describe("WhatsApp Join Approval commands", () => {
     const transport = await readFile(new URL("../src/whatsapp/transport-adapter.ts", import.meta.url), "utf8");
     expect(transport).toContain('status: "not-returned"');
     expect(transport).toContain("updateGroupParticipantBatch");
+    expect(transport).toContain('method(socket, "resolveParticipantJid")');
+    expect(transport).toContain('method(socket, "resolveParticipantJids")');
+    expect(transport).toContain('value.phone_number');
+    const registry = await readFile(new URL("../src/whatsapp/command-registry.ts", import.meta.url), "utf8");
+    expect(registry).toContain("const [snapshot, requests] = await Promise.all([");
     expect(approvalBlock).toContain("const action = participantAction as");
     expect(approvalBlock).toContain("batch chunk");
   });

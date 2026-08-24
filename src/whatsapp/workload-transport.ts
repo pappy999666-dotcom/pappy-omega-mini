@@ -82,6 +82,8 @@ export function createAssignedWorkloadSocket(
     "groupParticipantsUpdate",
     "groupRequestParticipantsList",
     "groupRequestParticipantsUpdate",
+    "resolveParticipantJid",
+    "resolveParticipantJids",
     "groupSettingUpdate",
     "groupMemberAddMode",
     "groupJoinApprovalMode",

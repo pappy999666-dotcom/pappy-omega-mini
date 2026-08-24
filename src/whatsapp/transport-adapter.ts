@@ -778,14 +778,17 @@ function digitsFromIdentity(value: unknown): string | undefined {
   return digits.length >= 7 ? digits : undefined;
 }
 
-async function verifiedRequestPhone(socket: WASocket, jid: string, provided?: string): Promise<string | undefined> {
-  const direct = digitsFromIdentity(provided) ?? (jid.endsWith("@lid") || jid.endsWith("@hosted.lid") ? undefined : digitsFromIdentity(jid));
+async function verifiedRequestPhone(socket: WASocket, jid: string, provided?: string, resolvedOverride?: string): Promise<string | undefined> {
+  const direct = digitsFromIdentity(provided) ?? digitsFromIdentity(resolvedOverride) ?? (jid.endsWith("@lid") || jid.endsWith("@hosted.lid") ? undefined : digitsFromIdentity(jid));
   if (direct) return direct;
   if (!jid.endsWith("@lid") && !jid.endsWith("@hosted.lid")) return undefined;
+  const resolveParticipant = method(socket, "resolveParticipantJid");
   const mapping = (socket as WASocket & { signalRepository?: { lidMapping?: { getPNForLID?: (lid: string) => Promise<string | null> } } }).signalRepository?.lidMapping;
   try {
-    const resolved = await mapping?.getPNForLID?.(jid);
-    return digitsFromIdentity(resolved);
+    const resolved = resolveParticipant
+      ? await resolveParticipant(jid)
+      : await mapping?.getPNForLID?.(jid);
+    return digitsFromIdentity(typeof resolved === "string" ? resolved : undefined);
   } catch {
     return undefined;
   }
@@ -801,12 +804,33 @@ export async function listGroupJoinRequests(
   if (!list) throw new Error("Unsupported capability: groupRequestParticipantsList");
   const result = await list(groupJid);
   if (!Array.isArray(result)) return [];
+  const panelResolver = method(socket, "resolveParticipantJids");
+  const candidateJids = result.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const value = item as Record<string, unknown>;
+    const jid = typeof value.jid === "string" ? value.jid : typeof value.id === "string" ? value.id : "";
+    return jid ? [jid] : [];
+  });
+  let resolvedPanelJids: Record<string, unknown> = {};
+  if (panelResolver && candidateJids.length) {
+    try {
+      const resolved = await panelResolver(candidateJids);
+      if (resolved && typeof resolved === "object") resolvedPanelJids = resolved as Record<string, unknown>;
+    } catch {
+      resolvedPanelJids = {};
+    }
+  }
   const requests = await Promise.all(result.map(async (item) => {
     if (!item || typeof item !== "object") return undefined;
     const value = item as Record<string, unknown>;
     const jid = typeof value.jid === "string" ? value.jid : typeof value.id === "string" ? value.id : "";
     if (!jid) return undefined;
-    const phoneNumber = await verifiedRequestPhone(socket, jid, typeof value.phoneNumber === "string" ? value.phoneNumber : undefined);
+    const phoneNumber = await verifiedRequestPhone(
+      socket,
+      jid,
+      typeof value.phoneNumber === "string" ? value.phoneNumber : typeof value.phone_number === "string" ? value.phone_number : undefined,
+      typeof resolvedPanelJids[jid] === "string" ? resolvedPanelJids[jid] as string : undefined,
+    );
     return {
       jid,
       ...(phoneNumber ? { phoneNumber } : {}),

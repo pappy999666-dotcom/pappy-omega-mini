@@ -199,22 +199,18 @@ function groupJidForApproval(ctx: CommandContext): string {
 
 async function pendingApprovalRequests(ctx: CommandContext) {
   const groupJid = groupJidForApproval(ctx);
-  const snapshot = await getGroupModerationSnapshot(
-    ctx.workspaceId,
-    ctx.sessionId,
-    groupJid,
-    { fresh: true },
-  );
-  if (!snapshot.isAdmin)
-    throw new Error("This WhatsApp identity is not an administrator in this group.");
-  return {
-    groupJid,
-    requests: await listGroupJoinRequests(
+  const [snapshot, requests] = await Promise.all([
+    getGroupModerationSnapshot(
       ctx.workspaceId,
       ctx.sessionId,
       groupJid,
+      { fresh: true },
     ),
-  };
+    listGroupJoinRequests(ctx.workspaceId, ctx.sessionId, groupJid),
+  ]);
+  if (!snapshot.isAdmin)
+    throw new Error("This WhatsApp identity is not an administrator in this group.");
+  return { groupJid, requests };
 }
 
 function approvalCountry(request: { jid: string; phoneNumber?: string }): string {

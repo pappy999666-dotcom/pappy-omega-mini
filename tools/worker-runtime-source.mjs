@@ -917,6 +917,17 @@ async function executeTransport(runtime, method, encodedArgs) {
     const { richMenu: _richMenu, ...safeContent } = value;
     return runtime.socket.sendMessage(jid, materializeWorkloadContent(safeContent), sendOptions);
   }
+  if (method === "resolveParticipantJid") {
+    const value = typeof args[0] === "string" ? args[0] : "";
+    return workerParticipantJid({ id: value }, runtime) || null;
+  }
+  if (method === "resolveParticipantJids") {
+    const values = Array.isArray(args[0])
+      ? [...new Set(args[0].filter((value) => typeof value === "string" && value).slice(0, 5000))]
+      : [];
+    const resolved = await Promise.all(values.map(async (value) => [value, await workerParticipantJid({ id: value }, runtime).catch(() => "")]));
+    return Object.fromEntries(resolved.filter(([, value]) => typeof value === "string" && value));
+  }
   if (method === "sendGroupStatus") {
     const [jid, payload] = args;
     const native = runtime.socket.sendGroupStatus;
