@@ -13,6 +13,8 @@ export interface RichMenuImage {
   mime_type: string;
   width: number;
   height: number;
+  /** Render the image inside the Gen4 response body instead of as a detached preview. */
+  inline?: boolean;
 }
 
 export interface RichMenuButton {

@@ -27,7 +27,11 @@ export interface LyricsResult {
   syncedLyrics?: string;
 }
 
-const COMMAND_TIMEOUT_MS = 45_000;
+// Keep media failures isolated and responsive; ordinary commands never enter this path.
+const COMMAND_TIMEOUT_MS = 20_000;
+const PLAY_METADATA_TIMEOUT_MS = 8_000;
+const PIPED_REQUEST_TIMEOUT_MS = 5_000;
+const PIPED_STREAM_TIMEOUT_MS = 15_000;
 const LYRICS_TIMEOUT_MS = 8_000;
 const MAX_LYRICS_CHARS = 12_000;
 const MAX_MEDIA_BYTES = Math.max(1_000_000, Number(process.env.PLAY_MAX_BYTES ?? process.env.MAX_MEDIA_BYTES ?? 50 * 1024 * 1024));
@@ -114,7 +118,7 @@ async function pipedJson(path: string): Promise<Record<string, unknown>> {
   let lastError: unknown;
   for (const base of PIPED_API_BASES) {
     try {
-      const response = await withTimeout(fetch(`${base}${path}`, { headers: { "User-Agent": "Pappy-Omega-Mini/1.0" } }), 12_000, () => undefined);
+      const response = await withTimeout(fetch(`${base}${path}`, { headers: { "User-Agent": "Pappy-Omega-Mini/1.0" } }), PIPED_REQUEST_TIMEOUT_MS, () => undefined);
       if (!response.ok) throw new Error(`Piped HTTP ${response.status}`);
       return await response.json() as Record<string, unknown>;
     } catch (error) {
@@ -147,7 +151,7 @@ async function resolvePipedMetadata(input: string): Promise<PlayMetadata> {
 export async function resolvePlayMetadata(input: string): Promise<PlayMetadata> {
   const source = sourceFor(input);
   try {
-    const result = await runCommand(["--dump-single-json", "--skip-download", "--no-playlist", "--no-warnings", source], 20_000);
+    const result = await runCommand(["--dump-single-json", "--skip-download", "--no-playlist", "--no-warnings", source], PLAY_METADATA_TIMEOUT_MS);
     const line = result.stdout.trim().split("\n").filter(Boolean).at(-1);
     if (!line) throw new Error("No media metadata was returned for that search.");
     return parseMetadata(line, source);
@@ -166,7 +170,7 @@ async function downloadPipedMedia(metadata: PlayMetadata, mode: PlayMode): Promi
     .filter((item) => typeof item.url === "string" && item.url && item.videoOnly !== true)
     .sort((a, b) => Number(b.bitrate ?? 0) - Number(a.bitrate ?? 0))[0];
   if (!candidate?.url) throw new Error(`Piped did not expose a playable ${mode} stream.`);
-  const response = await withTimeout(fetch(String(candidate.url), { headers: { "User-Agent": "Pappy-Omega-Mini/1.0" } }), 30_000, () => undefined);
+  const response = await withTimeout(fetch(String(candidate.url), { headers: { "User-Agent": "Pappy-Omega-Mini/1.0" } }), PIPED_STREAM_TIMEOUT_MS, () => undefined);
   if (!response.ok) throw new Error(`Piped stream HTTP ${response.status}.`);
   const contentLength = Number(response.headers.get("content-length") ?? 0);
   if (contentLength > MAX_MEDIA_BYTES) throw new Error("The media output exceeds the configured size limit.");

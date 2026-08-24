@@ -44,6 +44,7 @@ export async function buildWhatsappMenuPayload(
         mime_type: string;
         width: number;
         height: number;
+        inline?: boolean;
       }
     | undefined;
   const configuredId = configuration.whatsappMenuMediaId;
@@ -65,6 +66,7 @@ export async function buildWhatsappMenuPayload(
         mime_type: candidate.media.mimeType,
         width: 1080,
         height: 620,
+        inline: true,
       };
       break;
     } catch (error) {
