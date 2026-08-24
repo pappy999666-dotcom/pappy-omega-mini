@@ -210,11 +210,11 @@ export function classifyDisconnect(error: unknown): DisconnectClassification {
   if (code === 401 && !explicitLogout) {
     return {
       code,
-      label: "unauthorized-transient",
+      label: "unauthorized-paused",
       terminal: false,
-      status: "DEGRADED",
+      status: "LOGGED_OUT",
       recovery:
-        "401 was received without explicit logout confirmation; credentials are preserved and recovery is scheduled.",
+        "WhatsApp rejected this socket with 401; credentials are preserved, automatic reconnect is paused, and the session can be paired or resumed explicitly.",
     };
   }
   const fallback = {
@@ -1018,7 +1018,7 @@ async function openWhatsAppSession(
             );
           });
       }
-      if (!terminal && !getLifecycleState(key).stopping) {
+      if (!terminal && classification.status !== "LOGGED_OUT" && !getLifecycleState(key).stopping) {
         scheduleReconnect({
           key,
           workspaceId,
