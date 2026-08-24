@@ -1215,6 +1215,12 @@ async function resolveBroadcastPreview(runtime, intent) {
   broadcastPreviewInflight.set(cacheKey, request);
   return request;
 }
+async function withinDeadline(task, timeoutMs) {
+  return Promise.race([
+    task,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("optional enrichment timed out")), timeoutMs)),
+  ]);
+}
 async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview, executionSeed) {
   const text = typeof intent.text === "string" ? intent.text : "";
   const mediaCaption = typeof media?.caption === "string" ? media.caption.trim() : "";
@@ -1224,7 +1230,7 @@ async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview, exec
   if (intent.kind === "allstatus" && intent.styled === true && /https?:\/\/\S+/i.test(detectorText)) {
     let groupName = "WhatsApp Group";
     try {
-      const metadata = await runtime.socket.groupMetadata(jid);
+      const metadata = await withinDeadline(runtime.socket.groupMetadata(jid), 3_000);
       groupName = String(metadata?.subject ?? groupName).trim() || groupName;
     } catch {
       // A missing group subject must never block the styled status delivery.
@@ -1250,15 +1256,26 @@ async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview, exec
     else await runtime.socket.sendMessage(jid, { ...withPreview, groupStatus: true }, styleOptions);
     return;
   }
-  const metadata = await runtime.socket.groupMetadata(jid);
-  const participants = (await Promise.all((metadata?.participants ?? []).map((participant) => workerParticipantJid(participant, runtime))))
-    .filter(Boolean)
-    .slice(0, 1000);
+  // allchat delivery is mandatory; member lookup is only enrichment. If it
+  // times out or a participant cannot be mapped, send the group message
+  // without mentions instead of failing or sending a blank preview card.
+  let participants = [];
+  try {
+    const metadata = await withinDeadline(runtime.socket.groupMetadata(jid), 3_000);
+    participants = (await withinDeadline(
+      Promise.all((metadata?.participants ?? []).slice(0, 2_000).map((participant) => workerParticipantJid(participant, runtime).catch(() => ""))),
+      3_000,
+    )).filter(Boolean).slice(0, 1_000);
+  } catch {
+    participants = [];
+  }
   const materialized = materializeWorkloadContent(content);
-  const withPreview = linkPreview && typeof linkPreview === "object"
-    ? { ...materialized, linkPreview }
-    : materialized;
-  await runtime.socket.sendMessage(jid, { ...withPreview, mentions: participants });
+  // Prevent Baileys from auto-generating an incomplete invite/link preview.
+  const withPreview = { ...materialized, linkPreview: {} };
+  await runtime.socket.sendMessage(jid, {
+    ...withPreview,
+    ...(participants.length ? { mentions: participants } : {}),
+  });
 }
 async function remoteBroadcastCancelled(runtime, jobId) {
   try {
@@ -1301,7 +1318,9 @@ async function runLocalBroadcast(runtime, intent, groups, media) {
   checkpoint.lastResult = "Preparing the exact content for delivery.";
   await writeBroadcastCheckpoint(checkpoint);
   await reportLocalBroadcast(activeRuntime, checkpoint);
-  const linkPreview = await resolveBroadcastPreview(runtime, intent);
+  const linkPreview = intent.kind === "allchat"
+    ? undefined
+    : await resolveBroadcastPreview(runtime, intent);
   checkpoint.currentAction = "broadcast ready";
   checkpoint.lastResult = `Resolved ${checkpoint.totalGroups} target group(s); starting delivery.`;
   await writeBroadcastCheckpoint(checkpoint);
