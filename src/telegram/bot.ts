@@ -265,6 +265,7 @@ const globalBridgeActive = new Set<string>();
 const joinStates = new Map<string, "idle" | "running" | "paused" | "stopped">();
 const joinJobs = new Map<string, string>();
 const liveLoops = new Map<string, ReturnType<typeof setInterval>>();
+const joinLiveLoopSessions = new Map<string, string>();
 const validatorLiveStates = new Map<string, boolean>();
 const passiveIntakeSuspended = new Set<string>();
 const pendingAdminInput = new Map<
@@ -3050,9 +3051,10 @@ export function createTelegramBot(): Telegraf<Context> {
   });
 
   bot.action(/^session:([^:]+):menu$/, async (ctx) => {
-    await ctx.answerCbQuery();
+    void ctx.answerCbQuery().catch(() => undefined);
     const session = ownedSession(ctx, ctx.match[1] ?? "");
     if (!session) return deny(ctx);
+    stopJoinLiveLoops(session.sessionId);
     await edit(
       ctx,
       await renderSessionOverview(ctx, session),
@@ -3143,66 +3145,55 @@ export function createTelegramBot(): Telegraf<Context> {
     );
   });
   bot.action(/^session:([^:]+):purge:confirm$/, async (ctx) => {
-    await ctx.answerCbQuery("Purging session…");
+    void ctx.answerCbQuery("Purge queued").catch(() => undefined);
     const session = ownedSession(ctx, ctx.match[1] ?? "");
     if (!session) return deny(ctx);
     const user = resolveTelegramUser(ctx);
-    try {
-      const purged = await purgeWhatsAppSession(
-        user.workspaceId,
-        session.sessionId,
-      );
-      await recordAudit({
+    const sessionId = session.sessionId;
+    const sessionName = session.sessionName;
+    const message = ctx.callbackQuery?.message;
+    const chatId = ctx.chat?.id ?? (message && "chat" in message ? message.chat.id : undefined);
+    const messageId = message && "message_id" in message ? message.message_id : undefined;
+    void edit(
+      ctx,
+      pageText(
+        "Session Purge",
+        infoResponse(
+          "Purge Started",
+          `<b>${escapeHtml(sessionName)}</b> is being removed in the background. Telegram navigation remains available while remote panel cleanup completes.`,
+        ),
+      ),
+      keyboard([[btn("‹ Sessions", "sessions:list:0", "success")]]),
+    ).catch(() => undefined);
+    void purgeWhatsAppSession(user.workspaceId, sessionId).then(async (purged) => {
+      recordAudit({
         workspaceId: user.workspaceId,
         actorTelegramUserId: String(ctx.from?.id ?? ""),
         action: "session.purge",
         success: true,
-        metadata: {
-          sessionId: session.sessionId,
-          sessionName: session.sessionName,
-          jobs: purged.jobs,
-          links: purged.links,
-          traces: purged.traces,
-          autoPromoteConfigs: purged.autoPromoteConfigs,
-          autoPromoteRuns: purged.autoPromoteRuns,
-        },
+        metadata: { sessionId, sessionName, jobs: purged.jobs, links: purged.links, traces: purged.traces, autoPromoteConfigs: purged.autoPromoteConfigs, autoPromoteRuns: purged.autoPromoteRuns },
       });
-      await edit(
-        ctx,
-        pageText(
-          "Session Purged",
-          successResponse(
-            purged.remoteCleanup === "CONFIRMED"
-              ? "Encrypted Auth Removed"
-              : "Central Purge Completed",
-            `Session <b>${escapeHtml(session.sessionName)}</b> was stopped and removed from the control plane.\n\n<b>Deleted:</b> ${purged.jobs} jobs · ${purged.links} collected links · ${purged.traces} message traces · ${purged.autoPromoteRuns} Auto Promote runs · ${purged.autoPromoteConfigs} session Auto Promote configs · ${purged.remoteCleanup === "CONFIRMED" ? "panel encrypted auth" : "central auth record"}\n\n${purged.remoteCleanup === "CONFIRMED" ? "Panel auth was confirmed removed." : "The panel was unreachable, so its auth directory could not be confirmed removed; the assignment was revoked and it cannot reconnect this session."}\n\nYou can create a new session from Sessions.`,
-          ),
+      const text = pageText(
+        "Session Purged",
+        successResponse(
+          purged.remoteCleanup === "CONFIRMED" ? "Encrypted Auth Removed" : "Central Purge Completed",
+          `Session <b>${escapeHtml(sessionName)}</b> was stopped and removed from the control plane.\n\n<b>Deleted:</b> ${purged.jobs} jobs · ${purged.links} collected links · ${purged.traces} message traces · ${purged.autoPromoteRuns} Auto Promote runs · ${purged.autoPromoteConfigs} session Auto Promote configs · ${purged.remoteCleanup === "CONFIRMED" ? "panel encrypted auth" : "central auth record"}\n\n${purged.remoteCleanup === "CONFIRMED" ? "Panel auth was confirmed removed." : "The panel was unreachable; its assignment was revoked and central cleanup completed."}`,
         ),
-        keyboard([[btn("‹ Sessions", "sessions:list:0", "success")]]),
       );
-    } catch (error) {
-      await recordAudit({
+      if (chatId && messageId)
+        await ctx.telegram.editMessageText(chatId, messageId, undefined, text, { parse_mode: "HTML", reply_markup: keyboard([[btn("‹ Sessions", "sessions:list:0", "success")]]) }).catch(() => undefined);
+    }).catch(async (error) => {
+      recordAudit({
         workspaceId: user.workspaceId,
         actorTelegramUserId: String(ctx.from?.id ?? ""),
         action: "session.purge",
         success: false,
-        metadata: {
-          sessionId: session.sessionId,
-          error: String(error).slice(0, 240),
-        },
+        metadata: { sessionId, error: String(error).slice(0, 240) },
       });
-      await edit(
-        ctx,
-        pageText(
-          "Purge Failed",
-          dangerResponse(
-            "Session Not Purged",
-            escapeHtml(error instanceof Error ? error.message : String(error)),
-          ),
-        ),
-        keyboard([[btn("‹ Session", `session:${session.sessionId}:menu`)]]),
-      );
-    }
+      const text = pageText("Purge Failed", dangerResponse("Session Not Purged", escapeHtml(error instanceof Error ? error.message : String(error))));
+      if (chatId && messageId)
+        await ctx.telegram.editMessageText(chatId, messageId, undefined, text, { parse_mode: "HTML", reply_markup: keyboard([[btn("‹ Session", `session:${sessionId}:menu`)]]) }).catch(() => undefined);
+    });
   });
   bot.action(/^session:([^:]+):pfp:(get|remove|change)$/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -6017,14 +6008,15 @@ export function createTelegramBot(): Telegraf<Context> {
         joinStates.set(key, "running");
       } else if (operation === "pause") {
         const jobId = joinJobs.get(key);
-        if (jobId) await runtime?.pause(jobId);
+        if (jobId && runtime) void runtime.pause(jobId).catch(() => undefined);
         joinStates.set(key, "paused");
       } else if (operation === "stop") {
         const jobId = joinJobs.get(key);
-        if (jobId) await runtime?.cancel(jobId);
+        if (jobId && runtime) void runtime.cancel(jobId).catch(() => undefined);
         joinStates.set(key, "stopped");
       }
       if (operation === "settings") {
+        pendingJoinSettingInput.delete(String(ctx.from?.id ?? ""));
         const current = getSessionJoinSettings(
           user.workspaceId,
           session.sessionId,
@@ -9734,6 +9726,7 @@ async function showValidatorLiveLog(
             const current = liveLoops.get(loopKey);
             if (current) clearInterval(current);
             liveLoops.delete(loopKey);
+            joinLiveLoopSessions.delete(loopKey);
           });
       })
       .catch(() => undefined);
@@ -9918,9 +9911,12 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
     );
     return;
   }
-  const loopKey = `join:${chatId}:${messageId}`;
+  const loopKey = `join:${session.sessionId}:${chatId}:${messageId}`;
   const previous = liveLoops.get(loopKey);
-  if (previous) clearInterval(previous);
+  if (previous) {
+    clearInterval(previous);
+    joinLiveLoopSessions.delete(loopKey);
+  }
   const interval = setInterval(() => {
     void Promise.all([
       runtime.get(jobId),
@@ -9952,6 +9948,7 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
             const active = liveLoops.get(loopKey);
             if (active) clearInterval(active);
             liveLoops.delete(loopKey);
+            joinLiveLoopSessions.delete(loopKey);
           });
         if (
           ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(
@@ -9960,11 +9957,23 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
         ) {
           clearInterval(interval);
           liveLoops.delete(loopKey);
+          joinLiveLoopSessions.delete(loopKey);
         }
       })
       .catch(() => undefined);
   }, 1500);
   liveLoops.set(loopKey, interval);
+  joinLiveLoopSessions.set(loopKey, session.sessionId);
+}
+
+function stopJoinLiveLoops(sessionId: string): void {
+  for (const [key, loopSessionId] of joinLiveLoopSessions) {
+    if (loopSessionId !== sessionId) continue;
+    const interval = liveLoops.get(key);
+    if (interval) clearInterval(interval);
+    liveLoops.delete(key);
+    joinLiveLoopSessions.delete(key);
+  }
 }
 
 function jobStateToJoinStatus(
