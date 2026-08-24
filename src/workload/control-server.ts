@@ -527,6 +527,9 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         ...(typeof input.interactionId === "string" ? { interactionId: input.interactionId } : {}),
         ...(typeof input.quotedText === "string" ? { quotedText: input.quotedText } : {}),
         ...(typeof input.quotedSenderJid === "string" ? { quotedSenderJid: input.quotedSenderJid } : {}),
+        ...(input.quotedMessageKey && typeof input.quotedMessageKey === "object" && !Array.isArray(input.quotedMessageKey)
+          ? { quotedMessageKey: input.quotedMessageKey as Record<string, unknown> }
+          : {}),
         ...(Array.isArray(input.mentionedJids) ? { mentionedJids: input.mentionedJids.filter((item): item is string => typeof item === "string").slice(0, 100) } : {}),
         ...(inboundMedia ? { media: inboundMedia } : {}),
         ...(input.fromMe === true ? { fromMe: true } : {}),

@@ -136,9 +136,9 @@ async function main(): Promise<void> {
         senderJid: event.senderJid,
         text: event.text,
         ...(event.interactionId ? { interactionId: event.interactionId } : {}),
-        ...(event.messageId ? { quotedSenderJid: event.quotedSenderJid } : {}),
         ...(event.quotedText ? { quotedText: event.quotedText } : {}),
         ...(event.quotedSenderJid ? { quotedSenderJid: event.quotedSenderJid } : {}),
+        ...(event.quotedMessageKey ? { quotedMessageKey: event.quotedMessageKey } : {}),
         ...(event.mentionedJids?.length ? { mentionedJids: event.mentionedJids } : {}),
         ...(event.media
           ? {

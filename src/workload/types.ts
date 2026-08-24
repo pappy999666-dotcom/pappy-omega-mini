@@ -230,6 +230,7 @@ export interface WorkloadInboundEvent {
   interactionId?: string;
   quotedText?: string;
   quotedSenderJid?: string;
+  quotedMessageKey?: Record<string, unknown>;
   mentionedJids?: string[];
   media?: WorkloadInboundMedia;
   fromMe?: boolean;

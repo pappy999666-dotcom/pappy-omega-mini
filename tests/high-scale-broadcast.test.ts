@@ -111,6 +111,8 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("sendInteractiveTable(jid, table, sendOptions)");
     expect(source).toContain("associatedChildMessage");
     expect(source).toContain("mentionedJids: context.mentionedJid.slice(0, 100)");
+    expect(source).toContain("const quotedMessageKey = typeof context?.stanzaId === \"string\"");
+    expect(source).toContain("quotedMessageKey ? { quotedMessageKey }");
     expect(source).toContain("runtime.socket.richMenu(jid, value.richMenu)");
     expect(source).toContain("const { richMenu: _richMenu, ...safeContent } = value");
   });
@@ -122,6 +124,8 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("result.nativeTable");
     const router = await readFile(messageRouterPath, "utf8");
     expect(router).toContain("sendCurrentText");
+    const inboundIndex = await readFile(indexPath, "utf8");
+    expect(inboundIndex).toContain("quotedMessageKey: event.quotedMessageKey");
   });
 
   it("persists and reloads encrypted inventory snapshots for instant panel totals", async () => {
@@ -163,6 +167,7 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(service).toContain("revokeSharedWorkloadAccess");
     expect(control).toContain("isWorkloadWorkerAuthorizedForWorkspace");
     expect(control).toContain("assignment.workspaceId !== workspaceId");
+    expect(control).toContain("quotedMessageKey: input.quotedMessageKey");
     expect(bot).toContain('bot.action("workload:share:add"');
     expect(bot).toContain('bot.action(/^workload:share:([^:]+)$/');
     expect(bot).toContain('bot.action(/^workload:share:remove:(.+)$/');
