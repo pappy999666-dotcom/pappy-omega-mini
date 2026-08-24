@@ -157,7 +157,7 @@ export interface CommandContext {
   }) => Promise<void>;
   sendCurrentGroupPoll?: (input: { question: string; options: string[] }) => Promise<void>;
   cancelJobs?: (
-    kind: "gstatus" | "allstatus" | "allchat" | "tag",
+    kind: "gstatus" | "allstatus" | "allchat" | "tag" | "join-manager",
   ) => Promise<number>;
 }
 
@@ -957,6 +957,24 @@ export function createCommandRegistry(): RegisteredCommand[] {
         });
         if (typeof started === "string") return started;
         return `Join Manager started.\nTarget       · ${started.targetCount} Active link(s)\nDelay        · ${formatSeconds(started.delayMs)}\nExpected time · ${formatDuration(started.expectedTimeMs)}\nLive code    · ${started.jobCode}`;
+      },
+    },
+    {
+      name: "stopjoin",
+      aliases: ["stopjoinmanager", "joinstop"],
+      description: "Cancel active Join Manager work for this session only.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.cancelJobs) return "Join Manager cancellation is unavailable until the worker runtime is ready.";
+        const count = await ctx.cancelJobs("join-manager");
+        return [
+          "✦ PAPPY OMEGA MINI · JOIN MANAGER",
+          "─────────────────────",
+          "Action      · STOP JOIN",
+          `Cancelled   · ${count} active job${count === 1 ? "" : "s"}`,
+          "Scope       · Current WhatsApp session only",
+          `Status      · ${count ? "Stopped" : "No active Join Manager job"}`,
+        ].join("\n");
       },
     },
     {

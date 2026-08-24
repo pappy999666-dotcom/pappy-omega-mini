@@ -488,7 +488,7 @@ export async function routeWhatsAppText(
     ...(runtime
       ? {
           cancelJobs: async (
-            kind: "gstatus" | "allstatus" | "allchat" | "tag",
+            kind: "gstatus" | "allstatus" | "allchat" | "tag" | "join-manager",
           ) => {
             const jobs = await runtime.listRecent(100);
             const active = jobs.filter(

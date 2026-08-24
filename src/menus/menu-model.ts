@@ -60,6 +60,7 @@ export function buildSessionMenu(
     { id: "support", label: "Support", command: "support", description: "Create a support ticket." },
     { id: "autojoin", label: "Auto-join", command: "autojoin", description: "Toggle Active-bucket automatic joining." },
     { id: "join", label: "Join Manager", command: "join", description: "Start the Active-bucket Join Manager." },
+    { id: "stopjoin", label: "Stop Join", command: "stopjoin", description: "Cancel active Join Manager work for this session." },
     { id: "targetgs", label: "Join target", command: "targetgs", description: "Set the number of Active links to join." },
     { id: "setprefix", label: "Set prefix", command: "setprefix", description: "Set the session command prefix." },
     { id: "pfp", label: "PFP", command: "pfp", description: "Get or update the WhatsApp profile picture." },
