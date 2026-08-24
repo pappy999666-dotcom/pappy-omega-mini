@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
+import { pappyHeader } from "./response-designs.js";
 
 export type PlayMode = "audio" | "video";
 
@@ -14,6 +15,8 @@ export interface PlayMetadata {
   thumbnailUrl?: string;
   webpageUrl?: string;
   sourceUrl: string;
+  provider?: "yt-dlp" | "piped";
+  sourceId?: string;
 }
 
 export interface LyricsResult {
@@ -32,6 +35,11 @@ const MAX_MEDIA_SIZE_ARG = process.env.PLAY_MAX_FILESIZE?.trim() || "50M";
 const YT_DLP_BIN = process.env.YT_DLP_BIN?.trim() || "yt-dlp";
 const FFPROBE_BIN = process.env.FFPROBE_BIN?.trim() || "ffprobe";
 const MAX_CONCURRENT_MEDIA_JOBS = 2;
+const PIPED_API_BASES = (process.env.PIPED_API_BASES ?? "https://api.piped.private.coffee,https://pipedapi.kavin.rocks,https://pipedapi.leptons.xyz")
+  .split(",")
+  .map((value) => value.trim().replace(/\/$/u, ""))
+  .filter(Boolean);
+
 let activeMediaJobs = 0;
 const mediaJobWaiters: Array<() => void> = [];
 
@@ -92,12 +100,93 @@ function parseMetadata(raw: string, sourceUrl: string): PlayMetadata {
   };
 }
 
+function videoIdFromUrl(value: string): string | undefined {
+  try {
+    const parsed = new URL(value);
+    if (!/(?:youtube\.com|youtu\.be)$/iu.test(parsed.hostname.replace(/^www\./iu, ""))) return undefined;
+    return parsed.searchParams.get("v") ?? parsed.pathname.split("/").filter(Boolean).at(-1);
+  } catch {
+    return undefined;
+  }
+}
+
+async function pipedJson(path: string): Promise<Record<string, unknown>> {
+  let lastError: unknown;
+  for (const base of PIPED_API_BASES) {
+    try {
+      const response = await withTimeout(fetch(`${base}${path}`, { headers: { "User-Agent": "Pappy-Omega-Mini/1.0" } }), 12_000, () => undefined);
+      if (!response.ok) throw new Error(`Piped HTTP ${response.status}`);
+      return await response.json() as Record<string, unknown>;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("No Piped API instance responded.");
+}
+
+async function resolvePipedMetadata(input: string): Promise<PlayMetadata> {
+  const search = await pipedJson(`/search?q=${encodeURIComponent(input.trim())}&filter=videos`);
+  const items = Array.isArray(search.items) ? search.items as Array<Record<string, unknown>> : [];
+  const item = items.find((candidate) => candidate.type === "stream" && typeof candidate.url === "string");
+  if (!item) throw new Error("No public Piped result was found for that search.");
+  const itemUrl = String(item.url);
+  const id = videoIdFromUrl(`https://www.youtube.com${itemUrl}`) ?? itemUrl.match(/[?&]v=([^&]+)/u)?.[1];
+  if (!id) throw new Error("The public search result did not contain a usable video identity.");
+  return {
+    title: String(item.title ?? input),
+    ...(item.uploaderName ? { uploader: String(item.uploaderName) } : {}),
+    ...(Number.isFinite(Number(item.duration)) && Number(item.duration) > 0 ? { durationSeconds: Math.round(Number(item.duration)) } : {}),
+    ...(item.thumbnail ? { thumbnailUrl: String(item.thumbnail) } : {}),
+    webpageUrl: `https://www.youtube.com/watch?v=${id}`,
+    sourceUrl: input,
+    provider: "piped",
+    sourceId: id,
+  };
+}
+
 export async function resolvePlayMetadata(input: string): Promise<PlayMetadata> {
   const source = sourceFor(input);
-  const result = await runCommand(["--dump-single-json", "--skip-download", "--no-playlist", "--no-warnings", source], 20_000);
-  const line = result.stdout.trim().split("\n").filter(Boolean).at(-1);
-  if (!line) throw new Error("No media metadata was returned for that search.");
-  return parseMetadata(line, source);
+  try {
+    const result = await runCommand(["--dump-single-json", "--skip-download", "--no-playlist", "--no-warnings", source], 20_000);
+    const line = result.stdout.trim().split("\n").filter(Boolean).at(-1);
+    if (!line) throw new Error("No media metadata was returned for that search.");
+    return parseMetadata(line, source);
+  } catch (primaryError) {
+    if (/^https?:\/\//iu.test(input.trim())) throw primaryError;
+    return resolvePipedMetadata(input);
+  }
+}
+
+async function downloadPipedMedia(metadata: PlayMetadata, mode: PlayMode): Promise<WhatsAppMediaPayload> {
+  if (!metadata.sourceId) throw new Error("Piped media identity is missing.");
+  const streamPayload = await pipedJson(`/streams/${encodeURIComponent(metadata.sourceId)}`);
+  const streams = mode === "audio" ? streamPayload.audioStreams : streamPayload.videoStreams;
+  const candidates = Array.isArray(streams) ? streams as Array<Record<string, unknown>> : [];
+  const candidate = candidates
+    .filter((item) => typeof item.url === "string" && item.url && item.videoOnly !== true)
+    .sort((a, b) => Number(b.bitrate ?? 0) - Number(a.bitrate ?? 0))[0];
+  if (!candidate?.url) throw new Error(`Piped did not expose a playable ${mode} stream.`);
+  const response = await withTimeout(fetch(String(candidate.url), { headers: { "User-Agent": "Pappy-Omega-Mini/1.0" } }), 30_000, () => undefined);
+  if (!response.ok) throw new Error(`Piped stream HTTP ${response.status}.`);
+  const contentLength = Number(response.headers.get("content-length") ?? 0);
+  if (contentLength > MAX_MEDIA_BYTES) throw new Error("The media output exceeds the configured size limit.");
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length || bytes.length > MAX_MEDIA_BYTES) throw new Error("The media output exceeds the configured size limit.");
+  const directory = await mkdtemp(join(tmpdir(), `pappy-piped-${randomUUID()}-`));
+  const filePath = join(directory, mode === "audio" ? "media.m4a" : "media.mp4");
+  try {
+    await writeFile(filePath, bytes);
+    await runExternalCommand(FFPROBE_BIN, ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filePath], 10_000);
+  } finally {
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+  }
+  return {
+    kind: mode,
+    bytes,
+    mimeType: mode === "audio" ? "audio/mp4" : "video/mp4",
+    fileName: `${metadata.title.replace(/[^a-z0-9._-]+/giu, "_").slice(0, 80) || "pappy-media"}.${mode === "audio" ? "m4a" : "mp4"}`,
+    ...(mode === "audio" ? { ptt: false } : {}),
+  };
 }
 
 function isMediaFile(name: string, mode: PlayMode): boolean {
@@ -116,6 +205,7 @@ export function buildDownloadArgs(mode: PlayMode, output: string, source: string
 
 export async function downloadPlay(input: string, mode: PlayMode, resolvedMetadata?: PlayMetadata): Promise<{ metadata: PlayMetadata; media: WhatsAppMediaPayload }> {
   const metadata = resolvedMetadata ?? await resolvePlayMetadata(input);
+  if (metadata.provider === "piped") return { metadata, media: await downloadPipedMedia(metadata, mode) };
   const directory = await mkdtemp(join(tmpdir(), `pappy-play-${randomUUID()}-`));
   try {
     const output = join(directory, "media.%(ext)s");
@@ -162,9 +252,7 @@ export async function fetchLyrics(input: string): Promise<LyricsResult> {
 
 export function playUsageText(): string {
   return [
-    "⌬ ⤷ *PLAY COMMAND USAGE* ⚙︎",
-    "",
-    "─────────────",
+    ...pappyHeader("play", "PLAY COMMAND USAGE"),
     "⎔ Commands    · ⇆ .play <song or video>",
     "⎔ Video       · ⇆ .video <song or video>",
     "⎔ Lyrics      · ⇆ .lyrics <song title>",
@@ -174,7 +262,7 @@ export function playUsageText(): string {
     "· .video Big Buck Bunny",
     "· .lyrics Blinding Lights The Weeknd",
     "─────────────",
-    "» *Note:* Metadata is resolved first. The media download starts only after the preview is prepared.",
+    "» *Note:* Metadata is resolved first. Media download begins only after the preview is prepared.",
   ].join("\n");
 }
 

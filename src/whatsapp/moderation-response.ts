@@ -1,4 +1,5 @@
 import { phoneJidFromIdentity } from "./identity-normalization.js";
+import { pappyHeader } from "./response-designs.js";
 
 export interface ModerationReply {
   text: string;
@@ -28,10 +29,7 @@ export function buildModerationWarningResponse(input: {
   note: string;
 }): ModerationReply {
   const text = [
-    "ㅤ   ⚫︎  𝗦𝗬𝗦𝗧𝗘𝗠 𝗪𝗔𝗥𝗡𝗜𝗡𝗚  ⚫︎",
-    "",
-    `˗ˏˋ ⚠️ ˎˊ˗  *${(input.title ?? "MANUAL WARNING DETECTED").toUpperCase()}*  ✦`,
-    "─────────────",
+    ...pappyHeader(input.groupName + input.action, input.title ?? "MANUAL WARNING DETECTED"),
     `⎔ Target   · ⇆ ${realMention(input.targetPhone)}`,
     `⎔ Group    · ⇆ ${clean(input.groupName, 120)}`,
     `⎔ Action   · ⇆ ${clean(input.action, 80)}`,
@@ -50,10 +48,7 @@ export function buildModerationActionResponse(input: {
   note: string;
 }): ModerationReply {
   const text = [
-    "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
-    "",
-    `˗ˏˋ ⎔ ˎˊ˗  *${input.title.toUpperCase()}*  ✦`,
-    "─────────────",
+    ...pappyHeader(input.groupName + input.action, input.title),
     ...(input.targetPhone ? [`⎔ Target      · ⇆ ${realMention(input.targetPhone)}`] : []),
     `⎔ Action      · ⇆ ${clean(input.action, 100)}`,
     `⎔ Scope       · ⇆ ${clean(input.groupName, 120)}`,
@@ -70,10 +65,7 @@ export function buildModerationReviewResponse(input: { action: string; selected:
     ? shownPhones.map((phone) => realMention(phone)).join(", ") + (phones.length > shownPhones.length ? ` · +${phones.length - shownPhones.length} more` : "")
     : "Verified members";
   const text = [
-    "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
-    "",
-    `˗ˏˋ ⎔ ˎˊ˗  *${input.action.toUpperCase()} REVIEW*  ✦`,
-    "─────────────",
+    ...pappyHeader(input.scope + input.action, `${input.action} REVIEW`),
     `⎔ Targets     · ⇆ ${targetText}`,
     `⎔ Selected    · ⇆ ${input.selected}`,
     `⎔ Scope       · ⇆ ${clean(input.scope, 120)}`,
@@ -86,10 +78,7 @@ export function buildModerationReviewResponse(input: { action: string; selected:
 
 export function buildModerationJobResponse(input: { action: string; selected: number; jobId: string; phones?: string[] }): ModerationReply {
   const text = [
-    "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
-    "",
-    "˗ˏˋ ⚙︎ ˎˊ˗  *MEMBER BATCH JOB*  ✦",
-    "─────────────",
+    ...pappyHeader(input.jobId, "MEMBER BATCH JOB"),
     `⎔ Action    · ⇆ ${input.action.toUpperCase()}`,
     `⎔ Selected  · ⇆ ${input.selected}`,
     `⎔ Job ID    · ⇆ ${clean(input.jobId, 80)}`,
@@ -102,10 +91,7 @@ export function buildModerationJobResponse(input: { action: string; selected: nu
 export function formatModerationMessage(title: string, rows: Array<[string, string]>): string {
   const normalized = rows.map(([label, value]) => `⎔ ${label.padEnd(12, " ")} · ⇆ ${clean(value, 180)}`);
   return [
-    "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
-    "",
-    `˗ˏˋ ⎔ ˎˊ˗  *${title.toUpperCase()}*  ✦`,
-    "─────────────",
+    ...pappyHeader(title, title),
     ...normalized,
     "─────────────",
     "» *Note:* This action is scoped to the current WhatsApp group.",

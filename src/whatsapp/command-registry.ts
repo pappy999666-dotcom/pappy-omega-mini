@@ -17,7 +17,8 @@ import {
 } from "../menus/menu-model.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { firstVerifiedPhone, maskedPhoneLabel, phoneJidFromIdentity, verifiedTargetJid, verifiedTargetJids, verifiedTargetPhone } from "./identity-normalization.js";
-import { buildModerationActionResponse, buildModerationJobResponse, buildModerationReviewResponse, realMention } from "./moderation-response.js";
+import { buildModerationActionResponse, buildModerationJobResponse, buildModerationReviewResponse, formatModerationMessage, realMention } from "./moderation-response.js";
+import { pappyHeader } from "./response-designs.js";
 import { banUsageCard, commandUsageCard, pairingHelpCard, sessionPairingCard } from "./response-cards.js";
 import type { GroupControlTable } from "./group-control-confirmation.js";
 import { buildLyricsText, buildMediaJobText, buildPlayPreviewText, downloadPlay, fetchLyrics, playUsageText, resolvePlayMetadata, withMediaDownloadSlot, type PlayMode } from "./play-media.js";
@@ -216,6 +217,14 @@ async function pendingApprovalRequests(ctx: CommandContext) {
 function approvalCountry(request: { jid: string; phoneNumber?: string }): string {
   const source = request.phoneNumber ?? (/@(s\.whatsapp\.net|c\.us)$/iu.test(request.jid) ? request.jid : "");
   return source.replace(/\D/g, "");
+}
+
+const COMMON_COUNTRY_CODES = ["234", "233", "254", "255", "256", "260", "27", "20", "1", "7", "33", "34", "39", "44", "49", "52", "55", "61", "62", "63", "64", "65", "66", "81", "82", "84", "86", "90", "91", "92", "93", "94", "95", "98"];
+
+function countryPrefixFromPhone(phone: string | undefined): string | undefined {
+  const digits = phone?.replace(/\D/g, "") ?? "";
+  if (!digits) return undefined;
+  return COMMON_COUNTRY_CODES.find((code) => digits.startsWith(code)) ?? digits.slice(0, 3);
 }
 
 function approvalPreviewLabel(request: { jid?: string; phoneNumber?: string }, index: number): string {
@@ -523,8 +532,16 @@ export async function runPlayCommand(ctx: CommandContext, requestedMode?: PlayMo
     }
     const result = await withSessionPlaySlot(ctx, () => withMediaDownloadSlot(() => downloadPlay(query, mode, metadata)));
     return { text: `${mode === "audio" ? "🎵 Audio" : "🎬 Video"} ready · ${metadata.title}`, media: result.media };
-  } catch {
-    return commandUsageCard({ title: mode === "audio" ? "Music Unavailable" : "Video Unavailable", command: mode === "audio" ? ".play" : ".video", commandSyntax: `${mode === "audio" ? ".play" : ".video"} <song or video>`, note: "The public source could not be resolved or downloaded within the safety limits. Try another public or authorized source." });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "The public source could not be resolved or downloaded within the safety limits.";
+    return [
+      ...pappyHeader(`${mode}:${query}`, `${mode === "audio" ? "MUSIC" : "VIDEO"} UNAVAILABLE`),
+      `⎔ Command · ⇆ ${mode === "audio" ? ".play" : ".video"} <song or video>`,
+      `⎔ Request · ⇆ ${query.slice(0, 160)}`,
+      "─────────────",
+      `» *Reason:* ${reason.slice(0, 420)}`,
+      "» *Next:* Try a direct public URL or another public/authorized source.",
+    ].join("\\n");
   }
 }
 
@@ -1409,10 +1426,37 @@ export function createCommandRegistry(): RegisteredCommand[] {
       ownerOnly: true,
       run: async (ctx) => {
         const country = (ctx.args[0] ?? "").replace(/\D/g, "");
-        if (!country) return commandUsageCard({ title: "Request Count", command: ".reqamt", commandSyntax: ".reqamt <country-code>", examples: [".reqamt 234"], note: "Shows pending join requests for the selected country." });
         const { requests } = await pendingApprovalRequests(ctx);
-        const count = requests.filter((request) => approvalCountry(request).startsWith(country)).length;
-        return `Pending requests for country ${country}: ${count}. LID-only requests are excluded.`;
+        const verified = requests
+          .map((request) => firstVerifiedPhone(request.phoneNumber, request.jid))
+          .filter((phone): phone is string => Boolean(phone));
+        const available = new Map<string, number>();
+        for (const phone of verified) {
+          const code = countryPrefixFromPhone(phone);
+          if (code) available.set(code, (available.get(code) ?? 0) + 1);
+        }
+        const availableText = [...available.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([code, count]) => `+${code} (${count})`)
+          .join(" · ");
+        if (!country)
+          return commandUsageCard({
+            title: "Request Count",
+            command: ".reqamt",
+            commandSyntax: ".reqamt <country-code>",
+            examples: [".reqamt 234"],
+            howToUse: ["Provide a numeric country code to count matching pending requests.", "Only verified phone identities are counted; unresolved LIDs are excluded."],
+            note: `Available countries: ${availableText || "none currently available"}.`,
+          });
+        const matched = verified.filter((phone) => phone.startsWith(country)).length;
+        const total = verified.length;
+        const otherCountryExcluded = Math.max(0, total - matched);
+        return formatModerationMessage("REQUEST COUNT", [
+          ["Country", `+${country}`],
+          ["Matched total", String(matched)],
+          ["Total verified", String(total)],
+          ["Other excluded", String(otherCountryExcluded)],
+        ]);
       },
     },
     {

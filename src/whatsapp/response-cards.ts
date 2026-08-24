@@ -1,3 +1,5 @@
+import { pappyHeader } from "./response-designs.js";
+
 function clean(value: string, limit = 240): string {
   return (value || "—").replace(/[\r\n]/gu, " ").slice(0, limit);
 }
@@ -12,9 +14,7 @@ export function commandUsageCard(input: {
   note?: string;
 }): string {
   const lines = [
-    `⌬ ⤷ *${input.title.toUpperCase()} USAGE* ⚙︎`,
-    "",
-    "─────────────",
+    ...pappyHeader(input.command, input.title),
     `⎔ Command · ⇆ ${input.commandSyntax ?? input.command}`,
     "─────────────",
   ];
@@ -34,6 +34,8 @@ export function commandUsageCard(input: {
     lines.push("");
   }
   if (input.note) lines.push(`» *Note:* ${clean(input.note)}`);
+  if (!input.note && !input.acceptedTargets?.length && !input.examples?.length && !input.howToUse?.length)
+    lines.push("» *Note:* Use the command syntax above and provide verified, supported input.");
   return lines.join("\n").replace(/\n+$/u, "");
 }
 
