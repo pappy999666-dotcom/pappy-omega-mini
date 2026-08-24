@@ -68,6 +68,9 @@ import type {
   WorkloadShareRecord,
 } from "./types.js";
 
+const workloadCleanupAt = new Map<string, number>();
+const WORKLOAD_CLEANUP_INTERVAL_MS = 30_000;
+
 export interface WorkloadEnrollmentResult {
   enrollmentId: string;
   token: string;
@@ -815,13 +818,27 @@ export async function pollWorkloadCommands(
     await waitForWorkloadCommandSignal(worker.workerId, Math.min(Math.max(waitMs, 0), 5_000));
     return [];
   }
-  await expireStaleWorkloadCommands(worker.workerId);
-  await requeueStaleWorkloadCommands(worker.workerId);
+  const now = Date.now();
+  const lastCleanupAt = workloadCleanupAt.get(worker.workerId) ?? 0;
+  if (now - lastCleanupAt >= WORKLOAD_CLEANUP_INTERVAL_MS) {
+    workloadCleanupAt.set(worker.workerId, now);
+    await Promise.all([
+      expireStaleWorkloadCommands(worker.workerId),
+      requeueStaleWorkloadCommands(worker.workerId),
+    ]);
+  }
   let commands = await leaseWorkloadCommands(worker.workerId, limit);
   if (commands.length || waitMs <= 0) return commands;
   await waitForWorkloadCommandSignal(worker.workerId, waitMs);
-  await expireStaleWorkloadCommands(worker.workerId);
-  await requeueStaleWorkloadCommands(worker.workerId);
+  const refreshedAt = Date.now();
+  const refreshedCleanupAt = workloadCleanupAt.get(worker.workerId) ?? 0;
+  if (refreshedAt - refreshedCleanupAt >= WORKLOAD_CLEANUP_INTERVAL_MS) {
+    workloadCleanupAt.set(worker.workerId, refreshedAt);
+    await Promise.all([
+      expireStaleWorkloadCommands(worker.workerId),
+      requeueStaleWorkloadCommands(worker.workerId),
+    ]);
+  }
   commands = await leaseWorkloadCommands(worker.workerId, limit);
   return commands;
 }
