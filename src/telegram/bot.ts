@@ -8586,6 +8586,7 @@ async function handlePairingText(
 }
 
 async function sendSessions(ctx: Context, page: number): Promise<void> {
+  await refreshSessionRegistryForUi();
   const user = resolveTelegramUser(ctx);
   const sessions = listVisibleSessions(user.workspaceId);
   const body = pageText(
