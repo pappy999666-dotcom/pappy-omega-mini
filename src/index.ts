@@ -212,8 +212,20 @@ async function main(): Promise<void> {
     pairingCleanupTimer.unref?.();
   }
   const persistedSessions = listAllSessions();
+  // An assigned panel owns the WhatsApp socket for its phone. Do not recover
+  // an older local duplicate for the same phone in the main process: two
+  // Baileys sockets for one account cause 401/408 reconnect churn and make
+  // every panel command wait behind a socket that can never become ready.
+  const assignedPhoneNumbers = new Set(
+    persistedSessions
+      .filter((session) => Boolean(session.workloadWorkerId))
+      .map((session) => session.phoneNumber?.replace(/\D/g, "") ?? "")
+      .filter(Boolean),
+  );
   const ownedSessions = persistedSessions.filter((session) => {
     if (isWorkerProcess) return workerSessionIds.has(session.sessionId);
+    const phone = session.phoneNumber?.replace(/\D/g, "") ?? "";
+    if (!session.workloadWorkerId && phone && assignedPhoneNumbers.has(phone)) return false;
     return !excludedSessionIds.has(session.sessionId) && !session.workloadWorkerId;
   });
   const recoverableSessions = [];
