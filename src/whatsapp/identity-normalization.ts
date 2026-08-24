@@ -53,3 +53,18 @@ export function verifiedTargetPhone(args: string[] | undefined, mentions: unknow
   }
   return undefined;
 }
+
+/** Resolve exactly one target to a phone JID; LID-only values are intentionally rejected. */
+export function verifiedTargetJid(args: string[] | undefined, mentions: unknown[] | undefined, quotedSender: unknown): string | undefined {
+  return phoneJidFromIdentity(verifiedTargetPhone(args, mentions, quotedSender));
+}
+
+/** Collect explicit, mentioned, and quoted targets as deduplicated phone JIDs. */
+export function verifiedTargetJids(args: string[] | undefined, mentions: unknown[] | undefined, quotedSender: unknown): string[] {
+  const values = [
+    ...(Array.isArray(mentions) ? mentions : []),
+    ...(quotedSender ? [quotedSender] : []),
+    ...(args ?? []),
+  ];
+  return [...new Set(values.map((value) => phoneJidFromIdentity(value)).filter((value): value is string => Boolean(value)))];
+}

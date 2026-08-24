@@ -16,7 +16,7 @@ import {
   renderAsciiMenu,
 } from "../menus/menu-model.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
-import { firstVerifiedPhone, maskedPhoneLabel, phoneJidFromIdentity, verifiedTargetPhone } from "./identity-normalization.js";
+import { firstVerifiedPhone, maskedPhoneLabel, phoneJidFromIdentity, verifiedTargetJid, verifiedTargetJids, verifiedTargetPhone } from "./identity-normalization.js";
 import { buildModerationActionResponse, buildModerationJobResponse, buildModerationReviewResponse, realMention } from "./moderation-response.js";
 import { banUsageCard, commandUsageCard, pairingHelpCard, sessionPairingCard } from "./response-cards.js";
 import type { GroupControlTable } from "./group-control-confirmation.js";
@@ -257,7 +257,9 @@ async function approvalConfirmationReply(
     groupJid: groupJidForApproval(ctx),
     senderJid,
     operation,
-    participants: requests.map((request) => request.jid),
+    participants: requests
+      .map((request) => phoneJidFromIdentity(firstVerifiedPhone(request.phoneNumber, request.jid)))
+      .filter((jid): jid is string => Boolean(jid)),
     table,
   });
   pending.table.buttons = [
@@ -536,6 +538,123 @@ export async function runLyricsCommand(ctx: CommandContext): Promise<string> {
   }
 }
 
+function formatDiagnosticTime(value?: number): string {
+  return value ? new Date(value).toISOString().replace("T", " ").replace(".000Z", " UTC") : "—";
+}
+
+function buildPingResponse(current: WhatsAppSession): string {
+  const status = effectiveSessionStatus(current);
+  const lastSync = current.lastHealthyAt ?? current.lastMessageReceivedAt ?? current.lastOutboundMessageAt ?? current.connectedAt;
+  const state = status === "ACTIVE" ? "Socket stream is healthy." : "Re-establishing socket stream...";
+  return [
+    "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
+    "",
+    "˗ˏˋ ⚡︎ ˎˊ˗  *PING & LATENCY*  ✦",
+    "─────────────",
+    `⎔ Session   · ⇆ ${current.sessionName}`,
+    `⎔ Status    · ⇆ ${status}`,
+    "⎔ Latency   · ⇆ measured on delivery",
+    "⎔ Speed     · ⇆ queue-backed",
+    `⎔ Last Sync · ⇆ ${formatDiagnosticTime(lastSync)}`,
+    "─────────────",
+    `» *State:* ${state}`,
+  ].join("\n");
+}
+
+function buildProfileResponse(ctx: CommandContext): string {
+  const current = session(ctx);
+  const status = effectiveSessionStatus(current);
+  const ownerPhone = firstVerifiedPhone(current.phoneNumber);
+  const senderPhone = firstVerifiedPhone(ctx.senderJid);
+  const role = ownerPhone && senderPhone === ownerPhone ? "Primary Owner" : "Sudo / Admin";
+  const connectedAt = current.connectedAt;
+  const uptime = connectedAt ? formatDuration(Math.max(0, Date.now() - connectedAt)) : "—";
+  const memory = process.memoryUsage().rss / 1024 / 1024;
+  const links = `${current.collectedLinkCount ?? 0} / ${current.validatedLinkCount ?? 0}`;
+  return [
+    "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
+    "",
+    "˗ˏˋ ⚙︎ ˎˊ˗  *LIVE DIAGNOSTICS*  ✦",
+    "─────────────",
+    "◈ *CORE IDENTITY*",
+    `⎔ Session   · ⇆ ${current.sessionName}`,
+    `⎔ Phone     · ⇆ ${current.phoneNumber ?? "pending"}`,
+    `⎔ Role      · ⇆ ${role}`,
+    "",
+    "◈ *LIVE RUNTIME*",
+    `⎔ Status    · ⇆ ${status}`,
+    `⎔ Speed     · ⇆ ${current.lastHealthyAt ? `${Math.max(0, Date.now() - current.lastHealthyAt)}ms since health sync` : "awaiting health sync"}`,
+    `⎔ Uptime    · ⇆ ${uptime}`,
+    `⎔ RAM Load  · ⇆ ${memory.toFixed(1)} MB RSS`,
+    "",
+    "◈ *CONFIG & CHATS*",
+    `⎔ Prefix    · ⇆ ${current.prefix || "none"}`,
+    `⎔ AutoJoin  · ⇆ ${current.autoJoinEnabled ? "ON" : "OFF"}`,
+    "⎔ Workflows · ⇆ Queue-backed",
+    `⎔ Links     · ⇆ ${links}`,
+    "─────────────",
+  ].join("\n");
+}
+
+function buildSudoCompleteResponse(action: "add" | "remove", identityJid: string, scope: "Session" | "Global"): WhatsAppCommandReply {
+  const identityDigits = firstVerifiedPhone(identityJid) ?? identityJid;
+  const granted = action === "add";
+  return {
+    text: [
+      "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
+      "",
+      `˗ˏˋ 𓋎 ˎˊ˗  *SUDO ${granted ? "ADD" : "REMOVE"} COMPLETE*  ✦`,
+      "─────────────",
+      `⎔ Scope     · ⇆ ${scope}`,
+      `⎔ Target    · ⇆ @${identityDigits}`,
+      `⎔ Privilege · ⇆ ${granted ? "Sudo / Admin" : "Revoked"}`,
+      `⎔ Status    · ⇆ ${granted ? "Granted" : "Removed"}`,
+      "─────────────",
+      `» *${granted ? "Success" : "Complete"}:* User ${granted ? "added to" : "removed from"} the ${scope.toLowerCase()} sudo list.`,
+    ].join("\n"),
+    mentions: [identityJid],
+  };
+}
+
+async function runSudoCommand(ctx: CommandContext): Promise<string | WhatsAppCommandReply> {
+  const global = ctx.args[0]?.toLowerCase() === "global";
+  const offset = global ? 1 : 0;
+  const requestedAction = ctx.args[offset]?.toLowerCase();
+  if (global && requestedAction === "list") {
+    const identities = getWorkspaceSudo(ctx.workspaceId)
+      .map((identity) => firstVerifiedPhone(identity))
+      .filter((identity): identity is string => Boolean(identity));
+    return identities.length
+      ? `Global sudo phone identities:\n${identities.map((identity) => `+${identity}`).join("\n")}`
+      : "No verified global sudo phone identities configured.";
+  }
+  if (!global && requestedAction === "list") {
+    const identities = session(ctx).sudoList
+      .map((identity) => firstVerifiedPhone(identity))
+      .filter((identity): identity is string => Boolean(identity));
+    return identities.length
+      ? `Session sudo phone identities:\n${identities.map((identity) => `+${identity}`).join("\n")}`
+      : "No verified session sudo phone identities configured.";
+  }
+  const explicitAction = requestedAction === "add" || requestedAction === "remove";
+  const action = explicitAction ? requestedAction : ctx.invokedName === "rmsudo" ? "remove" : "add";
+  const targetArgs = explicitAction ? ctx.args.slice(offset + 1) : ctx.args.slice(offset);
+  const identityJid = verifiedTargetJid(targetArgs, ctx.mentionedJids, ctx.quotedSenderJid);
+  const identityDigits = firstVerifiedPhone(identityJid);
+  if (!identityJid || !identityDigits || !["add", "remove"].includes(action))
+    return commandUsageCard({ title: ctx.invokedName === "rmsudo" ? "RMsudo Command" : "Setsudo Command", command: ctx.invokedName === "rmsudo" ? ".rmsudo" : ".setsudo", commandSyntax: ctx.invokedName === "rmsudo" ? ".rmsudo [global] <target>" : ".setsudo [global] <target>", acceptedTargets: ["Tag / Mention · Real WhatsApp mention", "Reply · Reply to a verified phone identity", "Phone · Explicit international number for global scope"], note: ctx.invokedName === "rmsudo" ? "Removes the verified target; no add/remove keyword is required." : "Adds the verified target; no add/remove keyword is required. LID-only identities are not accepted." });
+  if (global) {
+    updateWorkspaceSudo(ctx.workspaceId, action, identityJid);
+    return buildSudoCompleteResponse(action, identityJid, "Global");
+  }
+  const current = session(ctx).sudoList;
+  const next = action === "add"
+    ? [...new Set([...current, identityJid])]
+    : current.filter((item) => firstVerifiedPhone(item) !== identityDigits);
+  updateSession(ctx.workspaceId, ctx.sessionId, { sudoList: next });
+  return buildSudoCompleteResponse(action, identityJid, "Session");
+}
+
 export function createCommandRegistry(): RegisteredCommand[] {
   return [
     ...lazyAntiCommands(),
@@ -719,8 +838,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
       name: "ping",
       aliases: [],
       description: "Fast session health check.",
-      run: async (ctx) =>
-        `PAPPY OMEGA MINI · ${session(ctx).sessionName}\n${effectiveSessionStatus(session(ctx))} · ${new Date().toISOString()}`,
+      run: async (ctx) => buildPingResponse(session(ctx)),
     },
     {
       name: "menu",
@@ -775,17 +893,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
       name: "profile",
       aliases: ["me", "session"],
       description: "Show session identity and health.",
-      run: async (ctx) => {
-        const current = session(ctx);
-        return [
-          `PAPPY OMEGA MINI`,
-          `Session: ${current.sessionName}`,
-          `Phone: ${current.phoneNumber ?? "pending"}`,
-          `Status: ${effectiveSessionStatus(current)}`,
-          `Prefix: ${current.prefix || "none"}`,
-          `Auto-join: ${current.autoJoinEnabled ? "ON" : "OFF"}`,
-        ].join("\n");
-      },
+      run: async (ctx) => buildProfileResponse(ctx),
     },
     {
       name: "autojoin",
@@ -1015,16 +1123,17 @@ export function createCommandRegistry(): RegisteredCommand[] {
       run: async (ctx) => {
         const raw = ctx.args.join(" ").trim();
         if (!raw)
-          return commandUsageCard({ title: "Create Group", command: ".creategroup", commandSyntax: ".creategroup <name> [| description] [| participant numbers]", note: "Participant entries must be verified international phone numbers." });
+          return commandUsageCard({ title: "Create Group", command: ".creategroup", commandSyntax: ".creategroup <name> [| description] [| participant numbers / mentions / reply]", acceptedTargets: ["Tag / Mention · Real WhatsApp mention", "Reply · Reply to a verified phone identity", "Phone · Explicit international number"], note: "Participant entries are normalized to verified phone JIDs; LID-only identities are rejected." });
         const parts = raw.split("|").map((part) => part.trim());
         const subject = parts[0] ?? "";
         const description = parts[1] ?? "";
-        const participants = (parts[2] ?? "")
+        const participantTokens = (parts[2] ?? "")
           .split(/[\s,]+/)
           .map((value) => value.trim())
           .filter(Boolean);
+        const participants = verifiedTargetJids(participantTokens, ctx.mentionedJids, ctx.quotedSenderJid);
         if (!subject)
-          return commandUsageCard({ title: "Create Group", command: ".creategroup", commandSyntax: ".creategroup <name> [| description] [| participant numbers]", note: "Participant entries must be verified international phone numbers." });
+          return commandUsageCard({ title: "Create Group", command: ".creategroup", commandSyntax: ".creategroup <name> [| description] [| participant numbers / mentions / reply]", acceptedTargets: ["Tag / Mention · Real WhatsApp mention", "Reply · Reply to a verified phone identity", "Phone · Explicit international number"], note: "Participant entries are normalized to verified phone JIDs; LID-only identities are rejected." });
         try {
           const jid = await createWhatsAppGroup(
             ctx.workspaceId,
@@ -1529,46 +1638,16 @@ export function createCommandRegistry(): RegisteredCommand[] {
     {
       name: "setsudo",
       aliases: ["sudo"],
-      description: "Manage per-session sudo numbers.",
+      description: "Add a verified session or global sudo phone identity.",
       ownerOnly: true,
-      run: async (ctx) => {
-        const global = ctx.args[0]?.toLowerCase() === "global";
-        const offset = global ? 1 : 0;
-        const requestedAction = ctx.args[offset]?.toLowerCase();
-        if (global && requestedAction === "list") {
-          const identities = getWorkspaceSudo(ctx.workspaceId)
-            .map((identity) => firstVerifiedPhone(identity))
-            .filter((identity): identity is string => Boolean(identity));
-          return identities.length
-            ? `Global sudo phone identities:\n${identities.map((identity) => `+${identity}`).join("\n")}`
-            : "No verified global sudo phone identities configured.";
-        }
-        if (!global && requestedAction === "list") {
-          const identities = session(ctx).sudoList
-            .map((identity) => firstVerifiedPhone(identity))
-            .filter((identity): identity is string => Boolean(identity));
-          return identities.length
-            ? `Session sudo phone identities:\n${identities.map((identity) => `+${identity}`).join("\n")}`
-            : "No verified session sudo phone identities configured.";
-        }
-        const explicitAction = requestedAction === "add" || requestedAction === "remove";
-        const action = explicitAction ? requestedAction : ctx.invokedName === "rmsudo" ? "remove" : "add";
-        const targetArgs = explicitAction ? ctx.args.slice(offset + 1) : ctx.args.slice(offset);
-        const identityDigits = verifiedTargetPhone(targetArgs, ctx.mentionedJids, ctx.quotedSenderJid);
-        const identity = phoneJidFromIdentity(identityDigits);
-        if (!identity || !["add", "remove"].includes(action))
-          return commandUsageCard({ title: ctx.invokedName === "rmsudo" ? "RMsudo Command" : "Setsudo Command", command: ctx.invokedName === "rmsudo" ? ".rmsudo" : ".setsudo", commandSyntax: ctx.invokedName === "rmsudo" ? ".rmsudo [global] <target>" : ".setsudo [global] <target>", acceptedTargets: ["Tag / Mention · Real WhatsApp mention", "Reply · Reply to a verified phone identity", "Phone · Explicit international number for global scope"], note: ctx.invokedName === "rmsudo" ? "Removes the verified target; no add/remove keyword is required." : "Adds the verified target; no add/remove keyword is required. LID-only identities are not accepted." });
-        if (global) {
-          const next = updateWorkspaceSudo(ctx.workspaceId, action, identity);
-          return `Global sudo ${action} complete for +${identityDigits}.\nInherited by ${next.length} configured phone identity${next.length === 1 ? "" : "ies"}.`;
-        }
-        const current = session(ctx).sudoList;
-        const next = action === "add"
-          ? [...new Set([...current, identity])]
-          : current.filter((item) => item !== identity);
-        updateSession(ctx.workspaceId, ctx.sessionId, { sudoList: next });
-        return `Session sudo ${action} complete for +${identityDigits}.`;
-      },
+      run: runSudoCommand,
+    },
+    {
+      name: "rmsudo",
+      aliases: ["removesudo"],
+      description: "Remove a verified session or global sudo phone identity.",
+      ownerOnly: true,
+      run: runSudoCommand,
     },
   ];
 }
@@ -1601,8 +1680,18 @@ export async function handleGroupControlInteraction(
     return queueMemberOperation(ctx, pending.groupJid, pending.participantAction ?? "remove", stillMembers);
   }
   const fresh = await pendingApprovalRequests(ctx);
-  const current = new Set(fresh.requests.map((request) => request.jid));
-  const participants = pending.participants.filter((participant) => current.has(participant));
+  const current = new Set(
+    fresh.requests
+      .map((request) => firstVerifiedPhone(request.phoneNumber, request.jid))
+      .filter((phone): phone is string => Boolean(phone)),
+  );
+  const participants = pending.participants
+    .filter((participant) => {
+      const phone = firstVerifiedPhone(participant);
+      return Boolean(phone && current.has(phone));
+    })
+    .map((participant) => phoneJidFromIdentity(firstVerifiedPhone(participant)))
+    .filter((jid): jid is string => Boolean(jid));
   if (!participants.length) return `No selected pending requests remain; the ${pending.operation} action was not queued.`;
   return queueApprovalOperation(ctx, pending.operation, participants);
 }
