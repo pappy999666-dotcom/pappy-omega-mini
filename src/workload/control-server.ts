@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
-import { createHash, sign } from "node:crypto";
+import { createHash, createHmac, sign, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
 import { env } from "../config/env.js";
 import {
@@ -23,6 +23,7 @@ import { WORKLOAD_CONTROL_VERSION } from "./security.js";
 import type { WorkloadInboundEvent, WorkloadRegistrationRequest } from "./types.js";
 import { getBroadcastProgress, isBroadcastCancellationRequested, saveBroadcastProgress } from "./broadcast-progress.js";
 import { readJobMedia } from "../whatsapp/job-media-store.js";
+import { readMenuMedia } from "../media/menu-media-store.js";
 import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
 import { getRuntimeHealthSnapshot } from "../core/runtime-health.js";
 import { inboundAdmissionSnapshot } from "../whatsapp/inbound-admission.js";
@@ -146,6 +147,47 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         inbound: inboundAdmissionSnapshot(),
         outbound: outboundAdmissionSnapshot(),
       });
+      return;
+    }
+    if (method === "GET" && path.startsWith("/workload/menu-media/")) {
+      const segments = path.split("/").filter(Boolean);
+      if (segments.length !== 4) {
+        json(response, 400, { ok: false, error: "Invalid menu media path." });
+        return;
+      }
+      let workspaceId: string;
+      let mediaId: string;
+      try {
+        workspaceId = decodeURIComponent(segments[2] ?? "");
+        mediaId = decodeURIComponent(segments[3] ?? "");
+      } catch {
+        json(response, 400, { ok: false, error: "Invalid menu media path encoding." });
+        return;
+      }
+      const requestUrl = new URL(request.url ?? "/", "http://localhost");
+      const expires = Number(requestUrl.searchParams.get("exp") ?? "");
+      const signature = requestUrl.searchParams.get("sig") ?? "";
+      const expected = createHmac(
+        "sha256",
+        env.ENCRYPTION_SECRET || "pappy-omega-mini-menu",
+      )
+        .update(`${workspaceId}:${mediaId}:${expires}`)
+        .digest("hex");
+      const validSignature = /^[a-f0-9]{64}$/i.test(signature) && timingSafeEqual(
+        Buffer.from(signature, "hex"),
+        Buffer.from(expected, "hex"),
+      );
+      const now = Math.floor(Date.now() / 1000);
+      if (!Number.isSafeInteger(expires) || expires < now || !validSignature) {
+        json(response, 403, { ok: false, error: "Signed menu media URL is invalid or expired." });
+        return;
+      }
+      const { media, bytes } = await readMenuMedia(workspaceId, mediaId);
+      response.statusCode = 200;
+      response.setHeader("content-type", media.mimeType);
+      response.setHeader("content-length", String(bytes.byteLength));
+      response.setHeader("cache-control", "public, max-age=86400, immutable");
+      response.end(bytes);
       return;
     }
     if (method !== "POST") {
