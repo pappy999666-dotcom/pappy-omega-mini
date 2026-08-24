@@ -778,7 +778,11 @@ async function emitInbound(runtime, message) {
     ? await serializeInboundMedia(runtime, { key: { ...key, ...(typeof context?.stanzaId === "string" ? { id: context.stanzaId } : {}) }, message: quotedMessage })
     : undefined;
   const inboundMedia = directMedia ?? quotedMedia;
-  const senderJid = key.fromMe ? (runtime.socket.user?.id ?? remoteJid) : (key.participantAlt ?? key.remoteJidAlt ?? key.participant ?? remoteJid);
+  const senderCandidate = key.fromMe ? (runtime.socket.user?.id ?? remoteJid) : (key.participantAlt ?? key.remoteJidAlt ?? key.participant ?? remoteJid);
+  const senderJid = await workerParticipantJid({ id: senderCandidate }, runtime).catch(() => "");
+  const resolvedMentionedJids = Array.isArray(context?.mentionedJid)
+    ? (await Promise.all(context.mentionedJid.slice(0, 100).map((candidate) => workerParticipantJid({ id: candidate }, runtime).catch(() => "")))).filter(Boolean)
+    : [];
   const safeMessage = sanitizeAntiValue(normalized);
   const safeKey = sanitizeAntiValue(key);
   const eventPayload = {
@@ -794,7 +798,7 @@ async function emitInbound(runtime, message) {
     ...(quotedText ? { quotedText } : {}),
     ...(quotedSenderJid ? { quotedSenderJid } : {}),
     ...(quotedMessageKey ? { quotedMessageKey } : {}),
-    ...(Array.isArray(context?.mentionedJid) ? { mentionedJids: context.mentionedJid.slice(0, 100) } : {}),
+    ...(resolvedMentionedJids.length ? { mentionedJids: resolvedMentionedJids } : {}),
     ...(inboundMedia ? { media: inboundMedia } : {}),
     ...(key.fromMe ? { fromMe: true } : {}),
   };
