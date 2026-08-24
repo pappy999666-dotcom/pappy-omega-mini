@@ -117,6 +117,9 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("runtime.socket.richMenu(jid, value.richMenu)");
     expect(source).toContain("process.argv[1] ? resolve(process.argv[1]) : \"\"");
     expect(source).toContain("const AUTO_UPDATE_ENABLED");
+    const service = await readFile(workloadServicePath, "utf8");
+    expect(service).toContain("if (previousStatus !== \"ACTIVE\") {");
+    expect(service).toContain("notifyWorkloadOwner(next, state);");
     expect(source).toContain("const { richMenu: _richMenu, ...safeContent } = value");
   });
 

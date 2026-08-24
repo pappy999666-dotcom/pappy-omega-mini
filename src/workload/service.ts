@@ -656,8 +656,10 @@ export async function recordWorkloadHeartbeat(
   if (!next) throw new Error("Workload worker no longer exists.");
   if (next.status === "ACTIVE") {
     const state = previousStatus === "UNREACHABLE" || previousStatus === "OFFLINE" ? "RECOVERED" : "CONNECTED";
-    notifyWorkloadOwner(next, state);
-    if (previousStatus !== "ACTIVE") await appendWorkloadEvent({ workspaceId: next.workspaceId, workerId: next.workerId, kind: "worker.status", metadata: { status: state, authHealth: "VALID" } });
+    if (previousStatus !== "ACTIVE") {
+      notifyWorkloadOwner(next, state);
+      await appendWorkloadEvent({ workspaceId: next.workspaceId, workerId: next.workerId, kind: "worker.status", metadata: { status: state, authHealth: "VALID" } });
+    }
   } else if (next.status === "ERROR") {
     notifyWorkloadOwner(next, "ERROR", input.lastError);
     if (previousStatus !== "ERROR") await appendWorkloadEvent({ workspaceId: next.workspaceId, workerId: next.workerId, kind: "worker.status", metadata: { status: "ERROR", reason: input.lastError } });
