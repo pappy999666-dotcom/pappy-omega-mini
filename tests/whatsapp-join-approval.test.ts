@@ -133,7 +133,7 @@ describe("WhatsApp Join Approval commands", () => {
     ] } as never);
     const ctx = context();
     const preview = await executeCommand(createCommandRegistry(), "kickall", ctx);
-    expect((preview as WhatsAppCommandReply).text).toContain("No action has been queued");
+    expect((preview as WhatsAppCommandReply).text).toContain("No action is queued until Confirm is tapped");
     expect(ctx.enqueueGroupControlJob).not.toHaveBeenCalled();
     await confirmPreview(preview, ctx);
     expect(ctx.enqueueGroupControlJob).toHaveBeenCalledWith({ groupJid: "120363000000000000@g.us", operation: "participant", participantAction: "remove", participants: ["2348022222222@s.whatsapp.net", "447700000003@s.whatsapp.net"] });
