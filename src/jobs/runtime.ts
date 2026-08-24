@@ -60,6 +60,7 @@ import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
 import { getInceptor, startInceptor } from "./inceptor.js";
 import { joinWhatsAppInvite } from "./join-operation.js";
+import { downloadPlay, withMediaDownloadSlot, type PlayMode } from "../whatsapp/play-media.js";
 import {
   purgeAutoPromoteSession,
   recordAutoPromoteChildCompletion,
@@ -80,6 +81,12 @@ interface LinkValidationPayload {
   sourceUserId?: string;
   sourceSessionId?: string;
   validationLeaseToken?: string;
+}
+
+interface PlayDownloadPayload {
+  query?: string;
+  mode?: PlayMode;
+  sourceChatJid?: string;
 }
 
 interface GroupControlPayload {
@@ -331,6 +338,24 @@ export function startWorkerRuntime(): JobOrchestrator {
     validatorSweepTimer = undefined;
     validatorGuardTimer = undefined;
     await redis.quit();
+  });
+
+  orchestrator.register("play-download", async (context) => {
+    const sessionId = context.job.sessionId;
+    const payload = context.job.payload as PlayDownloadPayload;
+    const query = typeof payload.query === "string" ? payload.query.trim() : "";
+    const mode = payload.mode === "video" ? "video" : payload.mode === "audio" ? "audio" : undefined;
+    const sourceChatJid = typeof payload.sourceChatJid === "string" ? payload.sourceChatJid.trim() : "";
+    if (!sessionId || !query || !mode || !sourceChatJid)
+      throw new Error("Play download payload is incomplete.");
+    if (context.isCancellationRequested()) return { success: 0, failed: 0, skipped: 1 };
+    await waitForWhatsAppSessionReady(context.job.workspaceId, sessionId, 60_000);
+    await context.report({ total: 1, currentAction: `downloading ${mode}`, lastResult: "Media source accepted; download is isolated from command handling." });
+    const result = await withMediaDownloadSlot(() => downloadPlay(query, mode));
+    if (context.isCancellationRequested()) return { success: 0, failed: 0, skipped: 1 };
+    await sendGroupText(context.job.workspaceId, sessionId, sourceChatJid, `${mode === "audio" ? "🎵 Audio" : "🎬 Video"} ready · ${result.metadata.title}`, result.media);
+    await context.report({ completed: 1, success: 1, failed: 0, skipped: 0, currentAction: "delivered", lastResult: "Media delivered." });
+    return { success: 1, failed: 0, skipped: 0 };
   });
 
   orchestrator.register("link-validation", async (context) => {

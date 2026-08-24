@@ -70,8 +70,10 @@ function serializeReply(reply: BridgeResult): SerializedReply | string | null {
         media: {
           kind: media.kind,
           bytes: media.bytes.toString("base64"),
-          mimeType: media.mimeType,
-          fileName: media.fileName,
+          ...(media.mimeType !== undefined ? { mimeType: media.mimeType } : {}),
+          ...(media.fileName !== undefined ? { fileName: media.fileName } : {}),
+          ...(media.caption !== undefined ? { caption: media.caption } : {}),
+          ...(media.ptt !== undefined ? { ptt: media.ptt } : {}),
         },
       }
     : rest;
@@ -86,8 +88,10 @@ function deserializeReply(reply: SerializedReply | string | null): BridgeResult 
         media: {
           kind: media.kind,
           bytes: Buffer.from(media.bytes, "base64"),
-          mimeType: media.mimeType,
-          fileName: media.fileName,
+          ...(media.mimeType !== undefined ? { mimeType: media.mimeType } : {}),
+          ...(media.fileName !== undefined ? { fileName: media.fileName } : {}),
+          ...(media.caption !== undefined ? { caption: media.caption } : {}),
+          ...(media.ptt !== undefined ? { ptt: media.ptt } : {}),
         },
       }
     : rest;

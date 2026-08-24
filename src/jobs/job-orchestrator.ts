@@ -939,6 +939,7 @@ function operationFor(
     kind === "cleanup" ||
     kind === "preview-hydration" ||
     kind === "media-processing" ||
+    kind === "play-download" ||
     kind === "group-sync" ||
     kind === "group-control"
   )

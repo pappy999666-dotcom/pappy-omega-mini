@@ -30,6 +30,7 @@ import {
   sendGroupColorStatus,
   sendPersonalStatus,
   sendGroupText,
+  sendDirectText,
   sendGroupPoll,
 } from "./transport-adapter.js";
 import { buildWhatsappMenuPayload } from "../menus/whatsapp-menu.js";
@@ -61,12 +62,7 @@ export interface WhatsAppReply {
   mentions?: string[];
   nativeFlow?: Array<{ text: string; copy?: string; id?: string; url?: string }>;
   nativeTable?: GroupControlTable;
-  media?: {
-    kind: "image" | "video";
-    bytes: Buffer;
-    mimeType: string;
-    fileName: string;
-  };
+  media?: WhatsAppMediaPayload;
   caption?: string;
 }
 
@@ -273,6 +269,19 @@ export async function routeWhatsAppText(
               jobCode: record.jobCode ?? record.jobId.slice(0, 8),
             };
           },
+          enqueuePlayJob: async ({ query, mode, sourceChatJid }: { query: string; mode: "audio" | "video"; sourceChatJid: string }) => {
+            const payload = { query, mode, sourceChatJid };
+            const payloadHash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+            const record = await runtime.enqueue({
+              workspaceId: message.workspaceId,
+              sessionId: message.sessionId,
+              kind: "play-download",
+              payload,
+              idempotencyKey: `${message.workspaceId}:${message.sessionId}:play-download:${message.messageId ?? payloadHash}`,
+              maxAttempts: 2,
+            });
+            return record.jobCode ?? record.jobId.slice(0, 8);
+          },
           enqueueJob: async ({
             kind,
             payload,
@@ -446,6 +455,14 @@ export async function routeWhatsAppText(
           message.chatJid,
           { text, ...(message.media ? { media: message.media } : {}) },
         );
+      }
+    },
+    sendCurrentText: async (text: string) => {
+      if (!message.chatJid) throw new Error("The current WhatsApp chat could not be resolved.");
+      if (message.chatJid.endsWith("@g.us")) {
+        await sendGroupText(message.workspaceId, message.sessionId, message.chatJid, text);
+      } else {
+        await sendDirectText(message.workspaceId, message.sessionId, message.chatJid, text);
       }
     },
     ...(runtime

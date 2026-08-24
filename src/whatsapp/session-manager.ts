@@ -739,9 +739,9 @@ async function openWhatsAppSession(
               const content = mediaReply.media
                 ? {
                     [mediaReply.media.kind]: mediaReply.media.bytes,
-                    caption: mediaReply.caption ?? "",
-                    mimetype: mediaReply.media.mimeType,
-                    ...(mediaReply.media.kind === "video" ? { fileName: mediaReply.media.fileName } : {}),
+                    ...(mediaReply.media.kind !== "audio" && (mediaReply.caption ?? "") ? { caption: mediaReply.caption } : {}),
+                    ...(mediaReply.media.mimeType ? { mimetype: mediaReply.media.mimeType } : {}),
+                    ...(mediaReply.media.kind === "video" || mediaReply.media.kind === "document" ? { fileName: mediaReply.media.fileName } : {}),
                     ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
                     ...(mediaReply.nativeTable ? { nativeTable: mediaReply.nativeTable } : {}),
                     ...(mediaReply.mentions?.length ? { mentions: mediaReply.mentions } : {}),

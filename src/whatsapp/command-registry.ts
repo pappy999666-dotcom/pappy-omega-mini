@@ -20,6 +20,7 @@ import { firstVerifiedPhone, maskedPhoneLabel, phoneJidFromIdentity, verifiedTar
 import { buildModerationActionResponse, buildModerationJobResponse, realMention } from "./moderation-response.js";
 import { banUsageCard, commandUsageCard, pairingHelpCard, sessionPairingCard } from "./response-cards.js";
 import type { GroupControlTable } from "./group-control-confirmation.js";
+import { buildLyricsText, buildMediaJobText, buildPlayPreviewText, downloadPlay, fetchLyrics, playUsageText, resolvePlayMetadata, withMediaDownloadSlot, type PlayMode } from "./play-media.js";
 import { registerGroupControlConfirmation, consumeGroupControlConfirmation } from "./group-control-confirmation.js";
 import {
   getPreviewDebugSnapshot,
@@ -82,10 +83,27 @@ export interface EnqueueGroupControlResult {
 }
 
 const MAX_GROUP_CONTROL_PARTICIPANTS = 1_000;
+const playSessionTails = new Map<string, Promise<void>>();
+
+async function withSessionPlaySlot<T>(ctx: CommandContext, task: () => Promise<T>): Promise<T> {
+  const key = `${ctx.workspaceId}:${ctx.sessionId}`;
+  const previous = playSessionTails.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  playSessionTails.set(key, current);
+  await previous.catch(() => undefined);
+  try {
+    return await task();
+  } finally {
+    release();
+    if (playSessionTails.get(key) === current) playSessionTails.delete(key);
+  }
+}
 
 export interface WhatsAppCommandReply {
   text?: string;
   mentions?: string[];
+  media?: WhatsAppMediaPayload;
   nativeFlow?: Array<{ text: string; copy?: string; id?: string; url?: string }>;
   nativeTable?: GroupControlTable;
 }
@@ -130,6 +148,9 @@ export interface CommandContext {
     repeat: number;
   }) => Promise<void>;
   sendCurrentPersonalStatus?: (input: { text: string }) => Promise<void>;
+  sendCurrentText?: (text: string) => Promise<void>;
+  enqueuePlayJob?: (input: { query: string; mode: PlayMode; sourceChatJid: string }) => Promise<string>;
+
   sendCurrentGroupHidetag?: (input: {
     text: string;
     participantCount?: number;
@@ -490,6 +511,42 @@ function lazyAntiCommands(): RegisteredCommand[] {
   return entries;
 }
 
+export async function runPlayCommand(ctx: CommandContext, requestedMode?: PlayMode): Promise<string | WhatsAppCommandReply> {
+  const requested = mediaCommandPayload(ctx);
+  let mode = requestedMode ?? "audio";
+  let query = requested;
+  const [first, ...rest] = requested.split(/\s+/u);
+  if (!requestedMode && (first?.toLowerCase() === "audio" || first?.toLowerCase() === "video")) {
+    mode = first.toLowerCase() as PlayMode;
+    query = rest.join(" ").trim();
+  }
+  if (!query) return playUsageText();
+  if (!ctx.sendCurrentText)
+    return commandUsageCard({ title: "Play Unavailable", command: ".play", commandSyntax: ".play <song or video>", note: "The WhatsApp text transport is not ready for this session." });
+  try {
+    const metadata = await resolvePlayMetadata(query);
+    await ctx.sendCurrentText(buildPlayPreviewText(metadata, mode));
+    if (ctx.enqueuePlayJob && ctx.chatJid) {
+      const jobCode = await ctx.enqueuePlayJob({ query, mode, sourceChatJid: ctx.chatJid });
+      return { text: buildMediaJobText(metadata, mode, jobCode) };
+    }
+    const result = await withSessionPlaySlot(ctx, () => withMediaDownloadSlot(() => downloadPlay(query, mode, metadata)));
+    return { text: `${mode === "audio" ? "🎵 Audio" : "🎬 Video"} ready · ${metadata.title}`, media: result.media };
+  } catch {
+    return commandUsageCard({ title: mode === "audio" ? "Music Unavailable" : "Video Unavailable", command: mode === "audio" ? ".play" : ".video", commandSyntax: `${mode === "audio" ? ".play" : ".video"} <song or video>`, note: "The public source could not be resolved or downloaded within the safety limits. Try another public or authorized source." });
+  }
+}
+
+export async function runLyricsCommand(ctx: CommandContext): Promise<string> {
+  const query = mediaCommandPayload(ctx);
+  if (!query) return playUsageText();
+  try {
+    return buildLyricsText(await fetchLyrics(query));
+  } catch {
+    return commandUsageCard({ title: "Lyrics Unavailable", command: ".lyrics", commandSyntax: ".lyrics <song title or artist>", note: "No compliant lyrics record was available for that search. Full lyrics are not fabricated or scraped from private sources." });
+  }
+}
+
 export function createCommandRegistry(): RegisteredCommand[] {
   return [
     ...lazyAntiCommands(),
@@ -606,6 +663,24 @@ export function createCommandRegistry(): RegisteredCommand[] {
       aliases: [],
       description: "Review bounded deletion of recent tracked messages from one verified member.",
       run: async (ctx) => deleteAllMember(ctx),
+    },
+    {
+      name: "play",
+      aliases: ["music", "audio"],
+      description: "Resolve a public or authorized source, preview metadata, then deliver audio.",
+      run: async (ctx) => runPlayCommand(ctx),
+    },
+    {
+      name: "video",
+      aliases: [],
+      description: "Resolve a public or authorized source, preview metadata, then deliver video.",
+      run: async (ctx) => runPlayCommand(ctx, "video"),
+    },
+    {
+      name: "lyrics",
+      aliases: ["lyric"],
+      description: "Look up available lyrics from the configured compliant catalogue.",
+      run: async (ctx) => runLyricsCommand(ctx),
     },
     {
       name: "support",

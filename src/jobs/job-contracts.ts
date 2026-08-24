@@ -11,6 +11,7 @@ export type JobKind =
   | "scheduled"
   | "preview-hydration"
   | "media-processing"
+  | "play-download"
   | "group-sync"
   | "group-control"
   | "cleanup"

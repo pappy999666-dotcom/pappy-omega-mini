@@ -10,6 +10,9 @@ RUN pnpm exec tsc -p tsconfig.json
 FROM node:20-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates ffmpeg yt-dlp \
+  && rm -rf /var/lib/apt/lists/*
 RUN corepack enable
 COPY --from=build /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts

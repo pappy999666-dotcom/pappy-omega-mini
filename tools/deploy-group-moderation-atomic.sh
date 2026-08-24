@@ -28,6 +28,9 @@ grep -q 'MEMBER BATCH JOB' dist/src/telegram/ui.js
 grep -q 'banUsageCard' dist/src/whatsapp/response-cards.js
 grep -q 'commandUsageCard' dist/src/whatsapp/response-cards.js
 grep -q 'pairingHelpCard' dist/src/whatsapp/response-cards.js
+grep -q 'play-download' dist/src/jobs/runtime.js
+grep -q 'buildDownloadArgs' dist/src/whatsapp/play-media.js
+grep -q 'MEDIA JOB' dist/src/whatsapp/play-media.js
 ! grep -Rql 'local-pappy-approval-probe' dist
 test -s worker-package/index.js
 
@@ -69,9 +72,16 @@ grep -q 'MEMBER BATCH JOB' "$STAGE/dist/src/telegram/ui.js"
 grep -q 'banUsageCard' "$STAGE/dist/src/whatsapp/response-cards.js"
 grep -q 'commandUsageCard' "$STAGE/dist/src/whatsapp/response-cards.js"
 grep -q 'pairingHelpCard' "$STAGE/dist/src/whatsapp/response-cards.js"
+grep -q 'play-download' "$STAGE/dist/src/jobs/runtime.js"
+grep -q 'buildDownloadArgs' "$STAGE/dist/src/whatsapp/play-media.js"
+grep -q 'MEDIA JOB' "$STAGE/dist/src/whatsapp/play-media.js"
 ! grep -Rql 'local-pappy-approval-probe' "$STAGE/dist"
 test -s "$STAGE/worker-package/index.js"
 test "$(systemctl is-active pappy-panel-v3.service)" = active
+command -v yt-dlp >/dev/null
+yt-dlp --version >/dev/null
+command -v ffmpeg >/dev/null
+command -v ffprobe >/dev/null
 mkdir -p .deploy-backups
 if [ -d dist ]; then tar -czf ".deploy-backups/${LABEL}-dist.tar.gz" dist; fi
 if [ -f worker-package/index.js ]; then cp -a worker-package/index.js ".deploy-backups/${LABEL}-worker-index.js"; fi
@@ -112,6 +122,10 @@ done
 test "$READY" = true
 test "$(systemctl is-active pappy-omega-mini.service)" = active
 test "$(systemctl is-active pappy-panel-v3.service)" = active
+command -v yt-dlp >/dev/null
+yt-dlp --version >/dev/null
+command -v ffmpeg >/dev/null
+command -v ffprobe >/dev/null
 grep -q '"ok":true' "/tmp/${LABEL}-health.json"
 test "$(sha256sum dist/src/index.js | cut -d' ' -f1)" = "$EXPECTED_INDEX"
 test "$(sha256sum dist/src/whatsapp/command-registry.js | cut -d' ' -f1)" = "$EXPECTED_COMMAND"
