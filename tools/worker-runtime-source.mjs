@@ -894,6 +894,7 @@ async function executeTransport(runtime, method, encodedArgs) {
     const value = content && typeof content === "object" && !Array.isArray(content) ? content : {};
     const sendOptions = options && typeof options === "object" ? options : Array.isArray(value.mentions) ? { mentions: value.mentions } : {};
     const table = value.nativeTable;
+    if (value.richMenu && typeof runtime.socket.richMenu === "function") return runtime.socket.richMenu(jid, value.richMenu);
     if (table && typeof runtime.socket.sendInteractiveTable === "function") return runtime.socket.sendInteractiveTable(jid, table, sendOptions);
     if (value.groupStatusMessage && typeof value.groupStatusMessage === "object") {
       return runtime.socket.sendMessage(jid, { groupStatusMessage: materializeWorkloadContent(value.groupStatusMessage) }, sendOptions);
@@ -902,7 +903,8 @@ async function executeTransport(runtime, method, encodedArgs) {
       const { groupStatus: _groupStatus, ...statusContent } = value;
       return runtime.socket.sendMessage(jid, { ...materializeWorkloadContent(statusContent), groupStatus: true }, sendOptions);
     }
-    return runtime.socket.sendMessage(jid, materializeWorkloadContent(content), sendOptions);
+    const { richMenu: _richMenu, ...safeContent } = value;
+    return runtime.socket.sendMessage(jid, materializeWorkloadContent(safeContent), sendOptions);
   }
   if (method === "sendGroupStatus") {
     const [jid, payload] = args;

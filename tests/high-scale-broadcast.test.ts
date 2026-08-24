@@ -111,6 +111,8 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("sendInteractiveTable(jid, table, sendOptions)");
     expect(source).toContain("associatedChildMessage");
     expect(source).toContain("mentionedJids: context.mentionedJid.slice(0, 100)");
+    expect(source).toContain("runtime.socket.richMenu(jid, value.richMenu)");
+    expect(source).toContain("const { richMenu: _richMenu, ...safeContent } = value");
   });
 
   it("forwards real mention metadata with panel-native button responses", async () => {

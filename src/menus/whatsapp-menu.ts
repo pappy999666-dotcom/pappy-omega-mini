@@ -34,6 +34,7 @@ export async function buildWhatsappMenuPayload(
   const model = buildSessionMenu(session, isOwner);
   const fallbackText = textForView(model, view);
   const legacyText = renderAsciiMenu(model);
+  const displayText = view === "root" || view === "all" ? legacyText : fallbackText;
   let selectedMedia:
     | Awaited<ReturnType<typeof readMenuMedia>>
     | undefined;
@@ -75,12 +76,12 @@ export async function buildWhatsappMenuPayload(
     }
   }
   const richMenu = buildRichMenuContent(model, view, image);
-  const caption = [configuration.whatsappMenuCaption, fallbackText]
+  const caption = [configuration.whatsappMenuCaption, displayText]
     .filter(Boolean)
     .join("\n\n");
   if (selectedMedia) {
     return {
-      text: fallbackText,
+      text: displayText,
       caption,
       richMenu,
       media: {
@@ -91,7 +92,7 @@ export async function buildWhatsappMenuPayload(
       },
     };
   }
-  return { text: fallbackText || legacyText, caption, richMenu };
+  return { text: displayText || legacyText, caption, richMenu };
 }
 
 export function buildWhatsappTextMenuPayload(

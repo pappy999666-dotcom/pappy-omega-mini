@@ -59,6 +59,7 @@ export function createAssignedWorkloadSocket(
 ): WASocket {
   const methods = [
     "sendMessage",
+    "richMenu",
     "sendStatus",
     "getStatusJidList",
     "sendGroupStatus",
