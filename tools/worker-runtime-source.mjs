@@ -897,7 +897,7 @@ async function executeTransport(runtime, method, encodedArgs) {
     if (value.richMenu && typeof runtime.socket.richMenu === "function") return runtime.socket.richMenu(jid, value.richMenu);
     if (table && typeof runtime.socket.sendInteractiveTable === "function") return runtime.socket.sendInteractiveTable(jid, table, sendOptions);
     if (value.groupStatusMessage && typeof value.groupStatusMessage === "object") {
-      return runtime.socket.sendMessage(jid, { groupStatusMessage: materializeWorkloadContent(value.groupStatusMessage) }, sendOptions);
+      return runtime.socket.sendMessage(jid, { ...materializeWorkloadContent(value.groupStatusMessage), groupStatus: true }, sendOptions);
     }
     if (value.groupStatus === true) {
       const { groupStatus: _groupStatus, ...statusContent } = value;
@@ -913,7 +913,7 @@ async function executeTransport(runtime, method, encodedArgs) {
     const text = payload && typeof payload === "object" && typeof payload.text === "string" ? payload.text : "";
     if (typeof native === "function" && !hasMedia && !/https?:\/\/\S+/i.test(text)) return native.apply(runtime.socket, args);
     const content = materializeWorkloadContent(payload);
-    if (hasMedia) return runtime.socket.sendMessage(jid, { groupStatusMessage: content });
+    if (hasMedia) return runtime.socket.sendMessage(jid, { ...content, groupStatus: true });
     return runtime.socket.sendMessage(jid, { ...content, groupStatus: true });
   }
   if (method === "sendGroupHidetag" || method === "sendGroupMentions") {

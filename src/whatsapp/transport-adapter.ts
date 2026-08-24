@@ -941,7 +941,8 @@ export async function sendGroupStatus(
       cacheScope: `${workspaceId}:${sessionId}`,
     });
     await send(jid, {
-      groupStatusMessage: preparedMedia,
+      ...preparedMedia,
+      groupStatus: true,
     });
     return;
   }
@@ -1045,7 +1046,7 @@ export async function sendGroupColorStatus(
     font: design.font,
   };
   if (payload.media) {
-    await send(jid, { groupStatusMessage: prepared }, sendOptions);
+    await send(jid, { ...prepared, groupStatus: true }, sendOptions);
   } else {
     await send(jid, { ...prepared, groupStatus: true }, sendOptions);
   }

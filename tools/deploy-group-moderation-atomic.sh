@@ -131,6 +131,9 @@ yt-dlp --version >/dev/null
 command -v ffmpeg >/dev/null
 command -v ffprobe >/dev/null
 grep -q '"ok":true' "/tmp/${LABEL}-health.json"
+grep -q 'groupStatus: true' dist/src/whatsapp/transport-adapter.js
+grep -q 'if (hasMedia) return runtime.socket.sendMessage(jid, { ...content, groupStatus: true });' tools/worker-runtime-source.mjs
+grep -q 'runtime.socket.richMenu(jid, value.richMenu)' tools/worker-runtime-source.mjs;
 test "$(sha256sum dist/src/index.js | cut -d' ' -f1)" = "$EXPECTED_INDEX"
 test "$(sha256sum dist/src/whatsapp/command-registry.js | cut -d' ' -f1)" = "$EXPECTED_COMMAND"
 test "$(sha256sum dist/src/whatsapp/anti-system/engine.js | cut -d' ' -f1)" = "$EXPECTED_ENGINE"
@@ -144,6 +147,7 @@ printf 'panel=%s\n' "$(systemctl is-active pappy-panel-v3.service)"
 printf 'health_ok=true\n'
 printf 'moderation_markers=present\n'
 printf 'worker_hash=match\n'
+printf 'status_envelope=verified\n'
 printf 'probe_absent=true\n'
 rm -rf "$STAGE"
 rm -f "/tmp/${LABEL}.tar.gz" "/tmp/${LABEL}-health.json"

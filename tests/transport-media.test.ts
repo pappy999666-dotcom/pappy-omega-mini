@@ -73,10 +73,10 @@ describe("WhatsApp media transport coverage", () => {
         string,
         Record<string, unknown>,
       ];
-      const statusMessage = content.groupStatusMessage as Record<string, unknown> | undefined;
-      const statusPayload = statusMessage ?? content;
-      expect(statusPayload[key]).toBe(bytes);
-      expect(statusPayload.mimetype).toBe(mimeType);
+      expect(content.groupStatus).toBe(true);
+      expect(content.groupStatusMessage).toBeUndefined();
+      expect(content[key]).toBe(bytes);
+      expect(content.mimetype).toBe(mimeType);
     },
   );
 
