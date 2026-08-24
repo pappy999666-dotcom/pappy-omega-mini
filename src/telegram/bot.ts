@@ -10086,9 +10086,11 @@ async function edit(
       reply_markup: markup,
     });
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (/message is not modified/i.test(errorMessage)) return;
     if (ctx.callbackQuery) {
       console.warn(
-        `[pappy-omega-mini] Telegram callback view edit failed: ${error instanceof Error ? error.message : String(error)}`,
+        `[pappy-omega-mini] Telegram callback view edit failed: ${errorMessage}`,
       );
       await ctx.answerCbQuery(
         "This view could not be updated. Tap Refresh to try again.",
