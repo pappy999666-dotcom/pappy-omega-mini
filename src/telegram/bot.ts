@@ -136,6 +136,7 @@ import {
   expandGroupCallbackData,
 } from "./group-selection.js";
 import { telegramSafeText } from "./text-safety.js";
+import { isClosedGroupTransportError } from "./group-inventory-error.js";
 import { routeWhatsAppText } from "../whatsapp/message-router.js";
 import { effectiveSessionStatus } from "../menus/menu-model.js";
 import { isHealthyWhatsAppSession } from "../whatsapp/session-allocator.js";
@@ -8919,9 +8920,10 @@ async function showSessionGroups(
     keyboard([[btn("‹ Session Control", `session:${session.sessionId}:menu`)]]),
   );
   try {
-    const groups = await listAdminGroups(
-      session.workspaceId,
-      session.sessionId,
+    const groups = await withTelegramTimeout(
+      listAdminGroups(session.workspaceId, session.sessionId),
+      20_000,
+      "Group inventory timed out while waiting for the WhatsApp session.",
     );
     const now = Date.now();
     const selectionTokens = new Map<number, string>();
@@ -9001,16 +9003,23 @@ async function showSessionGroups(
       ]),
     );
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const transportClosed = isClosedGroupTransportError(error);
     await edit(
       ctx,
       pageText(
         `${session.sessionName} · Groups`,
         dangerResponse(
-          "Group Inventory Unavailable",
-          `${escapeHtml(error instanceof Error ? error.message : String(error))}\n\nThe WhatsApp session may still be loading its group inventory.`,
+          transportClosed ? "WhatsApp Transport Offline" : "Group Inventory Unavailable",
+          transportClosed
+            ? "The WhatsApp socket is closed or reconnecting, so live group inventory cannot be read yet. Your saved session was not deleted. Reconnect it, then reload Groups."
+            : `${escapeHtml(message)}\n\nThe WhatsApp session may still be loading its group inventory.`,
         ),
       ),
       keyboard([
+        ...(transportClosed
+          ? [[btn("↻ Reconnect WhatsApp", `session:${session.sessionId}:action:reconnect`, "success")]]
+          : []),
         [
           btn(
             "↻ Retry Groups",
