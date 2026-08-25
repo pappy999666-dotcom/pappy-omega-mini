@@ -385,7 +385,7 @@ export interface CryptoFailureDecision {
 
 export function isBaileysCryptoFailure(input: unknown): boolean {
   const text = input instanceof Error
-    ? `${input.name} ${input.message}`
+    ? `${input.name} ${input.message} ${input.stack ?? ""}`
     : typeof input === "string"
       ? input
       : (() => {
@@ -396,10 +396,25 @@ export function isBaileysCryptoFailure(input: unknown): boolean {
           }
         })();
   const lower = text.toLowerCase();
-  return lower.includes("messagecountererror") ||
+  if (
+    lower.includes("messagecountererror") ||
     lower.includes("key used already or never filled") ||
     lower.includes("bad mac") ||
-    lower.includes("transaction failed, rolling back");
+    lower.includes("no session found to decrypt message") ||
+    lower.includes("received message with old counter")
+  ) return true;
+  // These signatures are only crypto failures when tied to Baileys' decrypt
+  // path; do not swallow unrelated application transaction errors.
+  if (
+    lower.includes("failed to decrypt message") &&
+    /decrypt|cipher|counter|bad mac|session/.test(lower)
+  ) return true;
+  if (
+    lower.includes("expected buffer instead of: object") &&
+    /decrypt|groupcipher|sender-message-key|sessioncipher/.test(lower)
+  ) return true;
+  return lower.includes("transaction failed, rolling back") &&
+    /messagecountererror|bad mac|decrypt|cipher|old counter/.test(lower);
 }
 
 export class SessionCryptoFailureGuard {
@@ -431,6 +446,14 @@ export class SessionCryptoFailureGuard {
     this.windowStartedAt = now;
     this.count = 0;
   }
+
+  isCoolingDown(now = Date.now()): boolean {
+    return now - this.lastRecoveryAt < this.recoveryCooldownMs;
+  }
+
+  cooldownRemainingMs(now = Date.now()): number {
+    return Math.max(0, this.recoveryCooldownMs - (now - this.lastRecoveryAt));
+  }
 }
 
 interface MessageCacheKey {
@@ -456,8 +479,15 @@ export const BAILEYS_SESSION_SOCKET_OPTIONS = Object.freeze({
   connectTimeoutMs: 20_000,
   keepAliveIntervalMs: 15_000,
   defaultQueryTimeoutMs: 60_000,
-  retryRequestDelayMs: 250,
-  maxMsgRetryCount: 3,
+  // Failed decryptions are already bounded by the per-session guard. Do not
+  // ask WhatsApp for repeated retries for the same unreadable payload; that
+  // feedback loop is what turns stale Signal state into CPU/log storms.
+  retryRequestDelayMs: 0,
+  maxMsgRetryCount: 0,
+  // The application lifecycle supervisor owns reconnects and preserves auth.
+  // Baileys' internal recreation path can delete a sender session while a
+  // message storm is active and is intentionally disabled.
+  enableAutoSessionRecreation: false,
 });
 
 export function isLiveWhatsAppUpsert(type?: string): boolean {
@@ -490,8 +520,40 @@ export async function wrapSignalKeyStoreWithCache(
   return makeCacheableSignalKeyStore(store, logger);
 }
 
+function isBaileysDirectCryptoLog(input: unknown): boolean {
+  const text = Array.isArray(input)
+    ? input.map((value) => value instanceof Error ? `${value.name} ${value.message}` : String(value)).join(" ")
+    : String(input ?? "");
+  const lower = text.toLowerCase();
+  return lower.includes("failed to decrypt message with any known session") ||
+    lower.includes("decrypted message with closed session") ||
+    (lower.includes("session error:") && isBaileysCryptoFailure(lower));
+}
+
+let baileysDirectCryptoLogFilterInstalled = false;
+function installBaileysDirectCryptoLogFilter(): void {
+  if (baileysDirectCryptoLogFilterInstalled) return;
+  baileysDirectCryptoLogFilterInstalled = true;
+  const originalError = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    if (isBaileysDirectCryptoLog(args)) return;
+    originalError(...args);
+  };
+}
+installBaileysDirectCryptoLogFilter();
+
 const retryCounterCaches = new Map<string, BaileysRetryCounterCache>();
 const messageCaches = new Map<string, BoundedTtlCache<Record<string, unknown>>>();
+const cryptoFailureGuards = new Map<string, SessionCryptoFailureGuard>();
+
+export function cryptoFailureGuardFor(sessionKey: string): SessionCryptoFailureGuard {
+  let guard = cryptoFailureGuards.get(sessionKey);
+  if (!guard) {
+    guard = new SessionCryptoFailureGuard();
+    cryptoFailureGuards.set(sessionKey, guard);
+  }
+  return guard;
+}
 
 function retryCounterCacheFor(sessionKey: string): BaileysRetryCounterCache {
   let cache = retryCounterCaches.get(sessionKey);
@@ -516,6 +578,7 @@ function clearSessionBaileysCaches(sessionKey: string): void {
   retryCounterCaches.delete(sessionKey);
   messageCaches.get(sessionKey)?.clear();
   messageCaches.delete(sessionKey);
+  cryptoFailureGuards.delete(sessionKey);
 }
 
 async function openWhatsAppSession(
@@ -562,7 +625,9 @@ async function openWhatsAppSession(
   let smaxInvalidWindowStartedAt = 0;
   let smaxInvalidCount = 0;
   let lastSmaxInvalidLogAt = 0;
-  const cryptoFailureGuard = new SessionCryptoFailureGuard();
+  // Keep this guard keyed by lifecycle/session, not by socket generation. A
+  // reconnect must not reset the cooldown and recreate a recovery storm.
+  const cryptoFailureGuard = cryptoFailureGuardFor(key);
   let lastCryptoWarningAt = 0;
   let stableOpenTimer: ReturnType<typeof setTimeout> | undefined;
   const CRYPTO_ERROR_WINDOW_MS = 30_000;
@@ -581,12 +646,20 @@ async function openWhatsAppSession(
             const error = record.error && typeof record.error === "object"
               ? record.error as Record<string, unknown>
               : undefined;
+            const err = record.err && typeof record.err === "object"
+              ? record.err as Record<string, unknown>
+              : undefined;
             return [
               record.msg,
               record.message,
               record.name,
+              record.stack,
               error?.message,
               error?.name,
+              error?.stack,
+              err?.message,
+              err?.name,
+              err?.stack,
               (error?.output as Record<string, unknown> | undefined)?.statusCode,
               (error?.output as Record<string, unknown> | undefined)?.payload,
             ]
@@ -661,6 +734,7 @@ async function openWhatsAppSession(
   const groupMetadataCache = new BoundedTtlCache<unknown>(512, 15_000);
   const groupMetadataInflight = new Map<string, Promise<unknown>>();
   let socket!: RuntimeSocket;
+  let cryptoRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
   let scheduleCryptoRecovery: ((error?: unknown) => void) | undefined;
   const getMessage = async (messageKey: unknown): Promise<Record<string, unknown> | undefined> => {
     const candidate = (messageKey ?? {}) as MessageCacheKey;
@@ -735,7 +809,14 @@ async function openWhatsAppSession(
       // The connection.update close handler owns state transition and reconnect scheduling.
     }
   };
-  scheduleCryptoRecovery = forceSocketRecovery;
+  scheduleCryptoRecovery = (error?: unknown) => {
+    if (cryptoRecoveryTimer) return;
+    cryptoRecoveryTimer = setTimeout(() => {
+      cryptoRecoveryTimer = undefined;
+      if (isCurrentSocket()) forceSocketRecovery(error);
+    }, 0);
+    cryptoRecoveryTimer.unref?.();
+  };
   socket.ws?.on?.("error", forceSocketRecovery);
   socket.ws?.on?.("close", () => {
     if (isCurrentSocket())
@@ -1390,12 +1471,30 @@ async function openWhatsAppSession(
           });
       }
       if (!terminal && classification.status !== "LOGGED_OUT" && !getLifecycleState(key).stopping) {
-        scheduleReconnect({
-          key,
-          workspaceId,
-          sessionId,
-          run: () => void startWhatsAppSession(workspaceId, sessionId),
-        });
+        const cryptoCooldownMs = cryptoFailureGuard.cooldownRemainingMs();
+        if (cryptoCooldownMs > 0) {
+          // A recovery-triggered close must not reconnect straight into the
+          // same Signal failure storm. Keep only this session paused; other
+          // sessions and the Telegram control plane remain available.
+          const lifecycle = getLifecycleState(key);
+          const delayMs = Math.max(cryptoCooldownMs, 30_000);
+          lifecycle.reconnectTimer = setTimeout(() => {
+            lifecycle.reconnectTimer = undefined;
+            if (!lifecycle.stopping) void startWhatsAppSession(workspaceId, sessionId);
+          }, delayMs);
+          lifecycle.reconnectTimer.unref?.();
+          updateSession(workspaceId, sessionId, {
+            status: "RECONNECTING",
+            disconnectReason: `crypto recovery cooldown active; reconnect deferred for ${delayMs}ms`,
+          });
+        } else {
+          scheduleReconnect({
+            key,
+            workspaceId,
+            sessionId,
+            run: () => void startWhatsAppSession(workspaceId, sessionId),
+          });
+        }
       }
     },
   );
@@ -1631,6 +1730,9 @@ export async function stopWhatsAppSession(
   }
   const key = lifecycleKey(workspaceId, sessionId);
   markStopping(key);
+  // This is an explicit owner/control-plane stop. Reconnects do not reach this
+  // path, so the session-keyed crypto cooldown survives normal recovery.
+  cryptoFailureGuards.delete(key);
   const runtime = runtimes.get(key);
   if (runtime) {
     runtime.stop();

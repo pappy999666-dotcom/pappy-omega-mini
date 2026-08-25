@@ -18,6 +18,8 @@ import {
   BAILEYS_SESSION_SOCKET_OPTIONS,
   BaileysRetryCounterCache,
   SessionCryptoFailureGuard,
+  cryptoFailureGuardFor,
+  isBaileysCryptoFailure,
   authenticatedOpenSessionPatch,
   classifyDisconnect,
   isLiveWhatsAppUpsert,
@@ -126,8 +128,9 @@ describe("V2 hardening", () => {
       connectTimeoutMs: 20_000,
       keepAliveIntervalMs: 15_000,
       defaultQueryTimeoutMs: 60_000,
-      retryRequestDelayMs: 250,
-      maxMsgRetryCount: 3,
+      retryRequestDelayMs: 0,
+      maxMsgRetryCount: 0,
+      enableAutoSessionRecreation: false,
     });
   });
 
@@ -149,6 +152,26 @@ describe("V2 hardening", () => {
     expect(guard.observe(new Error("Bad MAC"), 6_000)).toMatchObject({ matched: true, count: 3, shouldRecover: false });
     expect(guard.observe(new Error("Bad MAC"), 124_000)).toMatchObject({ matched: true, count: 1, shouldRecover: false });
     expect(guard.observe(new Error("ordinary failure"), 125_000)).toMatchObject({ matched: false, shouldRecover: false });
+  });
+
+  it("recognizes the production decrypt storm without hiding unrelated transaction failures", () => {
+    expect(isBaileysCryptoFailure({ msg: "failed to decrypt message", err: { message: "No session found to decrypt message" } })).toBe(true);
+    expect(isBaileysCryptoFailure({ msg: "failed to decrypt message", err: { message: "Received message with old counter: 22, 18" } })).toBe(true);
+    expect(isBaileysCryptoFailure({ msg: "failed to decrypt message", err: { message: "Expected Buffer instead of: Object", stack: "GroupCipher.decrypt" } })).toBe(true);
+    expect(isBaileysCryptoFailure("transaction failed, rolling back")).toBe(false);
+  });
+
+  it("keeps crypto cooldown state across reconnect generations and isolates sessions", () => {
+    const first = cryptoFailureGuardFor("workspace-a:session-a");
+    const sameSession = cryptoFailureGuardFor("workspace-a:session-a");
+    const other = cryptoFailureGuardFor("workspace-a:session-b");
+    expect(sameSession).toBe(first);
+    expect(other).not.toBe(first);
+    for (let i = 0; i < 11; i += 1) first.observe("Bad MAC", 10_000 + i);
+    expect(first.observe("Bad MAC", 10_011).shouldRecover).toBe(true);
+    first.markRecovered(10_011);
+    for (let i = 0; i < 12; i += 1) expect(sameSession.observe("Bad MAC", 10_100 + i).shouldRecover).toBe(false);
+    expect(other.observe("Bad MAC", 10_100)).toMatchObject({ matched: true, count: 1, shouldRecover: false });
   });
 
   it("keeps retry counters bounded and clears them deterministically", async () => {
