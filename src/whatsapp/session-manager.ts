@@ -8,6 +8,7 @@ import makeWASocket, {
 } from "@crysnovax/baileys";
 import pino from "pino";
 import { env } from "../config/env.js";
+import type { WhatsAppSession } from "../types/domain.js";
 import {
   deleteSession,
   getSession,
@@ -115,6 +116,28 @@ export interface DisconnectClassification {
   terminal: boolean;
   status: "LOGGED_OUT" | "ERROR" | "DEGRADED" | "RECONNECTING";
   recovery: string;
+}
+
+/**
+ * A confirmed Baileys `connection.update:open` means the socket is usable now.
+ * Reconnect backoff is tracked separately and is reset only after the stable
+ * open window, so the registry must not mislabel an open socket as RECONNECTING.
+ */
+export function authenticatedOpenSessionPatch(input: {
+  now: number;
+  socketGeneration: number;
+  reconnectCount: number;
+}): Partial<WhatsAppSession> {
+  return {
+    status: "ACTIVE",
+    connectedAt: input.now,
+    lastHealthyAt: input.now,
+    socketGeneration: input.socketGeneration,
+    reconnectCount: input.reconnectCount,
+    authHealth: "VALID",
+    lastError: undefined,
+    disconnectReason: undefined,
+  };
 }
 
 export function classifyDisconnect(error: unknown): DisconnectClassification {
@@ -1203,13 +1226,11 @@ async function openWhatsAppSession(
           });
           if (stableOpenTimer) clearTimeout(stableOpenTimer);
           updateSession(workspaceId, sessionId, {
-            status: "RECONNECTING",
-            connectedAt: Date.now(),
-            socketGeneration: getLifecycleState(key).socketGeneration,
-            reconnectCount: 0,
-            authHealth: "DEGRADED",
-            lastError: undefined,
-            disconnectReason: "transport opened; awaiting stable connection check",
+            ...authenticatedOpenSessionPatch({
+              now: Date.now(),
+              socketGeneration: getLifecycleState(key).socketGeneration,
+              reconnectCount: getLifecycleState(key).reconnectAttempt,
+            }),
             workerNodeId: process.env.HOSTNAME ?? `pid-${process.pid}`,
           });
           stableOpenTimer = setTimeout(() => {
@@ -1219,6 +1240,7 @@ async function openWhatsAppSession(
             markStableConnected(key);
             updateSession(workspaceId, sessionId, {
               status: "ACTIVE",
+              reconnectCount: 0,
               lastHealthyAt: Date.now(),
               authHealth: "VALID",
               lastError: undefined,

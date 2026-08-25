@@ -17,6 +17,7 @@ import {
 import {
   BAILEYS_SESSION_SOCKET_OPTIONS,
   BaileysRetryCounterCache,
+  authenticatedOpenSessionPatch,
   classifyDisconnect,
   isLiveWhatsAppUpsert,
   wrapSignalKeyStoreWithCache,
@@ -66,6 +67,19 @@ describe("V2 hardening", () => {
     expect(error.correlationId).toMatch(/[0-9a-f-]{20,}/);
     expect(renderSafeError(error)).toContain("Reference:");
     expect(renderSafeError(error)).not.toContain("private socket detail");
+  });
+
+  it("publishes a confirmed socket open as ACTIVE without resetting reconnect backoff", () => {
+    expect(authenticatedOpenSessionPatch({ now: 1700000000000, socketGeneration: 7, reconnectCount: 4 })).toEqual({
+      status: "ACTIVE",
+      connectedAt: 1700000000000,
+      lastHealthyAt: 1700000000000,
+      socketGeneration: 7,
+      reconnectCount: 4,
+      authHealth: "VALID",
+      lastError: undefined,
+      disconnectReason: undefined,
+    });
   });
 
   it("preserves auth for ambiguous transport codes and purges only explicit logout", () => {
