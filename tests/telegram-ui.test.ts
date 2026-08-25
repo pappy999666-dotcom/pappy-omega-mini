@@ -31,6 +31,8 @@ import {
   sessionGroupKeyboard,
   validatorLiveKeyboard,
   validatorLiveText,
+  btn,
+  keyboard,
 } from "../src/telegram/ui.js";
 import type { WhatsAppSession } from "../src/types/domain.js";
 import {
@@ -78,6 +80,16 @@ describe("Telegram UI authorization", () => {
     expect(JSON.stringify(globalBridgeKeyboard(1))).toContain(
       '"style":"success"',
     );
+  });
+  it("sanitizes malformed Unicode in every inline button label", () => {
+    const malformed = "bad" + String.fromCharCode(0xd800) + "label";
+    const markup = keyboard([[btn(malformed, "test:callback")]]);
+    const label = markup.inline_keyboard[0]?.[0]?.text ?? "";
+    expect(label).toBe("bad�label");
+    expect([...label].every((character) => {
+      const code = character.charCodeAt(0);
+      return code < 0xd800 || code > 0xdfff || character.length > 1;
+    })).toBe(true);
   });
 
   it("uses native blockquote response framing", () => {

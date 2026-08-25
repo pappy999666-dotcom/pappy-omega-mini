@@ -7,6 +7,7 @@ import { effectiveSessionStatus } from "../menus/menu-model.js";
 import { infoResponse } from "./renderer.js";
 import { pappyTelegramFeatureSections } from "./feature-catalog.js";
 import { compactGroupCallbackData } from "./group-selection.js";
+import { telegramSafeText } from "./text-safety.js";
 
 export type ButtonStyle = "primary" | "success" | "danger";
 type InlineButton = InlineKeyboardMarkup["inline_keyboard"][number][number] & {
@@ -50,8 +51,20 @@ export function urlBtn(
   return { text, url, style };
 }
 
+function sanitizeButton(button: Button): Button {
+  return {
+    ...button,
+    text: telegramSafeText(button.text, 128),
+    ...(button.copy_text
+      ? { copy_text: { text: telegramSafeText(button.copy_text.text, 4096) } }
+      : {}),
+  };
+}
+
 export function keyboard(rows: Button[][]): InlineKeyboardMarkup {
-  return { inline_keyboard: rows } as InlineKeyboardMarkup;
+  return {
+    inline_keyboard: rows.map((row) => row.map(sanitizeButton)),
+  } as InlineKeyboardMarkup;
 }
 
 export function groupStartKeyboard(isModerator: boolean): InlineKeyboardMarkup {
