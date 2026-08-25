@@ -387,6 +387,12 @@ function messageCacheKey(key: MessageCacheKey): string | undefined {
 }
 
 export const BAILEYS_SESSION_SOCKET_OPTIONS = Object.freeze({
+  // Crysnova Baileys 2.7.12 can instantiate a MessageRetryManager whose
+  // receive-side code calls saveBaseKey/hasSameBaseKey/deleteBaseKey, while
+  // the shipped manager omits those methods. Disable that optional manager so
+  // retry receipts remain bounded by msgRetryCounterCache and getMessage,
+  // without entering the incompatible resend/session-recreation path.
+  enableRecentMessageCache: false,
   markOnlineOnConnect: false,
   syncFullHistory: false,
   connectTimeoutMs: 20_000,

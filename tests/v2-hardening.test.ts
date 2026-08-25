@@ -119,6 +119,7 @@ describe("V2 hardening", () => {
 
   it("pins quiet, bounded Crysnova socket defaults", () => {
     expect(BAILEYS_SESSION_SOCKET_OPTIONS).toEqual({
+      enableRecentMessageCache: false,
       markOnlineOnConnect: false,
       syncFullHistory: false,
       connectTimeoutMs: 20_000,
