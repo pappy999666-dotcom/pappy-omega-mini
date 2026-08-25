@@ -22,6 +22,8 @@ import {
   setStickerCommandBinding,
 } from "../src/whatsapp/sticker-command-bindings.js";
 import { clearStickerPackNameForTests } from "../src/whatsapp/sticker-settings.js";
+import { applyStickerPackMetadata } from "../src/whatsapp/sticker-exif.js";
+import { inspectSticker } from "../src/whatsapp/sticker-info.js";
 import { extractStickerFingerprint } from "../src/whatsapp/quoted-payload-resolver.js";
 
 const registry = createCommandRegistry();
@@ -180,6 +182,26 @@ describe("WhatsApp sticker media", () => {
     expect(reply.media?.stickerPackName).toBe("My Pack");
     expect(reply.caption).toContain("TEXT STICKER CREATED");
     expect(reply.caption).toContain("Quoted sender profile picture");
+  });
+
+  it("reads sticker dimensions, animation state, and embedded pack information", async () => {
+    const user = resolveUser(`sticker-info-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "sticker-info" });
+    const base = await sharp({ create: { width: 24, height: 18, channels: 4, background: "#ff77aa" } }).webp().toBuffer();
+    const bytes = applyStickerPackMetadata(base, { packName: "Info Pack", publisher: "Info Publisher", emojis: ["✨"] });
+    const info = await inspectSticker({ kind: "sticker", bytes, mimeType: "image/webp" });
+    expect(info.width).toBe(24);
+    expect(info.height).toBe(18);
+    expect(info.animated).toBe(false);
+    expect(info.packName).toBe("Info Pack");
+    expect(info.publisher).toBe("Info Publisher");
+    expect(info.emojis).toEqual(["✨"]);
+    const result = await executeCommand(registry, "sticker info", commandContext(user.workspaceId, session.sessionId, {
+      args: ["info"],
+      media: { kind: "sticker", bytes, mimeType: "image/webp" },
+    }));
+    expect(String(result)).toContain("STICKER INFORMATION");
+    expect(String(result)).toContain("Info Pack");
   });
 
   it("converts a static sticker payload back to PNG media and preserves pack metadata on take", async () => {

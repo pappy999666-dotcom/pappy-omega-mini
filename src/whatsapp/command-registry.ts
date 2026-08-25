@@ -18,6 +18,7 @@ import {
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { convertMediaToSticker, convertStickerToMedia, renderTextSticker } from "./sticker-media.js";
 import { applyStickerPackMetadata } from "./sticker-exif.js";
+import { inspectSticker } from "./sticker-info.js";
 import { getStickerPackName, setStickerPackName } from "./sticker-settings.js";
 import { firstVerifiedPhone, maskedPhoneLabel, phoneJidFromIdentity, verifiedTargetJid, verifiedTargetJids, verifiedTargetPhone } from "./identity-normalization.js";
 import { buildModerationActionResponse, buildModerationJobResponse, buildModerationReviewResponse, formatModerationMessage, realMention } from "./moderation-response.js";
@@ -1232,11 +1233,35 @@ export function createCommandRegistry(): RegisteredCommand[] {
       },
     },
     {
+      name: "stickerinfo",
+      aliases: ["sinfo", "sticker-info"],
+      description: "Show technical and embedded metadata for a quoted sticker.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.media || ctx.media.kind !== "sticker") return commandUsageCard({ title: "Sticker Information", command: `${session(ctx).prefix}stickerinfo`, commandSyntax: `${session(ctx).prefix}stickerinfo (reply to a sticker)`, note: "Reply to a sticker to inspect its media and pack metadata." });
+        try {
+          const info = await inspectSticker(ctx.media);
+          return [...pappyHeader(`${ctx.workspaceId}:${ctx.sessionId}:sticker-info`, "STICKER INFORMATION"), `⎔ Format     · ⇆ ${info.format ?? "WebP"}`, `⎔ MIME       · ⇆ ${info.mimeType}`, `⎔ Size       · ⇆ ${info.bytes.toLocaleString()} bytes`, `⎔ Canvas     · ⇆ ${info.width ?? "?"} × ${info.height ?? "?"}`, `⎔ Animation  · ⇆ ${info.animated ? `Yes · ${info.frames ?? 0} frames` : "No · static"}`, `⎔ Alpha      · ⇆ ${info.hasAlpha === undefined ? "Unknown" : info.hasAlpha ? "Yes" : "No"}`, `⎔ Pack       · ⇆ ${info.packName ?? "Not embedded"}`, `⎔ Publisher  · ⇆ ${info.publisher ?? "Not embedded"}`, `⎔ Emojis     · ⇆ ${info.emojis.length ? info.emojis.join(" ") : "None embedded"}`].join("\n");
+        } catch (error) {
+          return commandUsageCard({ title: "Sticker Information Unavailable", command: `${session(ctx).prefix}stickerinfo`, commandSyntax: `${session(ctx).prefix}stickerinfo (reply to a sticker)`, note: error instanceof Error ? error.message : "The sticker metadata could not be read safely." });
+        }
+      },
+    },
+    {
       name: "sticker",
       aliases: ["s", "makesticker"],
       description: "Create a sticker from an image, GIF, video, text, or emoji.",
       ownerOnly: true,
       run: async (ctx) => {
+        if (["info", "metadata", "details"].includes((ctx.args[0] ?? "").toLowerCase())) {
+          if (!ctx.media || ctx.media.kind !== "sticker") return commandUsageCard({ title: "Sticker Information", command: `${session(ctx).prefix}sticker info`, commandSyntax: `${session(ctx).prefix}sticker info (reply to a sticker)`, note: "Reply to a sticker to inspect its media and pack metadata." });
+          try {
+            const info = await inspectSticker(ctx.media);
+            return [...pappyHeader(`${ctx.workspaceId}:${ctx.sessionId}:sticker-info`, "STICKER INFORMATION"), `⎔ Format     · ⇆ ${info.format ?? "WebP"}`, `⎔ MIME       · ⇆ ${info.mimeType}`, `⎔ Size       · ⇆ ${info.bytes.toLocaleString()} bytes`, `⎔ Canvas     · ⇆ ${info.width ?? "?"} × ${info.height ?? "?"}`, `⎔ Animation  · ⇆ ${info.animated ? `Yes · ${info.frames ?? 0} frames` : "No · static"}`, `⎔ Pack       · ⇆ ${info.packName ?? "Not embedded"}`, `⎔ Publisher  · ⇆ ${info.publisher ?? "Not embedded"}`, `⎔ Emojis     · ⇆ ${info.emojis.length ? info.emojis.join(" ") : "None embedded"}`].join("\n");
+          } catch (error) {
+            return commandUsageCard({ title: "Sticker Information Unavailable", command: `${session(ctx).prefix}sticker info`, commandSyntax: `${session(ctx).prefix}sticker info (reply to a sticker)`, note: error instanceof Error ? error.message : "The sticker metadata could not be read safely." });
+          }
+        }
         try {
           if (ctx.media && ["image", "video"].includes(ctx.media.kind)) {
             const packName = getStickerPackName(ctx.workspaceId, ctx.sessionId);

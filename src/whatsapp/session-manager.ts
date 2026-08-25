@@ -756,7 +756,7 @@ async function openWhatsAppSession(
         const hasGroupInvite = extractWhatsAppGroupInviteUrls(combinedText).length > 0;
         const shouldTraceInbound = Boolean(text || quotedText || stickerFingerprint) && (isPrefixedCommand || hasGroupInvite);
         const mediaCommand =
-          /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate|allstatus|allchat|gstatus|tag|stag|status|cs|convertsticker|sticker|makesticker|take|takesticker|stickerpname|spn)/.test(
+          /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate|allstatus|allchat|gstatus|tag|stag|status|cs|convertsticker|sticker|makesticker|take|takesticker|stickerpname|spn|stickerinfo|sinfo|sticker-info)/.test(
             commandSource,
           );
         const inboundMedia = stickerFingerprint
