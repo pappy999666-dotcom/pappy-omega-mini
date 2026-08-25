@@ -118,9 +118,15 @@ export function markConnected(key: string): void {
   const state = getLifecycleState(key);
   state.connected = true;
   setLifecycleStatus(key, "ONLINE");
-  state.reconnectAttempt = 0;
+  // Do not clear reconnect backoff on a transient open event. The session
+  // manager resets it only after the socket survives its stable-open window.
   if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
   state.reconnectTimer = undefined;
+}
+
+export function markStableConnected(key: string): void {
+  const state = getLifecycleState(key);
+  state.reconnectAttempt = 0;
 }
 
 export function markStopping(key: string): void {

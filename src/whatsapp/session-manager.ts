@@ -58,6 +58,7 @@ import {
   lifecycleKey,
   markClosed,
   markConnected,
+  markStableConnected,
   markOpening,
   markStopping,
   scheduleReconnect,
@@ -1192,6 +1193,7 @@ async function openWhatsAppSession(
             stableOpenTimer = undefined;
             const lifecycle = getLifecycleState(key);
             if (!isCurrentSocket() || lifecycle.stopping || socket.ws?.isOpen === false) return;
+            markStableConnected(key);
             updateSession(workspaceId, sessionId, {
               status: "ACTIVE",
               lastHealthyAt: Date.now(),

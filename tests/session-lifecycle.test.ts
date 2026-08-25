@@ -4,6 +4,8 @@ import {
   getLifecycleHealth,
   getLifecycleState,
   lifecycleKey,
+  markConnected,
+  markStableConnected,
   noteHeartbeat,
   startHeartbeat,
   stopAllLifecycles,
@@ -18,6 +20,15 @@ describe("WhatsApp session lifecycle supervisor telemetry", () => {
   afterEach(() => {
     stopAllLifecycles();
     clearLifecycle(key);
+  });
+
+  it("preserves reconnect backoff until a connection is stable", () => {
+    const state = getLifecycleState(key);
+    state.reconnectAttempt = 4;
+    markConnected(key);
+    expect(getLifecycleState(key).reconnectAttempt).toBe(4);
+    markStableConnected(key);
+    expect(getLifecycleState(key).reconnectAttempt).toBe(0);
   });
 
   it("reports the age of the last successful heartbeat rather than the last transition", () => {
