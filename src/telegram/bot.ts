@@ -356,6 +356,7 @@ type AdminGroupSelection = Awaited<ReturnType<typeof listAdminGroups>>[number];
 const ADMIN_GROUP_SELECTION_CACHE_MS = 2 * 60_000;
 const adminGroupSelectionTokens = new StableSelectionStore<AdminGroupSelection>(ADMIN_GROUP_SELECTION_CACHE_MS);
 const groupRecoverySingleFlight = new SingleFlight<boolean>();
+const groupInventorySingleFlight = new SingleFlight<AdminGroupSelection[]>();
 const pendingGroupSetting = new Map<
   string,
   {
@@ -8926,11 +8927,16 @@ async function showSessionGroups(
     keyboard([[btn("‹ Session Control", `session:${session.sessionId}:menu`)]]),
   );
   try {
-    const groups = await withTelegramTimeout(
-      listAdminGroups(session.workspaceId, session.sessionId),
-      20_000,
-      "Group inventory timed out while waiting for the WhatsApp session.",
+    const inventory = groupInventorySingleFlight.run(
+      `${session.workspaceId}:${session.sessionId}`,
+      () =>
+        withTelegramTimeout(
+          listAdminGroups(session.workspaceId, session.sessionId),
+          20_000,
+          "Group inventory timed out while waiting for the WhatsApp session.",
+        ),
     );
+    const groups = await inventory.promise;
     const now = Date.now();
     const selectionTokens = new Map<number, string>();
     for (const [index, group] of groups.entries()) {
