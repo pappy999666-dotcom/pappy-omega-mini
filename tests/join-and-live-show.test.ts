@@ -205,12 +205,20 @@ describe("Baileys Join Operation", () => {
     const rateOverLimit = await joinWhatsAppInvite(
       {
         groupGetInviteInfo: async () => ({ id: "120@g.us" }),
-        groupAcceptInvite: async () => { throw new Error("rate-over-limit"); },
+        groupAcceptInvite: async () => { throw new Error("rate-overlimit"); },
       },
       "https://chat.whatsapp.com/RATE_OVER_LIMIT",
     );
     expect(rateOverLimit.rateLimited).toBe(true);
     expect(rateOverLimit.accountRestricted).toBe(true);
+
+    const gone = await joinWhatsAppInvite(
+      {
+        groupGetInviteInfo: async () => { throw new Error("gone"); },
+      },
+      "https://chat.whatsapp.com/GONE",
+    );
+    expect(gone.linkUnavailable).toBe(true);
 
     const restricted = await joinWhatsAppInvite(
       {

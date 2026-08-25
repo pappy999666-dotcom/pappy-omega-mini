@@ -48,7 +48,7 @@ function normalizedError(error: string): string {
 }
 function isRateLimited(error: string): boolean {
   const normalized = normalizedError(error);
-  return /rate(?: over)? limit|too many requests|\b429\b|flood|throttl|temporarily banned|try again later|spam limit/i.test(normalized);
+  return /rate(?: over)? ?limit|rate overlimit|too many requests|\b429\b|flood|throttl|temporarily banned|try again later|spam limit/i.test(normalized);
 }
 
 function statusCodeFromError(error: unknown): number | undefined {
@@ -59,7 +59,7 @@ function statusCodeFromError(error: unknown): number | undefined {
 }
 
 function isLinkUnavailable(error: string): boolean {
-  return /invite.*(?:revoked|expired|invalid|not found|gone)|unknown invite|group.*(?:not found|does not exist)|not-authorized|group-invite-invalid|invite-link-revoked/i.test(error);
+  return /invite.*(?:revoked|expired|invalid|not found|gone)|unknown invite|group.*(?:not found|does not exist)|not-authorized|group-invite-invalid|invite-link-revoked|\b(?:410|gone)\b/i.test(error);
 }
 
 function isGroupFull(error: string): boolean {
@@ -185,7 +185,7 @@ export async function joinWhatsAppInvite(
     }
     const normalized = normalizedError(message);
     const rateLimited = isRateLimited(message) || statusCode === 429;
-    const accountRestricted = /spam limit|temporarily banned|account restricted|too many groups|rate over limit/i.test(normalized);
+    const accountRestricted = /spam limit|temporarily banned|account restricted|too many groups|rate over ?limit|rate overlimit/i.test(normalized);
     return {
       success: false,
       requestRequired: isRequestRequired(message),
