@@ -361,6 +361,38 @@ const groupInventoryCache = new Map<
 >();
 const groupInventoryLastKnown = new Map<string, GroupSummary[]>();
 const groupInventoryInflight = new Map<string, Promise<GroupSummary[]>>();
+const GROUP_INVENTORY_WARMUP_CONCURRENCY = 2;
+type GroupInventoryWarmupTask = {
+  key: string;
+  promise: Promise<void>;
+  run: () => Promise<void>;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+};
+const groupInventoryWarmupQueue: GroupInventoryWarmupTask[] = [];
+const groupInventoryWarmups = new Map<string, Promise<void>>();
+let activeGroupInventoryWarmups = 0;
+
+function pumpGroupInventoryWarmups(): void {
+  while (
+    activeGroupInventoryWarmups < GROUP_INVENTORY_WARMUP_CONCURRENCY &&
+    groupInventoryWarmupQueue.length
+  ) {
+    const task = groupInventoryWarmupQueue.shift();
+    if (!task) return;
+    activeGroupInventoryWarmups += 1;
+    void task
+      .run()
+      .then(task.resolve, task.reject)
+      .finally(() => {
+        activeGroupInventoryWarmups = Math.max(0, activeGroupInventoryWarmups - 1);
+        if (groupInventoryWarmups.get(task.key) === task.promise) {
+          groupInventoryWarmups.delete(task.key);
+        }
+        pumpGroupInventoryWarmups();
+      });
+  }
+}
 const groupParticipantCache = new Map<
   string,
   { expiresAt: number; participants: string[] }
@@ -492,6 +524,37 @@ export async function listGroups(
     });
   groupInventoryInflight.set(cacheKey, request);
   return (await request).map((group) => ({ ...group }));
+}
+
+/**
+ * Populate the session-scoped inventory cache after a verified socket open.
+ * This is deliberately best-effort; callers must never wait for warm-up.
+ */
+export function warmGroupInventory(
+  workspaceId: string,
+  sessionId: string,
+): Promise<void> {
+  const key = `${workspaceId}:${sessionId}`;
+  const cached = groupInventoryCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return Promise.resolve();
+  const existing = groupInventoryWarmups.get(key);
+  if (existing) return existing;
+  let resolveTask!: () => void;
+  let rejectTask!: (error: unknown) => void;
+  const promise = new Promise<void>((resolve, reject) => {
+    resolveTask = resolve;
+    rejectTask = reject;
+  });
+  groupInventoryWarmups.set(key, promise);
+  groupInventoryWarmupQueue.push({
+    key,
+    promise,
+    run: () => listGroups(workspaceId, sessionId).then(() => undefined),
+    resolve: resolveTask,
+    reject: rejectTask,
+  });
+  pumpGroupInventoryWarmups();
+  return promise;
 }
 
 export function filterAdminGroupSummaries(groups: GroupSummary[]): GroupSummary[] {

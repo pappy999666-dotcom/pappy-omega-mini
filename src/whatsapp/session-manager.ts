@@ -1168,6 +1168,14 @@ async function openWhatsAppSession(
               lastError: undefined,
               disconnectReason: undefined,
             });
+            // Warm the existing session-scoped group inventory cache in the background.
+            // Telegram callbacks and broadcast jobs never wait for this task.
+            void import("./transport-adapter.js")
+              .then(({ warmGroupInventory }) => warmGroupInventory(workspaceId, sessionId))
+              .catch((error) => {
+                if (process.env.PAPPY_DEBUG_WA_GROUPS === "1")
+                  console.debug(`[pappy-omega-mini] group inventory warm-up skipped session=${sessionId}:`, error instanceof Error ? error.message : String(error));
+              });
             const chatId = pairingNotifications.get(key);
             const selfJid = (socket as unknown as { user?: { id?: string } }).user?.id;
             if (pendingWhatsAppPairingNotice.has(key) && selfJid) {
