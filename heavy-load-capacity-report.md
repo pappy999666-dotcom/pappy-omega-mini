@@ -84,3 +84,9 @@ A future scale-out design should partition sessions across multiple worker proce
 The hardening build passed `npm run build` and the complete test suite: **28 test files and 253 tests**. The tested commit was pushed to GitHub `main` without force-pushing. The VPS rollout restarted only `pappy-omega-mini.service`, preserved protected environment/auth/storage/data directories and databases, returned health version `1.2.92`, and passed `npm run doctor:ci` for Node, owner configuration, encryption, storage, Telegram, Redis, and MongoDB.
 
 No pairing, session migration, session purge, kick, approval/rejection, mass broadcast, or real WhatsApp traffic injection was performed. The live validation was deliberately read-only and non-destructive.
+
+## Final post-deployment soak
+
+After commit `9afbca2` was deployed, the public HTTPS health endpoint was tested again with 50 concurrent clients for 60 seconds. It completed 5,180 requests with 5,180 successful responses, zero failures, and zero invalid bodies. Latency was 461 ms at p50, 1,243 ms at p95, 2,514 ms at p99, and 5,279 ms at maximum. The service remained active/running with `ExecMainStatus=0` and `NRestarts=0`; the final health response was `ok: true`, package version `1.2.92`, with inbound and outbound queues at zero active and zero pending. The final runtime snapshot reported approximately 79% process CPU, 291 MB RSS, 82 ms p95 event-loop lag, and 236 ms maximum sampled event-loop lag. The post-deployment journal scan found no fatal, uncaught, crash, `SIGKILL`, crypto-storm, `smax-invalid`, or reconnect-scheduled event.
+
+The higher maximum latency in this final public flood is a tail-latency observation, not a failed request or a process stall. It reinforces the need to monitor p95/p99 latency during real media and WhatsApp workloads rather than promising a fixed sub-second response under every possible traffic pattern.

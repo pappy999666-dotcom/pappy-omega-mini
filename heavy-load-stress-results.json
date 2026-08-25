@@ -59,6 +59,39 @@
       "max": 3717.15
     }
   },
+  "finalPostDeployHttpsFlood": {
+    "durationSeconds": 60,
+    "concurrency": 50,
+    "requests": 5180,
+    "successes": 5180,
+    "failures": 0,
+    "invalidBodies": 0,
+    "latencyMs": {
+      "p50": 460.87,
+      "p95": 1242.7,
+      "p99": 2514.31,
+      "max": 5279.07
+    },
+    "service": {
+      "active": true,
+      "subState": "running",
+      "execMainStatus": 0,
+      "nRestarts": 0
+    },
+    "health": {
+      "ok": true,
+      "packageVersion": "1.2.92",
+      "inboundActive": 0,
+      "inboundPending": 0,
+      "outboundActive": 0,
+      "outboundPending": 0,
+      "runtimeCpuPercent": 79.04,
+      "runtimeEventLoopP95Ms": 82.12,
+      "runtimeEventLoopMaxMs": 236.32,
+      "runtimeRssBytes": 291082240
+    },
+    "stormJournalMatches": 0
+  },
   "vpsSamplingDuringFlood": {
     "samples": 12,
     "healthFailures": 0,
