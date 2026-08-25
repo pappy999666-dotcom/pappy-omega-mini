@@ -376,6 +376,63 @@ export class BaileysRetryCounterCache {
   }
 }
 
+export interface CryptoFailureDecision {
+  matched: boolean;
+  count: number;
+  windowStartedAt: number;
+  shouldRecover: boolean;
+}
+
+export function isBaileysCryptoFailure(input: unknown): boolean {
+  const text = input instanceof Error
+    ? `${input.name} ${input.message}`
+    : typeof input === "string"
+      ? input
+      : (() => {
+          try {
+            return JSON.stringify(input);
+          } catch {
+            return String(input);
+          }
+        })();
+  const lower = text.toLowerCase();
+  return lower.includes("messagecountererror") ||
+    lower.includes("key used already or never filled") ||
+    lower.includes("bad mac") ||
+    lower.includes("transaction failed, rolling back");
+}
+
+export class SessionCryptoFailureGuard {
+  private windowStartedAt = 0;
+  private count = 0;
+  private lastRecoveryAt = Number.NEGATIVE_INFINITY;
+
+  constructor(
+    private readonly windowMs = 30_000,
+    private readonly recoveryThreshold = 12,
+    private readonly recoveryCooldownMs = 120_000,
+  ) {}
+
+  observe(input: unknown, now = Date.now()): CryptoFailureDecision {
+    if (!isBaileysCryptoFailure(input))
+      return { matched: false, count: 0, windowStartedAt: this.windowStartedAt, shouldRecover: false };
+    if (!this.windowStartedAt || now - this.windowStartedAt > this.windowMs) {
+      this.windowStartedAt = now;
+      this.count = 0;
+    }
+    this.count += 1;
+    const shouldRecover = this.count >= this.recoveryThreshold &&
+      now - this.lastRecoveryAt >= this.recoveryCooldownMs;
+    return { matched: true, count: this.count, windowStartedAt: this.windowStartedAt, shouldRecover };
+  }
+
+  markRecovered(now = Date.now()): void {
+    this.lastRecoveryAt = now;
+    this.windowStartedAt = now;
+    this.count = 0;
+  }
+}
+
 interface MessageCacheKey {
   remoteJid?: string;
   id?: string;
@@ -505,8 +562,7 @@ async function openWhatsAppSession(
   let smaxInvalidWindowStartedAt = 0;
   let smaxInvalidCount = 0;
   let lastSmaxInvalidLogAt = 0;
-  let cryptoErrorWindowStartedAt = 0;
-  let cryptoErrorCount = 0;
+  const cryptoFailureGuard = new SessionCryptoFailureGuard();
   let lastCryptoWarningAt = 0;
   let stableOpenTimer: ReturnType<typeof setTimeout> | undefined;
   const CRYPTO_ERROR_WINDOW_MS = 30_000;
@@ -539,33 +595,33 @@ async function openWhatsAppSession(
               .slice(0, 2_000);
           })
           .join(" ");
-        const cryptoFailure = /failed to decrypt message|No session found to decrypt message|Expected Buffer instead of|Received message with old counter/i.test(rendered);
-        if (cryptoFailure) {
+        const cryptoDecision = cryptoFailureGuard.observe(rendered);
+        if (cryptoDecision.matched) {
           const now = Date.now();
-          if (!cryptoErrorWindowStartedAt || now - cryptoErrorWindowStartedAt > CRYPTO_ERROR_WINDOW_MS) {
-            cryptoErrorWindowStartedAt = now;
-            cryptoErrorCount = 0;
+          if (cryptoDecision.shouldRecover) {
+            cryptoFailureGuard.markRecovered(now);
+            scheduleCryptoRecovery?.(new Error("Baileys crypto failure threshold reached."));
           }
-          cryptoErrorCount += 1;
           if (
-            cryptoErrorCount >= CRYPTO_ERROR_LIMIT &&
+            cryptoDecision.count >= CRYPTO_ERROR_LIMIT &&
             now - lastCryptoWarningAt >= CRYPTO_ERROR_WINDOW_MS
           ) {
             lastCryptoWarningAt = now;
             const elapsedSeconds = Math.max(
               1,
-              Math.round((now - cryptoErrorWindowStartedAt) / 1000),
+              Math.round((now - cryptoDecision.windowStartedAt) / 1000),
             );
             noteError(
               key,
-              `message decryption failures suppressed: ${cryptoErrorCount} in ${elapsedSeconds}s`,
+              `Baileys crypto failures suppressed: ${cryptoDecision.count} in ${elapsedSeconds}s`,
             );
             console.warn(
-              `[pappy-omega-mini] suppressed message-level Baileys decryption failures session=${sessionId}; socket kept alive after ${cryptoErrorCount} failures in ${elapsedSeconds}s`,
+              `[pappy-omega-mini] suppressed Baileys crypto failures session=${sessionId}; count=${cryptoDecision.count} in ${elapsedSeconds}s`,
             );
           }
-          // A bad or stale inbound message key is not proof that the websocket
-          // transport is dead. Closing here creates a reconnect/crypto storm.
+          // A single stale counter or bad MAC is not proof that the websocket
+          // transport is dead. Only a sustained per-session storm requests one
+          // bounded recovery, and the cooldown prevents reconnect loops.
           return;
         }
         if (rendered.includes("smax-invalid")) {
@@ -605,6 +661,7 @@ async function openWhatsAppSession(
   const groupMetadataCache = new BoundedTtlCache<unknown>(512, 15_000);
   const groupMetadataInflight = new Map<string, Promise<unknown>>();
   let socket!: RuntimeSocket;
+  let scheduleCryptoRecovery: ((error?: unknown) => void) | undefined;
   const getMessage = async (messageKey: unknown): Promise<Record<string, unknown> | undefined> => {
     const candidate = (messageKey ?? {}) as MessageCacheKey;
     const cacheKey = messageCacheKey(candidate);
@@ -678,6 +735,7 @@ async function openWhatsAppSession(
       // The connection.update close handler owns state transition and reconnect scheduling.
     }
   };
+  scheduleCryptoRecovery = forceSocketRecovery;
   socket.ws?.on?.("error", forceSocketRecovery);
   socket.ws?.on?.("close", () => {
     if (isCurrentSocket())

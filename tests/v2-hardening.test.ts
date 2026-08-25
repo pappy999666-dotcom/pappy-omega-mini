@@ -17,6 +17,7 @@ import {
 import {
   BAILEYS_SESSION_SOCKET_OPTIONS,
   BaileysRetryCounterCache,
+  SessionCryptoFailureGuard,
   authenticatedOpenSessionPatch,
   classifyDisconnect,
   isLiveWhatsAppUpsert,
@@ -135,6 +136,19 @@ describe("V2 hardening", () => {
     expect(isLiveWhatsAppUpsert()).toBe(true);
     expect(isLiveWhatsAppUpsert("append")).toBe(false);
     expect(isLiveWhatsAppUpsert("history")).toBe(false);
+  });
+
+  it("contains crypto failures and requests at most one recovery per cooldown", () => {
+    const guard = new SessionCryptoFailureGuard(30_000, 3, 120_000);
+    expect(guard.observe(new Error("Bad MAC"), 1_000)).toMatchObject({ matched: true, count: 1, shouldRecover: false });
+    expect(guard.observe(new Error("MessageCounterError: Key used already or never filled"), 2_000)).toMatchObject({ matched: true, count: 2, shouldRecover: false });
+    expect(guard.observe(new Error("Bad MAC"), 3_000)).toMatchObject({ matched: true, count: 3, shouldRecover: true });
+    guard.markRecovered(3_000);
+    expect(guard.observe(new Error("Bad MAC"), 4_000)).toMatchObject({ matched: true, count: 1, shouldRecover: false });
+    expect(guard.observe(new Error("Bad MAC"), 5_000)).toMatchObject({ matched: true, count: 2, shouldRecover: false });
+    expect(guard.observe(new Error("Bad MAC"), 6_000)).toMatchObject({ matched: true, count: 3, shouldRecover: false });
+    expect(guard.observe(new Error("Bad MAC"), 124_000)).toMatchObject({ matched: true, count: 1, shouldRecover: false });
+    expect(guard.observe(new Error("ordinary failure"), 125_000)).toMatchObject({ matched: false, shouldRecover: false });
   });
 
   it("keeps retry counters bounded and clears them deterministically", async () => {
