@@ -24,7 +24,7 @@ import {
   removeEncryptedJson,
   writeEncryptedJson,
 } from "../core/encrypted-store.js";
-import { routeWhatsAppText, type WhatsAppReply } from "./message-router.js";
+import { isSelfExecutableWhatsAppCommand, routeWhatsAppText, type WhatsAppReply } from "./message-router.js";
 import { runAntiChecks, runAntiParticipantEvent } from "./anti-system/engine.js";
 import { collectLinks, extractWhatsAppGroupInviteUrls } from "../links/link-collector.js";
 import { prepareCanonicalPreviewContent } from "./baileys-native-preview.js";
@@ -746,7 +746,7 @@ async function openWhatsAppSession(
         const combinedText = [text, quotedText].filter(Boolean).join("\n");
         const commandSource = combinedText.trim().toLowerCase();
         const sessionPrefix = getSession(workspaceId, sessionId).prefix.trim();
-        const selfAuthoredText = message.key.fromMe === true && !interactionId && !interactionDisplayText;
+        const selfAuthoredText = message.key.fromMe === true && !interactionId && !interactionDisplayText && isSelfExecutableWhatsAppCommand(commandSource, sessionPrefix);
         const isPrefixedCommand = Boolean(
           interactionId || interactionDisplayText || selfAuthoredText || (sessionPrefix && commandSource.startsWith(sessionPrefix)),
         );
@@ -878,7 +878,7 @@ async function openWhatsAppSession(
             sessionId,
             ...(messageKey.id ? { messageId: messageKey.id } : {}),
             chatJid: message.key.remoteJid,
-            senderJid,
+            senderJid: resolvedSenderJid ?? senderJid,
             ...(quotedSenderJid ? { quotedSenderJid } : {}),
             ...(quotedMessageKey ? { quotedMessageKey } : {}),
             ...(mentionedJids.filter((value): value is string => Boolean(value)).length

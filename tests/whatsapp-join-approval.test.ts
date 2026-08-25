@@ -205,8 +205,7 @@ describe("WhatsApp Join Approval commands", () => {
     expect(result).toContain("Action        · APPROVE");
     expect(result).toContain("JOIN APPROVAL");
     const selfResult = await routeWhatsAppText({ workspaceId: ctx.workspaceId, sessionId: ctx.sessionId, senderJid: ctx.senderJid as string, chatJid: ctx.chatJid as string, text: "approveall", fromMe: true });
-    expect(selfResult).toBeTypeOf("object");
-    expect(selfResult).toMatchObject({ nativeFlow: expect.any(Array) });
+    expect(selfResult).toBeNull();
   });
 
   it("requires a WhatsApp group chat for approval commands", async () => {

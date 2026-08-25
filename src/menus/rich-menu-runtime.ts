@@ -138,7 +138,7 @@ const GROUPS: MenuGroup[] = [
     "linkpermit", "rmlinkpermit", "botpermit", "rmbotpermit", "spampermit", "rmspampermit", "picpermit", "rmpicpermit", "vidpermit", "rmvidpermit", "audpermit", "rmaudpermit", "vnpermit", "rmvnpermit", "emojipermit", "rmemojipermit", "sticpermit", "rmsticpermit", "nsfwpermit", "rmnsfwpermit", "mentionpermit", "rmmentionpermit", "gmpermit", "rmgmpermit", "pollpermit", "rmpollpermit", "fwdpermit", "rmfwdpermit", "chanpermit", "rmchanpermit",
     "antilinkmsg", "antispammsg", "antivnmsg", "antitxtmsg", "antiemojimsg", "antiwordsmsg", "antigroupmentionmsg", "antigmmsg", "antipollmsg", "antiforwardmsg", "antichannelmsg", "antigstatusmsg",
   ] },
-  { key: "tools", title: "ACCESS & TOOLS", commands: ["setsudo", "rmsudo", "purge"] },
+  { key: "tools", title: "ACCESS & TOOLS", commands: ["setsudo", "rmsudo"] },
 ];
 
 export const CATEGORY_LABELS: Record<string, string> = {

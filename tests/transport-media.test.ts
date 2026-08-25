@@ -213,7 +213,7 @@ describe("WhatsApp media transport coverage", () => {
 
 
 describe("styled group status transport", () => {
-  it("leaves ordinary text unstyled even when sent through the d-status adapter", async () => {
+  it("applies a color background to ordinary text through the d-status adapter", async () => {
     mocks.send.mockClear();
     await sendGroupColorStatus(
       "workspace",
@@ -227,9 +227,12 @@ describe("styled group status transport", () => {
       Record<string, unknown>,
       Record<string, unknown> | undefined,
     ];
-    expect(content.text).toBe("ordinary status text");
+    expect(content.text).toContain("ordinary status text");
+    expect(content.text).toContain("Cyber Alpha");
     expect(content.groupStatus).toBe(true);
-    expect(options).toBeUndefined();
+    expect(options?.backgroundColor).toMatch(/^#[0-9A-F]{6}$/);
+    expect(options?.backgroundColor).not.toBe("#000000");
+    expect(typeof options?.font).toBe("number");
   });
 
   it("sends group-aware color metadata through Baileys generation options", async () => {

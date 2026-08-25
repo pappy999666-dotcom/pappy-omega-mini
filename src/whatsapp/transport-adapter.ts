@@ -1333,12 +1333,8 @@ export async function sendGroupColorStatus(
   const sourceText = payload.text ?? "";
   const mediaCaption = payload.media?.caption?.trim() ?? "";
   const detectorText = sourceText || mediaCaption;
-  // `d` means design only for a URL. Plain text must remain the ordinary
-  // group-status path so `.dgstatus hello` never creates a colored canvas.
-  if (!firstHttpUrl(detectorText)) {
-    await sendGroupStatus(workspaceId, sessionId, jid, payload);
-    return;
-  }
+  // Designed status applies to both URL and ordinary text payloads. URL
+  // metadata is preserved when available; text uses the text design templates.
   const groupName = String(group.subject ?? "WhatsApp Group").trim() || "WhatsApp Group";
   const sourceContent = payload.media
     ? messagePayload(detectorText, payload.media)

@@ -113,6 +113,24 @@ describe("shared session menu", () => {
     expect(help.nativeTable.footer).not.toContain(".menu");
   });
 
+  it("maps every visible command button to a registered command with its direct prefix", async () => {
+    const user = resolveUser(`wa-menu-click-matrix-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "click-matrix" });
+    updateSession(user.workspaceId, session.sessionId, { prefix: "!" });
+    const payload = await buildWhatsappMenuPayload(getSession(user.workspaceId, session.sessionId), true, "all");
+    const registered = new Set(createCommandRegistry().flatMap((command) => [command.name, ...command.aliases]));
+    const commandButtons = payload.richMenu.body.cards
+      .flatMap((card) => card.buttons)
+      .filter((button) => button.id.startsWith("cmd:"));
+    expect(commandButtons.length).toBeGreaterThan(20);
+    for (const button of commandButtons) {
+      const command = button.id.split(":")[1] ?? "";
+      expect(registered.has(command), `unregistered menu command: ${command}`).toBe(true);
+      expect(button.text).toBe(`!${command}`);
+      expect(button.text).not.toBe(`!open ${command}`);
+    }
+  });
+
   it("keeps session changes inside the owning workspace", () => {
     const first = resolveUser(`owner-${Date.now()}-${Math.random()}`);
     const second = resolveUser(`owner-${Date.now()}-${Math.random()}`);
