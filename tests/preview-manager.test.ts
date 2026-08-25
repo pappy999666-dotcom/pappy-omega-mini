@@ -7,6 +7,7 @@ import {
   firstHttpUrl,
   isCompletePreview,
   prepareCanonicalPreviewContent,
+  prepareCanonicalPreviewContentWithBudget,
 } from "../src/whatsapp/baileys-native-preview.js";
 import {
   extractWhatsAppGroupInviteUrls,
@@ -45,6 +46,27 @@ describe("canonical Baileys-native preview pipeline", () => {
     expect(firstHttpUrl("Join https://chat.whatsapp.com/ABC123.")).toBe(
       "https://chat.whatsapp.com/ABC123",
     );
+  });
+
+  it("returns a cold URL payload within the interactive budget", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return new Response("", { status: 404 });
+    }) as typeof fetch;
+    try {
+      const startedAt = Date.now();
+      const text = "https://example.com/cold-gstatus";
+      const content = await prepareCanonicalPreviewContentWithBudget({
+        text,
+        content: { text, groupStatus: true },
+        cacheScope: `test-budget-${Date.now()}`,
+      }, 100);
+      expect(Date.now() - startedAt).toBeLessThan(300);
+      expect(content).toEqual({ text, groupStatus: true });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("resolves parameterized group invites through the bare invite code", async () => {

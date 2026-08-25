@@ -4,6 +4,7 @@ import { getWhatsAppSocket } from "./session-manager.js";
 import {
   firstHttpUrl,
   prepareCanonicalPreviewContent,
+  prepareCanonicalPreviewContentWithBudget,
 } from "./baileys-native-preview.js";
 import { createGroupStatusDesign } from "./status-design.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
@@ -1215,7 +1216,7 @@ export async function sendGroupStatus(
   if (!send) throw new Error("Unsupported capability: groupStatus");
   if (payload.media) {
     const mediaContent = messagePayload(text, payload.media);
-    const preparedMedia = await prepareCanonicalPreviewContent({
+    const preparedMedia = await prepareCanonicalPreviewContentWithBudget({
       text,
       content: mediaContent,
       target: "group-status",
@@ -1234,7 +1235,7 @@ export async function sendGroupStatus(
     ...statusPayload,
     groupStatus: true,
   };
-  const prepared = await prepareCanonicalPreviewContent({
+  const prepared = await prepareCanonicalPreviewContentWithBudget({
     text,
     content,
     target: "group-status",

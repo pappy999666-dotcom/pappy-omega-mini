@@ -404,6 +404,36 @@ describe("WhatsApp command registry", () => {
     })).resolves.toBeNull();
   });
 
+  it("routes Full Menu and category clicks as view interactions", async () => {
+    const user = resolveUser(`rich-menu-view-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "rich-menu-view",
+      phoneNumber: "2348012345678",
+    });
+    updateSession(user.workspaceId, session.sessionId, {
+      status: "ACTIVE",
+      prefix: "!",
+      lastHealthyAt: Date.now(),
+    });
+    const fullMenu = await routeWhatsAppText({
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      senderJid: "2348012345678@s.whatsapp.net",
+      text: "",
+      interactionId: "ui:menu:all:nonce",
+    });
+    expect(fullMenu).toMatchObject({ richMenu: { header: { title: expect.stringContaining("FULL COMMAND MENU") } } });
+    const category = await routeWhatsAppText({
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      senderJid: "2348012345678@s.whatsapp.net",
+      text: "",
+      interactionDisplayText: "Open Moderation",
+    });
+    expect(category).toMatchObject({ richMenu: { header: { title: expect.stringContaining("GROUP MODERATION") } } });
+  });
+
   it("supports null no-prefix mode per session", async () => {
     const user = resolveUser(`prefix-null-${Date.now()}-${Math.random()}`);
     const session = createSession({

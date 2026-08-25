@@ -144,6 +144,12 @@ export async function routeWhatsAppText(
 
   const commandName = raw.trim().split(/\s+/, 1)[0]?.toLowerCase();
   const isOwner = isOwnerFor(message, session);
+  if (menuAction?.view) {
+    const payload = await buildWhatsappMenuPayload(session, isOwner, menuAction.view);
+    return payload.media
+      ? { media: payload.media, caption: payload.caption, richMenu: payload.richMenu }
+      : { text: payload.text, richMenu: payload.richMenu };
+  }
   // WhatsApp is a private command surface: public and unauthorized senders
   // receive no reply and cannot open the menu. `fromMe` is the transport-level
   // proof that this was sent by the authenticated account itself, even when

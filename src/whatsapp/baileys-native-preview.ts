@@ -995,6 +995,32 @@ export function getPreviewDebugSnapshot(scope = "global"): PreviewDebugSnapshot 
   return lastDebug.get(scope);
 }
 
+/**
+ * Keep an interactive status command responsive on a cold URL preview. A cached
+ * preview is returned normally; if the resolver exceeds the small interactive
+ * budget, the original URL payload is sent and the resolver continues to warm
+ * the shared cache without blocking the WhatsApp send.
+ */
+export async function prepareCanonicalPreviewContentWithBudget(
+  input: CanonicalPreviewInput,
+  budgetMs = 1_200,
+): Promise<Record<string, unknown>> {
+  const preparation = prepareCanonicalPreviewContent(input);
+  preparation.catch(() => undefined);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      preparation,
+      new Promise<Record<string, unknown>>((resolve) => {
+        timer = setTimeout(() => resolve({ ...input.content }), Math.max(100, budgetMs));
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function closeCanonicalPreview(): Promise<void> {
   await redis?.quit().catch(() => undefined);
   redis = undefined;
