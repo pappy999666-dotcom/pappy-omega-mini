@@ -1,0 +1,79 @@
+{
+  "host": {
+    "vcpus": 6,
+    "memoryGiB": 11,
+    "swapGiB": 2,
+    "diskFreeGiBApprox": 185,
+    "service": "pappy-omega-mini.service",
+    "packageVersion": "1.2.92",
+    "commit": "9afbca2"
+  },
+  "syntheticAdmissionStress": {
+    "sessions": 50,
+    "inboundConfig": {
+      "concurrency": 12,
+      "perSessionActive": 2,
+      "maxPending": 500,
+      "perSessionMaxPending": 100
+    },
+    "outboundConfig": {
+      "concurrency": 24,
+      "perSessionActive": 1,
+      "maxPending": 1000,
+      "perSessionMaxPending": 200
+    },
+    "controlled": {
+      "attempted": 1200,
+      "accepted": 1112,
+      "droppedOrRejected": 88,
+      "completed": 1112,
+      "p50Ms": 130.98,
+      "p95Ms": 315.87,
+      "maxMs": 348.41,
+      "maxEventLoopLagMs": 0.68,
+      "unhandledRejections": 0
+    },
+    "saturated": {
+      "attempted": 4000,
+      "accepted": 1536,
+      "droppedOrRejected": 2464,
+      "completed": 1536,
+      "p50Ms": 441.8,
+      "p95Ms": 826.53,
+      "maxMs": 884.36,
+      "maxEventLoopLagMs": 0.56,
+      "unhandledRejections": 0
+    }
+  },
+  "httpsHealthFlood": {
+    "durationSeconds": 60,
+    "concurrency": 50,
+    "requests": 5198,
+    "successes": 5198,
+    "failures": 0,
+    "invalidBodies": 0,
+    "latencyMs": {
+      "p50": 472.89,
+      "p95": 1114.27,
+      "p99": 3015.37,
+      "max": 3717.15
+    }
+  },
+  "vpsSamplingDuringFlood": {
+    "samples": 12,
+    "healthFailures": 0,
+    "serviceRestarts": 0,
+    "serviceStatus": "active/running",
+    "execMainStatus": 0,
+    "runtimeCpuPercentObserved": {
+      "min": 26.51,
+      "max": 75.75
+    },
+    "runtimeEventLoopP95MsMax": 122.81,
+    "runtimeEventLoopMaxMsMax": 242.61,
+    "runtimeRssBytesMin": 303009792,
+    "runtimeRssBytesMax": 303534080,
+    "queueActiveAndPending": "0/0 at all sampled health responses",
+    "stormJournalMatches": 0
+  }
+}
