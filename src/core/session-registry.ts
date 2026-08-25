@@ -187,6 +187,18 @@ export function isActiveWhatsAppSession(session: WhatsAppSession): boolean {
   return session.status === "ACTIVE" && session.authHealth !== "INVALID" && session.authHealth !== "DEGRADED";
 }
 
+/**
+ * Persisted transport failures are recoverable when credentials are still
+ * present. DEGRADED and RECONNECTING are transient transport states, not proof
+ * that a session must be left stranded until an owner clicks Reconnect.
+ */
+export function isPersistedWhatsAppSessionRecoverable(
+  session: WhatsAppSession,
+): boolean {
+  return !["LOGGED_OUT", "BANNED", "FROZEN"].includes(session.status) &&
+    session.authHealth !== "INVALID";
+}
+
 export function isSessionVisibleInTelegram(session: WhatsAppSession): boolean {
   if (session.status === "LOGGED_OUT" || session.status === "BANNED") return false;
   return !(

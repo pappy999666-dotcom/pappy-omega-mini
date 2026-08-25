@@ -23,6 +23,7 @@ import {
   getSession,
   hydrateSessionRegistry,
   listAllSessions,
+  isPersistedWhatsAppSessionRecoverable,
   updateSession,
 } from "./core/session-registry.js";
 import { hydrateControlPlane } from "./core/control-plane.js";
@@ -266,12 +267,7 @@ async function main(): Promise<void> {
   });
   const recoverableSessions = [];
   for (const session of ownedSessions) {
-    if (
-      session.status === "LOGGED_OUT" ||
-      session.authHealth === "INVALID" ||
-      session.authHealth === "DEGRADED"
-    )
-      continue;
+    if (!isPersistedWhatsAppSessionRecoverable(session)) continue;
     if (
       await hasPersistedWhatsAppAuth(session.workspaceId, session.sessionId)
     ) {

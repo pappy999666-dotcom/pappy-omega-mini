@@ -25,7 +25,9 @@ import {
 import { createSafeError, renderSafeError } from "../src/core/errors.js";
 import {
   createSession,
+  getSession,
   getSessionJoinSettings,
+  isPersistedWhatsAppSessionRecoverable,
   updateSession,
   updateSessionJoinSettings,
 } from "../src/core/session-registry.js";
@@ -159,6 +161,29 @@ describe("V2 hardening", () => {
     });
     expect(reads).toBe(1);
     await cached.set({ session: { "key-1": { value: "new" } } });
+  });
+
+  it("retries transiently reconnecting persisted sessions without reviving terminal states", () => {
+    const workspaceId = `recoverable-${Date.now()}-${Math.random()}`;
+    const reconnecting = createSession({ workspaceId, sessionName: "reconnecting" });
+    const degraded = createSession({ workspaceId, sessionName: "degraded" });
+    const loggedOut = createSession({ workspaceId, sessionName: "logged-out" });
+    const invalid = createSession({ workspaceId, sessionName: "invalid" });
+    const banned = createSession({ workspaceId, sessionName: "banned" });
+    const frozen = createSession({ workspaceId, sessionName: "frozen" });
+    updateSession(workspaceId, reconnecting.sessionId, { status: "RECONNECTING", authHealth: "DEGRADED" });
+    updateSession(workspaceId, degraded.sessionId, { status: "DEGRADED", authHealth: "UNKNOWN" });
+    updateSession(workspaceId, loggedOut.sessionId, { status: "LOGGED_OUT", authHealth: "INVALID" });
+    updateSession(workspaceId, invalid.sessionId, { status: "ERROR", authHealth: "INVALID" });
+    updateSession(workspaceId, banned.sessionId, { status: "BANNED", authHealth: "VALID" });
+    updateSession(workspaceId, frozen.sessionId, { status: "FROZEN", authHealth: "VALID" });
+
+    expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, reconnecting.sessionId))).toBe(true);
+    expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, degraded.sessionId))).toBe(true);
+    expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, loggedOut.sessionId))).toBe(false);
+    expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, invalid.sessionId))).toBe(false);
+    expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, banned.sessionId))).toBe(false);
+    expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, frozen.sessionId))).toBe(false);
   });
 
   it("selects only healthy owned sessions and honors a safe preference", () => {
