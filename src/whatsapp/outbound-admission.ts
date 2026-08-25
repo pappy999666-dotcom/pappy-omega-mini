@@ -10,6 +10,7 @@ export interface OutboundAdmissionSnapshot {
   concurrency: number;
   perSessionActive: number;
   maxPending: number;
+  perSessionMaxPending: number;
   active: number;
   pending: number;
   oldestWaitMs: number;
@@ -23,6 +24,13 @@ const GLOBAL_CONCURRENCY = Math.max(
 const MAX_PENDING = Math.max(
   50,
   Number.parseInt(process.env.OUTBOUND_WA_MAX_PENDING ?? "1000", 10) || 1000,
+);
+const PER_SESSION_MAX_PENDING = Math.max(
+  10,
+  Math.min(
+    MAX_PENDING,
+    Number.parseInt(process.env.OUTBOUND_WA_MAX_PENDING_PER_SESSION ?? "200", 10) || 200,
+  ),
 );
 
 interface PendingTask extends OutboundAdmissionTask {
@@ -101,6 +109,7 @@ export function enqueueOutbound(task: OutboundAdmissionTask): Promise<void> {
   const pending = [...pendingBySession.values()].reduce((sum, queue) => sum + queue.length, 0);
   if (pending >= MAX_PENDING) return Promise.reject(new Error("Outbound admission queue is full."));
   const queue = pendingBySession.get(task.sessionId) ?? [];
+  if (queue.length >= PER_SESSION_MAX_PENDING) return Promise.reject(new Error("Outbound session admission queue is full."));
   if (!pendingBySession.has(task.sessionId)) {
     pendingBySession.set(task.sessionId, queue);
     if (!sessionOrder.includes(task.sessionId)) sessionOrder.push(task.sessionId);
@@ -132,10 +141,11 @@ export function outboundAdmissionSnapshot(now = Date.now()): OutboundAdmissionSn
     concurrency: GLOBAL_CONCURRENCY,
     perSessionActive: 1,
     maxPending: MAX_PENDING,
+    perSessionMaxPending: PER_SESSION_MAX_PENDING,
     active,
     pending,
     oldestWaitMs: Math.round(oldestWaitMs),
-    perSession,
+    perSession: {},
   };
 }
 

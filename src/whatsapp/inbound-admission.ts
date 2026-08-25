@@ -12,6 +12,7 @@ export interface InboundAdmissionSnapshot {
   concurrency: number;
   perSessionActive: number;
   maxPending: number;
+  perSessionMaxPending: number;
   active: number;
   pending: number;
   oldestWaitMs: number;
@@ -33,6 +34,13 @@ const PER_SESSION_ACTIVE = Math.max(
 const MAX_PENDING = Math.max(
   50,
   Number.parseInt(process.env.INBOUND_WA_MAX_PENDING ?? "500", 10) || 500,
+);
+const PER_SESSION_MAX_PENDING = Math.max(
+  10,
+  Math.min(
+    MAX_PENDING,
+    Number.parseInt(process.env.INBOUND_WA_MAX_PENDING_PER_SESSION ?? "100", 10) || 100,
+  ),
 );
 
 interface PendingTask extends InboundAdmissionTask {
@@ -111,6 +119,11 @@ export function enqueueInbound(task: InboundAdmissionTask): boolean {
     return false;
   }
   const queue = pendingBySession.get(task.sessionId) ?? [];
+  if (queue.length >= PER_SESSION_MAX_PENDING) {
+    dropped += 1;
+    task.onDrop?.();
+    return false;
+  }
   if (!pendingBySession.has(task.sessionId)) {
     pendingBySession.set(task.sessionId, queue);
     sessionOrder.push(task.sessionId);
@@ -145,6 +158,7 @@ export function inboundAdmissionSnapshot(now = Date.now()): InboundAdmissionSnap
     concurrency: GLOBAL_CONCURRENCY,
     perSessionActive: PER_SESSION_ACTIVE,
     maxPending: MAX_PENDING,
+    perSessionMaxPending: PER_SESSION_MAX_PENDING,
     active,
     pending,
     oldestWaitMs: Math.round(oldestWaitMs),
@@ -157,6 +171,7 @@ export const inboundAdmissionConfig = {
   concurrency: GLOBAL_CONCURRENCY,
   perSessionActive: PER_SESSION_ACTIVE,
   maxPending: MAX_PENDING,
+  perSessionMaxPending: PER_SESSION_MAX_PENDING,
 } as const;
 
 export function resetInboundAdmissionForTests(): void {

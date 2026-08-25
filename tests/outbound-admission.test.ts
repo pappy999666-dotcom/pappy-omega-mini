@@ -82,7 +82,7 @@ describe("bounded outbound admission", () => {
     let releaseFirst!: () => void;
     const firstFinished = new Promise<void>((resolve) => { releaseFirst = resolve; });
     const accepted: Promise<void>[] = [];
-    const configuredCap = outboundAdmissionSnapshot().maxPending;
+    const configuredCap = outboundAdmissionSnapshot().perSessionMaxPending;
     for (let index = 0; index < configuredCap + 1; index += 1) {
       accepted.push(enqueueOutbound({
         sessionId: "session-full",
@@ -97,7 +97,7 @@ describe("bounded outbound admission", () => {
       sessionId: "session-full",
       priority: 1,
       run: async () => undefined,
-    })).rejects.toThrow("Outbound admission queue is full");
+    })).rejects.toThrow(/Outbound (?:session )?admission queue is full/);
     expect(outboundAdmissionSnapshot().pending).toBe(configuredCap);
 
     releaseFirst();

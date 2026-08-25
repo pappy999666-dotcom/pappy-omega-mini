@@ -34,6 +34,32 @@ describe("bounded inbound admission", () => {
     expect(inboundAdmissionSnapshot().active).toBe(0);
   });
 
+  it("caps one noisy session while allowing another session to enter", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let dropped = 0;
+    const cap = inboundAdmissionSnapshot().perSessionMaxPending;
+    for (let index = 0; index < cap + 5; index += 1) {
+      enqueueInbound({
+        sessionId: "noisy-session",
+        priority: 1,
+        run: async () => blocked,
+        onDrop: () => { dropped += 1; },
+      });
+    }
+    expect(dropped).toBe(3);
+    expect(inboundAdmissionSnapshot().perSession["noisy-session"]?.pending).toBe(cap);
+    expect(enqueueInbound({
+      sessionId: "quiet-session",
+      priority: 0,
+      run: async () => undefined,
+    })).toBe(true);
+    release();
+    await wait(30);
+    expect(inboundAdmissionSnapshot().active).toBe(0);
+    expect(inboundAdmissionSnapshot().pending).toBe(0);
+  });
+
   it("round-robins sessions instead of letting one burst starve another", async () => {
     const order: string[] = [];
     const task = (sessionId: string, index: number) => enqueueInbound({
