@@ -1054,7 +1054,7 @@ export function startWorkerRuntime(): JobOrchestrator {
     const immediateMode = payload.requestMode === "immediate";
     const fallbackDelay = immediateMode
       ? 0
-      : Math.max(1000, Math.min(60000, Number(payload.delayMs ?? 5000)));
+      : Math.max(1000, Math.min(60000, Number(payload.delayMs ?? 8000)));
     const minDelayMs = immediateMode
       ? 0
       : Math.max(

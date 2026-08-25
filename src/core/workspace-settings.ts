@@ -55,9 +55,9 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
       ...existing,
       ...(legacyImmediateDefaults
         ? {
-            defaultJoinDelayMs: 5000,
-            defaultJoinMinDelayMs: 5000,
-            defaultJoinMaxDelayMs: 5000,
+            defaultJoinDelayMs: 8000,
+            defaultJoinMinDelayMs: 8000,
+            defaultJoinMaxDelayMs: 8000,
             defaultJoinMode: "auto" as const,
           }
         : {}),
@@ -66,11 +66,11 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
       defaultJoinMaxConcurrency: existing.defaultJoinMaxConcurrency ?? 2,
       defaultJoinRetryLimit: existing.defaultJoinRetryLimit ?? 2,
       defaultJoinMinDelayMs:
-        (legacyImmediateDefaults ? 5000 : existing.defaultJoinMinDelayMs) ??
-        Math.max(1000, existing.defaultJoinDelayMs ?? 5000),
+        (legacyImmediateDefaults ? 8000 : existing.defaultJoinMinDelayMs) ??
+        Math.max(1000, existing.defaultJoinDelayMs ?? 8000),
       defaultJoinMaxDelayMs:
-        (legacyImmediateDefaults ? 5000 : existing.defaultJoinMaxDelayMs) ??
-        Math.max(1000, existing.defaultJoinDelayMs ?? 5000),
+        (legacyImmediateDefaults ? 8000 : existing.defaultJoinMaxDelayMs) ??
+        Math.max(1000, existing.defaultJoinDelayMs ?? 8000),
       defaultJoinRetryBaseMs: existing.defaultJoinRetryBaseMs ?? 5000,
       defaultJoinSessionCooldownMs:
         existing.defaultJoinSessionCooldownMs ?? 30000,
@@ -91,15 +91,15 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
     workspaceId,
     defaultPrefix: ".",
     defaultAutoJoinEnabled: false,
-    defaultJoinDelayMs: 5000,
-    defaultJoinMinDelayMs: 5000,
-    defaultJoinMaxDelayMs: 5000,
+    defaultJoinDelayMs: 8000,
+    defaultJoinMinDelayMs: 8000,
+    defaultJoinMaxDelayMs: 8000,
     defaultJoinRetryBaseMs: 5000,
     defaultJoinSessionCooldownMs: 30000,
     defaultJoinRestrictionThreshold: 5,
     defaultJoinTargetCount: 100,
     defaultJoinBatchCycles: 1,
-    defaultJoinMaxConcurrency: 2,
+    defaultJoinMaxConcurrency: 1,
     defaultJoinRetryLimit: 2,
     defaultJoinMode: "auto",
     defaultBroadcastDelayMs: 10000,

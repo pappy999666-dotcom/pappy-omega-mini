@@ -12,6 +12,11 @@ describe("live workspace settings", () => {
     const otherWorkspaceId = `${workspaceId}-other`;
     const first = createSession({ workspaceId, sessionName: "first" });
     const second = createSession({ workspaceId, sessionName: "second" });
+    const defaults = getWorkspaceDefaults(workspaceId);
+    expect(defaults.defaultJoinDelayMs).toBe(8000);
+    expect(defaults.defaultJoinMinDelayMs).toBe(8000);
+    expect(defaults.defaultJoinMaxDelayMs).toBe(8000);
+    expect(defaults.defaultJoinMaxConcurrency).toBe(1);
     const other = createSession({
       workspaceId: otherWorkspaceId,
       sessionName: "other",

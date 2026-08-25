@@ -5818,10 +5818,10 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery("Applying to all sessions…");
     const user = resolveTelegramUser(ctx);
     const current = getWorkspaceDefaults(user.workspaceId);
-    const values = [0, 5000, 10000, 30000];
+    const values = [0, 8000, 10000, 30000];
     const index = values.indexOf(current.defaultJoinDelayMs);
     const next = updateWorkspaceDefaults(user.workspaceId, {
-      defaultJoinDelayMs: values[(index + 1) % values.length] ?? 5000,
+      defaultJoinDelayMs: values[(index + 1) % values.length] ?? 8000,
     });
     await edit(
       ctx,

@@ -349,9 +349,9 @@ describe("Session-scoped Join Manager settings", () => {
     expect(second.createdAt).toEqual(expect.any(Number));
     const beforeSecond = getSessionJoinSettings(workspaceId, second.sessionId);
     expect(beforeSecond).toMatchObject({
-      delayMs: 5000,
-      minDelayMs: 5000,
-      maxDelayMs: 5000,
+      delayMs: 8000,
+      minDelayMs: 8000,
+      maxDelayMs: 8000,
       mode: "auto",
     });
     updateSessionJoinSettings(workspaceId, first.sessionId, {
