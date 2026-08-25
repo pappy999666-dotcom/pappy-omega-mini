@@ -488,17 +488,27 @@ async function openWhatsAppSession(
     hooks: {
       logMethod(inputArgs, method) {
         const rendered = inputArgs
-          .map((value) =>
-            typeof value === "string"
-              ? value
-              : (() => {
-                  try {
-                    return JSON.stringify(value);
-                  } catch {
-                    return String(value);
-                  }
-                })(),
-          )
+          .map((value) => {
+            if (typeof value === "string") return value.slice(0, 2_000);
+            if (value instanceof Error) return value.message.slice(0, 2_000);
+            if (!value || typeof value !== "object") return String(value);
+            const record = value as Record<string, unknown>;
+            const error = record.error && typeof record.error === "object"
+              ? record.error as Record<string, unknown>
+              : undefined;
+            return [
+              record.msg,
+              record.message,
+              record.name,
+              error?.message,
+              error?.name,
+              (error?.output as Record<string, unknown> | undefined)?.statusCode,
+              (error?.output as Record<string, unknown> | undefined)?.payload,
+            ]
+              .filter((item): item is string | number => typeof item === "string" || typeof item === "number")
+              .join(" ")
+              .slice(0, 2_000);
+          })
           .join(" ");
         const cryptoFailure = /failed to decrypt message|No session found to decrypt message|Expected Buffer instead of|Received message with old counter/i.test(rendered);
         if (cryptoFailure) {
