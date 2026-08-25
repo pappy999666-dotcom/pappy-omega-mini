@@ -5,7 +5,7 @@ import {
   selectJoinInventoryRecords,
 } from "../src/jobs/join-operation.js";
 import { JoinResultStore } from "../src/jobs/join-result-store.js";
-import { jobLiveText } from "../src/telegram/ui.js";
+import { jobLiveClockText, jobLiveText } from "../src/telegram/ui.js";
 import type { JobRecord } from "../src/jobs/job-contracts.js";
 
 function job(): JobRecord {
@@ -285,11 +285,17 @@ describe("Join Result Store", () => {
 });
 
 describe("Live Show renderer", () => {
-  it("renders the short code and operation counters", () => {
-    const rendered = jobLiveText(job());
+  it("renders the short code, operation counters, and live clock", () => {
+    const current = job();
+    current.createdAt = 1_000;
+    current.startedAt = 2_000;
+    const rendered = jobLiveText(current);
     expect(rendered).toContain("AB12CD34");
     expect(rendered).toContain("Already member");
     expect(rendered).toContain("Joined Alpha");
+    expect(rendered).toContain("Live clock");
+    expect(rendered).toContain("Updated");
+    expect(jobLiveClockText(current, 12_345)).toContain("00:00:10");
   });
 
   it("renders Group Control action labels and worker lease metadata", () => {

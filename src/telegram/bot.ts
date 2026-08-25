@@ -191,6 +191,7 @@ import {
   joinManagerKeyboard,
   jobLiveKeyboard,
   jobLiveText,
+  jobLiveClockText,
   linkCollectionKeyboard,
   mediaKeyboard,
   menuMediaPickerKeyboard,
@@ -562,6 +563,7 @@ function startJobLiveLoop(
     });
   }, 1_000);
   liveLoops.set(loopKey, interval);
+  void refresh();
   setTimeout(() => stopJobLiveLoop(loopKey), 30 * 60_000).unref?.();
 }
 
@@ -10037,7 +10039,7 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
   const status = job
     ? jobStateToJoinStatus(job.state)
     : (joinStates.get(key) ?? "idle");
-  const render = (currentJob = job) => {
+  const render = (currentJob = job, now = Date.now()) => {
     const progress = currentJob?.progress;
     const payload = (currentJob?.payload ?? {}) as Record<string, unknown>;
     const target =
@@ -10067,6 +10069,9 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
       `<b>Socket:</b> <code>${escapeHtml(session.sessionId.slice(0, 12))}</code> · generation ${escapeHtml(String(session.socketGeneration ?? "—"))}`,
       `<b>Mode:</b> ${escapeHtml(mode)} · <b>Target:</b> ${escapeHtml(String(target))} · <b>Delay:</b> ${escapeHtml(delayMs)}`,
       `<b>Selection:</b> shuffled across the full shared Active bucket`,
+      currentJob
+        ? jobLiveClockText(currentJob, now)
+        : `<b>Live clock:</b> waiting for the worker record`,
       `<b>Cursor:</b> ${progress?.completed ?? 0}/${escapeHtml(String(total))} · <b>Job:</b> <code>${escapeHtml(code)}</code>`,
       `<b>Joined:</b> ${joined} · <b>Requested:</b> ${requested} · <b>Already member:</b> ${alreadyMember}`,
       `<b>Dead returned to Main:</b> ${deadLinks} · <b>Failed:</b> ${progress?.failed ?? 0} · <b>Retrying:</b> ${progress?.retrying ?? 0}`,
@@ -10109,53 +10114,70 @@ async function showJoinManager(ctx: Context, sessionId: string): Promise<void> {
     clearInterval(previous);
     joinLiveLoopSessions.delete(loopKey);
   }
-  const interval = setInterval(() => {
-    void Promise.all([
-      runtime.get(jobId),
-      countValidatorBucket(GLOBAL_VALIDATOR_SCOPE, "active").catch(
-        () => undefined,
-      ),
-      listGroups(session.workspaceId, session.sessionId).catch(() => undefined),
-    ])
-      .then(([nextJob, nextActiveLinks, nextGroups]) => {
-        activeLinks = nextActiveLinks;
-        totalGroups = nextGroups?.length;
-        if (!nextJob) return;
-        const nextStatus = jobStateToJoinStatus(nextJob.state);
-        void ctx.telegram
-          .editMessageText(
-            chatId,
-            messageId,
-            undefined,
-            render(nextJob).replace(
-              `Status:</b> ${status}`,
-              `Status:</b> ${nextStatus}`,
-            ),
-            {
-              parse_mode: "HTML",
-              reply_markup: joinManagerKeyboard(session.sessionId, nextStatus),
-            },
-          )
-          .catch(() => {
-            const active = liveLoops.get(loopKey);
-            if (active) clearInterval(active);
-            liveLoops.delete(loopKey);
-            joinLiveLoopSessions.delete(loopKey);
-          });
-        if (
-          ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"].includes(
-            nextJob.state,
-          )
-        ) {
-          clearInterval(interval);
-          liveLoops.delete(loopKey);
-          joinLiveLoopSessions.delete(loopKey);
+  let refreshInFlight = false;
+  let interval: NodeJS.Timeout | undefined;
+  const stop = (): void => {
+    if (interval) clearInterval(interval);
+    if (liveLoops.get(loopKey) === interval || liveLoops.has(loopKey))
+      liveLoops.delete(loopKey);
+    joinLiveLoopSessions.delete(loopKey);
+  };
+  const refresh = async (): Promise<void> => {
+    if (refreshInFlight) return;
+    refreshInFlight = true;
+    try {
+      const [nextJob, nextActiveLinks, nextGroups] = await Promise.all([
+        runtime.get(jobId),
+        countValidatorBucket(GLOBAL_VALIDATOR_SCOPE, "active").catch(
+          () => undefined,
+        ),
+        listGroups(session.workspaceId, session.sessionId).catch(() => undefined),
+      ]);
+      activeLinks = nextActiveLinks;
+      totalGroups = nextGroups?.length;
+      if (!nextJob) {
+        stop();
+        return;
+      }
+      const nextStatus = jobStateToJoinStatus(nextJob.state);
+      try {
+        await ctx.telegram.editMessageText(
+          chatId,
+          messageId,
+          undefined,
+          render(nextJob, Date.now()).replace(
+            `Status:</b> ${status}`,
+            `Status:</b> ${nextStatus}`,
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: joinManagerKeyboard(session.sessionId, nextStatus),
+          },
+        );
+      } catch (error) {
+        const editClass = classifyLiveEditError(error);
+        if (editClass === "display-gone") {
+          stop();
+          return;
         }
-      })
-      .catch(() => undefined);
-  }, 1500);
+        // Benign, transient, and unexpected Telegram edit errors do not kill
+        // the worker-backed display. The next tick retries with fresh state.
+      }
+      if (["COMPLETED", "PARTIAL", "FAILED", "CANCELLED", "EXPIRED"].includes(nextJob.state))
+        stop();
+    } catch {
+      // Redis/worker/list-groups reads can briefly fail. Keep the Live Show
+      // alive so it recovers without requiring the user to press Refresh.
+    } finally {
+      refreshInFlight = false;
+    }
+  };
+  interval = setInterval(() => {
+    void refresh();
+  }, 1_000);
   liveLoops.set(loopKey, interval);
   joinLiveLoopSessions.set(loopKey, session.sessionId);
+  void refresh();
 }
 
 function stopJoinLiveLoops(sessionId: string): void {

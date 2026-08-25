@@ -910,6 +910,22 @@ function liveProgressBar(completed: number, total?: number): string {
   return `[${"█".repeat(filled)}${"░".repeat(10 - filled)}]`;
 }
 
+function formatLiveClock(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+export function jobLiveClockText(job: JobRecord, now = Date.now()): string {
+  const terminal = ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED", "EXPIRED"].includes(job.state);
+  const end = terminal ? (job.completedAt ?? now) : now;
+  const started = job.startedAt ?? job.createdAt;
+  const updated = new Date(now).toISOString().slice(11, 19);
+  return `<b>Live clock</b> ${formatLiveClock(end - started)} · <b>Updated</b> ${updated} UTC`;
+}
+
 export function jobLiveText(job: JobRecord | undefined): string {
   if (!job)
     return pageText(
@@ -951,6 +967,7 @@ export function jobLiveText(job: JobRecord | undefined): string {
       `<blockquote><b>Signal</b> ${indicator} ${escapeHtml(job.state)}
 <b>Code</b> <code>${escapeHtml(job.jobCode ?? "—")}</code>
 <b>Flow</b> ${liveProgressBar(progress.completed, progress.total)} ${progress.completed}/${progress.total ?? "—"} · ${remaining} remaining
+${jobLiveClockText(job)}
 <b>${nextLabel}</b> ${countdown}  <b>Cadence</b> ${cadence}
 <b>Worker</b> <code>${escapeHtml(worker)}</code>  <b>Lease until</b> <code>${escapeHtml(lease)}</code>
 <b>Success</b> ${progress.success}  <b>Failed</b> ${progress.failed}  <b>Skipped</b> ${progress.skipped}
