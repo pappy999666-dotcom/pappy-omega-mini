@@ -37,7 +37,9 @@ describe("Telegram guided-flow isolation", () => {
       "group:moderation:members",
       "group:moderation:bulk",
     ]) expect(source).toContain(route);
-    expect(source).toContain("Opening Administrator Groups");
+    expect(source).not.toContain("Opening Administrator Groups");
+    expect(source).toContain('logGroupInventoryDebug("telegram-open"');
+    expect(source).toContain('logGroupInventoryDebug("telegram-inventory-ready"');
     expect(source).toContain('beginExclusiveInput(String(ctx.from?.id ?? ""));\n    pendingGroupPicture.set');
     expect(source).toContain('beginExclusiveInput(String(ctx.from?.id ?? ""));\n    pendingGroupLeave.set');
   });

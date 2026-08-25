@@ -34,10 +34,10 @@ describe("group inventory fast path", () => {
     expect(source).toContain("if (allowStale && groupSummaryLastKnown.has(cacheKey))");
   });
 
-  it("skips the loading edit when a fresh administrator cache exists", async () => {
+  it("never renders the old loading card and keeps the cache-peek API available", async () => {
     const source = await readFile(botSourcePath, "utf8");
-    expect(source).toContain("const cachedAdminGroups = peekCachedAdminGroups(");
-    expect(source).toContain("if (cachedAdminGroups === undefined) {");
+    expect(source).not.toContain("Opening Administrator Groups");
+    expect(source).not.toContain("const cachedAdminGroups = peekCachedAdminGroups(");
     const transportSource = await readFile(transportSourcePath, "utf8");
     expect(transportSource).toContain("export function peekCachedAdminGroups(");
   });

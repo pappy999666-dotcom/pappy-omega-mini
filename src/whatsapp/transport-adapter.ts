@@ -1,4 +1,5 @@
 import type { WASocket } from "@crysnovax/baileys";
+import { createHash } from "node:crypto";
 import { getWhatsAppSocket } from "./session-manager.js";
 import {
   firstHttpUrl,
@@ -361,6 +362,39 @@ const groupInventoryCache = new Map<
 >();
 const groupInventoryLastKnown = new Map<string, GroupSummary[]>();
 const groupInventoryInflight = new Map<string, Promise<GroupSummary[]>>();
+
+function groupInventoryKeyHash(workspaceId: string, sessionId: string): string {
+  return createHash("sha256")
+    .update(`${workspaceId}:${sessionId}`)
+    .digest("hex")
+    .slice(0, 12);
+}
+
+function groupInventoryErrorClass(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/rate|over.?limit|429/i.test(message)) return "rate-limit";
+  if (/timeout/i.test(message)) return "timeout";
+  if (/closed|not connected/i.test(message)) return "transport-closed";
+  if (/unavailable|unsupported/i.test(message)) return "capability-unavailable";
+  return "other";
+}
+
+export function logGroupInventoryDebug(
+  stage: string,
+  workspaceId: string,
+  sessionId: string,
+  fields: Record<string, string | number | boolean | undefined> = {},
+): void {
+  if (process.env.PAPPY_DEBUG_WA_GROUPS !== "1") return;
+  const safeFields = Object.entries(fields)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${String(value).replace(/\s+/g, "_").slice(0, 120)}`)
+    .join(" ");
+  console.info(
+    `[pappy-omega-mini] group-inventory stage=${stage} key=${groupInventoryKeyHash(workspaceId, sessionId)}${safeFields ? ` ${safeFields}` : ""}`,
+  );
+}
+
 const GROUP_INVENTORY_WARMUP_CONCURRENCY = 2;
 type GroupInventoryWarmupTask = {
   key: string;
@@ -440,10 +474,20 @@ export async function listGroups(
   sessionId: string,
 ): Promise<GroupSummary[]> {
   const cacheKey = `${workspaceId}:${sessionId}`;
+  const startedAt = Date.now();
+  logGroupInventoryDebug("request", workspaceId, sessionId);
   const cached = groupInventoryCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.groups.map((group) => ({ ...group }));
+  if (cached && cached.expiresAt > Date.now()) {
+    logGroupInventoryDebug("cache-hit", workspaceId, sessionId, {
+      durationMs: Date.now() - startedAt,
+      groups: cached.groups.length,
+      adminGroups: filterAdminGroupSummaries(cached.groups).length,
+    });
+    return cached.groups.map((group) => ({ ...group }));
+  }
   const inflight = groupInventoryInflight.get(cacheKey);
   if (inflight) {
+    logGroupInventoryDebug("shared-inflight", workspaceId, sessionId);
     try {
       const groups = await Promise.race([
         inflight,
@@ -466,9 +510,18 @@ export async function listGroups(
   const fetchGroups = method(socket, "groupFetchAllParticipating");
   if (!fetchSummaries && !fetchGroups) throw new Error("Unsupported capability: groupMetadata");
   const identities = socketIdentityVariants(socket);
+  logGroupInventoryDebug("transport-ready", workspaceId, sessionId, {
+    panelSummary: Boolean(fetchSummaries),
+    fullInventory: Boolean(fetchGroups),
+  });
   const loadPanelSummaries = async (): Promise<GroupSummary[]> => {
-    if (!fetchSummaries) return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>, identities);
+    if (!fetchSummaries) {
+      logGroupInventoryDebug("full-scan-start", workspaceId, sessionId, { reason: "no-panel-summary" });
+      return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>, identities);
+    }
     try {
+      logGroupInventoryDebug("panel-summary-start", workspaceId, sessionId);
+      const summaryStartedAt = Date.now();
       const result = await Promise.race([
         // The worker resolves the live socket identity internally. Passing a
         // control-plane identity hint disables its stale-while-revalidate path
@@ -498,7 +551,14 @@ export async function listGroups(
       // full inventory scan on every cold Groups open.
       const roleMetadataComplete =
         summaries.length > 0 && summaries.every((group) => typeof group.isAdmin === "boolean");
+      logGroupInventoryDebug("panel-summary-done", workspaceId, sessionId, {
+        durationMs: Date.now() - summaryStartedAt,
+        groups: summaries.length,
+        adminGroups: summaries.filter((group) => group.isAdmin === true).length,
+        roleMetadataComplete,
+      });
       if (fetchGroups && summaries.length > 0 && !roleMetadataComplete) {
+        logGroupInventoryDebug("full-scan-start", workspaceId, sessionId, { reason: "role-metadata-missing" });
         return loadGroupInventory(
           fetchGroups as (...args: unknown[]) => Promise<unknown>,
           identities,
@@ -507,6 +567,9 @@ export async function listGroups(
       }
       return summaries;
     } catch (error) {
+      logGroupInventoryDebug("panel-summary-error", workspaceId, sessionId, {
+        errorClass: groupInventoryErrorClass(error),
+      });
       const reason = error instanceof Error ? error.message : String(error);
       if (fetchGroups && /method is unavailable:\s*listGroupSummaries/i.test(reason))
         return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>, identities);
@@ -515,6 +578,11 @@ export async function listGroups(
   };
   const request = loadPanelSummaries()
     .then((groups) => {
+      logGroupInventoryDebug("result", workspaceId, sessionId, {
+        durationMs: Date.now() - startedAt,
+        groups: groups.length,
+        adminGroups: groups.filter((group) => group.isAdmin === true).length,
+      });
       groupInventoryLastKnown.set(cacheKey, groups);
       groupInventoryCache.set(cacheKey, {
         expiresAt: Date.now() + GROUP_INVENTORY_CACHE_MS,
@@ -523,6 +591,10 @@ export async function listGroups(
       return groups;
     })
     .catch((error) => {
+      logGroupInventoryDebug("request-error", workspaceId, sessionId, {
+        durationMs: Date.now() - startedAt,
+        errorClass: groupInventoryErrorClass(error),
+      });
       const stale = groupInventoryLastKnown.get(cacheKey);
       if (stale) return stale;
       throw error;

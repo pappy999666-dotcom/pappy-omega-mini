@@ -118,7 +118,7 @@ import {
   getProfilePictureUrl,
   leaveWhatsAppGroup,
   listAdminGroups,
-  peekCachedAdminGroups,
+  logGroupInventoryDebug,
   listGroups,
   removeProfilePicture,
   sendDirectText,
@@ -8916,23 +8916,10 @@ async function showSessionGroups(
 ): Promise<void> {
   const session = ownedSession(ctx, sessionId);
   if (!session) return deny(ctx);
-  const cachedAdminGroups = peekCachedAdminGroups(
-    session.workspaceId,
-    session.sessionId,
-  );
-  if (cachedAdminGroups === undefined) {
-    await edit(
-      ctx,
-      pageText(
-        `${session.sessionName} · Admin Groups`,
-        infoResponse(
-          "Opening Administrator Groups",
-          "Reading the current WhatsApp group inventory. Your controls will appear in this message as soon as the session responds.",
-        ),
-      ),
-      keyboard([[btn("‹ Session Control", `session:${session.sessionId}:menu`)]]),
-    );
-  }
+  const telegramStartedAt = Date.now();
+  logGroupInventoryDebug("telegram-open", session.workspaceId, session.sessionId, {
+    page,
+  });
   try {
     const inventory = groupInventorySingleFlight.run(
       `${session.workspaceId}:${session.sessionId}`,
@@ -8944,6 +8931,11 @@ async function showSessionGroups(
         ),
     );
     const groups = await inventory.promise;
+    logGroupInventoryDebug("telegram-inventory-ready", session.workspaceId, session.sessionId, {
+      durationMs: Date.now() - telegramStartedAt,
+      groups: groups.length,
+      adminGroups: groups.filter((group) => group.isAdmin === true).length,
+    });
     const now = Date.now();
     const selectionTokens = new Map<number, string>();
     for (const [index, group] of groups.entries()) {
@@ -9022,6 +9014,9 @@ async function showSessionGroups(
       ]),
     );
   } catch (error) {
+    logGroupInventoryDebug("telegram-open-error", session.workspaceId, session.sessionId, {
+      durationMs: Date.now() - telegramStartedAt,
+    });
     const message = error instanceof Error ? error.message : String(error);
     const transportClosed = isClosedGroupTransportError(error);
     await edit(
