@@ -131,7 +131,10 @@ import {
   updateProfileName,
   updateProfilePicture,
 } from "../whatsapp/transport-adapter.js";
-import { StableSelectionStore } from "./group-selection.js";
+import {
+  StableSelectionStore,
+  expandGroupCallbackData,
+} from "./group-selection.js";
 import { telegramSafeText } from "./text-safety.js";
 import { routeWhatsAppText } from "../whatsapp/message-router.js";
 import { effectiveSessionStatus } from "../menus/menu-model.js";
@@ -345,7 +348,7 @@ const pendingSessionSudo = new Map<
 >();
 const pendingGroupPicture = new Map<
   string,
-  { workspaceId: string; sessionId: string; groupJid?: string }
+  { workspaceId: string; sessionId: string; groupJid?: string; index?: number }
 >();
 type AdminGroupSelection = Awaited<ReturnType<typeof listAdminGroups>>[number];
 const ADMIN_GROUP_SELECTION_CACHE_MS = 2 * 60_000;
@@ -616,10 +619,13 @@ export function createTelegramBot(): Telegraf<Context> {
         passiveIntakeSuspended.delete(userId);
       }
       if (ctx.callbackQuery) {
-        const callbackData =
+        const rawCallbackData =
           "data" in ctx.callbackQuery
             ? String(ctx.callbackQuery.data ?? "")
             : "";
+        const callbackData = expandGroupCallbackData(rawCallbackData) ?? rawCallbackData;
+        if (callbackData !== rawCallbackData && "data" in ctx.callbackQuery)
+          ctx.callbackQuery.data = callbackData;
         if (
           !isAutoPromoteWizardContinuation(callbackData) &&
           !callbackData.includes(":group:moderation:members:country:confirm")
@@ -1621,6 +1627,9 @@ export function createTelegramBot(): Telegraf<Context> {
       const input = ctx.message.text.trim().split(/\s+/);
       const groupJid = groupPicture.groupJid ?? input[0];
       const imageUrl = groupPicture.groupJid ? input[0] : input[1];
+      const returnMarkup = groupPicture.index !== undefined
+        ? keyboard([[btn("↻ Open Group", `session:${groupPicture.sessionId}:group:view:${groupPicture.index}`, "primary")], [btn("‹ My Groups", `session:${groupPicture.sessionId}:section:groups`)]])
+        : keyboard([[btn("‹ WhatsApp Tools", `session:${groupPicture.sessionId}:section:tools`)], [btn("‹ Session", `session:${groupPicture.sessionId}:menu`)]]);
       try {
         if (!groupJid || !imageUrl || !/^https:\/\//i.test(imageUrl))
           throw new Error(
@@ -1642,7 +1651,7 @@ export function createTelegramBot(): Telegraf<Context> {
               `<code>${escapeHtml(groupJid)}</code> profile picture updated.`,
             ),
           ),
-          { parse_mode: "HTML" },
+          { parse_mode: "HTML", reply_markup: returnMarkup },
         );
       } catch (error) {
         await ctx.reply(
@@ -1655,7 +1664,7 @@ export function createTelegramBot(): Telegraf<Context> {
               ),
             ),
           ),
-          { parse_mode: "HTML" },
+          { parse_mode: "HTML", reply_markup: returnMarkup },
         );
       }
       return;
@@ -3823,14 +3832,6 @@ export function createTelegramBot(): Telegraf<Context> {
       }
     },
   );
-  bot.action(/^session:([^:]+):group:moderation:(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery();
-    await showGroupModeration(
-      ctx,
-      String(ctx.match[1] ?? ""),
-      Number(ctx.match[2] ?? -1),
-    );
-  });
   bot.action(
     /^session:([^:]+):group:moderation:members:country:confirm$/,
     async (ctx) => {
@@ -4525,7 +4526,7 @@ export function createTelegramBot(): Telegraf<Context> {
       );
     },
   );
-  bot.action(/^session:${session.sessionId}:group:picture:get:(\d+)$/, async (ctx) => {
+  bot.action(/^session:([^:]+):group:picture:get:(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
     if (!session) return deny(ctx);
@@ -4576,10 +4577,12 @@ export function createTelegramBot(): Telegraf<Context> {
       () => undefined,
     );
     if (!group) return showSessionGroups(ctx, session.sessionId);
+    beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingGroupPicture.set(String(ctx.from?.id ?? ""), {
       workspaceId: session.workspaceId,
       sessionId: session.sessionId,
       groupJid: group.jid,
+      index,
     });
     await edit(
       ctx,
@@ -4604,6 +4607,7 @@ export function createTelegramBot(): Telegraf<Context> {
       () => undefined,
     );
     if (!group) return showSessionGroups(ctx, session.sessionId);
+    beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingGroupLeave.set(String(ctx.from?.id ?? ""), {
       workspaceId: session.workspaceId,
       sessionId: session.sessionId,
@@ -4682,6 +4686,7 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
     if (!session) return deny(ctx);
+    beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingGroupLeave.set(String(ctx.from?.id ?? ""), {
       workspaceId: session.workspaceId,
       sessionId: session.sessionId,
@@ -4849,6 +4854,7 @@ export function createTelegramBot(): Telegraf<Context> {
     if (action === "groups") return showSessionGroups(ctx, session.sessionId);
     if (action === "health") return showSessionHealth(ctx, session.sessionId);
     if (action === "gpp") {
+      beginExclusiveInput(String(ctx.from?.id ?? ""));
       pendingGroupPicture.set(String(ctx.from?.id ?? ""), {
         workspaceId: session.workspaceId,
         sessionId: session.sessionId,
@@ -8901,6 +8907,17 @@ async function showSessionGroups(
 ): Promise<void> {
   const session = ownedSession(ctx, sessionId);
   if (!session) return deny(ctx);
+  await edit(
+    ctx,
+    pageText(
+      `${session.sessionName} · Admin Groups`,
+      infoResponse(
+        "Opening Administrator Groups",
+        "Reading the current WhatsApp group inventory. Your controls will appear in this message as soon as the session responds.",
+      ),
+    ),
+    keyboard([[btn("‹ Session Control", `session:${session.sessionId}:menu`)]]),
+  );
   try {
     const groups = await listAdminGroups(
       session.workspaceId,

@@ -21,6 +21,27 @@ describe("Telegram guided-flow isolation", () => {
     expect(source).toContain("↻ Reload My Groups");
   });
 
+  it("keeps Groups callbacks uniquely routable and immediately responsive", async () => {
+    const source = await readFile(botSourcePath, "utf8");
+    expect(source).toContain('bot.action(/^session:([^:]+):group:picture:get:(\\d+)$/');
+    expect(source).not.toContain('bot.action(/^session:${session.sessionId}:group:picture:get:');
+    expect(source.match(/bot\.action\(\/\^session:\(\[\^:\]\+\):group:moderation:\(\\d\+\)\$\//g)).toHaveLength(1);
+    for (const route of [
+      "group:view",
+      "group:invite",
+      "group:(name|description)",
+      "group:picture:get",
+      "group:picture",
+      "group:leave",
+      "group:moderation:approve",
+      "group:moderation:members",
+      "group:moderation:bulk",
+    ]) expect(source).toContain(route);
+    expect(source).toContain("Opening Administrator Groups");
+    expect(source).toContain('beginExclusiveInput(String(ctx.from?.id ?? ""));\n    pendingGroupPicture.set');
+    expect(source).toContain('beginExclusiveInput(String(ctx.from?.id ?? ""));\n    pendingGroupLeave.set');
+  });
+
   it("clears persisted pairing state when a new guided flow claims input", async () => {
     const source = await readFile(botSourcePath, "utf8");
     expect(source).toContain("clearPendingPairing(userId);");

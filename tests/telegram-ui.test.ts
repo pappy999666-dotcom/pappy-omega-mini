@@ -33,6 +33,10 @@ import {
   validatorLiveText,
 } from "../src/telegram/ui.js";
 import type { WhatsAppSession } from "../src/types/domain.js";
+import {
+  compactGroupCallbackData,
+  expandGroupCallbackData,
+} from "../src/telegram/group-selection.js";
 
 const session: WhatsAppSession = {
   sessionId: "session-1",
@@ -117,6 +121,22 @@ describe("Telegram UI authorization", () => {
     expect(main).toContain("help:section:broadcast");
     expect(helpSectionText("broadcast")).toContain(".allstatus");
     expect(JSON.stringify(helpSectionKeyboard("broadcast"))).toContain("help:main");
+  });
+
+  it("keeps every UUID-based Group callback within Telegram's byte budget", () => {
+    const group = JSON.stringify(
+      sessionGroupKeyboard("12345678-1234-4234-8234-123456789012", 123),
+    );
+    const callbacks = group.match(/callback_data[^,}]+/g) ?? [];
+    for (const callback of callbacks) {
+      const value = callback.slice(callback.indexOf(":") + 2, -1);
+      expect(Buffer.byteLength(value, "utf8")).toBeLessThanOrEqual(64);
+    }
+    const legacy = "session:12345678-1234-4234-8234-123456789012:group:moderation:approve:all:run:123";
+    const compact = compactGroupCallbackData(legacy);
+    expect(compact.startsWith("g:")).toBe(true);
+    expect(Buffer.byteLength(compact, "utf8")).toBeLessThanOrEqual(64);
+    expect(expandGroupCallbackData(compact)).toBe(legacy);
   });
 
   it("renders the complete PAPPY-native group detail submenu", () => {

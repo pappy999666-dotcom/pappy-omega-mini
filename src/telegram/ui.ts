@@ -6,6 +6,7 @@ import type { AutoPromoteConfig, AutoPromoteRun } from "../autopromote/types.js"
 import { effectiveSessionStatus } from "../menus/menu-model.js";
 import { infoResponse } from "./renderer.js";
 import { pappyTelegramFeatureSections } from "./feature-catalog.js";
+import { compactGroupCallbackData } from "./group-selection.js";
 
 export type ButtonStyle = "primary" | "success" | "danger";
 type InlineButton = InlineKeyboardMarkup["inline_keyboard"][number][number] & {
@@ -30,7 +31,7 @@ export function btn(
   callback_data: string,
   style: ButtonStyle = "primary",
 ): Button {
-  return { text, callback_data, style };
+  return { text, callback_data: compactGroupCallbackData(callback_data), style };
 }
 
 export function copyBtn(
