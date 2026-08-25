@@ -25,6 +25,7 @@ import {
 import { moderatorCommandScopes } from "../src/telegram/moderator.js";
 import { isCompletePreview } from "../src/whatsapp/baileys-native-preview.js";
 import {
+  buildQuotedMessageEnvelope,
   extractMessageContextInfo,
   extractMessageText,
   extractQuotedMessage,
@@ -344,6 +345,24 @@ describe("quoted payload resolver", () => {
     expect(extractQuotedText(quoted)).toBe(
       "quoted image https://example.com/image",
     );
+  });
+
+  it("builds the quoted media envelope from the quoted stanza key", () => {
+    const quoted = { stickerMessage: { mimetype: "image/webp", mediaKey: "encoded-key" } };
+    const result = buildQuotedMessageEnvelope(
+      { key: { remoteJid: "group@g.us", id: "outer-command" }, message: { extendedTextMessage: { text: ".cs" } } },
+      quoted,
+      { stanzaId: "quoted-sticker-id", participant: "2348012345678@s.whatsapp.net" },
+    );
+    expect(result).toEqual({
+      key: {
+        remoteJid: "group@g.us",
+        id: "quoted-sticker-id",
+        participant: "2348012345678@s.whatsapp.net",
+      },
+      message: quoted,
+    });
+    expect(buildQuotedMessageEnvelope({ key: { remoteJid: "group@g.us" } }, quoted, {})).toBeUndefined();
   });
 
   it("keeps context info and quoted text through wrapped messages", () => {

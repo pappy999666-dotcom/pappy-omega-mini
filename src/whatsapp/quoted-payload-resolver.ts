@@ -10,6 +10,40 @@ export interface MessageEnvelope {
   message?: Record<string, unknown>;
 }
 
+/**
+ * Build the actual message key required by Baileys when downloading quoted
+ * media. The outer command key identifies the command message, not the
+ * quoted sticker; using it can return an empty/invalid payload.
+ */
+export function buildQuotedMessageEnvelope(
+  envelope: MessageEnvelope,
+  quotedMessage: Record<string, unknown> | undefined,
+  contextInfo: Record<string, unknown> | undefined,
+): MessageEnvelope | undefined {
+  const remoteJid = typeof envelope.key?.remoteJid === "string"
+    ? envelope.key.remoteJid
+    : undefined;
+  const stanzaId = typeof contextInfo?.stanzaId === "string"
+    ? contextInfo.stanzaId
+    : undefined;
+  if (!remoteJid || !stanzaId || !quotedMessage) return undefined;
+  const participant = typeof contextInfo?.participant === "string"
+    ? contextInfo.participant
+    : undefined;
+  const fromMe = typeof contextInfo?.fromMe === "boolean"
+    ? contextInfo.fromMe
+    : undefined;
+  return {
+    key: {
+      remoteJid,
+      id: stanzaId,
+      ...(participant ? { participant } : {}),
+      ...(fromMe !== undefined ? { fromMe } : {}),
+    },
+    message: quotedMessage,
+  };
+}
+
 export type WhatsAppInteractionKind = "native-flow" | "list" | "buttons" | "template";
 
 export interface WhatsAppInteraction {
@@ -173,7 +207,8 @@ export async function resolveMediaPayload(
       {},
       socket as never,
     );
-    if (!Buffer.isBuffer(bytes)) return undefined;
+    if (!Buffer.isBuffer(bytes) || bytes.length === 0)
+      throw new Error("WhatsApp returned an empty media payload for the quoted message.");
     const mediaBody = content?.[`${media.kind}Message`];
     const body = isRecord(mediaBody) ? mediaBody : {};
     const caption = typeof body.caption === "string" ? body.caption : undefined;

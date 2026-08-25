@@ -32,6 +32,7 @@ import { prepareCanonicalPreviewContent } from "./baileys-native-preview.js";
 import { enqueueInbound } from "./inbound-admission.js";
 import { enqueueOutbound } from "./outbound-admission.js";
 import {
+  buildQuotedMessageEnvelope,
   extractMessageContextInfo,
   extractMessageText,
   extractWhatsAppInteraction,
@@ -810,6 +811,9 @@ async function openWhatsAppSession(
         const text = interactionId ?? interactionDisplayText ?? extractMessageText(envelope.message);
         const quoted = extractQuotedMessage(envelope.message);
         const quotedText = extractQuotedText(quoted);
+        const messageContextInfo = extractMessageContextInfo(envelope.message) as
+          | { quotedMessage?: Record<string, unknown>; participant?: string; mentionedJid?: string[]; stanzaId?: string; fromMe?: boolean }
+          | undefined;
         const stickerFingerprint = extractStickerFingerprint(envelope.message);
         const quotedStickerFingerprint = extractStickerFingerprint(quoted);
         const combinedText = [text, quotedText].filter(Boolean).join("\n");
@@ -825,17 +829,19 @@ async function openWhatsAppSession(
           /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate|allstatus|allchat|gstatus|tag|stag|status|cs|convertsticker|sticker|makesticker|take|takesticker|stickerpname|spn|stickerinfo|sinfo|sticker-info)/.test(
             commandSource,
           );
+        const quotedEnvelope = buildQuotedMessageEnvelope(
+          { key: envelope.key },
+          quoted,
+          messageContextInfo,
+        );
         const inboundMedia = stickerFingerprint
-          ? (quoted
-            ? await resolveMediaPayload({ key: envelope.key, message: quoted }, socket)
+          ? (quotedEnvelope
+            ? await resolveMediaPayload(quotedEnvelope, socket)
             : undefined)
           : mediaCommand
             ? ((await resolveMediaPayload(envelope, socket)) ??
-              (quoted
-                ? await resolveMediaPayload(
-                    { key: envelope.key, message: quoted },
-                    socket,
-                  )
+              (quotedEnvelope
+                ? await resolveMediaPayload(quotedEnvelope, socket)
                 : undefined))
             : undefined;
         const senderJid = message.key.fromMe
@@ -845,9 +851,7 @@ async function openWhatsAppSession(
             message.key.remoteJidAlt ??
             message.key.participant ??
             message.key.remoteJid);
-        const contextInfo = extractMessageContextInfo(envelope.message) as
-          | { quotedMessage?: Record<string, unknown>; participant?: string; mentionedJid?: string[]; stanzaId?: string }
-          | undefined;
+        const contextInfo = messageContextInfo;
         const lidMapping = (
           socket as unknown as {
             signalRepository?: {
