@@ -195,12 +195,22 @@ export function isActiveWhatsAppSession(session: WhatsAppSession): boolean {
 export function isPersistedWhatsAppSessionRecoverable(
   session: WhatsAppSession,
 ): boolean {
-  return !["LOGGED_OUT", "BANNED", "FROZEN"].includes(session.status) &&
-    session.authHealth !== "INVALID";
+  if (["BANNED", "FROZEN"].includes(session.status)) return false;
+  if (session.status === "LOGGED_OUT") {
+    // A nonterminal 401 is deliberately recorded as LOGGED_OUT to pause
+    // reconnect churn, but authHealth remains DEGRADED and credentials are
+    // preserved. It must be eligible for one explicit/startup recovery pass.
+    return session.authHealth === "DEGRADED" &&
+      /unauthorized-paused|transport:401/i.test(session.disconnectReason ?? "");
+  }
+  return session.authHealth !== "INVALID";
 }
 
 export function isSessionVisibleInTelegram(session: WhatsAppSession): boolean {
-  if (session.status === "LOGGED_OUT" || session.status === "BANNED") return false;
+  if (
+    session.status === "BANNED" ||
+    (session.status === "LOGGED_OUT" && session.authHealth === "INVALID")
+  ) return false;
   return !(
     Boolean(session.workloadWorkerId) &&
     session.status === "DEGRADED" &&

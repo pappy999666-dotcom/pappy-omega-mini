@@ -28,6 +28,7 @@ import {
   getSession,
   getSessionJoinSettings,
   isPersistedWhatsAppSessionRecoverable,
+  isSessionVisibleInTelegram,
   updateSession,
   updateSessionJoinSettings,
 } from "../src/core/session-registry.js";
@@ -171,12 +172,18 @@ describe("V2 hardening", () => {
     const invalid = createSession({ workspaceId, sessionName: "invalid" });
     const banned = createSession({ workspaceId, sessionName: "banned" });
     const frozen = createSession({ workspaceId, sessionName: "frozen" });
+    const ambiguous401 = createSession({ workspaceId, sessionName: "ambiguous-401" });
     updateSession(workspaceId, reconnecting.sessionId, { status: "RECONNECTING", authHealth: "DEGRADED" });
     updateSession(workspaceId, degraded.sessionId, { status: "DEGRADED", authHealth: "UNKNOWN" });
     updateSession(workspaceId, loggedOut.sessionId, { status: "LOGGED_OUT", authHealth: "INVALID" });
     updateSession(workspaceId, invalid.sessionId, { status: "ERROR", authHealth: "INVALID" });
     updateSession(workspaceId, banned.sessionId, { status: "BANNED", authHealth: "VALID" });
     updateSession(workspaceId, frozen.sessionId, { status: "FROZEN", authHealth: "VALID" });
+    updateSession(workspaceId, ambiguous401.sessionId, {
+      status: "LOGGED_OUT",
+      authHealth: "DEGRADED",
+      disconnectReason: "transport:401 · unauthorized-paused. Credentials are preserved.",
+    });
 
     expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, reconnecting.sessionId))).toBe(true);
     expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, degraded.sessionId))).toBe(true);
@@ -184,6 +191,9 @@ describe("V2 hardening", () => {
     expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, invalid.sessionId))).toBe(false);
     expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, banned.sessionId))).toBe(false);
     expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, frozen.sessionId))).toBe(false);
+    expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, ambiguous401.sessionId))).toBe(true);
+    expect(isSessionVisibleInTelegram(getSession(workspaceId, ambiguous401.sessionId))).toBe(true);
+    expect(isSessionVisibleInTelegram(getSession(workspaceId, loggedOut.sessionId))).toBe(false);
   });
 
   it("selects only healthy owned sessions and honors a safe preference", () => {
