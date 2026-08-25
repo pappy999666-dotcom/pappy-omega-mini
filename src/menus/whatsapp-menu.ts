@@ -1,4 +1,3 @@
-import { stat } from "node:fs/promises";
 import {
   getMenuMedia,
   getWhatsappMenuSettings,
@@ -53,8 +52,9 @@ export async function buildWhatsappMenuPayload(
     try {
       const candidate = getMenuMedia(session.workspaceId, mediaId);
       if (candidate.kind !== "image") continue;
-      const fileStat = await stat(candidate.filePath);
-      if (!fileStat.isFile() || fileStat.size <= 0) throw new Error("Menu media file is unavailable.");
+      // The catalog is already hydrated and the signed endpoint validates the file
+      // when WhatsApp fetches it. Avoid blocking every menu render on a filesystem
+      // stat so the rich-menu envelope can be relayed immediately.
       image = {
         url: buildMenuMediaUrl(session.workspaceId, candidate.mediaId),
         mime_type: candidate.mimeType,

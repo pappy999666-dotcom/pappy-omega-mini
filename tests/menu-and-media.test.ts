@@ -81,6 +81,8 @@ describe("shared session menu", () => {
     expect(payload.text).not.toContain("┌");
     expect(payload.text).not.toContain("╔");
     expect(payload.text).not.toContain("One command surface, two polished interfaces.");
+    expect(payload.richMenu.header.disclaimerText).toBe("Choose a section below to explore the available controls.");
+    expect(payload.richMenu.header.disclaimerText).not.toContain("owner actions");
   });
 
   it("uses each session prefix for command labels while keeping navigation prefix-free", async () => {
@@ -307,7 +309,7 @@ describe("quoted payload resolver", () => {
 });
 
 describe("WhatsApp command registry", () => {
-  it("sends one gstatus payload directly to the current group without an acknowledgment", async () => {
+  it("sends one gstatus payload directly to the current group and returns a clean done card", async () => {
     const user = resolveUser(`gstatus-${Date.now()}-${Math.random()}`);
     const session = createSession({
       workspaceId: user.workspaceId,
@@ -329,7 +331,8 @@ describe("WhatsApp command registry", () => {
         },
       },
     );
-    expect(result).toBe("");
+    expect(result).toContain("GROUP STATUS SENT");
+    expect(result).toContain("Delivery completed by the current WhatsApp session.");
     expect(captured).toMatchObject({
       text: "hello",
       repeat: 1,
@@ -392,6 +395,23 @@ describe("WhatsApp command registry", () => {
     expect(groupCalled).toBe(false);
   });
 
+  it("returns a clean done card for the gstatusd alias after dispatch", async () => {
+    const user = resolveUser(`gstatusd-done-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "gstatusd-done", phoneNumber: "2348012345678" });
+    let captured: { text: string; repeat: number } | undefined;
+    const result = await executeCommand(createCommandRegistry(), "gstatusd https://example.com/status", {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      chatJid: "120363000000000000@g.us",
+      args: [],
+      sendCurrentColorGroupStatus: async (input) => { captured = input; },
+    });
+    expect(result).toContain("DESIGNED GROUP STATUS SENT");
+    expect(result).toContain("Randomized design");
+    expect(captured).toEqual({ text: "https://example.com/status", repeat: 1 });
+  });
+
   it("strips the gstatus command token from a media caption", async () => {
     const user = resolveUser(`gstatus-caption-${Date.now()}-${Math.random()}`);
     const session = createSession({
@@ -415,7 +435,7 @@ describe("WhatsApp command registry", () => {
         captured = input;
       },
     });
-    expect(result).toBe("");
+    expect(result).toContain("GROUP STATUS SENT");
     expect(captured).toEqual({
       text: "https://chat.whatsapp.com/ABC123",
       repeat: 1,

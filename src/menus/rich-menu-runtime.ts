@@ -170,7 +170,7 @@ export function buildRichMenuContent(model: SessionMenuModel, view = "root", ima
   const actions = new Set(model.actions.map((item: MenuAction) => item.command));
   const nonce = interactionNonce();
   return {
-    header: { title: `PAPPY OMEGA MINI · ${CATEGORY_LABELS[view] || CATEGORY_LABELS.root}`, disclaimer: true, disclaimerText: "Private control surface · owner actions are filtered by session permissions", ...(image?.url ? { image } : {}) },
+    header: { title: `PAPPY OMEGA MINI · ${CATEGORY_LABELS[view] || CATEGORY_LABELS.root}`, disclaimer: true, disclaimerText: "Choose a section below to explore the available controls.", ...(image?.url ? { image } : {}) },
     body: { cards: cardsForView(view, actions, nonce, model.prefix || ""), carousel: false },
     footer: { text: "Back to Pappy Omega Mini on Telegram", url: TELEGRAM_HOME_URL },
   };
