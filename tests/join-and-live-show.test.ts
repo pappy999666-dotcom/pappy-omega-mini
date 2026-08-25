@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { joinWhatsAppInvite } from "../src/jobs/join-operation.js";
+import { joinWhatsAppInvite, remixJoinRecords } from "../src/jobs/join-operation.js";
 import { JoinResultStore } from "../src/jobs/join-result-store.js";
 import { jobLiveText } from "../src/telegram/ui.js";
 import type { JobRecord } from "../src/jobs/job-contracts.js";
@@ -100,6 +100,62 @@ describe("Baileys Join Operation", () => {
       title: "Alpha",
     });
     expect(calls).toEqual(["request:ABC_123"]);
+  });
+
+  it("reuses a supplied membership snapshot without fetching participating groups", async () => {
+    let membershipReads = 0;
+    const result = await joinWhatsAppInvite(
+      {
+        groupFetchAllParticipating: async () => {
+          membershipReads += 1;
+          return {};
+        },
+        groupGetInviteInfo: async () => ({ id: "120@g.us", subject: "Alpha" }),
+        groupAcceptInvite: async () => "120@g.us",
+      },
+      "https://chat.whatsapp.com/ABC_123",
+      { participatingGroups: {} },
+    );
+    expect(result.success).toBe(true);
+    expect(membershipReads).toBe(0);
+  });
+
+  it("remixes the same inventory between cycles deterministically", () => {
+    const records = ["A", "B", "C", "D"].map((canonicalUrl) => ({ canonicalUrl }));
+    const first = remixJoinRecords(records, "job-1", 0).map((record) => record.canonicalUrl);
+    const second = remixJoinRecords(records, "job-1", 1).map((record) => record.canonicalUrl);
+    expect(first).toHaveLength(records.length);
+    expect(new Set(first)).toEqual(new Set(second));
+    expect(second).not.toEqual(first);
+    expect(remixJoinRecords(records, "job-1", 0).map((record) => record.canonicalUrl)).toEqual(first);
+  });
+
+  it("separates dead links, full groups, and account restrictions", async () => {
+    const dead = await joinWhatsAppInvite(
+      { groupGetInviteInfo: async () => { throw new Error("invite-link-revoked"); } },
+      "https://chat.whatsapp.com/DEAD",
+    );
+    expect(dead.linkUnavailable).toBe(true);
+    expect(dead.accountRestricted).toBe(false);
+
+    const full = await joinWhatsAppInvite(
+      {
+        groupGetInviteInfo: async () => ({ id: "120@g.us" }),
+        groupAcceptInvite: async () => { throw new Error("participant-limit reached"); },
+      },
+      "https://chat.whatsapp.com/FULL",
+    );
+    expect(full.groupFull).toBe(true);
+    expect(full.accountRestricted).toBe(false);
+
+    const restricted = await joinWhatsAppInvite(
+      {
+        groupGetInviteInfo: async () => ({ id: "120@g.us" }),
+        groupAcceptInvite: async () => { throw new Error("spam limit temporarily banned"); },
+      },
+      "https://chat.whatsapp.com/RESTRICTED",
+    );
+    expect(restricted.accountRestricted).toBe(true);
   });
 
   it("reports unsupported request mode honestly", async () => {

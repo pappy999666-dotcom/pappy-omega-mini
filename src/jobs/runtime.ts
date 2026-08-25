@@ -59,7 +59,11 @@ import {
 import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
 import { getInceptor, startInceptor } from "./inceptor.js";
-import { joinWhatsAppInvite } from "./join-operation.js";
+import {
+  joinWhatsAppInvite,
+  remixJoinRecords,
+  type JoinAttemptResult,
+} from "./join-operation.js";
 import { downloadPlay, withMediaDownloadSlot, type PlayMode } from "../whatsapp/play-media.js";
 import {
   purgeAutoPromoteSession,
@@ -153,6 +157,22 @@ function classifyJoinFailure(error: unknown): {
   if (/network|econn|socket|closed|not connected|dns|fetch failed/.test(lower))
     return { classification: "network-error", retryable: true, message };
   return { classification: "internal-error", retryable: false, message };
+}
+
+function classifyJoinAttempt(result: JoinAttemptResult): {
+  classification: JoinFailureClass;
+  retryable: boolean;
+  message: string;
+} {
+  if (result.linkUnavailable)
+    return { classification: "invalid-invite", retryable: false, message: result.error ?? "Invite is unavailable." };
+  if (result.groupFull)
+    return { classification: "group-unavailable", retryable: false, message: result.error ?? "Group is full." };
+  if (result.accountRestricted)
+    return { classification: "rate-limit", retryable: false, message: result.error ?? "WhatsApp restricted this account." };
+  if (result.rateLimited)
+    return { classification: "rate-limit", retryable: true, message: result.error ?? "This join endpoint is temporarily throttled." };
+  return classifyJoinFailure(result.error ?? "Join failed");
 }
 
 let activeRuntime: JobOrchestrator | undefined;
@@ -935,6 +955,13 @@ export function startWorkerRuntime(): JobOrchestrator {
     if (!sessionId)
       throw new Error("Join Manager requires a selected WhatsApp session.");
     const boundSession = getSession(context.job.workspaceId, sessionId);
+    const ready = await waitForWhatsAppSessionReady(
+      context.job.workspaceId,
+      sessionId,
+      90_000,
+    );
+    if (!ready)
+      throw new Error("WhatsApp session is not ready for Join Manager work yet.");
     const socket = getWhatsAppSocket(
       context.job.workspaceId,
       sessionId,
@@ -947,6 +974,7 @@ export function startWorkerRuntime(): JobOrchestrator {
         participantsCount?: number;
       }>;
       groupAcceptInvite?: (code: string) => Promise<string | undefined>;
+      groupRequestJoin?: (code: string) => Promise<string | undefined>;
     };
     const payload = context.job.payload as {
       targetCount?: number;
@@ -963,6 +991,14 @@ export function startWorkerRuntime(): JobOrchestrator {
       sourceBucket?: "active";
       selectedLinks?: string[];
     };
+    let membershipSnapshot: Record<string, unknown> | undefined;
+    try {
+      membershipSnapshot = await socket.groupFetchAllParticipating?.();
+    } catch {
+      // Invite metadata and join can still proceed; a later successful join
+      // seeds the snapshot without turning a membership-read failure into an
+      // account restriction.
+    }
     const selectedLinks = new Set(
       (payload.selectedLinks ?? []).map((link) => link.trim()).filter(Boolean),
     );
@@ -974,13 +1010,7 @@ export function startWorkerRuntime(): JobOrchestrator {
     if (selectedLinks.size) {
       for (const link of selectedLinks) {
         const record = await buckets.get(GLOBAL_VALIDATOR_SCOPE, link);
-        if (
-          record?.bucket === "active" &&
-          !["joined", "already-member", "request-required"].includes(
-            record.metadata?.joinClassification ?? "",
-          )
-        )
-          sourceRecords.push(record);
+        if (record?.bucket === "active") sourceRecords.push(record);
       }
     } else {
       let cursor = 0;
@@ -992,40 +1022,27 @@ export function startWorkerRuntime(): JobOrchestrator {
           100,
         );
         for (const record of page.records) {
-          if (
-            !["joined", "already-member", "request-required"].includes(
-              record.metadata?.joinClassification ?? "",
-            )
-          )
-            sourceRecords.push(record);
+          sourceRecords.push(record);
         }
         cursor = page.nextCursor;
       } while (cursor !== 0);
     }
-    const shuffledRecords = sourceRecords
-      .map((record) => ({
-        record,
-        sortKey: createHash("sha256")
-          .update(`${context.job.jobId}:${record.canonicalUrl}`)
-          .digest("hex"),
-      }))
-      .sort((left, right) => left.sortKey.localeCompare(right.sortKey))
-      .map(({ record }) => record)
-      .slice(0, targetLimit);
+    const selectedRecords = sourceRecords.slice(0, targetLimit);
     sourceRecords.length = 0;
-    sourceRecords.push(...shuffledRecords);
+    sourceRecords.push(...selectedRecords);
     const batchCycles = Math.max(
       1,
       Math.min(20, Number(payload.batchCycles ?? 1)),
     );
     const workItems = Array.from({ length: batchCycles }).flatMap((_, cycle) =>
-      sourceRecords.map((record) => ({ record, cycle })),
+      remixJoinRecords(sourceRecords, context.job.jobId, cycle).map((record) => ({ record, cycle })),
     );
     await context.report({
       total: workItems.length,
       currentAction: `shuffled Active inventory · selected ${sourceRecords.length} link(s)`,
     });
     let rateLimitHits = 0;
+    let accountRestrictionHits = 0;
     let requested = 0;
     let alreadyMember = 0;
     let deadLinks = 0;
@@ -1066,9 +1083,10 @@ export function startWorkerRuntime(): JobOrchestrator {
         Math.min(3, Number(payload.maxConcurrency ?? 1)),
       ),
       context,
-      // A genuine WhatsApp restriction stops this job after the affected link;
-      // no arbitrary application threshold is used to reject healthy sessions.
-      shouldStop: () => rateLimitHits > 0,
+      // Only a confirmed account restriction stops this job. A rate-limited
+      // invite lookup remains a link-level transient and the next remixed link
+      // is still allowed to proceed.
+      shouldStop: () => accountRestrictionHits > 0,
       processItem: async (workItem, signal) => {
         const { record, cycle } = workItem;
         const prior = await joinResults.get(
@@ -1124,6 +1142,7 @@ export function startWorkerRuntime(): JobOrchestrator {
         let retryAttempt = 0;
         let result = await joinWhatsAppInvite(socket, record.canonicalUrl, {
           mode: payload.requestMode ?? "auto",
+          ...(membershipSnapshot ? { participatingGroups: membershipSnapshot } : {}),
         });
         while (
           !result.success &&
@@ -1131,10 +1150,9 @@ export function startWorkerRuntime(): JobOrchestrator {
           !result.requestRequired &&
           retryAttempt < retryLimit
         ) {
-          const retryClass = classifyJoinFailure(result.error ?? "Join failed");
+          const retryClass = classifyJoinAttempt(result);
           if (
-            !retryClass.retryable ||
-            retryClass.classification === "rate-limit"
+            !retryClass.retryable
           )
             break;
           retryAttempt += 1;
@@ -1146,9 +1164,10 @@ export function startWorkerRuntime(): JobOrchestrator {
             setTimeout(resolve, retryBaseMs * retryAttempt),
           );
           if (signal.aborted) return { status: "skipped" as const };
-          result = await joinWhatsAppInvite(socket, record.canonicalUrl, {
-            mode: payload.requestMode ?? "auto",
-          });
+            result = await joinWhatsAppInvite(socket, record.canonicalUrl, {
+              mode: payload.requestMode ?? "auto",
+              ...(membershipSnapshot ? { participatingGroups: membershipSnapshot } : {}),
+            });
         }
         const joinClassification: NonNullable<
           LinkRecord["metadata"]
@@ -1167,6 +1186,7 @@ export function startWorkerRuntime(): JobOrchestrator {
           joinRetryable: false,
         };
         if (result.success) {
+          if (result.jid) membershipSnapshot = { ...(membershipSnapshot ?? {}), [result.jid]: {} };
           joined += 1;
           await buckets.move(
             GLOBAL_VALIDATOR_SCOPE,
@@ -1189,6 +1209,7 @@ export function startWorkerRuntime(): JobOrchestrator {
           return { status: "success" as const };
         }
         if (result.alreadyMember) {
+          if (result.jid) membershipSnapshot = { ...(membershipSnapshot ?? {}), [result.jid]: {} };
           alreadyMember += 1;
           await buckets.move(
             GLOBAL_VALIDATOR_SCOPE,
@@ -1210,7 +1231,7 @@ export function startWorkerRuntime(): JobOrchestrator {
           });
           return { status: "skipped" as const };
         }
-        const classified = classifyJoinFailure(result.error ?? "Join failed");
+        const classified = classifyJoinAttempt(result);
         if (result.requestRequired) {
           requested += 1;
           await buckets.move(
@@ -1241,14 +1262,19 @@ export function startWorkerRuntime(): JobOrchestrator {
         }
         if (classified.classification === "rate-limit") {
           rateLimitHits += 1;
+          if (result.accountRestricted) accountRestrictionHits += 1;
           await context.report({
             retrying: (context.job.progress.retrying ?? 0) + 1,
             rateLimitHits,
-            rateLimitStopAt: 1,
-            lastResult: `WhatsApp restriction reported after ${rateLimitHits} attempt(s)`,
-            currentAction: "cooling down after WhatsApp restriction",
+            ...(accountRestrictionHits > 0 ? { rateLimitStopAt: 1 } : {}),
+            lastResult: result.accountRestricted
+              ? `WhatsApp account restriction reported after ${rateLimitHits} attempt(s)`
+              : `Join endpoint temporarily throttled after ${rateLimitHits} attempt(s)`,
+            currentAction: result.accountRestricted
+              ? "cooling down after WhatsApp account restriction"
+              : "continuing after link-level throttle",
           });
-          if (sessionCooldownMs)
+          if (result.accountRestricted && sessionCooldownMs)
             await new Promise((resolve) =>
               setTimeout(resolve, sessionCooldownMs),
             );
@@ -1283,7 +1309,10 @@ export function startWorkerRuntime(): JobOrchestrator {
             currentAction: "marked dead",
           });
         } else {
-          const deadLink = ["invalid-invite", "expired", "group-unavailable"].includes(
+          // Only an invite-specific invalid/expired result is terminal for the
+          // link. Full, locked, or temporarily unavailable groups stay Active
+          // so a later remix or another session can try again.
+          const deadLink = ["invalid-invite", "expired"].includes(
             classified.classification,
           );
           const retryable = classified.retryable || classified.classification === "rate-limit";
