@@ -41,6 +41,17 @@ export function applyStickerPackMetadata(
   chunk.writeUInt32LE(exifPayload.length, 4);
   const padding = exifPayload.length % 2 ? Buffer.from([0]) : Buffer.alloc(0);
   const result = Buffer.concat([base, chunk, exifPayload, padding]);
+  let offset = 12;
+  while (offset + 18 <= result.length) {
+    const type = result.subarray(offset, offset + 4).toString("ascii");
+    const size = result.readUInt32LE(offset + 4);
+    if (type === "VP8X" && size >= 10) {
+      // VP8X flags: 0x08 advertises that an EXIF chunk is present.
+      result[offset + 8] = (result[offset + 8] ?? 0) | 0x08;
+      break;
+    }
+    offset += 8 + size + (size % 2);
+  }
   result.writeUInt32LE(result.length - 8, 4);
   if (result.length > MAX_STICKER_BYTES) throw new Error("Sticker metadata made the WebP exceed WhatsApp's safe sticker size limit.");
   return result;
