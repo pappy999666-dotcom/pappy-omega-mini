@@ -3340,7 +3340,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const index = Number(ctx.match[2] ?? -1);
     try {
       const group = await getSessionGroupAt(ctx, session.sessionId, index);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       const code = await getGroupInviteCode(
         session.workspaceId,
         session.sessionId,
@@ -3395,7 +3395,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       beginExclusiveInput(String(ctx.from?.id ?? ""));
       pendingGroupSetting.set(String(ctx.from?.id ?? ""), {
         workspaceId: session.workspaceId,
@@ -3431,7 +3431,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       try {
         const snapshot = await getGroupModerationSnapshot(
           session.workspaceId,
@@ -3495,7 +3495,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       const secondsByMode = {
         off: 0,
         "24h": 86_400,
@@ -3556,7 +3556,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       await edit(
         ctx,
         pageText(
@@ -3594,7 +3594,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       try {
         const snapshot = await getGroupModerationSnapshot(
           session.workspaceId,
@@ -3662,7 +3662,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(
       () => undefined,
     );
-    if (!group) return showSessionGroups(ctx, session.sessionId);
+    if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
     await edit(
       ctx,
       pageText(
@@ -3715,7 +3715,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       const labels = {
         block: "block all non-admins",
         remove: "remove all non-admins",
@@ -3758,7 +3758,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       try {
         const snapshot = await getGroupModerationSnapshot(
           session.workspaceId,
@@ -3908,9 +3908,9 @@ export function createTelegramBot(): Telegraf<Context> {
       if (!session) return deny(ctx);
       const index = Number(ctx.match[2] ?? -1);
       const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       try {
-        const snapshot = await getGroupModerationSnapshot(session.workspaceId, session.sessionId, group.jid, { fresh: false });
+        const snapshot = await getGroupModerationSnapshot(session.workspaceId, session.sessionId, group.jid, { fresh: true });
         if (!snapshot.isAdmin) throw new Error("This WhatsApp identity is no longer an administrator in the group.");
         const nonAdmins = snapshot.participants.filter((participant) => !participant.admin);
         const preview = snapshot.participants.slice(0, 20).map((participant) =>
@@ -3949,7 +3949,7 @@ export function createTelegramBot(): Telegraf<Context> {
       if (!session) return deny(ctx);
       const index = Number(ctx.match[3] ?? -1);
       const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       beginExclusiveInput(String(ctx.from?.id ?? ""));
       pendingGroupModerationInput.set(String(ctx.from?.id ?? ""), {
         workspaceId: session.workspaceId,
@@ -3983,7 +3983,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       const snapshot = await getGroupModerationSnapshot(
         session.workspaceId,
         session.sessionId,
@@ -4032,7 +4032,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       try {
         const snapshot = await getGroupModerationSnapshot(
           session.workspaceId,
@@ -4088,7 +4088,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       try {
         const snapshot = await getGroupModerationSnapshot(
           session.workspaceId,
@@ -4235,7 +4235,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       try {
         const snapshot = await getGroupModerationSnapshot(
           session.workspaceId,
@@ -4347,7 +4347,7 @@ export function createTelegramBot(): Telegraf<Context> {
       if (!session) return deny(ctx);
       const index = Number(ctx.match[2] ?? -1);
       const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       const requests = await listGroupJoinRequests(session.workspaceId, session.sessionId, group.jid).catch(() => []);
       await edit(
         ctx,
@@ -4375,7 +4375,7 @@ export function createTelegramBot(): Telegraf<Context> {
       if (!session) return deny(ctx);
       const index = Number(ctx.match[2] ?? -1);
       const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       try {
         const snapshot = await getGroupModerationSnapshot(session.workspaceId, session.sessionId, group.jid);
         if (!snapshot.isAdmin) throw new Error("This WhatsApp identity is no longer an administrator in the group.");
@@ -4427,7 +4427,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       const requests = await listGroupJoinRequests(
         session.workspaceId,
         session.sessionId,
@@ -4470,7 +4470,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       try {
         const snapshot = await getGroupModerationSnapshot(
           session.workspaceId,
@@ -4557,7 +4557,7 @@ export function createTelegramBot(): Telegraf<Context> {
         session.sessionId,
         index,
       ).catch(() => undefined);
-      if (!group) return showSessionGroups(ctx, session.sessionId);
+      if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
       const action =
           ctx.match[2] === "reject"
             ? ctx.match[3] === "country" ? "rejectCountry" : "rejectAmount"
@@ -4602,7 +4602,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(
       () => undefined,
     );
-    if (!group) return showSessionGroups(ctx, session.sessionId);
+    if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
     try {
       const url = await getGroupProfilePictureUrl(
         session.workspaceId,
@@ -4644,7 +4644,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(
       () => undefined,
     );
-    if (!group) return showSessionGroups(ctx, session.sessionId);
+    if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
     beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingGroupPicture.set(String(ctx.from?.id ?? ""), {
       workspaceId: session.workspaceId,
@@ -4674,7 +4674,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const group = await getSessionGroupAt(ctx, session.sessionId, index).catch(
       () => undefined,
     );
-    if (!group) return showSessionGroups(ctx, session.sessionId);
+    if (!group) return showGroupSelectionExpired(ctx, session.sessionId);
     beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingGroupLeave.set(String(ctx.from?.id ?? ""), {
       workspaceId: session.workspaceId,
@@ -9163,7 +9163,7 @@ async function showGroupModeration(
         session.workspaceId,
         session.sessionId,
         group.jid,
-        { fresh: false },
+        { fresh: true },
       ),
       25_000,
       "Moderation metadata timed out. The panel may be busy; tap Retry.",

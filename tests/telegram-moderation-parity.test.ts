@@ -21,6 +21,7 @@ describe("Telegram moderation parity", () => {
     expect(source).not.toContain("group:moderation:90d:");
     expect(source).not.toContain("session:${session.sessionId}:action:groups");
     expect(source).not.toContain("session:${groupLeave.sessionId}:action:groups");
+    expect(source).toContain("showGroupSelectionExpired(ctx, session.sessionId)");
   });
 
   it("uses the correct approval/rejection route captures", async () => {
@@ -36,9 +37,11 @@ describe("Telegram moderation parity", () => {
 
   it("maps live group restriction fields into the moderation snapshot", async () => {
     const source = await readFile(transportSourcePath, "utf8");
+    const botSource = await readFile(botSourcePath, "utf8");
     expect(source).toContain("raw.announce");
     expect(source).toContain("raw.restrict");
     expect(source).toContain("raw.ephemeralDuration");
+    expect(botSource).toContain("{ fresh: true }");
   });
 });
 
