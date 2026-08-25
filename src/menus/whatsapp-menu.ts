@@ -1,6 +1,5 @@
 import {
   getMenuMedia,
-  readMenuMedia,
   getWhatsappMenuSettings,
   listMenuMedia,
 } from "../media/menu-media-store.js";
@@ -47,7 +46,6 @@ export async function buildWhatsappMenuPayload(
         inline?: boolean;
       }
     | undefined;
-  let media: WhatsappMenuPayload["media"];
   const configuredId = configuration.whatsappMenuMediaId;
   // An explicit clear means text mode. Never auto-select another uploaded
   // image after the administrator removes the active selection.
@@ -64,16 +62,8 @@ export async function buildWhatsappMenuPayload(
         mime_type: candidate.mimeType,
         width: 1080,
         height: 620,
-        inline: true,
+        inline: false,
       };
-      if (view === "root") {
-        try {
-          const loaded = await readMenuMedia(session.workspaceId, candidate.mediaId);
-          media = { kind: "image", bytes: loaded.bytes, mimeType: loaded.media.mimeType, fileName: loaded.media.fileName };
-        } catch (error) {
-          console.warn("[pappy-omega-mini] Selected WhatsApp menu image could not be read for media fallback:", error instanceof Error ? error.message : String(error));
-        }
-      }
       break;
     } catch (error) {
       if (mediaId === configuredId)
@@ -91,9 +81,9 @@ export async function buildWhatsappMenuPayload(
   const caption = [configuration.whatsappMenuCaption, displayText]
     .filter(Boolean)
     .join("\n\n");
-  // The native RichMenu encoder fetches the signed URL itself. Do not attach a
-  // duplicate base64 copy of the image to the control-plane response.
-  return { text: displayText || legacyText, ...(media ? { media } : {}), caption, richMenu };
+  // The native RichMenu encoder fetches the signed URL itself. Keep menu delivery
+  // as one rich response so a selected image cannot create a second legacy card.
+  return { text: displayText || legacyText, caption, richMenu };
 }
 
 export function buildWhatsappTextMenuPayload(

@@ -594,18 +594,6 @@ function formatDiagnosticTime(value?: number): string {
   return value ? new Date(value).toISOString().replace("T", " ").replace(".000Z", " UTC") : "—";
 }
 
-function buildStatusCompleteResponse(mode: "plain" | "designed", repeat: number): string {
-  const title = mode === "designed" ? "DESIGNED GROUP STATUS SENT" : "GROUP STATUS SENT";
-  return [
-    ...pappyHeader(`${title}:${repeat}`, title),
-    [`⎔ Mode       · ⇆ ${mode === "designed" ? "Randomized design" : "Plain payload"}`],
-    [`⎔ Delivered  · ⇆ ${repeat} post${repeat === 1 ? "" : "s"} to the current group`],
-    ["⎔ Preview    · ⇆ Preserved when available"],
-    "─────────────",
-    "» *Status:* Delivery completed by the current WhatsApp session.",
-  ].flat().join("\n");
-}
-
 function buildPingResponse(current: WhatsAppSession, receivedAt?: number): string {
   const status = effectiveSessionStatus(current);
   const lastSync = current.lastHealthyAt ?? current.lastMessageReceivedAt ?? current.lastOutboundMessageAt ?? current.connectedAt;
@@ -1591,7 +1579,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
         if (!text && !ctx.media)
           return commandUsageCard({ title: "Designed Group Status", command: ".dgstatus", commandSyntax: ".dgstatus <text or media>", howToUse: ["Send text or attach media.", "You may reply to a message to use its payload."], note: "Designed group status applies a per-group visual treatment." });
         await ctx.sendCurrentColorGroupStatus({ text, repeat });
-        return buildStatusCompleteResponse("designed", repeat);
+        return "";
       },
     },
     {
@@ -1614,7 +1602,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
             ? commandUsageCard({ title: "Group Status X", command: ".gstatusx", commandSyntax: ".gstatusx <count> <text or media>", note: "Send text/media or reply to a message." })
             : commandUsageCard({ title: "Group Status", command: ".gstatus", commandSyntax: ".gstatus <text or media>", note: "Send text/media or reply to a message." });
         await ctx.sendCurrentGroupStatus({ text, repeat });
-        return buildStatusCompleteResponse("plain", repeat);
+        return "";
       },
     },
     {
@@ -1631,7 +1619,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
         if (!text && !ctx.media)
           return commandUsageCard({ title: "Group Status X", command: ".gstatusx", commandSyntax: ".gstatusx <count> <text or media>", note: "Send text/media or reply to a message." });
         await ctx.sendCurrentGroupStatus({ text, repeat });
-        return buildStatusCompleteResponse("plain", repeat);
+        return "";
       },
     },
     {

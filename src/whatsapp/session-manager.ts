@@ -629,16 +629,8 @@ async function openWhatsAppSession(
       const richMenu = content?.richMenu as Record<string, unknown> | undefined;
       const richMenuSender = (socket as unknown as { richMenu?: (target: string, value: Record<string, unknown>) => Promise<unknown> }).richMenu;
       const mentions = Array.isArray(content?.mentions) ? content.mentions.filter((value: unknown): value is string => typeof value === "string") : [];
-      const mediaKind = ["image", "video", "audio", "document", "sticker"].find((kind) => Buffer.isBuffer(content?.[kind]));
       let sendResult: unknown;
-      if (richMenu && mediaKind && typeof socket.sendMessage === "function") {
-        const { richMenu: _richMenu, ...mediaContent } = content;
-        const mediaResult = await socket.sendMessage(jid, mediaContent);
-        trackOutboundResult(workspaceId, sessionId, jid, (socket as unknown as { user?: { id?: string } }).user?.id, mediaResult);
-        noteOutboundMessage(key);
-        if (typeof richMenuSender === "function") sendResult = await richMenuSender(jid, richMenu);
-        else sendResult = mediaResult;
-      } else if (richMenu && typeof richMenuSender === "function") {
+      if (richMenu && typeof richMenuSender === "function") {
         sendResult = await richMenuSender(jid, richMenu);
       } else if (nativeTable && nativeFlow.length === 0 && typeof socket.sendInteractiveTable === "function") {
         sendResult = await socket.sendInteractiveTable(jid, nativeTable, mentions.length ? { mentions } : {});

@@ -967,13 +967,6 @@ async function executeTransport(runtime, method, encodedArgs) {
     const sendOptions = options && typeof options === "object" ? options : Array.isArray(value.mentions) ? { mentions: value.mentions } : {};
     const table = value.nativeTable;
     const nativeFlow = Array.isArray(value.nativeFlow) ? value.nativeFlow : [];
-    const mediaKind = ["image", "video", "audio", "document", "sticker"].find((kind) => Buffer.isBuffer(value[kind]));
-    if (value.richMenu && mediaKind && typeof runtime.socket.sendMessage === "function") {
-      const { richMenu: _richMenu, ...mediaContent } = value;
-      const mediaResult = await runtime.socket.sendMessage(jid, materializeWorkloadContent(mediaContent), sendOptions);
-      if (typeof runtime.socket.richMenu === "function") return runtime.socket.richMenu(jid, value.richMenu);
-      return mediaResult;
-    }
     if (value.richMenu && typeof runtime.socket.richMenu === "function") return runtime.socket.richMenu(jid, value.richMenu);
     if (table && nativeFlow.length === 0 && typeof runtime.socket.sendInteractiveTable === "function") return runtime.socket.sendInteractiveTable(jid, table, sendOptions);
     if (value.groupStatusMessage && typeof value.groupStatusMessage === "object") {

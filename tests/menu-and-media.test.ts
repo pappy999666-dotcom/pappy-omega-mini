@@ -345,8 +345,7 @@ describe("WhatsApp command registry", () => {
         },
       },
     );
-    expect(result).toContain("GROUP STATUS SENT");
-    expect(result).toContain("Delivery completed by the current WhatsApp session.");
+    expect(result).toBe("");
     expect(captured).toMatchObject({
       text: "hello",
       repeat: 1,
@@ -409,7 +408,7 @@ describe("WhatsApp command registry", () => {
     expect(groupCalled).toBe(false);
   });
 
-  it("returns a clean done card for the gstatusd alias after dispatch", async () => {
+  it("keeps the gstatusd alias silent after dispatch", async () => {
     const user = resolveUser(`gstatusd-done-${Date.now()}-${Math.random()}`);
     const session = createSession({ workspaceId: user.workspaceId, sessionName: "gstatusd-done", phoneNumber: "2348012345678" });
     let captured: { text: string; repeat: number } | undefined;
@@ -421,8 +420,7 @@ describe("WhatsApp command registry", () => {
       args: [],
       sendCurrentColorGroupStatus: async (input) => { captured = input; },
     });
-    expect(result).toContain("DESIGNED GROUP STATUS SENT");
-    expect(result).toContain("Randomized design");
+    expect(result).toBe("");
     expect(captured).toEqual({ text: "https://example.com/status", repeat: 1 });
   });
 
@@ -449,7 +447,7 @@ describe("WhatsApp command registry", () => {
         captured = input;
       },
     });
-    expect(result).toContain("GROUP STATUS SENT");
+    expect(result).toBe("");
     expect(captured).toEqual({
       text: "https://chat.whatsapp.com/ABC123",
       repeat: 1,
@@ -780,11 +778,10 @@ describe("admin menu media", () => {
       sessionName: "media-menu-session",
     });
     const payload = await buildWhatsappMenuPayload(session, false);
-    expect(payload.media).toMatchObject({ kind: "image", mimeType: "image/png", fileName: "menu.png" });
-    expect(payload.media?.bytes.byteLength).toBeGreaterThan(0);
+    expect(payload.media).toBeUndefined();
     expect(payload.richMenu.header.image?.mime_type).toBe("image/png");
     expect(payload.richMenu.header.image?.url).toContain(media.mediaId);
-    expect(payload.richMenu.header.image?.inline).toBe(true);
+    expect(payload.richMenu.header.image?.inline).toBe(false);
     expect(payload.caption).toContain("Welcome to pappy-omega-mini");
     expect(payload.caption).toContain("COMMANDS");
   });
