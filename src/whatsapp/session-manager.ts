@@ -472,7 +472,9 @@ async function openWhatsAppSession(
     sessionId,
   );
   let recoverStaleSocket: ((reason: string) => void) | undefined;
-  let staleRecoveryTriggered = false;
+  let smaxInvalidWindowStartedAt = 0;
+  let smaxInvalidCount = 0;
+  let lastSmaxInvalidLogAt = 0;
   let cryptoErrorWindowStartedAt = 0;
   let cryptoErrorCount = 0;
   let cryptoStormRecoveryTriggered = false;
@@ -514,9 +516,24 @@ async function openWhatsAppSession(
           }
           return;
         }
-        if (rendered.includes("smax-invalid") && !staleRecoveryTriggered) {
-          staleRecoveryTriggered = true;
-          queueMicrotask(() => recoverStaleSocket?.(rendered));
+        if (rendered.includes("smax-invalid")) {
+          // 479/smax-invalid rejects one stanza (often a stale or malformed
+          // recipient address); it is not proof that this socket is dead.
+          // Resetting the socket for every rejected stanza creates a reconnect
+          // storm, crypto-session churn, and severe command latency.
+          const now = Date.now();
+          if (!smaxInvalidWindowStartedAt || now - smaxInvalidWindowStartedAt >= 60_000) {
+            smaxInvalidWindowStartedAt = now;
+            smaxInvalidCount = 0;
+          }
+          smaxInvalidCount += 1;
+          if (now - lastSmaxInvalidLogAt >= 60_000) {
+            lastSmaxInvalidLogAt = now;
+            console.warn(
+              `[pappy-omega-mini] suppressed Baileys smax-invalid stanza rejection session=${sessionId} count=${smaxInvalidCount}; socket recovery was not triggered`,
+            );
+          }
+          return;
         }
         method.apply(this, inputArgs);
       },
@@ -1117,7 +1134,6 @@ async function openWhatsAppSession(
           `[pappy-omega-mini] WhatsApp authenticated open workspace=${workspaceId} session=${sessionId}`,
         );
         markConnected(key);
-        staleRecoveryTriggered = false;
         startHeartbeat({
           key,
           workspaceId,
