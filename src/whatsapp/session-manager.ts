@@ -85,6 +85,7 @@ interface RuntimeSocket extends WASocket {
       lastDisconnect?: { error?: { output?: { statusCode?: number } } };
     }) => boolean,
   ) => Promise<unknown>;
+  groupMetadata?: (jid: string) => Promise<unknown>;
 }
 
 interface RuntimeSession {
@@ -282,6 +283,152 @@ class FileAuthStore implements CacheManagerStore {
   }
 }
 
+/**
+ * Small bounded TTL/LRU cache used only for Baileys control-plane helpers.
+ * Values are intentionally process-local: auth remains durable, while retry
+ * counters and recent message bodies never become an unbounded database log.
+ */
+export class BoundedTtlCache<T> {
+  private readonly entries = new Map<string, { value: T; expiresAt: number }>();
+
+  constructor(
+    private readonly maxEntries: number,
+    private readonly ttlMs: number,
+  ) {}
+
+  get(key: string): T | undefined {
+    const entry = this.entries.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+      this.entries.delete(key);
+      return undefined;
+    }
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return entry.value;
+  }
+
+  set(key: string, value: T, ttlMs = this.ttlMs): void {
+    this.entries.delete(key);
+    this.entries.set(key, { value, expiresAt: Date.now() + ttlMs });
+    while (this.entries.size > this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      if (typeof oldest !== "string") break;
+      this.entries.delete(oldest);
+    }
+  }
+
+  delete(key: string): void {
+    this.entries.delete(key);
+  }
+
+  clear(): void {
+    this.entries.clear();
+  }
+}
+
+export class BaileysRetryCounterCache {
+  private readonly cache = new BoundedTtlCache<number>(20_000, 60 * 60_000);
+
+  async get(key: string): Promise<number | undefined> {
+    return this.cache.get(key);
+  }
+
+  async set(key: string, value: number, ttlSeconds?: number): Promise<boolean> {
+    this.cache.set(key, value, typeof ttlSeconds === "number" ? ttlSeconds * 1000 : undefined);
+    return true;
+  }
+
+  async del(key: string): Promise<number> {
+    const existed = this.cache.get(key) !== undefined;
+    this.cache.delete(key);
+    return existed ? 1 : 0;
+  }
+
+  clear(): void {
+    this.cache.clear();
+  }
+}
+
+interface MessageCacheKey {
+  remoteJid?: string;
+  id?: string;
+  participant?: string;
+}
+
+function messageCacheKey(key: MessageCacheKey): string | undefined {
+  if (!key.remoteJid || !key.id) return undefined;
+  return `${key.remoteJid}\u0000${key.participant ?? ""}\u0000${key.id}`;
+}
+
+export const BAILEYS_SESSION_SOCKET_OPTIONS = Object.freeze({
+  markOnlineOnConnect: false,
+  syncFullHistory: false,
+  connectTimeoutMs: 20_000,
+  keepAliveIntervalMs: 15_000,
+  defaultQueryTimeoutMs: 60_000,
+  retryRequestDelayMs: 250,
+  maxMsgRetryCount: 3,
+});
+
+export function isLiveWhatsAppUpsert(type?: string): boolean {
+  return type === undefined || type === "notify";
+}
+
+export async function wrapSignalKeyStoreWithCache(
+  store: {
+    get: (type: string, ids: string[]) => Promise<Record<string, unknown>>;
+    set: (data: Record<string, Record<string, unknown>>) => Promise<unknown>;
+  },
+  logger?: unknown,
+): Promise<{
+  get: (type: string, ids: string[]) => Promise<Record<string, unknown>>;
+  set: (data: Record<string, Record<string, unknown>>) => Promise<unknown>;
+  clear?: () => Promise<void>;
+}> {
+  const { makeCacheableSignalKeyStore } = (await import(
+    "@crysnovax/baileys/lib/Utils/auth-utils.js"
+  )) as unknown as {
+    makeCacheableSignalKeyStore: (
+      durableStore: typeof store,
+      durableLogger?: unknown,
+    ) => {
+      get: typeof store.get;
+      set: typeof store.set;
+      clear?: () => Promise<void>;
+    };
+  };
+  return makeCacheableSignalKeyStore(store, logger);
+}
+
+const retryCounterCaches = new Map<string, BaileysRetryCounterCache>();
+const messageCaches = new Map<string, BoundedTtlCache<Record<string, unknown>>>();
+
+function retryCounterCacheFor(sessionKey: string): BaileysRetryCounterCache {
+  let cache = retryCounterCaches.get(sessionKey);
+  if (!cache) {
+    cache = new BaileysRetryCounterCache();
+    retryCounterCaches.set(sessionKey, cache);
+  }
+  return cache;
+}
+
+function messageCacheFor(sessionKey: string): BoundedTtlCache<Record<string, unknown>> {
+  let cache = messageCaches.get(sessionKey);
+  if (!cache) {
+    cache = new BoundedTtlCache<Record<string, unknown>>(1_000, 10 * 60_000);
+    messageCaches.set(sessionKey, cache);
+  }
+  return cache;
+}
+
+function clearSessionBaileysCaches(sessionKey: string): void {
+  retryCounterCaches.get(sessionKey)?.clear();
+  retryCounterCaches.delete(sessionKey);
+  messageCaches.get(sessionKey)?.clear();
+  messageCaches.delete(sessionKey);
+}
+
 async function openWhatsAppSession(
   workspaceId: string,
   sessionId: string,
@@ -374,6 +521,51 @@ async function openWhatsAppSession(
       },
     },
   });
+  // Crysnova's auth helper preserves BufferJSON serialization and returns an
+  // uncached Signal store. Wrap only key reads; writes still reach disk.
+  const authState = state as unknown as {
+    keys: {
+      get: (type: string, ids: string[]) => Promise<Record<string, unknown>>;
+      set: (data: Record<string, Record<string, unknown>>) => Promise<unknown>;
+    };
+  };
+  authState.keys = await wrapSignalKeyStoreWithCache(authState.keys, logger);
+  const retryCounterCache = retryCounterCacheFor(key);
+  const messageCache = messageCacheFor(key);
+  const groupMetadataCache = new BoundedTtlCache<unknown>(512, 15_000);
+  const groupMetadataInflight = new Map<string, Promise<unknown>>();
+  let socket!: RuntimeSocket;
+  const getMessage = async (messageKey: unknown): Promise<Record<string, unknown> | undefined> => {
+    const candidate = (messageKey ?? {}) as MessageCacheKey;
+    const cacheKey = messageCacheKey(candidate);
+    if (cacheKey) {
+      const exact = messageCache.get(cacheKey);
+      if (exact) return exact;
+    }
+    const fallbackKey = candidate.remoteJid && candidate.id
+      ? messageCacheKey({ remoteJid: candidate.remoteJid, id: candidate.id })
+      : undefined;
+    return fallbackKey ? messageCache.get(fallbackKey) : undefined;
+  };
+  const cachedGroupMetadata = async (jid: string): Promise<unknown> => {
+    const cached = groupMetadataCache.get(jid);
+    if (cached !== undefined) return cached;
+    const inflight = groupMetadataInflight.get(jid);
+    if (inflight) return inflight;
+    const request = (async () => {
+      const fetcher = socket.groupMetadata;
+      if (typeof fetcher !== "function") return undefined;
+      const metadata = await fetcher.call(socket, jid);
+      if (metadata !== undefined) groupMetadataCache.set(jid, metadata);
+      return metadata;
+    })();
+    groupMetadataInflight.set(jid, request);
+    try {
+      return await request;
+    } finally {
+      if (groupMetadataInflight.get(jid) === request) groupMetadataInflight.delete(jid);
+    }
+  };
   const { makeInMemoryStore } = (await import("@crysnovax/baileys")) as unknown as {
     makeInMemoryStore: (config?: Record<string, unknown>) => {
       contacts?: Record<string, unknown>;
@@ -381,11 +573,17 @@ async function openWhatsAppSession(
     };
   };
   const contactStore = makeInMemoryStore({ logger });
-  const socket = makeWASocket({
+  socket = makeWASocket({
     auth: state,
     logger,
     generateHighQualityLinkPreview: true,
     store: contactStore,
+    // Keep bot sessions quiet and prevent initial history floods. These values
+    // match the installed fork defaults unless explicitly chosen otherwise.
+    ...BAILEYS_SESSION_SOCKET_OPTIONS,
+    msgRetryCounterCache: retryCounterCache,
+    getMessage,
+    cachedGroupMetadata,
   } as never) as unknown as RuntimeSocket;
   const isCurrentSocket = (): boolean => {
     const lifecycleState = getLifecycleState(key);
@@ -472,6 +670,7 @@ async function openWhatsAppSession(
   socket.ev.on(
     "messages.upsert",
     (event: {
+      type?: string;
       messages?: Array<{
         key?: {
           remoteJid?: string;
@@ -499,7 +698,7 @@ async function openWhatsAppSession(
       if (!isCurrentSocket()) return;
       if (process.env.PAPPY_DEBUG_WA_EVENTS === "1")
         console.log(
-          `[pappy-omega-mini] WhatsApp inbound upsert session=${sessionId} count=${event.messages?.length ?? 0}`,
+          `[pappy-omega-mini] WhatsApp inbound upsert session=${sessionId} type=${event.type ?? "unknown"} count=${event.messages?.length ?? 0}`,
         );
       for (const message of event.messages ?? []) {
         enqueueInbound({
@@ -516,6 +715,20 @@ async function openWhatsAppSession(
         }
         if (!message.key?.remoteJid) return;
         const messageKey = message.key;
+        const rawMessageKey = messageCacheKey(messageKey);
+        if (message.message) {
+          const rawContent = message.message as Record<string, unknown>;
+          if (rawMessageKey) messageCache.set(rawMessageKey, rawContent);
+          if (message.key.remoteJid && message.key.id)
+            messageCache.set(
+              messageCacheKey({ remoteJid: message.key.remoteJid, id: message.key.id }) ?? "",
+              rawContent,
+            );
+        }
+        // `append` is history/backfill, not a fresh user action. Contact/store
+        // synchronization still runs, but commands, anti-actions, link intake,
+        // and media work must never be replayed from history.
+        if (!isLiveWhatsAppUpsert(event.type)) return;
 
         const envelope = {
           key: message.key as Record<string, unknown>,
@@ -845,6 +1058,7 @@ async function openWhatsAppSession(
       author?: string;
     }) => {
       if (!isCurrentSocket()) return;
+      if (update.id) groupMetadataCache.delete(update.id);
       if (update.action !== "promote" && update.action !== "demote") return;
       const participantAction: "promote" | "demote" = update.action;
       const groupJid = update.id ?? "";
@@ -983,6 +1197,7 @@ async function openWhatsAppSession(
       const currentRuntime = runtimes.get(key);
       if (currentRuntime?.socket !== socket) return;
       markClosed(key);
+      groupMetadataCache.clear();
       if (stableOpenTimer) {
         clearTimeout(stableOpenTimer);
         stableOpenTimer = undefined;
@@ -1216,6 +1431,7 @@ export async function purgeWhatsAppSession(
   sessionId: string,
 ): Promise<{ jobs: number; links: number; traces: number; autoPromoteConfigs: number; autoPromoteRuns: number; remoteCleanup: "CONFIRMED" | "UNREACHABLE" }> {
   const session = getSession(workspaceId, sessionId);
+  clearSessionBaileysCaches(lifecycleKey(workspaceId, sessionId));
   let remoteCleanup: "CONFIRMED" | "UNREACHABLE" = "CONFIRMED";
   if (session.workloadWorkerId) {
     try {
@@ -1279,8 +1495,9 @@ export async function stopWhatsAppSession(
 export async function shutdownWhatsAppSessions(): Promise<void> {
   stopAllLifecycles();
   const flushes: Promise<void>[] = [];
-  for (const runtime of runtimes.values()) {
+  for (const [key, runtime] of runtimes.entries()) {
     runtime.stop();
+    clearSessionBaileysCaches(key);
     flushes.push(runtime.flushAuth().catch(() => undefined));
   }
   runtimes.clear();

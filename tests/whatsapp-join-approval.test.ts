@@ -81,17 +81,17 @@ describe("WhatsApp Join Approval commands", () => {
     expect(ctx.enqueueGroupControlJob).not.toHaveBeenCalled();
     expect((preview as WhatsAppCommandReply).nativeTable?.buttons).toHaveLength(2);
     await confirmPreview(preview, ctx);
-    expect(ctx.enqueueGroupControlJob).toHaveBeenCalledWith({ groupJid: "120363000000000000@g.us", operation: "approve", participants: ["111@s.whatsapp.net", "222@s.whatsapp.net", "lid-333@lid"] });
+    expect(ctx.enqueueGroupControlJob).toHaveBeenCalledWith({ groupJid: "120363000000000000@g.us", operation: "approve", participants: ["2348011111111@s.whatsapp.net", "447700000002@s.whatsapp.net"] });
   });
 
   it("makes reject and approve aliases non-destructive usage guidance", async () => {
     const ctx = context();
     const reject = await executeCommand(createCommandRegistry(), "reject all", ctx);
-    expect(reject).toContain("REJECTION COMMANDS USAGE");
+    expect(reject).toContain("REJECTION COMMANDS");
     expect(reject).toContain(".rejectall");
     expect(ctx.enqueueGroupControlJob).not.toHaveBeenCalled();
     const approve = await executeCommand(createCommandRegistry(), "approve", ctx);
-    expect(approve).toContain("APPROVAL COMMANDS USAGE");
+    expect(approve).toContain("APPROVAL COMMANDS");
     expect(approve).toContain("Every bulk approval requires a native Confirm step");
   });
 
@@ -102,14 +102,14 @@ describe("WhatsApp Join Approval commands", () => {
     const preview = await executeCommand(createCommandRegistry(), "approveall", ctx);
     expect(ctx.enqueueGroupControlJob).not.toHaveBeenCalled();
     await confirmPreview(preview, ctx);
-    expect(ctx.enqueueGroupControlJob).toHaveBeenCalledWith({ groupJid: "120363000000000000@g.us", operation: "approve", participants: requests.map((request) => request.jid) });
+    expect(ctx.enqueueGroupControlJob).toHaveBeenCalledWith({ groupJid: "120363000000000000@g.us", operation: "approve", participants: requests.map((request) => request.phoneNumber ? `${request.phoneNumber}@s.whatsapp.net` : request.jid).filter((jid) => !jid.includes("@lid")) });
   });
 
   it("requires confirmation for amount and country selectors and handles direct PN JIDs", async () => {
     const amount = context();
     const amountPreview = await executeCommand(createCommandRegistry(), "approveamt 2", amount);
     await confirmPreview(amountPreview, amount);
-    expect(amount.enqueueGroupControlJob).toHaveBeenCalledWith({ groupJid: "120363000000000000@g.us", operation: "approve", participants: ["111@s.whatsapp.net", "222@s.whatsapp.net"] });
+    expect(amount.enqueueGroupControlJob).toHaveBeenCalledWith({ groupJid: "120363000000000000@g.us", operation: "approve", participants: ["2348011111111@s.whatsapp.net", "447700000002@s.whatsapp.net"] });
 
     mockedList.mockResolvedValue([{ jid: "2348098765432@s.whatsapp.net" }, { jid: "lid-333@lid" }]);
     const country = context();
@@ -121,7 +121,9 @@ describe("WhatsApp Join Approval commands", () => {
 
   it("keeps unresolved LID-only requests out of country counts", async () => {
     const result = await executeCommand(createCommandRegistry(), "reqamt 234", context());
-    expect(result).toBe("Pending requests for country 234: 1. LID-only requests are excluded.");
+    expect(result).toContain("REQUEST COUNT");
+    expect(result).toContain("Matched total · ⇆ 1");
+    expect(result).toContain("Other excluded · ⇆ 1");
   });
 
   it("requires native confirmation for protected Kick All and queues one batch", async () => {

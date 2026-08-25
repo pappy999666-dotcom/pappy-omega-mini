@@ -593,7 +593,9 @@ describe("admin menu media", () => {
       sessionName: "media-menu-session",
     });
     const payload = await buildWhatsappMenuPayload(session, false);
-    expect(payload.media?.kind).toBe("image");
+    expect(payload.media).toBeUndefined();
+    expect(payload.richMenu.header.image?.mime_type).toBe("image/png");
+    expect(payload.richMenu.header.image?.url).toContain(media.mediaId);
     expect(payload.caption).toContain("Welcome to pappy-omega-mini");
     expect(payload.caption).toContain("COMMANDS");
   });

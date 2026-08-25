@@ -14,8 +14,14 @@ import {
   recordAudit,
   setEmergencyState,
 } from "../src/core/control-plane.js";
+import {
+  BAILEYS_SESSION_SOCKET_OPTIONS,
+  BaileysRetryCounterCache,
+  classifyDisconnect,
+  isLiveWhatsAppUpsert,
+  wrapSignalKeyStoreWithCache,
+} from "../src/whatsapp/session-manager.js";
 import { createSafeError, renderSafeError } from "../src/core/errors.js";
-import { classifyDisconnect } from "../src/whatsapp/session-manager.js";
 import {
   createSession,
   getSessionJoinSettings,
@@ -65,9 +71,9 @@ describe("V2 hardening", () => {
   it("preserves auth for ambiguous transport codes and purges only explicit logout", () => {
     expect(classifyDisconnect({ output: { statusCode: 401 } })).toMatchObject({
       code: 401,
-      label: "unauthorized-transient",
+      label: "unauthorized-paused",
       terminal: false,
-      status: "DEGRADED",
+      status: "LOGGED_OUT",
     });
     expect(classifyDisconnect({ output: { statusCode: 401 }, message: "logged out by WhatsApp" })).toMatchObject({
       code: 401,
@@ -91,6 +97,54 @@ describe("V2 hardening", () => {
       label: "unknown-transport",
       terminal: false,
     });
+  });
+
+  it("pins quiet, bounded Crysnova socket defaults", () => {
+    expect(BAILEYS_SESSION_SOCKET_OPTIONS).toEqual({
+      markOnlineOnConnect: false,
+      syncFullHistory: false,
+      connectTimeoutMs: 20_000,
+      keepAliveIntervalMs: 15_000,
+      defaultQueryTimeoutMs: 60_000,
+      retryRequestDelayMs: 250,
+      maxMsgRetryCount: 3,
+    });
+  });
+
+  it("treats only notify or omitted upserts as live user actions", () => {
+    expect(isLiveWhatsAppUpsert("notify")).toBe(true);
+    expect(isLiveWhatsAppUpsert()).toBe(true);
+    expect(isLiveWhatsAppUpsert("append")).toBe(false);
+    expect(isLiveWhatsAppUpsert("history")).toBe(false);
+  });
+
+  it("keeps retry counters bounded and clears them deterministically", async () => {
+    const cache = new BaileysRetryCounterCache();
+    await cache.set("session-a", 2);
+    expect(await cache.get("session-a")).toBe(2);
+    expect(await cache.del("session-a")).toBe(1);
+    expect(await cache.get("session-a")).toBeUndefined();
+    expect(await cache.del("missing")).toBe(0);
+  });
+
+  it("caches Signal-key reads while preserving durable writes", async () => {
+    let reads = 0;
+    const durable = {
+      get: async (_type: string, ids: string[]) => {
+        reads += 1;
+        return Object.fromEntries(ids.map((id) => [id, { id, value: "durable" }]));
+      },
+      set: async (data: Record<string, Record<string, unknown>>) => data,
+    };
+    const cached = await wrapSignalKeyStoreWithCache(durable);
+    await expect(cached.get("session", ["key-1"])).resolves.toMatchObject({
+      "key-1": { value: "durable" },
+    });
+    await expect(cached.get("session", ["key-1"])).resolves.toMatchObject({
+      "key-1": { value: "durable" },
+    });
+    expect(reads).toBe(1);
+    await cached.set({ session: { "key-1": { value: "new" } } });
   });
 
   it("selects only healthy owned sessions and honors a safe preference", () => {
@@ -149,7 +203,7 @@ describe("WhatsApp command smoke paths", () => {
       senderJid: "15551234567:44@s.whatsapp.net",
       text: ".ping",
     });
-    expect(response).toContain("PAPPY OMEGA MINI");
+    expect(response).toContain("PING & LATENCY");
   });
 
   it("suppresses the WhatsApp menu while safe mode is enabled", async () => {
