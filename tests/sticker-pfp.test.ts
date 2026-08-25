@@ -3,12 +3,14 @@ import sharp from "sharp";
 
 const mocks = vi.hoisted(() => ({
   profilePictureUrl: vi.fn(async () => "https://profile.example/current.jpg"),
+  sendMessage: vi.fn(async () => ({ key: { id: "test" } })),
 }));
 
 vi.mock("../src/whatsapp/session-manager.js", () => ({
   getWhatsAppSocket: () => ({
     user: { id: "2348012345678:1@s.whatsapp.net" },
     profilePictureUrl: mocks.profilePictureUrl,
+    sendMessage: mocks.sendMessage,
   }),
 }));
 
@@ -22,9 +24,10 @@ import {
   setStickerCommandBinding,
 } from "../src/whatsapp/sticker-command-bindings.js";
 import { clearStickerPackNameForTests } from "../src/whatsapp/sticker-settings.js";
-import { applyStickerPackMetadata } from "../src/whatsapp/sticker-exif.js";
+import { applyStickerPackMetadata, validateWhatsAppSticker } from "../src/whatsapp/sticker-exif.js";
 import { inspectSticker } from "../src/whatsapp/sticker-info.js";
 import { extractStickerFingerprint } from "../src/whatsapp/quoted-payload-resolver.js";
+import { sendSticker } from "../src/whatsapp/transport-adapter.js";
 
 const registry = createCommandRegistry();
 
@@ -212,6 +215,20 @@ describe("WhatsApp sticker media", () => {
     const session = createSession({ workspaceId: user.workspaceId, sessionName: "sticker-info" });
     const base = await sharp({ create: { width: 24, height: 18, channels: 4, background: "#ff77aa" } }).webp().toBuffer();
     const bytes = applyStickerPackMetadata(base, { packName: "Info Pack", publisher: "Info Publisher", emojis: ["✨"] });
+    validateWhatsAppSticker(bytes, { requireMetadata: true });
+    const exifOffset = bytes.indexOf(Buffer.from("EXIF", "ascii"));
+    const vp8xOffset = bytes.indexOf(Buffer.from("VP8X", "ascii"));
+    expect(exifOffset).toBeGreaterThan(0);
+    expect(bytes.subarray(exifOffset + 8, exifOffset + 10).toString("ascii")).toBe("II");
+    expect(bytes.readUInt16LE(exifOffset + 18)).toBe(0x5741);
+    expect(bytes.readUInt16LE(exifOffset + 20)).toBe(7);
+    expect(vp8xOffset).toBeGreaterThan(0);
+    expect(bytes[vp8xOffset + 8]! & 0x08).toBe(0x08);
+    expect(bytes.readUInt32LE(4)).toBe(bytes.length - 8);
+    const decoded = await sharp(bytes).metadata();
+    expect(decoded.format).toBe("webp");
+    expect(decoded.width).toBe(24);
+    expect(decoded.height).toBe(18);
     const info = await inspectSticker({ kind: "sticker", bytes, mimeType: "image/webp" });
     expect(info.width).toBe(24);
     expect(info.height).toBe(18);
@@ -225,6 +242,21 @@ describe("WhatsApp sticker media", () => {
     }));
     expect(String(result)).toContain("STICKER INFORMATION");
     expect(String(result)).toContain("Info Pack");
+  });
+
+  it("uses a native sticker-only outbound payload", async () => {
+    mocks.sendMessage.mockClear();
+    await sendSticker("workspace", "session", "123@g.us", {
+      kind: "sticker",
+      bytes: Buffer.from("webp-bytes"),
+      mimeType: "image/webp",
+      caption: "must not be attached",
+      stickerPackName: "must stay inside EXIF",
+    });
+    expect(mocks.sendMessage).toHaveBeenCalledWith("123@g.us", {
+      sticker: Buffer.from("webp-bytes"),
+      mimetype: "image/webp",
+    });
   });
 
   it("converts a static sticker payload back to PNG media and preserves pack metadata on take", async () => {

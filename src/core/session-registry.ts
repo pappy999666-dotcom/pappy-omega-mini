@@ -178,6 +178,15 @@ export function listSessions(workspaceId: string): WhatsAppSession[] {
   );
 }
 
+/**
+ * A socket is selectable for safe session-scoped work when its lifecycle is
+ * ACTIVE. Persisted auth health can briefly be UNKNOWN while the live socket
+ * has already opened, so only explicit INVALID/DEGRADED states are excluded.
+ */
+export function isActiveWhatsAppSession(session: WhatsAppSession): boolean {
+  return session.status === "ACTIVE" && session.authHealth !== "INVALID" && session.authHealth !== "DEGRADED";
+}
+
 export function isSessionVisibleInTelegram(session: WhatsAppSession): boolean {
   if (session.status === "LOGGED_OUT" || session.status === "BANNED") return false;
   return !(

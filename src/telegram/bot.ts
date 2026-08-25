@@ -17,6 +17,7 @@ import {
   getWorkspaceDefaults,
   getWorkspaceOwnerTelegramUserId,
   updateWorkspaceDefaults,
+  isActiveWhatsAppSession,
 } from "../core/session-registry.js";
 import {
   clearWhatsappMenuMedia,
@@ -6436,7 +6437,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const user = resolveTelegramUser(ctx);
     const userId = String(ctx.from?.id ?? "");
     beginExclusiveInput(userId);
-    const activeSessions = activeAllSessions();
+    const activeSessions = autoPromoteSessions();
     const targets = activeSessions.map((session) => session.sessionId);
     pendingAutoPromote.set(userId, {
       workspaceId: user.workspaceId,
@@ -6468,7 +6469,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const userId = String(ctx.from?.id ?? "");
     const current = pendingAutoPromote.get(userId);
     if (!current || current.scope !== "GLOBAL") return;
-    const activeSessions = activeAllSessions();
+    const activeSessions = autoPromoteSessions();
     const activeIds = new Set(
       activeSessions.map((session) => session.sessionId),
     );
@@ -6509,7 +6510,7 @@ export function createTelegramBot(): Telegraf<Context> {
       targetSessionIds: [...selected],
       allFutureSessions: false,
     });
-    const activeSessions = activeAllSessions();
+    const activeSessions = autoPromoteSessions();
     await edit(
       ctx,
       pageText(
@@ -6529,7 +6530,7 @@ export function createTelegramBot(): Telegraf<Context> {
     const userId = String(ctx.from?.id ?? "");
     const current = pendingAutoPromote.get(userId);
     if (!current || current.scope !== "GLOBAL") return;
-    const activeSessions = activeAllSessions();
+    const activeSessions = autoPromoteSessions();
     const selected = activeSessions.map((session) => session.sessionId);
     pendingAutoPromote.set(userId, {
       ...current,
@@ -6569,7 +6570,7 @@ export function createTelegramBot(): Telegraf<Context> {
           ),
         ),
         autoPromoteGlobalTargetsKeyboard(
-          activeAllSessions(),
+          autoPromoteSessions(),
           new Set(current?.targetSessionIds ?? []),
         ),
       );
@@ -6648,7 +6649,7 @@ export function createTelegramBot(): Telegraf<Context> {
         stage: current.scope === "GLOBAL" ? "scope" : "days",
       });
       if (current.scope === "GLOBAL") {
-        const activeSessions = activeAllSessions();
+        const activeSessions = autoPromoteSessions();
         const selected = new Set(
           current.targetSessionIds ??
             activeSessions.map((session) => session.sessionId),
@@ -10371,6 +10372,10 @@ function activeWorkspaceSessions(workspaceId: string) {
 
 function activeAllSessions() {
   return listAllSessions().filter(isBridgeReadySession);
+}
+
+function autoPromoteSessions() {
+  return listAllSessions().filter(isActiveWhatsAppSession);
 }
 
 function globalBridgeSessions(ctx: Context) {

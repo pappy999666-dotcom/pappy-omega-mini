@@ -79,11 +79,15 @@ describe("Auto Promote scheduling contracts", () => {
     expect(isAutoPromoteWizardContinuation("admin:panel")).toBe(false);
   });
 
-  it("enumerates only live eligible sessions for session and global targets", () => {
+  it("enumerates live ACTIVE sessions even when persisted auth health is temporarily unknown", () => {
     const sessions = [
       { sessionId: "active", workspaceId: "w1", status: "ACTIVE", authHealth: "VALID" },
+      { sessionId: "unknown", workspaceId: "w1", status: "ACTIVE", authHealth: "UNKNOWN" },
+      { sessionId: "missing", workspaceId: "w1", status: "ACTIVE" },
       { sessionId: "invalid", workspaceId: "w1", status: "ACTIVE", authHealth: "INVALID" },
-      { sessionId: "degraded", workspaceId: "w1", status: "DEGRADED", authHealth: "HEALTHY" },
+      { sessionId: "degraded", workspaceId: "w1", status: "DEGRADED", authHealth: "VALID" },
+      { sessionId: "recovering", workspaceId: "w1", status: "RECONNECTING", authHealth: "VALID" },
+      { sessionId: "logged-out", workspaceId: "w1", status: "LOGGED_OUT", authHealth: "VALID" },
     ] as never;
     const base = {
       id: "cfg",
@@ -103,8 +107,9 @@ describe("Auto Promote scheduling contracts", () => {
       createdAt: 1,
       updatedAt: 1,
     };
-    expect(resolveTargetSessionIds({ ...base, scope: "GLOBAL" }, sessions)).toEqual(["active"]);
-    expect(resolveTargetSessionIds({ ...base, scope: "GLOBAL", targetSessionIds: ["invalid", "degraded", "active"] }, sessions)).toEqual(["active"]);
+    expect(resolveTargetSessionIds({ ...base, scope: "GLOBAL" }, sessions)).toEqual(["active", "unknown", "missing"]);
+    expect(resolveTargetSessionIds({ ...base, scope: "GLOBAL", targetSessionIds: ["invalid", "degraded", "recovering", "active", "unknown"] }, sessions)).toEqual(["active", "unknown"]);
+    expect(resolveTargetSessionIds({ ...base, scope: "SESSION", sessionId: "unknown" }, sessions)).toEqual(["unknown"]);
     expect(resolveTargetSessionIds({ ...base, scope: "SESSION", sessionId: "degraded" }, sessions)).toEqual([]);
   });
 

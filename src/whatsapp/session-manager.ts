@@ -1000,17 +1000,21 @@ async function openWhatsAppSession(
             const mediaReply = reply as WhatsAppReply;
             const deliverObjectReply = async (): Promise<void> => {
               const content = mediaReply.media
-                ? {
-                    [mediaReply.media.kind]: mediaReply.media.bytes,
-                    ...(mediaReply.media.kind !== "audio" && (mediaReply.caption ?? "") ? { caption: mediaReply.caption } : {}),
-                    ...(mediaReply.media.mimeType ? { mimetype: mediaReply.media.mimeType } : {}),
-                    ...(mediaReply.media.stickerPackName ? { stickerPackName: mediaReply.media.stickerPackName, stickerPackPublisher: "PAPPY OMEGA MINI" } : {}),
-                    ...(mediaReply.media.kind === "video" || mediaReply.media.kind === "document" ? { fileName: mediaReply.media.fileName } : {}),
-                    ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
-                    ...(mediaReply.nativeTable ? { nativeTable: mediaReply.nativeTable } : {}),
-                    ...(mediaReply.richMenu ? { richMenu: mediaReply.richMenu } : {}),
-                    ...(mediaReply.mentions?.length ? { mentions: mediaReply.mentions } : {}),
-                  }
+                ? mediaReply.media.kind === "sticker"
+                  ? {
+                      sticker: mediaReply.media.bytes,
+                      mimetype: "image/webp",
+                    }
+                  : {
+                      [mediaReply.media.kind]: mediaReply.media.bytes,
+                      ...(mediaReply.media.kind !== "audio" && (mediaReply.caption ?? "") ? { caption: mediaReply.caption } : {}),
+                      ...(mediaReply.media.mimeType ? { mimetype: mediaReply.media.mimeType } : {}),
+                      ...(mediaReply.media.kind === "video" || mediaReply.media.kind === "document" ? { fileName: mediaReply.media.fileName } : {}),
+                      ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
+                      ...(mediaReply.nativeTable ? { nativeTable: mediaReply.nativeTable } : {}),
+                      ...(mediaReply.richMenu ? { richMenu: mediaReply.richMenu } : {}),
+                      ...(mediaReply.mentions?.length ? { mentions: mediaReply.mentions } : {}),
+                    }
                 : {
                     ...(mediaReply.text ? { text: mediaReply.text } : {}),
                     ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
@@ -1024,7 +1028,7 @@ async function openWhatsAppSession(
                 const reason = error instanceof Error ? error.message : String(error);
                 if (!mediaReply.nativeFlow) throw error;
                 // nativeFlow is an optional enhancement; a rejected extension must never suppress the command reply.
-                const { nativeFlow: _nativeFlow, nativeTable: _nativeTable, richMenu: _richMenu, ...plainContent } = content;
+                const { nativeFlow: _nativeFlow, nativeTable: _nativeTable, richMenu: _richMenu, ...plainContent } = content as Record<string, unknown>;
                 await sendTrackedMessage(jid, plainContent).catch((fallbackError) => {
                   throw new Error(`${reason}; plain-text fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
                 });

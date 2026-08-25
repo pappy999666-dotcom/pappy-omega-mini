@@ -1235,9 +1235,7 @@ function messagePayload(
   if (media.kind === "sticker")
     return {
       sticker: media.bytes,
-      mimetype: media.mimeType ?? "image/webp",
-      stickerPackName: media.stickerPackName ?? "PAPPY OMEGA MINI",
-      stickerPackPublisher: "PAPPY OMEGA MINI",
+      mimetype: "image/webp",
     };
   return {
     [media.kind]: media.bytes,

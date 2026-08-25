@@ -13,7 +13,7 @@ import {
   setAutoPromoteConfigState,
   deleteAutoPromoteRunsForSession,
 } from "../persistence/mongo.js";
-import { getWorkspaceOwnerTelegramUserId, listAllSessions, refreshSessionRegistry } from "../core/session-registry.js";
+import { getWorkspaceOwnerTelegramUserId, isActiveWhatsAppSession, listAllSessions, refreshSessionRegistry } from "../core/session-registry.js";
 import type { JobOrchestrator } from "../jobs/job-orchestrator.js";
 import {
   DEFAULT_AUTOPROMOTE_SLOT_TIMES,
@@ -45,9 +45,7 @@ export function resolveTargetSessionIds(
   config: AutoPromoteConfig,
   sessionSnapshot = listAllSessions(),
 ): string[] {
-  const sessions = sessionSnapshot.filter(
-    (session) => session.status === "ACTIVE" && session.authHealth === "VALID",
-  );
+  const sessions = sessionSnapshot.filter(isActiveWhatsAppSession);
   if (config.scope === "SESSION")
     return config.sessionId && sessions.some((session) => session.sessionId === config.sessionId)
       ? [config.sessionId]
@@ -279,7 +277,7 @@ export async function dispatchAutoPromoteDueRuns(
       continue;
     }
     const session = listAllSessions().find((item) => item.sessionId === sessionId);
-    if (!session || session.status !== "ACTIVE") {
+    if (!session || !isActiveWhatsAppSession(session)) {
       await saveAutoPromoteRun({ ...run, status: "WAITING_FOR_SESSION", updatedAt: now });
       continue;
     }

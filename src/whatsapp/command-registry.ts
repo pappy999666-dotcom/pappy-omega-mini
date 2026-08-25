@@ -17,7 +17,7 @@ import {
 } from "../menus/menu-model.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { convertMediaToSticker, convertStickerToMedia, renderTextSticker } from "./sticker-media.js";
-import { applyStickerPackMetadata } from "./sticker-exif.js";
+import { applyStickerPackMetadata, validateWhatsAppSticker } from "./sticker-exif.js";
 import { inspectSticker } from "./sticker-info.js";
 import { getStickerPackName, setStickerPackName } from "./sticker-settings.js";
 import { firstVerifiedPhone, maskedPhoneLabel, phoneJidFromIdentity, verifiedTargetJid, verifiedTargetJids, verifiedTargetPhone } from "./identity-normalization.js";
@@ -1266,6 +1266,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
           if (ctx.media && ["image", "video"].includes(ctx.media.kind)) {
             const packName = getStickerPackName(ctx.workspaceId, ctx.sessionId);
             const media = await convertMediaToSticker(ctx.media);
+            validateWhatsAppSticker(media.bytes);
             return {
               media: { ...media, bytes: applyStickerPackMetadata(media.bytes, { packName }), stickerPackName: packName },
               caption: [...pappyHeader(`${ctx.workspaceId}:${ctx.sessionId}:sticker`, "STICKER CREATED"), "⎔ Source     · ⇆ Image, GIF, or video media", `⎔ Pack       · ⇆ ${getStickerPackName(ctx.workspaceId, ctx.sessionId)}`].join("\n"),
@@ -1279,6 +1280,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
             : undefined;
           const packName = getStickerPackName(ctx.workspaceId, ctx.sessionId);
           const media = await renderTextSticker({ text, ...(profilePicture ? { profilePicture } : {}) });
+          validateWhatsAppSticker(media.bytes);
           return {
             media: { ...media, bytes: applyStickerPackMetadata(media.bytes, { packName, emojis: Array.from(text).filter((character) => /\p{Extended_Pictographic}/u.test(character)).slice(0, 8) }), stickerPackName: packName },
             caption: [...pappyHeader(`${ctx.workspaceId}:${ctx.sessionId}:text-sticker`, "TEXT STICKER CREATED"), `⎔ Pack       · ⇆ ${getStickerPackName(ctx.workspaceId, ctx.sessionId)}`, "⎔ Style      · ⇆ Premium chat-bubble canvas", `⎔ Avatar     · ⇆ ${profilePicture ? "Quoted sender profile picture" : "Fallback avatar"}`].join("\n"),
@@ -1312,6 +1314,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
       run: async (ctx) => {
         if (!ctx.media || ctx.media.kind !== "sticker") return commandUsageCard({ title: "Take Sticker", command: `${session(ctx).prefix}take`, commandSyntax: `${session(ctx).prefix}take (reply to a sticker)`, note: "Reply to a sticker to resend it with the current pack name." });
         const packName = getStickerPackName(ctx.workspaceId, ctx.sessionId);
+        validateWhatsAppSticker(ctx.media.bytes);
         return {
           media: { ...ctx.media, bytes: applyStickerPackMetadata(ctx.media.bytes, { packName }), stickerPackName: packName },
           caption: [...pappyHeader(`${ctx.workspaceId}:${ctx.sessionId}:take`, "STICKER RESENT"), `⎔ Pack       · ⇆ ${packName}`, "⎔ Source     · ⇆ Quoted sticker"].join("\n"),
