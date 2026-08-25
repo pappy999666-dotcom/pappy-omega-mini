@@ -20,6 +20,13 @@ describe("group inventory fast path", () => {
     expect(source).toContain("if (fetchGroups && summaries.length > 0 && !roleMetadataComplete)");
   });
 
+  it("matches owner and alternate Baileys participant identity fields", async () => {
+    const source = await readFile(transportSourcePath, "utf8");
+    for (const field of ["metadata.owner", "metadata.subjectOwner", "metadata.descOwner", "value.participant", "value.userJid"]) {
+      expect(source).toContain(field);
+    }
+  });
+
   it("does not amplify inventory pressure with serial retries", async () => {
     const source = await readFile(transportSourcePath, "utf8");
     expect(source).toContain("for (let attempt = 0; attempt < 1; attempt += 1)");

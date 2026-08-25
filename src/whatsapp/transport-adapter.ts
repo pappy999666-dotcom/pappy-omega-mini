@@ -88,8 +88,41 @@ function participantIsAdmin(participant: unknown, identities: Set<string>): bool
     .some((candidate) => identities.has(candidate));
 }
 
+function adminMatchType(
+  metadata: GroupInventoryRecord,
+  identities: Set<string>,
+): "owner" | "participant" | undefined {
+  const ownerValues = [metadata.owner, metadata.subjectOwner, metadata.descOwner];
+  if (
+    ownerValues
+      .filter((value): value is string => typeof value === "string")
+      .flatMap((value) => [...jidVariants(value)])
+      .some((candidate) => identities.has(candidate))
+  )
+    return "owner";
+  const participantMatch = participantValues(metadata.participants).some((participant) => {
+    if (!participant || typeof participant !== "object") return false;
+    const value = participant as Record<string, unknown>;
+    const role = String(value.admin ?? value.role ?? "").toLowerCase();
+    if (role !== "admin" && role !== "superadmin" && value.isAdmin !== true && value.isSuperAdmin !== true)
+      return false;
+    return [
+      value.phoneNumber,
+      value.pn,
+      value.id,
+      value.jid,
+      value.lid,
+      value.participant,
+      value.userJid,
+    ]
+      .flatMap((candidate) => [...jidVariants(candidate)])
+      .some((candidate) => identities.has(candidate));
+  });
+  return participantMatch ? "participant" : undefined;
+}
+
 function metadataHasOwnAdminRole(metadata: GroupInventoryRecord, identities: Set<string>): boolean {
-  return participantValues(metadata.participants).some((participant) => participantIsAdmin(participant, identities));
+  return Boolean(adminMatchType(metadata, identities));
 }
 
 function statusContactValues(source: unknown): unknown[] {
@@ -355,7 +388,13 @@ const GROUP_INVENTORY_TIMEOUT_MS = 15_000;
 const GROUP_INVENTORY_CACHE_MS = 60_000;
 const GROUP_INVENTORY_INFLIGHT_TIMEOUT_MS = 20_000;
 const GROUP_PARTICIPANT_CACHE_MS = 30_000;
-type GroupInventoryRecord = { subject?: string; participants?: unknown[] };
+type GroupInventoryRecord = {
+  subject?: string;
+  participants?: unknown[];
+  owner?: unknown;
+  subjectOwner?: unknown;
+  descOwner?: unknown;
+};
 const groupInventoryCache = new Map<
   string,
   { expiresAt: number; groups: GroupSummary[] }
@@ -437,6 +476,7 @@ async function loadGroupInventory(
   fetchGroups: (...args: unknown[]) => Promise<unknown>,
   identities: Set<string>,
   timeoutMs = GROUP_INVENTORY_TIMEOUT_MS,
+  debugContext?: { workspaceId: string; sessionId: string },
 ): Promise<GroupSummary[]> {
   let lastError: unknown;
   // Inventory is a read snapshot, not a job that should amplify pressure.
@@ -453,12 +493,20 @@ async function loadGroupInventory(
           ),
         ),
       ])) as Record<string, GroupInventoryRecord>;
-      return Object.entries(result).map(([jid, metadata]) => ({
+      const groups = Object.entries(result).map(([jid, metadata]) => ({
         jid,
         subject: metadata.subject ?? jid,
         participantCount: participantValues(metadata.participants).length,
         isAdmin: metadataHasOwnAdminRole(metadata, identities),
+        adminMatchType: adminMatchType(metadata, identities),
       }));
+      logGroupInventoryDebug("full-scan-done", debugContext?.workspaceId ?? "unknown", debugContext?.sessionId ?? "unknown", {
+        groups: groups.length,
+        adminGroups: groups.filter((group) => group.isAdmin).length,
+        ownerMatches: groups.filter((group) => group.adminMatchType === "owner").length,
+        participantMatches: groups.filter((group) => group.adminMatchType === "participant").length,
+      });
+      return groups.map(({ adminMatchType: _adminMatchType, ...group }) => group);
     } catch (error) {
       lastError = error;
       break;
@@ -517,7 +565,12 @@ export async function listGroups(
   const loadPanelSummaries = async (): Promise<GroupSummary[]> => {
     if (!fetchSummaries) {
       logGroupInventoryDebug("full-scan-start", workspaceId, sessionId, { reason: "no-panel-summary" });
-      return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>, identities);
+      return loadGroupInventory(
+        fetchGroups as (...args: unknown[]) => Promise<unknown>,
+        identities,
+        GROUP_INVENTORY_TIMEOUT_MS,
+        { workspaceId, sessionId },
+      );
     }
     try {
       logGroupInventoryDebug("panel-summary-start", workspaceId, sessionId);
@@ -563,6 +616,7 @@ export async function listGroups(
           fetchGroups as (...args: unknown[]) => Promise<unknown>,
           identities,
           60_000,
+          { workspaceId, sessionId },
         ).catch(() => summaries);
       }
       return summaries;
@@ -572,7 +626,12 @@ export async function listGroups(
       });
       const reason = error instanceof Error ? error.message : String(error);
       if (fetchGroups && /method is unavailable:\s*listGroupSummaries/i.test(reason))
-        return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>, identities);
+        return loadGroupInventory(
+          fetchGroups as (...args: unknown[]) => Promise<unknown>,
+          identities,
+          GROUP_INVENTORY_TIMEOUT_MS,
+          { workspaceId, sessionId },
+        );
       throw error;
     }
   };
