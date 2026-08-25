@@ -113,6 +113,7 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("value.groupStatusMessage");
     expect(source).toContain("value.groupStatus === true");
     expect(source).toContain("sendInteractiveTable(jid, table, sendOptions)");
+    expect(source).toContain("nativeFlow.length === 0");
     expect(source).toContain("associatedChildMessage");
     expect(source).toContain("resolvedMentionedJids.length");
     expect(source).toContain("context.mentionedJid.slice(0, 100)");

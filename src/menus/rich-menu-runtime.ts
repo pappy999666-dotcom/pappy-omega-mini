@@ -6,6 +6,7 @@ const PUBLIC_MEDIA_ORIGIN =
   process.env.PAPPY_MENU_MEDIA_BASE_URL?.trim() ||
   "https://pappy-omega-mini-v1.duckdns.org";
 export const MENU_MEDIA_TTL = 24 * 60 * 60;
+export const MENU_INTERACTION_TTL_SECONDS = 60;
 export const TELEGRAM_HOME_URL = "https://t.me/pappy_b2_bot";
 
 export interface RichMenuImage {
@@ -49,6 +50,68 @@ export interface RichMenuContent {
 export interface MenuInteraction {
   view?: string;
   command?: string;
+  expiresAt?: number;
+}
+
+export interface MenuInteractionContext {
+  workspaceId: string;
+  sessionId: string;
+  prefix?: string;
+  /** Only native interaction payloads may use a bare command-label fallback. */
+  allowCommandText?: boolean;
+}
+
+interface MenuTokenBinding {
+  workspaceId: string;
+  sessionId: string;
+  expiresAt: number;
+}
+
+const menuTokens = new Map<string, MenuTokenBinding>();
+const menuSessions = new Map<string, number>();
+const MAX_MENU_TOKENS = 2048;
+
+function menuSessionKey(context: MenuInteractionContext): string {
+  return `${context.workspaceId}\u0000${context.sessionId}`;
+}
+
+function pruneMenuTokens(now = Date.now()): void {
+  for (const [nonce, binding] of menuTokens) {
+    if (binding.expiresAt <= now) menuTokens.delete(nonce);
+  }
+  for (const [key, expiresAt] of menuSessions) {
+    if (expiresAt <= now) menuSessions.delete(key);
+  }
+  while (menuTokens.size > MAX_MENU_TOKENS) {
+    const oldest = menuTokens.keys().next().value;
+    if (typeof oldest !== "string") break;
+    menuTokens.delete(oldest);
+  }
+}
+
+function registerMenuToken(nonce: string, options?: RichMenuBuildOptions): number {
+  const now = Date.now();
+  pruneMenuTokens(now);
+  const requested = options?.expiresAt ?? now + Math.max(5, Math.min(300, options?.ttlSeconds ?? MENU_INTERACTION_TTL_SECONDS)) * 1000;
+  const expiresAt = Math.max(now + 1_000, requested);
+  if (options?.workspaceId && options.sessionId) {
+    menuTokens.set(nonce, { workspaceId: options.workspaceId, sessionId: options.sessionId, expiresAt });
+    menuSessions.set(`${options.workspaceId}\u0000${options.sessionId}`, expiresAt);
+  }
+  return expiresAt;
+}
+
+function activeMenuSession(context: MenuInteractionContext): number | undefined {
+  pruneMenuTokens();
+  const expiresAt = menuSessions.get(menuSessionKey(context));
+  return expiresAt && expiresAt > Date.now() ? expiresAt : undefined;
+}
+
+function activeMenuToken(nonce: string, context: MenuInteractionContext): number | undefined {
+  pruneMenuTokens();
+  const binding = menuTokens.get(nonce);
+  if (!binding || binding.workspaceId !== context.workspaceId || binding.sessionId !== context.sessionId || binding.expiresAt <= Date.now()) return undefined;
+  return binding.expiresAt;
 }
 
 interface MenuGroup {
@@ -106,6 +169,13 @@ export function buildMenuMediaUrl(workspaceId: string, mediaId: string): string 
 
 function interactionNonce(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export interface RichMenuBuildOptions {
+  workspaceId?: string;
+  sessionId?: string;
+  ttlSeconds?: number;
+  expiresAt?: number;
 }
 
 function uiId(view: string, nonce: string): string {
@@ -166,35 +236,55 @@ export function textForView(model: SessionMenuModel, view: string): string {
   return [`PAPPY OMEGA MINI · ${title}`, model.statusLine, "", body, "", prefix ? `Tap a category or command. Send ${menuCommand} for a fresh set of buttons.` : "Tap a category or command. Use the buttons for a fresh set of controls."].join("\n");
 }
 
-export function buildRichMenuContent(model: SessionMenuModel, view = "root", image?: RichMenuImage): RichMenuContent {
+export function buildRichMenuContent(model: SessionMenuModel, view = "root", image?: RichMenuImage, options?: RichMenuBuildOptions): RichMenuContent {
   const actions = new Set(model.actions.map((item: MenuAction) => item.command));
   const nonce = interactionNonce();
+  const expiresAt = registerMenuToken(nonce, options);
+  const lifetimeSeconds = Math.max(5, Math.ceil((expiresAt - Date.now()) / 1000));
   return {
-    header: { title: `PAPPY OMEGA MINI · ${CATEGORY_LABELS[view] || CATEGORY_LABELS.root}`, disclaimer: true, disclaimerText: "Choose a section below to explore the available controls.", ...(image?.url ? { image } : {}) },
+    header: { title: `PAPPY OMEGA MINI · ${CATEGORY_LABELS[view] || CATEGORY_LABELS.root}`, disclaimer: true, disclaimerText: `Choose a section below to explore the available controls. Buttons expire after ${lifetimeSeconds}s.`, ...(image?.url ? { image } : {}) },
     body: { cards: cardsForView(view, actions, nonce, model.prefix || ""), carousel: false },
     footer: { text: "Back to Pappy Omega Mini on Telegram", url: TELEGRAM_HOME_URL },
   };
 }
 
-export function resolveMenuViewInteraction(value?: string): MenuInteraction | undefined {
-  const interaction = resolveMenuInteraction(value);
+export function resolveMenuViewInteraction(value?: string, context?: MenuInteractionContext): MenuInteraction | undefined {
+  const interaction = resolveMenuInteraction(value, context);
   return interaction?.view ? interaction : undefined;
 }
 
-export function resolveMenuInteraction(value?: string): MenuInteraction | undefined {
+export function resolveMenuInteraction(value?: string, context?: MenuInteractionContext): MenuInteraction | undefined {
   const key = String(value || "").trim();
   if (!key) return undefined;
-  if (key.startsWith(".")) {
-    const command = key.slice(1).trim().toLowerCase();
-    if (/^[a-z0-9][a-z0-9_-]{0,48}$/i.test(command)) return { command };
-  }
   const parts = key.split(":");
   const view = parts[2];
-  if (parts[0] === "ui" && parts[1] === "menu" && view && CATEGORY_LABELS[view])
-    return { view };
+  if (parts[0] === "ui" && parts[1] === "menu" && view && CATEGORY_LABELS[view]) {
+    const nonce = parts[3];
+    const expiresAt = context && nonce ? activeMenuToken(nonce, context) : undefined;
+    if (context && !expiresAt) return undefined;
+    return { view, ...(expiresAt ? { expiresAt } : {}) };
+  }
   const command = parts[1];
-  if (parts[0] === "cmd" && command && /^[a-z0-9][a-z0-9_-]{0,48}$/i.test(command))
-    return { command: command.toLowerCase() };
+  if (parts[0] === "cmd" && command && /^[a-z0-9][a-z0-9_-]{0,48}$/i.test(command)) {
+    const nonce = parts[2];
+    const expiresAt = context && nonce ? activeMenuToken(nonce, context) : undefined;
+    if (context && !expiresAt) return undefined;
+    return { command: command.toLowerCase(), ...(expiresAt ? { expiresAt } : {}) };
+  }
+  const prefix = context?.prefix?.trim() ?? "";
+  const commandText = prefix && key.startsWith(prefix)
+    ? key.slice(prefix.length).trim()
+    : context?.allowCommandText && /^[a-z0-9][a-z0-9_-]{0,48}$/i.test(key)
+      ? key
+      : !context && key.startsWith(".")
+        ? key.slice(1).trim()
+        : "";
+  if (commandText && /^[a-z0-9][a-z0-9_-]{0,48}$/i.test(commandText)) {
+    const expiresAt = context ? activeMenuSession(context) : undefined;
+    if (context && !expiresAt) return undefined;
+    return { command: commandText.toLowerCase(), ...(expiresAt ? { expiresAt } : {}) };
+  }
+  if (context && (DISPLAY_ACTIONS.has(key.toLowerCase()) || key.startsWith("Open ")) && !activeMenuSession(context)) return undefined;
   return DISPLAY_ACTIONS.get(key.toLowerCase());
 }
 

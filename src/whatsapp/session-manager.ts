@@ -625,13 +625,14 @@ async function openWhatsAppSession(
       run: async () => {
     try {
       const nativeTable = content?.nativeTable as { title?: string; headers?: unknown[]; rows?: unknown[][]; buttons?: Array<{ id?: string; text?: string }>; footer?: string } | undefined;
+      const nativeFlow = Array.isArray(content?.nativeFlow) ? content.nativeFlow : [];
       const richMenu = content?.richMenu as Record<string, unknown> | undefined;
       const richMenuSender = (socket as unknown as { richMenu?: (target: string, value: Record<string, unknown>) => Promise<unknown> }).richMenu;
       const mentions = Array.isArray(content?.mentions) ? content.mentions.filter((value: unknown): value is string => typeof value === "string") : [];
       let sendResult: unknown;
       if (richMenu && typeof richMenuSender === "function") {
         sendResult = await richMenuSender(jid, richMenu);
-      } else if (nativeTable && typeof socket.sendInteractiveTable === "function") {
+      } else if (nativeTable && nativeFlow.length === 0 && typeof socket.sendInteractiveTable === "function") {
         sendResult = await socket.sendInteractiveTable(jid, nativeTable, mentions.length ? { mentions } : {});
       } else {
         const { nativeTable: _nativeTable, richMenu: _richMenu, ...safeContent } = content ?? {};

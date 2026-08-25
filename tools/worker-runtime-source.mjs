@@ -966,8 +966,9 @@ async function executeTransport(runtime, method, encodedArgs) {
     const value = content && typeof content === "object" && !Array.isArray(content) ? content : {};
     const sendOptions = options && typeof options === "object" ? options : Array.isArray(value.mentions) ? { mentions: value.mentions } : {};
     const table = value.nativeTable;
+    const nativeFlow = Array.isArray(value.nativeFlow) ? value.nativeFlow : [];
     if (value.richMenu && typeof runtime.socket.richMenu === "function") return runtime.socket.richMenu(jid, value.richMenu);
-    if (table && typeof runtime.socket.sendInteractiveTable === "function") return runtime.socket.sendInteractiveTable(jid, table, sendOptions);
+    if (table && nativeFlow.length === 0 && typeof runtime.socket.sendInteractiveTable === "function") return runtime.socket.sendInteractiveTable(jid, table, sendOptions);
     if (value.groupStatusMessage && typeof value.groupStatusMessage === "object") {
       return runtime.socket.sendMessage(jid, { ...materializeWorkloadContent(value.groupStatusMessage), groupStatus: true }, sendOptions);
     }

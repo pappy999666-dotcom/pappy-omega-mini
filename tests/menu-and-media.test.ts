@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractUrls } from "../src/links/link-collector.js";
 import {
   createSession,
@@ -32,6 +32,10 @@ import {
 
 beforeEach(() => {
   // Tests use unique Telegram IDs/workspaces, so state remains tenant-safe without global resets.
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("link intake", () => {
@@ -81,7 +85,8 @@ describe("shared session menu", () => {
     expect(payload.text).not.toContain("┌");
     expect(payload.text).not.toContain("╔");
     expect(payload.text).not.toContain("One command surface, two polished interfaces.");
-    expect(payload.richMenu.header.disclaimerText).toBe("Choose a section below to explore the available controls.");
+    expect(payload.richMenu.header.disclaimerText).toContain("Choose a section below to explore the available controls.");
+    expect(payload.richMenu.header.disclaimerText).toContain("Buttons expire after 60s");
     expect(payload.richMenu.header.disclaimerText).not.toContain("owner actions");
   });
 
@@ -454,19 +459,22 @@ describe("WhatsApp command registry", () => {
       prefix: "!",
       lastHealthyAt: Date.now(),
     });
+    const menu = await buildWhatsappMenuPayload(getSession(user.workspaceId, session.sessionId), true, "core");
+    const pingButton = menu.richMenu.body.cards.flatMap((card) => card.buttons).find((button) => button.text === "!ping");
+    expect(pingButton?.id).toMatch(/^cmd:ping:/);
     await expect(routeWhatsAppText({
       workspaceId: user.workspaceId,
       sessionId: session.sessionId,
       senderJid: "2348012345678@s.whatsapp.net",
       text: "",
-      interactionId: "cmd:ping:nonce",
+      interactionId: pingButton!.id,
     })).resolves.toContain("ACTIVE");
     await expect(routeWhatsAppText({
       workspaceId: user.workspaceId,
       sessionId: session.sessionId,
       senderJid: "2348012345678@s.whatsapp.net",
       text: "",
-      interactionDisplayText: ".ping",
+      interactionDisplayText: "!ping",
     })).resolves.toContain("ACTIVE");
     await expect(routeWhatsAppText({
       workspaceId: user.workspaceId,
@@ -488,12 +496,15 @@ describe("WhatsApp command registry", () => {
       prefix: "!",
       lastHealthyAt: Date.now(),
     });
+    const rootMenu = await buildWhatsappMenuPayload(getSession(user.workspaceId, session.sessionId), true);
+    const fullMenuButton = rootMenu.richMenu.body.cards.flatMap((card) => card.buttons).find((button) => button.text === "Open full menu");
+    expect(fullMenuButton?.id).toMatch(/^ui:menu:all:/);
     const fullMenu = await routeWhatsAppText({
       workspaceId: user.workspaceId,
       sessionId: session.sessionId,
       senderJid: "2348012345678@s.whatsapp.net",
       text: "",
-      interactionId: "ui:menu:all:nonce",
+      interactionId: fullMenuButton!.id,
     });
     expect(fullMenu).toMatchObject({ richMenu: { header: { title: expect.stringContaining("FULL COMMAND MENU") } } });
     const category = await routeWhatsAppText({
@@ -518,6 +529,23 @@ describe("WhatsApp command registry", () => {
       text: "hello everyone",
     });
     expect(ordinaryText).toBeNull();
+  });
+
+  it("binds native menu buttons to the owner and expires them after the requested lifetime", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-08-25T12:00:00.000Z");
+    vi.setSystemTime(now);
+    const user = resolveUser(`rich-menu-security-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "rich-menu-security", phoneNumber: "2348012345678" });
+    updateSession(user.workspaceId, session.sessionId, { status: "ACTIVE", prefix: "!", lastHealthyAt: Date.now() });
+    const menu = await buildWhatsappMenuPayload(getSession(user.workspaceId, session.sessionId), true, "core", { ttlSeconds: 5 });
+    const pingButton = menu.richMenu.body.cards.flatMap((card) => card.buttons).find((button) => button.text === "!ping");
+    expect(pingButton?.id).toMatch(/^cmd:ping:/);
+    await expect(routeWhatsAppText({ workspaceId: user.workspaceId, sessionId: session.sessionId, senderJid: "2348012345678@s.whatsapp.net", text: "", interactionId: pingButton!.id })).resolves.toContain("ACTIVE");
+    await expect(routeWhatsAppText({ workspaceId: user.workspaceId, sessionId: session.sessionId, senderJid: "2348099999999@s.whatsapp.net", text: "", interactionId: pingButton!.id })).resolves.toBeNull();
+    vi.setSystemTime(new Date(now.getTime() + 6_000));
+    await expect(routeWhatsAppText({ workspaceId: user.workspaceId, sessionId: session.sessionId, senderJid: "2348012345678@s.whatsapp.net", text: "", interactionId: pingButton!.id })).resolves.toBeNull();
+    await expect(routeWhatsAppText({ workspaceId: user.workspaceId, sessionId: session.sessionId, senderJid: "2348012345678@s.whatsapp.net", text: "", interactionDisplayText: "!ping" })).resolves.toBeNull();
   });
 
   it("supports null no-prefix mode per session", async () => {

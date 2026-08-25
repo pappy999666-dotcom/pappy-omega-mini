@@ -86,9 +86,10 @@ function identityMatches(left: string, right: string): boolean {
 function isOwnerFor(
   message: IncomingTextMessage,
   session: ReturnType<typeof getSession>,
+  nativeInteraction = false,
 ): boolean {
   return (
-    message.fromMe === true ||
+    (!nativeInteraction && message.fromMe === true) ||
     message.bridgeAuthorized === true ||
     identityMatches(message.senderJid, session.phoneNumber ?? "") ||
     session.sudoList.some((identity) =>
@@ -113,21 +114,24 @@ export async function routeWhatsAppText(
   const interactionId = message.interactionId?.trim();
   const interactionDisplayText = message.interactionDisplayText?.trim();
   const interactionValue = interactionId || interactionDisplayText;
-  const menuAction = interactionValue ? resolveMenuInteraction(interactionValue) : undefined;
+  if (shouldProxyWhatsAppSession(message.workspaceId, message.sessionId))
+    return routeViaRemoteBridge(message);
+  const session = getSession(message.workspaceId, message.sessionId);
+  const interactionContext = { workspaceId: message.workspaceId, sessionId: message.sessionId, prefix: session.prefix, allowCommandText: Boolean(interactionValue) };
+  const menuAction = interactionValue ? resolveMenuInteraction(interactionValue, interactionContext) : undefined;
   const viewAction = menuAction?.view
     ? menuAction
     : !interactionValue
-      ? resolveMenuViewInteraction(commandInput.trim())
+      ? resolveMenuViewInteraction(commandInput.trim(), interactionContext)
       : undefined;
+  const looksLikeExpiredNativeMenuId = Boolean(interactionValue && /^(?:ui:menu:|cmd:)/i.test(interactionValue) && !menuAction);
+  if (looksLikeExpiredNativeMenuId) return null;
   const trimmed = menuAction?.command || (viewAction?.view ? "menu" : interactionValue || commandInput.trim());
   if (
     getEmergencyState().enabled &&
     /^(?:[^\w\s]{1,3})?(?:menu|help|m)(?:\s|$)/i.test(trimmed)
   )
     return null;
-  if (shouldProxyWhatsAppSession(message.workspaceId, message.sessionId))
-    return routeViaRemoteBridge(message);
-  const session = getSession(message.workspaceId, message.sessionId);
   const prefix = session.prefix;
   // Telegram Bridge is an already-authorized control-plane transport. It must
   // dispatch the command body independently of the target session's local
@@ -149,8 +153,10 @@ export async function routeWhatsAppText(
   if (!raw.trim()) return null;
 
   const commandName = raw.trim().split(/\s+/, 1)[0]?.toLowerCase();
-  const isOwner = isOwnerFor(message, session);
+  const isNativeInteraction = Boolean(interactionValue);
+  const isOwner = isOwnerFor(message, session, isNativeInteraction);
   if (viewAction?.view) {
+    if (!isOwner) return null;
     const payload = await buildWhatsappMenuPayload(session, isOwner, viewAction.view);
     return payload.media
       ? { media: payload.media, caption: payload.caption, richMenu: payload.richMenu }
@@ -183,7 +189,11 @@ export async function routeWhatsAppText(
   }
   if (commandName === "menu" || commandName === "m") {
     if (getEmergencyState().enabled) return null;
-    const payload = await buildWhatsappMenuPayload(session, isOwnerFor(message, session), menuAction?.view || "root");
+    const ttlToken = raw.trim().split(/\s+/)[1]?.toLowerCase() ?? "";
+    const ttlMatch = /^(\d{1,3})(s|sec|secs|m|min|mins)?$/i.exec(ttlToken);
+    const ttlValue = ttlMatch ? Number(ttlMatch[1]) * (/^m/i.test(ttlMatch[2] ?? "") ? 60 : 1) : undefined;
+    const ttlSeconds = ttlValue && Number.isFinite(ttlValue) ? Math.max(5, Math.min(300, ttlValue)) : undefined;
+    const payload = await buildWhatsappMenuPayload(session, isOwnerFor(message, session, isNativeInteraction), menuAction?.view || "root", { ...(ttlSeconds ? { ttlSeconds } : {}) });
     return payload.media
       ? { media: payload.media, caption: payload.caption, richMenu: payload.richMenu }
       : { text: payload.text, richMenu: payload.richMenu };

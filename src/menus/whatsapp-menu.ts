@@ -9,6 +9,7 @@ import {
   buildRichMenuContent,
   textForView,
   type RichMenuContent,
+  type RichMenuBuildOptions,
 } from "./rich-menu-runtime.js";
 import type { WhatsAppSession } from "../types/domain.js";
 import type { GroupControlTable } from "../whatsapp/group-control-confirmation.js";
@@ -29,6 +30,7 @@ export async function buildWhatsappMenuPayload(
   session: WhatsAppSession,
   isOwner: boolean,
   view = "root",
+  menuOptions?: RichMenuBuildOptions,
 ): Promise<WhatsappMenuPayload> {
   const configuration = getWhatsappMenuSettings(session.workspaceId);
   const model = buildSessionMenu(session, isOwner);
@@ -71,7 +73,11 @@ export async function buildWhatsappMenuPayload(
         );
     }
   }
-  const richMenu = buildRichMenuContent(model, view, image);
+  const richMenu = buildRichMenuContent(model, view, image, {
+    workspaceId: session.workspaceId,
+    sessionId: session.sessionId,
+    ...menuOptions,
+  });
   const caption = [configuration.whatsappMenuCaption, displayText]
     .filter(Boolean)
     .join("\n\n");
