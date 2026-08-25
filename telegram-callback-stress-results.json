@@ -1,0 +1,167 @@
+{
+  "generatedAt": "2026-08-25T05:53:06.530Z",
+  "syntheticOnly": true,
+  "sessionCount": 50,
+  "primaryCallbacksPerSession": 9,
+  "nestedRouteFamilies": 27,
+  "duplicateClickRounds": 200,
+  "duplicateClickOperations": 4500000,
+  "callbackCount": 450,
+  "compactCallbackCount": 200,
+  "maxCallbackBytes": 62,
+  "callbackLimitPass": true,
+  "elapsedMs": 64.933,
+  "operationsPerSecond": 69302596.57,
+  "maxEventLoopLagMs": 0,
+  "p95EventLoopLagMs": 0,
+  "unhandledRejections": 0,
+  "staleTokenRejected": true,
+  "routePatternCount": 20,
+  "routeHitSamples": {
+    "^session:([^:]+):group:(name|description):(\\d+)$": 100,
+    "^session:([^:]+):group:picture:(\\d+)$": 50,
+    "^session:([^:]+):group:picture:get:(\\d+)$": 50,
+    "^session:([^:]+):group:moderation:(\\d+)$": 50,
+    "^session:([^:]+):group:moderation:approve:(\\d+)$": 50,
+    "^session:([^:]+):group:invite:(\\d+)$": 50,
+    "^session:([^:]+):group:leave(?::confirm)?(?::(\\d+))?$": 50,
+    "^session:([^:]+):section:groups$": 50
+  },
+  "compactSamples": {
+    "view:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:view:123",
+      "compact": "session:12345678-1234-4234-8234-000000000032:group:view:123",
+      "bytes": 59
+    },
+    "name:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:name:123",
+      "compact": "session:12345678-1234-4234-8234-000000000032:group:name:123",
+      "bytes": 59
+    },
+    "description:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:description:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:description:123",
+      "bytes": 41
+    },
+    "picture:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:picture:123",
+      "compact": "session:12345678-1234-4234-8234-000000000032:group:picture:123",
+      "bytes": 62
+    },
+    "picture:get:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:picture:get:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:picture:get:123",
+      "bytes": 41
+    },
+    "invite:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:invite:123",
+      "compact": "session:12345678-1234-4234-8234-000000000032:group:invite:123",
+      "bytes": 61
+    },
+    "leave:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:leave:123",
+      "compact": "session:12345678-1234-4234-8234-000000000032:group:leave:123",
+      "bytes": 60
+    },
+    "moderation:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:123",
+      "bytes": 40
+    },
+    "moderation:approve:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:approve:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:approve:123",
+      "bytes": 48
+    },
+    "moderation:approval:on:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:approval:on:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:approval:on:123",
+      "bytes": 52
+    },
+    "moderation:memberadd:admins:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:memberadd:admins:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:memberadd:admins:123",
+      "bytes": 57
+    },
+    "moderation:chat:admins:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:chat:admins:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:chat:admins:123",
+      "bytes": 52
+    },
+    "moderation:info:all:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:info:all:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:info:all:123",
+      "bytes": 49
+    },
+    "moderation:promote:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:promote:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:promote:123",
+      "bytes": 48
+    },
+    "moderation:members:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:members:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:members:123",
+      "bytes": 48
+    },
+    "moderation:members:country:remove:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:members:country:remove:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:members:country:remove:123",
+      "bytes": 63
+    },
+    "moderation:bulk:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:bulk:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:bulk:123",
+      "bytes": 45
+    },
+    "moderation:bulk:block:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:bulk:block:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:bulk:block:123",
+      "bytes": 51
+    },
+    "moderation:ephemeral:90d:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:ephemeral:90d:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:ephemeral:90d:123",
+      "bytes": 54
+    },
+    "moderation:revoke-invite:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:revoke-invite:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:revoke-invite:123",
+      "bytes": 54
+    },
+    "moderation:revoke-invite:run:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:revoke-invite:run:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:revoke-invite:run:123",
+      "bytes": 58
+    },
+    "moderation:approve:amount:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:approve:amount:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:approve:amount:123",
+      "bytes": 55
+    },
+    "moderation:reject:country:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:reject:country:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:reject:country:123",
+      "bytes": 55
+    },
+    "moderation:approve:all:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:approve:all:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:approve:all:123",
+      "bytes": 52
+    },
+    "moderation:approve:all:run:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:approve:all:run:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:approve:all:run:123",
+      "bytes": 56
+    },
+    "moderation:reject:all:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:reject:all:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:reject:all:123",
+      "bytes": 51
+    },
+    "moderation:reject:all:run:123": {
+      "legacy": "session:12345678-1234-4234-8234-000000000032:group:moderation:reject:all:run:123",
+      "compact": "g:uEjRWeBI0QjSCNAAAAAAAMg:moderation:reject:all:run:123",
+      "bytes": 55
+    }
+  }
+}
