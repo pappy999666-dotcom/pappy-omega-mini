@@ -472,13 +472,12 @@ async function openWhatsAppSession(
     authStore,
     sessionId,
   );
-  let recoverStaleSocket: ((reason: string) => void) | undefined;
   let smaxInvalidWindowStartedAt = 0;
   let smaxInvalidCount = 0;
   let lastSmaxInvalidLogAt = 0;
   let cryptoErrorWindowStartedAt = 0;
   let cryptoErrorCount = 0;
-  let cryptoStormRecoveryTriggered = false;
+  let lastCryptoWarningAt = 0;
   let stableOpenTimer: ReturnType<typeof setTimeout> | undefined;
   const CRYPTO_ERROR_WINDOW_MS = 30_000;
   const CRYPTO_ERROR_LIMIT = 12;
@@ -516,16 +515,27 @@ async function openWhatsAppSession(
           if (!cryptoErrorWindowStartedAt || now - cryptoErrorWindowStartedAt > CRYPTO_ERROR_WINDOW_MS) {
             cryptoErrorWindowStartedAt = now;
             cryptoErrorCount = 0;
-            cryptoStormRecoveryTriggered = false;
           }
           cryptoErrorCount += 1;
-          if (cryptoErrorCount >= CRYPTO_ERROR_LIMIT && !cryptoStormRecoveryTriggered) {
-            cryptoStormRecoveryTriggered = true;
-            console.warn(
-              `[pappy-omega-mini] Baileys crypto error storm session=${sessionId}; recovering socket after ${cryptoErrorCount} failures in ${Math.round((now - cryptoErrorWindowStartedAt) / 1000)}s`,
+          if (
+            cryptoErrorCount >= CRYPTO_ERROR_LIMIT &&
+            now - lastCryptoWarningAt >= CRYPTO_ERROR_WINDOW_MS
+          ) {
+            lastCryptoWarningAt = now;
+            const elapsedSeconds = Math.max(
+              1,
+              Math.round((now - cryptoErrorWindowStartedAt) / 1000),
             );
-            queueMicrotask(() => recoverStaleSocket?.("Baileys crypto error storm"));
+            noteError(
+              key,
+              `message decryption failures suppressed: ${cryptoErrorCount} in ${elapsedSeconds}s`,
+            );
+            console.warn(
+              `[pappy-omega-mini] suppressed message-level Baileys decryption failures session=${sessionId}; socket kept alive after ${cryptoErrorCount} failures in ${elapsedSeconds}s`,
+            );
           }
+          // A bad or stale inbound message key is not proof that the websocket
+          // transport is dead. Closing here creates a reconnect/crypto storm.
           return;
         }
         if (rendered.includes("smax-invalid")) {
@@ -638,8 +648,6 @@ async function openWhatsAppSession(
       // The connection.update close handler owns state transition and reconnect scheduling.
     }
   };
-  recoverStaleSocket = (reason) =>
-    forceSocketRecovery(new Error(`Baileys server rejection: ${reason}`));
   socket.ws?.on?.("error", forceSocketRecovery);
   socket.ws?.on?.("close", () => {
     if (isCurrentSocket())
