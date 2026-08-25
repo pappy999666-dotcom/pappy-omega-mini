@@ -43,8 +43,25 @@ import {
   routeViaRemoteBridge,
   shouldProxyWhatsAppSession,
 } from "./remote-bridge.js";
+import {
+  buildStickerCommandInput,
+  getStickerCommandBinding,
+  stickerBindingMatches,
+} from "./sticker-command-bindings.js";
 
 const registry = createCommandRegistry();
+const recentStickerTriggers = new Map<string, number>();
+const STICKER_TRIGGER_DEDUPE_MS = 30_000;
+
+function acceptStickerTrigger(message: IncomingTextMessage): boolean {
+  if (!message.messageId || !message.stickerFingerprint) return true;
+  const now = Date.now();
+  for (const [key, expiresAt] of recentStickerTriggers) if (expiresAt <= now) recentStickerTriggers.delete(key);
+  const key = `${message.workspaceId}:${message.sessionId}:${message.messageId}:${message.stickerFingerprint}`;
+  if ((recentStickerTriggers.get(key) ?? 0) > now) return false;
+  recentStickerTriggers.set(key, now + STICKER_TRIGGER_DEDUPE_MS);
+  return true;
+}
 
 export interface IncomingTextMessage {
   workspaceId: string;
@@ -54,6 +71,8 @@ export interface IncomingTextMessage {
   senderJid: string;
   quotedSenderJid?: string;
   quotedMessageKey?: Record<string, unknown>;
+  quotedStickerFingerprint?: string;
+  stickerFingerprint?: string;
   mentionedJids?: string[];
   chatJid?: string;
   text: string;
@@ -86,7 +105,7 @@ function identityMatches(left: string, right: string): boolean {
 
 const SELF_EXECUTABLE_COMMANDS = new Set([
   "ping", "health", "profile", "help", "menu", "menulist",
-  "gstatus", "gstatusd", "dgstatus", "gstatusx", "tag", "stag", "pstatus",
+  "gstatus", "gstatusd", "dgstatus", "gstatusx", "tag", "stag", "pstatus", "setcmd", "flushcmd",
 ]);
 
 export function isSelfExecutableWhatsAppCommand(text: string, prefix = ""): boolean {
@@ -127,13 +146,21 @@ export function mergeQuotedPayload(text: string, quotedText?: string): string {
 export async function routeWhatsAppText(
   message: IncomingTextMessage,
 ): Promise<string | WhatsAppReply | null> {
-  const commandInput = mergeQuotedPayload(message.text, message.quotedText);
+  const textCommandInput = mergeQuotedPayload(message.text, message.quotedText);
   const interactionId = message.interactionId?.trim();
   const interactionDisplayText = message.interactionDisplayText?.trim();
   const interactionValue = interactionId || interactionDisplayText;
   if (shouldProxyWhatsAppSession(message.workspaceId, message.sessionId))
     return routeViaRemoteBridge(message);
   const session = getSession(message.workspaceId, message.sessionId);
+  const binding = message.stickerFingerprint
+    ? getStickerCommandBinding(message.workspaceId, message.sessionId)
+    : undefined;
+  const stickerCommandInput = binding && stickerBindingMatches(binding, message.stickerFingerprint)
+    ? buildStickerCommandInput(binding, message.quotedText, message.text)
+    : undefined;
+  const commandInput = stickerCommandInput || textCommandInput;
+  const stickerTrigger = Boolean(stickerCommandInput);
   const interactionContext = { workspaceId: message.workspaceId, sessionId: message.sessionId, prefix: session.prefix, allowCommandText: true };
   const menuAction = interactionValue ? resolveMenuInteraction(interactionValue, interactionContext) : undefined;
   const viewAction = menuAction?.view
@@ -150,12 +177,16 @@ export async function routeWhatsAppText(
   )
     return null;
   const prefix = session.prefix;
-  const selfAuthoredText = message.fromMe === true && !interactionValue && isSelfExecutableWhatsAppCommand(commandInput, prefix);
+  const selfAuthoredText = message.fromMe === true && !interactionValue && !stickerTrigger && isSelfExecutableWhatsAppCommand(textCommandInput, prefix);
   // Telegram Bridge and a message authored by this authenticated WhatsApp
   // identity are already trusted control-plane inputs. Native button clicks
   // remain separately sender-authorized below.
-  if (!interactionValue && !menuAction && !viewAction && !message.bridgeAuthorized && !selfAuthoredText && prefix && !trimmed.startsWith(prefix)) return null;
-  const raw = menuAction?.command || menuAction?.view || viewAction?.view
+  if (stickerTrigger && !isOwnerFor(message, session)) return null;
+  if (stickerTrigger && !acceptStickerTrigger(message)) return null;
+  if (!interactionValue && !menuAction && !viewAction && !stickerTrigger && !message.bridgeAuthorized && !selfAuthoredText && prefix && !trimmed.startsWith(prefix)) return null;
+  const raw = stickerTrigger
+    ? stickerCommandInput as string
+    : menuAction?.command || menuAction?.view || viewAction?.view
     ? trimmed
     : interactionValue
     ? trimmed
@@ -226,6 +257,8 @@ export async function routeWhatsAppText(
     senderJid: message.senderJid,
     ...(message.quotedSenderJid ? { quotedSenderJid: message.quotedSenderJid } : {}),
     ...(message.quotedMessageKey ? { quotedMessageKey: message.quotedMessageKey } : {}),
+    ...(message.quotedStickerFingerprint ? { quotedStickerFingerprint: message.quotedStickerFingerprint } : {}),
+    ...(message.stickerFingerprint ? { stickerFingerprint: message.stickerFingerprint } : {}),
     ...(message.quotedText ? { quotedText: message.quotedText } : {}),
     ...(message.mentionedJids?.length ? { mentionedJids: message.mentionedJids } : {}),
     ...(message.chatJid ? { chatJid: message.chatJid } : {}),

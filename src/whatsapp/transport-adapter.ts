@@ -248,6 +248,46 @@ export async function getProfilePictureUrl(
   return typeof result === "string" ? result : undefined;
 }
 
+export async function getProfilePictureMedia(
+  workspaceId: string,
+  sessionId: string,
+): Promise<WhatsAppMediaPayload | undefined> {
+  const url = await getProfilePictureUrl(workspaceId, sessionId);
+  if (!url) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("The profile-picture source was invalid.");
+  }
+  if (parsed.protocol !== "https:")
+    throw new Error("The profile-picture source was not a secure HTTPS image.");
+  const response = await fetch(parsed, {
+    signal: AbortSignal.timeout(12_000),
+    redirect: "follow",
+  });
+  try {
+    if (new URL(response.url || parsed.toString()).protocol !== "https:")
+      throw new Error("The profile-picture redirect was not a secure HTTPS URL.");
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("secure HTTPS")) throw error;
+    throw new Error("The profile-picture redirect was invalid.");
+  }
+  if (!response.ok) throw new Error(`Profile-picture download failed (${response.status}).`);
+  const contentType = (response.headers.get("content-type") ?? "image/jpeg").split(";", 1)[0]?.trim().toLowerCase() || "image/jpeg";
+  if (!contentType.startsWith("image/")) throw new Error("The profile-picture source did not return an image.");
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length || bytes.length > 8 * 1024 * 1024)
+    throw new Error("The profile-picture image exceeded the safe download limit.");
+  const extension = contentType === "image/png" ? "png" : contentType === "image/webp" ? "webp" : "jpg";
+  return {
+    kind: "image",
+    bytes,
+    mimeType: contentType,
+    fileName: `profile-picture.${extension}`,
+  };
+}
+
 export async function getGroupProfilePictureUrl(
   workspaceId: string,
   sessionId: string,

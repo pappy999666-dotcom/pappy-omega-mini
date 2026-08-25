@@ -234,6 +234,8 @@ export interface WorkloadInboundEvent {
   quotedText?: string;
   quotedSenderJid?: string;
   quotedMessageKey?: Record<string, unknown>;
+  quotedStickerFingerprint?: string;
+  stickerFingerprint?: string;
   mentionedJids?: string[];
   /** Sanitized Baileys message shape used only by the central Anti System. */
   message?: Record<string, unknown>;

@@ -532,6 +532,12 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         ...(input.quotedMessageKey && typeof input.quotedMessageKey === "object" && !Array.isArray(input.quotedMessageKey)
           ? { quotedMessageKey: input.quotedMessageKey as Record<string, unknown> }
           : {}),
+        ...(typeof input.quotedStickerFingerprint === "string" && /^sticker:[a-f0-9]{64}$/u.test(input.quotedStickerFingerprint)
+          ? { quotedStickerFingerprint: input.quotedStickerFingerprint }
+          : {}),
+        ...(typeof input.stickerFingerprint === "string" && /^sticker:[a-f0-9]{64}$/u.test(input.stickerFingerprint)
+          ? { stickerFingerprint: input.stickerFingerprint }
+          : {}),
         ...(Array.isArray(input.mentionedJids) ? { mentionedJids: input.mentionedJids.filter((item): item is string => typeof item === "string").slice(0, 100) } : {}),
         ...(input.message && typeof input.message === "object" && !Array.isArray(input.message) ? { message: input.message as Record<string, unknown> } : {}),
         ...(input.rawKey && typeof input.rawKey === "object" && !Array.isArray(input.rawKey) ? { rawKey: input.rawKey as Record<string, unknown> } : {}),

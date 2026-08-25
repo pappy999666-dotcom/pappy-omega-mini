@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { downloadMediaMessage } from "@crysnovax/baileys/lib/Utils/messages.js";
 import type {
   WhatsAppMediaKind,
@@ -124,6 +125,34 @@ export function extractQuotedText(
 ): string | undefined {
   const text = extractMessageText(quoted);
   return text || undefined;
+}
+
+/**
+ * Returns a stable, non-reversible identity for a sticker message. The raw
+ * Baileys media metadata is never exposed outside this module or persisted.
+ */
+export function extractStickerFingerprint(
+  message: Record<string, unknown> | undefined,
+): string | undefined {
+  const content = normalizedContent(message);
+  const sticker = content?.stickerMessage;
+  if (!isRecord(sticker)) return undefined;
+  const metadata = [
+    "fileSha256",
+    "fileEncSha256",
+    "mediaKey",
+    "directPath",
+  ].reduce<Record<string, string>>((result, key) => {
+    const value = sticker[key];
+    if (typeof value === "string" && value.trim()) result[key] = value.trim();
+    else if (Buffer.isBuffer(value) && value.length) result[key] = value.toString("base64");
+    else if (value instanceof Uint8Array && value.length) result[key] = Buffer.from(value).toString("base64");
+    return result;
+  }, {});
+  const keys = Object.keys(metadata).sort();
+  if (!keys.length) return undefined;
+  const canonical = keys.map((key) => `${key}:${metadata[key]}`).join("|");
+  return `sticker:${createHash("sha256").update(canonical, "utf8").digest("hex")}`;
 }
 
 export async function resolveMediaPayload(

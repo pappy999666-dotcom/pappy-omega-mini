@@ -19,6 +19,11 @@ import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { firstVerifiedPhone, maskedPhoneLabel, phoneJidFromIdentity, verifiedTargetJid, verifiedTargetJids, verifiedTargetPhone } from "./identity-normalization.js";
 import { buildModerationActionResponse, buildModerationJobResponse, buildModerationReviewResponse, formatModerationMessage, realMention } from "./moderation-response.js";
 import { pappyHeader } from "./response-designs.js";
+import {
+  clearStickerCommandBinding,
+  setStickerCommandBinding,
+  stickerBindingCommandList,
+} from "./sticker-command-bindings.js";
 import { banUsageCard, commandUsageCard, pairingHelpCard, sessionCommandUsageCard, sessionPairingCard } from "./response-cards.js";
 import type { GroupControlTable } from "./group-control-confirmation.js";
 import { buildLyricsText, buildMediaJobText, buildPlayPreviewText, downloadPlay, fetchLyrics, playUsageText, resolvePlayMetadata, withMediaDownloadSlot, type PlayMode } from "./play-media.js";
@@ -49,7 +54,7 @@ import {
 } from "./group-moderation-commands.js";
 import {
   createWhatsAppGroup,
-  getProfilePictureUrl,
+  getProfilePictureMedia,
   listGroups,
   removeProfilePicture,
   updateProfileBio,
@@ -144,9 +149,13 @@ export interface CommandContext {
   quotedSenderJid?: string;
   quotedText?: string;
   quotedMessageKey?: Record<string, unknown>;
+  /** Redacted identity of a quoted sticker used only by setcmd. */
+  quotedStickerFingerprint?: string;
   mentionedJids?: string[];
   chatJid?: string;
   media?: WhatsAppMediaPayload;
+  /** Redacted identity of a directly received sticker used by setcmd/flushcmd routing. */
+  stickerFingerprint?: string;
   args: string[];
   invokedName?: string;
   rawPayload?: string;
@@ -894,6 +903,66 @@ export function createCommandRegistry(): RegisteredCommand[] {
       },
     },
     {
+      name: "setcmd",
+      aliases: ["bindcmd"],
+      description: "Bind one safe command to a quoted sticker for this session.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const fingerprint = ctx.quotedStickerFingerprint;
+        const rawPayload = (ctx.rawPayload ?? "").trim();
+        const match = /^(\S+)(?:\s+([\s\S]*))?$/u.exec(rawPayload);
+        if (!fingerprint || !match?.[1])
+          return commandUsageCard({
+            title: "Sticker Command Binding",
+            command: `${session(ctx).prefix}setcmd`,
+            commandSyntax: `${session(ctx).prefix}setcmd <command> [payload]` ,
+            howToUse: ["Reply to a sticker with the command.", "A new binding replaces the previous sticker binding for this session."],
+            examples: [`${session(ctx).prefix}setcmd tag`, `${session(ctx).prefix}setcmd tag hi`],
+            note: "Only safe, owner-approved commands can be sticker triggers. Use flushcmd to clear the active binding.",
+          });
+        try {
+          const binding = setStickerCommandBinding({
+            workspaceId: ctx.workspaceId,
+            sessionId: ctx.sessionId,
+            fingerprint,
+            command: match[1],
+            payload: match[2] ?? "",
+          });
+          return [
+            ...pappyHeader(`${ctx.workspaceId}:${ctx.sessionId}:setcmd`, "STICKER COMMAND BOUND"),
+            `⎔ Command    · ⇆ ${session(ctx).prefix}${binding.command}${binding.payload ? ` ${binding.payload}` : ""}`,
+            "⎔ Trigger    · ⇆ Quoted sticker",
+            "⎔ Scope      · ⇆ Current WhatsApp session",
+            "⎔ Override   · ⇆ Replaces the previous binding",
+            "─────────────",
+            "» *Use:* Send the same sticker as an owner or sudo. If no static payload was set, quoted text supplies the command payload.",
+          ].join("\n");
+        } catch (error) {
+          return commandUsageCard({
+            title: "Sticker Binding Rejected",
+            command: `${session(ctx).prefix}setcmd`,
+            commandSyntax: `${session(ctx).prefix}setcmd <command> [payload]`,
+            note: `${error instanceof Error ? error.message : "The command could not be bound."} Allowed targets: ${stickerBindingCommandList().join(", ")}.`,
+          });
+        }
+      },
+    },
+    {
+      name: "flushcmd",
+      aliases: ["unbindcmd"],
+      description: "Clear the active sticker command binding for this session.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const cleared = clearStickerCommandBinding(ctx.workspaceId, ctx.sessionId);
+        return [
+          ...pappyHeader(`${ctx.workspaceId}:${ctx.sessionId}:flushcmd`, "STICKER COMMAND CLEARED"),
+          `⎔ Status     · ⇆ ${cleared ? "Binding removed" : "No active binding"}`,
+          "⎔ Scope      · ⇆ Current WhatsApp session",
+          "⎔ Trigger    · ⇆ Previous sticker is inactive",
+        ].join("\n");
+      },
+    },
+    {
       name: "ping",
       aliases: [],
       description: "Fast session health check.",
@@ -1103,12 +1172,19 @@ export function createCommandRegistry(): RegisteredCommand[] {
         try {
           const action = (ctx.args[0] ?? "get").toLowerCase();
           if (action === "get") {
-            const url = await getProfilePictureUrl(
+            const media = await getProfilePictureMedia(
               ctx.workspaceId,
               ctx.sessionId,
             );
-            return url
-              ? `Profile picture: ${url}`
+            return media
+              ? {
+                  media,
+                  caption: [
+                    ...pappyHeader(`${ctx.workspaceId}:${ctx.sessionId}`, "PROFILE PICTURE"),
+                    "⎔ Media      · ⇆ Current WhatsApp profile picture",
+                    "⎔ Delivery   · ⇆ Image attachment",
+                  ].join("\\n"),
+                }
               : "No profile picture is currently set.";
           }
           if (action === "remove" || action === "delete") {

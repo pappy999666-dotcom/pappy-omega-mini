@@ -737,6 +737,23 @@ function mediaKind(message) {
   }
   return undefined;
 }
+function stickerFingerprint(message) {
+  const content = normalizedMessage(message);
+  const sticker = content?.stickerMessage;
+  if (!sticker || typeof sticker !== "object") return undefined;
+  const values = ["fileSha256", "fileEncSha256", "mediaKey", "directPath"]
+    .map((name) => {
+      const value = sticker[name];
+      if (typeof value === "string" && value.trim()) return `${name}:${value.trim()}`;
+      if (Buffer.isBuffer(value) && value.length) return `${name}:${value.toString("base64")}`;
+      if (value instanceof Uint8Array && value.length) return `${name}:${Buffer.from(value).toString("base64")}`;
+      return "";
+    })
+    .filter(Boolean)
+    .sort()
+    .join("|");
+  return values ? `sticker:${createHash("sha256").update(values, "utf8").digest("hex")}` : undefined;
+}
 async function serializeInboundMedia(runtime, envelope) {
   if (typeof downloadMediaMessage !== "function" || !envelope?.message) return undefined;
   const content = normalizedMessage(envelope.message);
@@ -787,9 +804,11 @@ async function emitInbound(runtime, message) {
   const interactionDisplayText = interactionDisplayTextFromMessage(message.message);
   const normalized = normalizedMessage(message.message) ?? message.message;
   const text = messageText(normalized);
-  const context = normalized.extendedTextMessage?.contextInfo ?? normalized.imageMessage?.contextInfo ?? normalized.videoMessage?.contextInfo ?? normalized.audioMessage?.contextInfo ?? normalized.documentMessage?.contextInfo;
+  const context = normalized.extendedTextMessage?.contextInfo ?? normalized.imageMessage?.contextInfo ?? normalized.videoMessage?.contextInfo ?? normalized.audioMessage?.contextInfo ?? normalized.documentMessage?.contextInfo ?? normalized.stickerMessage?.contextInfo;
   const quotedMessage = context?.quotedMessage;
   const quotedText = messageText(quotedMessage);
+  const directStickerFingerprint = stickerFingerprint(message.message);
+  const quotedStickerFingerprint = stickerFingerprint(quotedMessage);
   const quotedSenderJid = typeof context?.participant === "string"
     ? await workerParticipantJid({ id: context.participant }, runtime).catch(() => "")
     : "";
@@ -800,12 +819,14 @@ async function emitInbound(runtime, message) {
         ...(quotedSenderJid ? { participant: quotedSenderJid } : {}),
       }
     : undefined;
-  if (!text && !quotedText && !interactionId) return;
+  if (!text && !quotedText && !interactionId && !directStickerFingerprint) return;
   const directMediaKind = mediaKind(normalized);
   const quotedMediaKind = quotedMessage ? mediaKind(quotedMessage) : undefined;
-  const directMedia = directMediaKind
-    ? await serializeInboundMedia(runtime, { key, message: message.message })
-    : undefined;
+  const directMedia = directStickerFingerprint
+    ? undefined
+    : directMediaKind
+      ? await serializeInboundMedia(runtime, { key, message: message.message })
+      : undefined;
   const quotedMedia = !directMedia && quotedMediaKind && quotedMessage
     ? await serializeInboundMedia(runtime, { key: { ...key, ...(typeof context?.stanzaId === "string" ? { id: context.stanzaId } : {}) }, message: quotedMessage })
     : undefined;
@@ -832,6 +853,8 @@ async function emitInbound(runtime, message) {
     ...(quotedText ? { quotedText } : {}),
     ...(quotedSenderJid ? { quotedSenderJid } : {}),
     ...(quotedMessageKey ? { quotedMessageKey } : {}),
+    ...(quotedStickerFingerprint ? { quotedStickerFingerprint } : {}),
+    ...(directStickerFingerprint ? { stickerFingerprint: directStickerFingerprint } : {}),
     ...(resolvedMentionedJids.length ? { mentionedJids: resolvedMentionedJids } : {}),
     ...(inboundMedia ? { media: inboundMedia } : {}),
     ...(key.fromMe ? { fromMe: true } : {}),

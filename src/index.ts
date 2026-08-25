@@ -168,6 +168,8 @@ async function main(): Promise<void> {
         ...(event.quotedText ? { quotedText: event.quotedText } : {}),
         ...(event.quotedSenderJid ? { quotedSenderJid: event.quotedSenderJid } : {}),
         ...(event.quotedMessageKey ? { quotedMessageKey: event.quotedMessageKey } : {}),
+        ...(event.quotedStickerFingerprint ? { quotedStickerFingerprint: event.quotedStickerFingerprint } : {}),
+        ...(event.stickerFingerprint ? { stickerFingerprint: event.stickerFingerprint } : {}),
         ...(event.mentionedJids?.length ? { mentionedJids: event.mentionedJids } : {}),
         ...(event.media
           ? {

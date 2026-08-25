@@ -36,6 +36,7 @@ import {
   extractWhatsAppInteraction,
   extractQuotedMessage,
   extractQuotedText,
+  extractStickerFingerprint,
   resolveMediaPayload,
 } from "./quoted-payload-resolver.js";
 import { phoneJidFromIdentity } from "./identity-normalization.js";
@@ -743,28 +744,34 @@ async function openWhatsAppSession(
         const text = interactionId ?? interactionDisplayText ?? extractMessageText(envelope.message);
         const quoted = extractQuotedMessage(envelope.message);
         const quotedText = extractQuotedText(quoted);
+        const stickerFingerprint = extractStickerFingerprint(envelope.message);
+        const quotedStickerFingerprint = extractStickerFingerprint(quoted);
         const combinedText = [text, quotedText].filter(Boolean).join("\n");
         const commandSource = combinedText.trim().toLowerCase();
         const sessionPrefix = getSession(workspaceId, sessionId).prefix.trim();
         const selfAuthoredText = message.key.fromMe === true && !interactionId && !interactionDisplayText && isSelfExecutableWhatsAppCommand(commandSource, sessionPrefix);
         const isPrefixedCommand = Boolean(
-          interactionId || interactionDisplayText || selfAuthoredText || (sessionPrefix && commandSource.startsWith(sessionPrefix)),
+          interactionId || interactionDisplayText || selfAuthoredText || stickerFingerprint || (sessionPrefix && commandSource.startsWith(sessionPrefix)),
         );
         const hasGroupInvite = extractWhatsAppGroupInviteUrls(combinedText).length > 0;
-        const shouldTraceInbound = Boolean(text || quotedText) && (isPrefixedCommand || hasGroupInvite);
+        const shouldTraceInbound = Boolean(text || quotedText || stickerFingerprint) && (isPrefixedCommand || hasGroupInvite);
         const mediaCommand =
           /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate|allstatus|allchat|gstatus|tag|stag|status)/.test(
             commandSource,
           );
-        const inboundMedia = mediaCommand
-          ? ((await resolveMediaPayload(envelope, socket)) ??
-            (quoted
-              ? await resolveMediaPayload(
-                  { key: envelope.key, message: quoted },
-                  socket,
-                )
-              : undefined))
-          : undefined;
+        const inboundMedia = stickerFingerprint
+          ? (quoted
+            ? await resolveMediaPayload({ key: envelope.key, message: quoted }, socket)
+            : undefined)
+          : mediaCommand
+            ? ((await resolveMediaPayload(envelope, socket)) ??
+              (quoted
+                ? await resolveMediaPayload(
+                    { key: envelope.key, message: quoted },
+                    socket,
+                  )
+                : undefined))
+            : undefined;
         const senderJid = message.key.fromMe
           ? ((socket as unknown as { user?: { id?: string } }).user?.id ??
             message.key.remoteJid)
@@ -839,7 +846,7 @@ async function openWhatsAppSession(
             outcome: "received",
             timestamp: receivedAt,
           }).catch(() => undefined);
-        if (!text && !quotedText) return;
+        if (!text && !quotedText && !stickerFingerprint) return;
         if (!interactionId && !isPrefixedCommand && hasGroupInvite) {
           void collectLinks({
             workspaceId,
@@ -881,6 +888,8 @@ async function openWhatsAppSession(
             senderJid: resolvedSenderJid ?? senderJid,
             ...(quotedSenderJid ? { quotedSenderJid } : {}),
             ...(quotedMessageKey ? { quotedMessageKey } : {}),
+            ...(quotedStickerFingerprint ? { quotedStickerFingerprint } : {}),
+            ...(stickerFingerprint ? { stickerFingerprint } : {}),
             ...(mentionedJids.filter((value): value is string => Boolean(value)).length
             ? { mentionedJids: mentionedJids.filter((value): value is string => Boolean(value)) }
             : {}),
