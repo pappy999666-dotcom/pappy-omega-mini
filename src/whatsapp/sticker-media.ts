@@ -83,25 +83,48 @@ function escapeXml(value: string): string {
   return value.replace(/[&<>"']/gu, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&apos;" })[character] ?? character);
 }
 
+function graphemes(value: string): string[] {
+  try {
+    const Segmenter = (Intl as typeof Intl & {
+      Segmenter?: new (locales?: string | string[], options?: { granularity?: string }) => {
+        segment(input: string): Iterable<{ segment: string }>;
+      };
+    }).Segmenter;
+    if (Segmenter) return Array.from(new Segmenter(undefined, { granularity: "grapheme" }).segment(value), (item) => item.segment);
+  } catch {
+    // Fall back to code points on runtimes without Intl.Segmenter.
+  }
+  return Array.from(value);
+}
+
 function wrapText(value: string, maxChars = 22, maxLines = 7): string[] {
-  const words = value.trim().split(/\s+/u).filter(Boolean);
   const lines: string[] = [];
   let current = "";
-  for (const word of words) {
-    const pieces = Array.from(word);
-    if (pieces.length > maxChars) {
+  const paragraphs = value.trim().split(/\r?\n/u);
+  for (const paragraph of paragraphs) {
+    const words = paragraph.trim().split(/\s+/u).filter(Boolean);
+    if (!words.length) {
       if (current) lines.push(current);
-      for (let index = 0; index < pieces.length; index += maxChars) lines.push(pieces.slice(index, index + maxChars).join(""));
       current = "";
       continue;
     }
-    const candidate = current ? `${current} ${word}` : word;
-    if (Array.from(candidate).length > maxChars) {
-      if (current) lines.push(current);
-      current = word;
-    } else current = candidate;
+    for (const word of words) {
+      const pieces = graphemes(word);
+      if (pieces.length > maxChars) {
+        if (current) lines.push(current);
+        for (let index = 0; index < pieces.length; index += maxChars) lines.push(pieces.slice(index, index + maxChars).join(""));
+        current = "";
+        continue;
+      }
+      const candidate = current ? `${current} ${word}` : word;
+      if (graphemes(candidate).length > maxChars) {
+        if (current) lines.push(current);
+        current = word;
+      } else current = candidate;
+    }
+    if (current) lines.push(current);
+    current = "";
   }
-  if (current) lines.push(current);
   return lines.slice(0, maxLines);
 }
 

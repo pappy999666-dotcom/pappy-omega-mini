@@ -184,6 +184,29 @@ describe("WhatsApp sticker media", () => {
     expect(reply.caption).toContain("Quoted sender profile picture");
   });
 
+  it("uses quoted text when no inline payload is provided and falls back cleanly when the avatar is unavailable", async () => {
+    const user = resolveUser(`sticker-quoted-text-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "sticker-quoted-text" });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("not found", {
+      status: 404,
+      headers: { "content-type": "text/plain" },
+    })));
+    const result = await executeCommand(registry, "sticker", commandContext(user.workspaceId, session.sessionId, {
+      rawPayload: "",
+      quotedText: "✨🫶 quoted message",
+      quotedSenderJid: "2348099999999@s.whatsapp.net",
+    }));
+    const reply = result as { media?: { kind: string; bytes: Buffer }; caption?: string };
+    expect(reply.media?.kind).toBe("sticker");
+    expect(reply.media?.bytes.length).toBeGreaterThan(0);
+    expect(reply.caption).toContain("Fallback avatar");
+
+    const emojiOnly = await executeCommand(registry, "s 🫶✨", commandContext(user.workspaceId, session.sessionId));
+    const emojiReply = emojiOnly as { media?: { kind: string; bytes: Buffer } };
+    expect(emojiReply.media?.kind).toBe("sticker");
+    expect(emojiReply.media?.bytes.length).toBeGreaterThan(0);
+  });
+
   it("reads sticker dimensions, animation state, and embedded pack information", async () => {
     const user = resolveUser(`sticker-info-${Date.now()}-${Math.random()}`);
     const session = createSession({ workspaceId: user.workspaceId, sessionName: "sticker-info" });
