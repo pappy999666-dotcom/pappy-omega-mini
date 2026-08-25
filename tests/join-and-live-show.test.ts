@@ -148,6 +148,18 @@ describe("Baileys Join Operation", () => {
     expect(full.groupFull).toBe(true);
     expect(full.accountRestricted).toBe(false);
 
+    const endpointThrottle = await joinWhatsAppInvite(
+      {
+        groupGetInviteInfo: async () => ({ id: "120@g.us" }),
+        groupAcceptInvite: async () => {
+          throw new Error("invite endpoint rate limit; try again later");
+        },
+      },
+      "https://chat.whatsapp.com/THROTTLED",
+    );
+    expect(endpointThrottle.rateLimited).toBe(true);
+    expect(endpointThrottle.accountRestricted).toBe(false);
+
     const restricted = await joinWhatsAppInvite(
       {
         groupGetInviteInfo: async () => ({ id: "120@g.us" }),

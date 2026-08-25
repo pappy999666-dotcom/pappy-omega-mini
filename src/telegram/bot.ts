@@ -481,6 +481,28 @@ function stopJobLiveLoop(loopKey: string): void {
   liveLoops.delete(loopKey);
 }
 
+function isLiveEditBenignError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /message is not modified/i.test(message);
+}
+
+function isLiveEditDisplayGone(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /specified message is not found|message to edit not found|query is too old/i.test(message);
+}
+
+function isLiveEditTransientError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /429|too many requests|timeout|timed out|network|econn|socket|502|503|504/i.test(message);
+}
+
+export function classifyLiveEditError(error: unknown): "benign" | "display-gone" | "transient" | "fatal" {
+  if (isLiveEditBenignError(error)) return "benign";
+  if (isLiveEditDisplayGone(error)) return "display-gone";
+  if (isLiveEditTransientError(error)) return "transient";
+  return "fatal";
+}
+
 function startJobLiveLoop(
   ctx: Context,
   workspaceId: string,
@@ -490,25 +512,54 @@ function startJobLiveLoop(
 ): void {
   const loopKey = `job-live:${workspaceId}:${chatId}:${messageId}`;
   stopJobLiveLoop(loopKey);
+  let refreshInFlight = false;
   const refresh = async (): Promise<void> => {
-    const job = await getWorkerRuntime()?.getByCode(workspaceId, code);
-    const terminal = Boolean(
-      job &&
-      ["COMPLETED", "PARTIAL", "FAILED", "CANCELLED", "EXPIRED"].includes(
-        job.state,
-      ),
-    );
-    await ctx.telegram.editMessageText(
-      chatId,
-      messageId,
-      undefined,
-      jobLiveText(job),
-      { parse_mode: "HTML", reply_markup: jobLiveKeyboard(job) },
-    );
-    if (terminal) stopJobLiveLoop(loopKey);
+    if (refreshInFlight) return;
+    refreshInFlight = true;
+    try {
+      const runtime = getWorkerRuntime();
+      const job = runtime ? await runtime.getByCode(workspaceId, code) : undefined;
+      if (!job) return;
+      const terminal = [
+        "COMPLETED",
+        "PARTIAL",
+        "FAILED",
+        "CANCELLED",
+        "EXPIRED",
+      ].includes(job.state);
+      try {
+        await ctx.telegram.editMessageText(
+          chatId,
+          messageId,
+          undefined,
+          jobLiveText(job),
+          { parse_mode: "HTML", reply_markup: jobLiveKeyboard(job) },
+        );
+      } catch (error) {
+        const editClass = classifyLiveEditError(error);
+        if (editClass === "benign") {
+          // Telegram returns 400 when the rendered progress is unchanged. That
+          // is not a reason to kill the live loop.
+        } else if (editClass === "display-gone") {
+          stopJobLiveLoop(loopKey);
+          return;
+        } else if (editClass === "transient") {
+          return;
+        } else {
+          throw error;
+        }
+      }
+      if (terminal) stopJobLiveLoop(loopKey);
+    } finally {
+      refreshInFlight = false;
+    }
   };
   const interval = setInterval(() => {
-    void refresh().catch(() => stopJobLiveLoop(loopKey));
+    void refresh().catch((error) => {
+      // A deleted/expired Telegram message is terminal for this display only;
+      // a transient transport failure must not stop future refreshes.
+      if (!isLiveEditTransientError(error)) stopJobLiveLoop(loopKey);
+    });
   }, 1_000);
   liveLoops.set(loopKey, interval);
   setTimeout(() => stopJobLiveLoop(loopKey), 30 * 60_000).unref?.();

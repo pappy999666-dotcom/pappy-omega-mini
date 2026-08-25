@@ -150,11 +150,12 @@ export async function joinWhatsAppInvite(
     const message = error instanceof Error ? error.message : String(error);
     const statusCode = statusCodeFromError(error);
     const rateLimited = isRateLimited(message) || statusCode === 429;
+    const accountRestricted = /spam.?limit|temporarily banned|account restricted|too many groups|rate[- ]over[- ]limit/i.test(message);
     return {
       success: false,
       requestRequired: isRequestRequired(message),
       rateLimited,
-      accountRestricted: (rateLimited && stage !== "invite-info") || /spam.?limit|temporarily banned|account restricted|too many groups/i.test(message),
+      accountRestricted,
       linkUnavailable: isLinkUnavailable(message),
       groupFull: isGroupFull(message),
       stage,
