@@ -97,12 +97,13 @@ describe("shared session menu", () => {
     const model = buildSessionMenu(getSession(user.workspaceId, session.sessionId), true);
     const moderationPayload = await buildWhatsappMenuPayload(getSession(user.workspaceId, session.sessionId), true, "moderation");
     const moderationButtons = moderationPayload.richMenu.body.cards.flatMap((card) => card.buttons);
-    expect(moderationButtons.some((item) => item.text === "!kick")).toBe(true);
-    expect(moderationButtons.some((item) => item.text === "Moderation")).toBe(true);
-    expect(moderationButtons.filter((item) => item.text === "Moderation")[0]?.id).toMatch(/^ui:menu:moderation:/);
+    expect(moderationButtons.some((item) => item.text === "!open kick")).toBe(true);
+    expect(moderationButtons.some((item) => item.text === "!open moderation")).toBe(true);
+    expect(moderationButtons.filter((item) => item.text === "!open moderation")[0]?.id).toMatch(/^ui:menu:moderation:/);
     const antiPayload = await buildWhatsappMenuPayload(getSession(user.workspaceId, session.sessionId), true, "antisystem");
     const antiButtons = antiPayload.richMenu.body.cards.flatMap((card) => card.buttons);
-    expect(antiButtons.some((item) => item.text === "!antilink")).toBe(true);
+    expect(antiButtons.some((item) => item.text === "!open antilink")).toBe(true);
+    expect(antiButtons.some((item) => item.text === "antilink")).toBe(false);
     expect(renderAsciiMenu(model)).toContain("!antilink");
     expect(renderAsciiMenu(model)).not.toContain(".antilink");
     const help = buildWhatsappHelpPayload(getSession(user.workspaceId, session.sessionId), true);
@@ -178,6 +179,14 @@ describe("WhatsApp command privacy", () => {
         fromMe: true,
       }),
     ).toContain("ACTIVE");
+  });
+
+  it("routes a self-sent prefixed command through the normal owner path", async () => {
+    const user = resolveUser(`wa-self-command-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "self-command", phoneNumber: "2348012345678" });
+    updateSession(user.workspaceId, session.sessionId, { status: "ACTIVE", prefix: "!", lastHealthyAt: Date.now() });
+    const result = await routeWhatsAppText({ workspaceId: user.workspaceId, sessionId: session.sessionId, senderJid: "2348012345678@s.whatsapp.net", fromMe: true, chatJid: "120363000000000000@g.us", text: "!ping" });
+    expect(result).toContain("ACTIVE");
   });
 
   it("dispatches bare bridge commands independently of the session prefix", async () => {
@@ -460,7 +469,7 @@ describe("WhatsApp command registry", () => {
       lastHealthyAt: Date.now(),
     });
     const menu = await buildWhatsappMenuPayload(getSession(user.workspaceId, session.sessionId), true, "core");
-    const pingButton = menu.richMenu.body.cards.flatMap((card) => card.buttons).find((button) => button.text === "!ping");
+    const pingButton = menu.richMenu.body.cards.flatMap((card) => card.buttons).find((button) => button.text === "!open ping");
     expect(pingButton?.id).toMatch(/^cmd:ping:/);
     await expect(routeWhatsAppText({
       workspaceId: user.workspaceId,
@@ -474,7 +483,7 @@ describe("WhatsApp command registry", () => {
       sessionId: session.sessionId,
       senderJid: "2348012345678@s.whatsapp.net",
       text: "",
-      interactionDisplayText: "!ping",
+      interactionDisplayText: "!open ping",
     })).resolves.toContain("ACTIVE");
     await expect(routeWhatsAppText({
       workspaceId: user.workspaceId,
@@ -497,7 +506,7 @@ describe("WhatsApp command registry", () => {
       lastHealthyAt: Date.now(),
     });
     const rootMenu = await buildWhatsappMenuPayload(getSession(user.workspaceId, session.sessionId), true);
-    const fullMenuButton = rootMenu.richMenu.body.cards.flatMap((card) => card.buttons).find((button) => button.text === "Open full menu");
+    const fullMenuButton = rootMenu.richMenu.body.cards.flatMap((card) => card.buttons).find((button) => button.text === "!open all");
     expect(fullMenuButton?.id).toMatch(/^ui:menu:all:/);
     const fullMenu = await routeWhatsAppText({
       workspaceId: user.workspaceId,
@@ -539,13 +548,13 @@ describe("WhatsApp command registry", () => {
     const session = createSession({ workspaceId: user.workspaceId, sessionName: "rich-menu-security", phoneNumber: "2348012345678" });
     updateSession(user.workspaceId, session.sessionId, { status: "ACTIVE", prefix: "!", lastHealthyAt: Date.now() });
     const menu = await buildWhatsappMenuPayload(getSession(user.workspaceId, session.sessionId), true, "core", { ttlSeconds: 5 });
-    const pingButton = menu.richMenu.body.cards.flatMap((card) => card.buttons).find((button) => button.text === "!ping");
+    const pingButton = menu.richMenu.body.cards.flatMap((card) => card.buttons).find((button) => button.text === "!open ping");
     expect(pingButton?.id).toMatch(/^cmd:ping:/);
     await expect(routeWhatsAppText({ workspaceId: user.workspaceId, sessionId: session.sessionId, senderJid: "2348012345678@s.whatsapp.net", text: "", interactionId: pingButton!.id })).resolves.toContain("ACTIVE");
     await expect(routeWhatsAppText({ workspaceId: user.workspaceId, sessionId: session.sessionId, senderJid: "2348099999999@s.whatsapp.net", text: "", interactionId: pingButton!.id })).resolves.toBeNull();
     vi.setSystemTime(new Date(now.getTime() + 6_000));
     await expect(routeWhatsAppText({ workspaceId: user.workspaceId, sessionId: session.sessionId, senderJid: "2348012345678@s.whatsapp.net", text: "", interactionId: pingButton!.id })).resolves.toBeNull();
-    await expect(routeWhatsAppText({ workspaceId: user.workspaceId, sessionId: session.sessionId, senderJid: "2348012345678@s.whatsapp.net", text: "", interactionDisplayText: "!ping" })).resolves.toBeNull();
+    await expect(routeWhatsAppText({ workspaceId: user.workspaceId, sessionId: session.sessionId, senderJid: "2348012345678@s.whatsapp.net", text: "", interactionDisplayText: "!open ping" })).resolves.toBeNull();
   });
 
   it("supports null no-prefix mode per session", async () => {
@@ -774,6 +783,7 @@ describe("admin menu media", () => {
     expect(payload.media).toBeUndefined();
     expect(payload.richMenu.header.image?.mime_type).toBe("image/png");
     expect(payload.richMenu.header.image?.url).toContain(media.mediaId);
+    expect(payload.richMenu.header.image?.inline).toBe(true);
     expect(payload.caption).toContain("Welcome to pappy-omega-mini");
     expect(payload.caption).toContain("COMMANDS");
   });

@@ -2,9 +2,13 @@ import { createHmac } from "node:crypto";
 import { env } from "../config/env.js";
 import type { MenuAction, SessionMenuModel } from "./menu-model.js";
 
-const PUBLIC_MEDIA_ORIGIN =
-  process.env.PAPPY_MENU_MEDIA_BASE_URL?.trim() ||
-  "https://pappy-omega-mini-v1.duckdns.org";
+function configuredPublicOrigin(): string {
+  const candidate = process.env.PAPPY_MENU_MEDIA_BASE_URL?.trim() || env.WORKLOAD_CONTROL_URL?.trim() || env.OPTIONAL_DOMAIN?.trim();
+  if (!candidate) return "https://pappy-omega-mini-v1.duckdns.org";
+  return /^https?:\/\//i.test(candidate) ? candidate.replace(/\/$/, "") : `https://${candidate.replace(/\/$/, "")}`;
+}
+
+const PUBLIC_MEDIA_ORIGIN = configuredPublicOrigin();
 export const MENU_MEDIA_TTL = 24 * 60 * 60;
 export const MENU_INTERACTION_TTL_SECONDS = 60;
 export const TELEGRAM_HOME_URL = "https://t.me/pappy_b2_bot";
@@ -187,26 +191,26 @@ function button(id: string, text: string, toast = ""): RichMenuButton {
 }
 
 function commandButton(command: string, nonce: string, prefix: string): RichMenuButton {
-  const commandText = `${prefix}${command}`;
+  const commandText = `${prefix}open ${command}`;
   return button(`cmd:${command}:${nonce}`, commandText, `Run ${commandText}`);
 }
 
-function navigationCards(nonce: string): RichMenuCard[] {
+function navigationCards(nonce: string, prefix: string): RichMenuCard[] {
   const split = Math.ceil(NAVIGATION.length / 2);
   return [
-    { title: "NAVIGATION", toast: "These controls stay available on every screen", buttons: NAVIGATION.slice(0, split).map(([view, text]) => button(uiId(view, nonce), text, `Open ${text}`)) },
-    { title: "MORE CATEGORIES", toast: "Return here at any time", buttons: NAVIGATION.slice(split).map(([view, text]) => button(uiId(view, nonce), text, `Open ${text}`)) },
+    { title: "NAVIGATION", toast: "These controls stay available on every screen", buttons: NAVIGATION.slice(0, split).map(([view, text]) => button(uiId(view, nonce), `${prefix}open ${view}`, `Open ${text}`)) },
+    { title: "MORE CATEGORIES", toast: "Return here at any time", buttons: NAVIGATION.slice(split).map(([view, text]) => button(uiId(view, nonce), `${prefix}open ${view}`, `Open ${text}`)) },
   ];
 }
 
-function rootCards(nonce: string): RichMenuCard[] {
+function rootCards(nonce: string, prefix: string): RichMenuCard[] {
   return [
-    { title: "FULL MENU", toast: "All registered WhatsApp commands", buttons: [button(uiId("all", nonce), "Open full menu", "Every available command")] },
-    { title: "ANTI-SYSTEM", toast: "Protection, permits, and custom notices", buttons: [button(uiId("antisystem", nonce), "Anti-system", "Open Anti-system commands")] },
-    { title: "BROADCAST & STATUS", toast: "Broadcast, status, chat, and tagging", buttons: [button(uiId("broadcast", nonce), "Broadcast", "Open Broadcast and Status")] },
-    { title: "SESSION & GROUPS", toast: "Session, identity, group, and join tools", buttons: [button(uiId("session", nonce), "Session"), button(uiId("groups", nonce), "Groups")] },
-    { title: "MODERATION & APPROVALS", toast: "Protected moderation and join approvals", buttons: [button(uiId("moderation", nonce), "Moderation"), button(uiId("approvals", nonce), "Approvals")] },
-    { title: "MEDIA, IDENTITY & HELP", toast: "Identity, diagnostics, and access", buttons: [button(uiId("identity", nonce), "Media & identity"), button(uiId("tools", nonce), "Help & tools")] },
+    { title: "FULL MENU", toast: "All registered WhatsApp commands", buttons: [button(uiId("all", nonce), `${prefix}open all`, "Every available command")] },
+    { title: "ANTI-SYSTEM", toast: "Protection, permits, and custom notices", buttons: [button(uiId("antisystem", nonce), `${prefix}open antisystem`, "Open Anti-system commands")] },
+    { title: "BROADCAST & STATUS", toast: "Broadcast, status, chat, and tagging", buttons: [button(uiId("broadcast", nonce), `${prefix}open broadcast`, "Open Broadcast and Status")] },
+    { title: "SESSION & GROUPS", toast: "Session, identity, group, and join tools", buttons: [button(uiId("session", nonce), `${prefix}open session`), button(uiId("groups", nonce), `${prefix}open groups`)] },
+    { title: "MODERATION & APPROVALS", toast: "Protected moderation and join approvals", buttons: [button(uiId("moderation", nonce), `${prefix}open moderation`), button(uiId("approvals", nonce), `${prefix}open approvals`)] },
+    { title: "MEDIA, IDENTITY & HELP", toast: "Identity, diagnostics, and access", buttons: [button(uiId("identity", nonce), `${prefix}open identity`), button(uiId("tools", nonce), `${prefix}open tools`)] },
   ];
 }
 
@@ -220,10 +224,10 @@ function groupCards(keys: string[], actions: Set<string>, nonce: string, prefix:
 }
 
 function cardsForView(view: string, actions: Set<string>, nonce = "preview", prefix = ""): RichMenuCard[] {
-  if (view === "root") return rootCards(nonce);
-  if (view === "all") return [...navigationCards(nonce), ...GROUPS.flatMap((group) => groupCards([group.key], actions, nonce, prefix))];
+  if (view === "root") return rootCards(nonce, prefix);
+  if (view === "all") return [...navigationCards(nonce, prefix), ...GROUPS.flatMap((group) => groupCards([group.key], actions, nonce, prefix))];
   const map: Record<string, string[]> = { core: ["core"], session: ["session"], identity: ["identity"], groups: ["groups"], moderation: ["moderation"], broadcast: ["broadcast"], approvals: ["approvals"], antisystem: ["antisystem"], tools: ["tools"], media: ["identity", "broadcast"] };
-  return [...navigationCards(nonce), ...groupCards(map[view] || ["core"], actions, nonce, prefix)];
+  return [...navigationCards(nonce, prefix), ...groupCards(map[view] || ["core"], actions, nonce, prefix)];
 }
 
 export function textForView(model: SessionMenuModel, view: string): string {
@@ -274,11 +278,19 @@ export function resolveMenuInteraction(value?: string, context?: MenuInteraction
   const prefix = context?.prefix?.trim() ?? "";
   const commandText = prefix && key.startsWith(prefix)
     ? key.slice(prefix.length).trim()
-    : context?.allowCommandText && /^[a-z0-9][a-z0-9_-]{0,48}$/i.test(key)
+    : context?.allowCommandText && /^[a-z0-9][a-z0-9_-]{0,48}(?:\s+[a-z0-9][a-z0-9_-]{0,48})?$/i.test(key)
       ? key
       : !context && key.startsWith(".")
         ? key.slice(1).trim()
         : "";
+  const openMatch = /^open\s+([a-z0-9][a-z0-9_-]{0,48})$/i.exec(commandText);
+  if (openMatch?.[1]) {
+    const target = openMatch[1].toLowerCase();
+    const expiresAt = context ? activeMenuSession(context) : undefined;
+    if (context && !expiresAt) return undefined;
+    if (CATEGORY_LABELS[target]) return { view: target, ...(expiresAt ? { expiresAt } : {}) };
+    return { command: target, ...(expiresAt ? { expiresAt } : {}) };
+  }
   if (commandText && /^[a-z0-9][a-z0-9_-]{0,48}$/i.test(commandText)) {
     const expiresAt = context ? activeMenuSession(context) : undefined;
     if (context && !expiresAt) return undefined;

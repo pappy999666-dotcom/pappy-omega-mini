@@ -62,7 +62,7 @@ export async function buildWhatsappMenuPayload(
         mime_type: candidate.mimeType,
         width: 1080,
         height: 620,
-        inline: false,
+        inline: true,
       };
       break;
     } catch (error) {
