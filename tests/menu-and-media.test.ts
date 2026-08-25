@@ -432,6 +432,20 @@ describe("WhatsApp command registry", () => {
       interactionDisplayText: "Open Moderation",
     });
     expect(category).toMatchObject({ richMenu: { header: { title: expect.stringContaining("GROUP MODERATION") } } });
+    const plainLabel = await routeWhatsAppText({
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      senderJid: "2348012345678@s.whatsapp.net",
+      text: "Groups",
+    });
+    expect(plainLabel).toMatchObject({ richMenu: { header: { title: expect.stringContaining("GROUPS & LOCAL CONTROL") } } });
+    const ordinaryText = await routeWhatsAppText({
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      senderJid: "2348012345678@s.whatsapp.net",
+      text: "hello everyone",
+    });
+    expect(ordinaryText).toBeNull();
   });
 
   it("supports null no-prefix mode per session", async () => {

@@ -173,6 +173,11 @@ export function buildRichMenuContent(model: SessionMenuModel, view = "root", ima
   };
 }
 
+export function resolveMenuViewInteraction(value?: string): MenuInteraction | undefined {
+  const interaction = resolveMenuInteraction(value);
+  return interaction?.view ? interaction : undefined;
+}
+
 export function resolveMenuInteraction(value?: string): MenuInteraction | undefined {
   const key = String(value || "").trim();
   if (!key) return undefined;

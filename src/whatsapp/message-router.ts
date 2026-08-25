@@ -38,7 +38,7 @@ import {
   buildWhatsappMenuPayload,
   buildWhatsappTextMenuPayload,
 } from "../menus/whatsapp-menu.js";
-import { resolveMenuInteraction, type RichMenuContent } from "../menus/rich-menu-runtime.js";
+import { resolveMenuInteraction, resolveMenuViewInteraction, type RichMenuContent } from "../menus/rich-menu-runtime.js";
 import {
   routeViaRemoteBridge,
   shouldProxyWhatsAppSession,
@@ -113,7 +113,12 @@ export async function routeWhatsAppText(
   const interactionDisplayText = message.interactionDisplayText?.trim();
   const interactionValue = interactionId || interactionDisplayText;
   const menuAction = interactionValue ? resolveMenuInteraction(interactionValue) : undefined;
-  const trimmed = menuAction?.command || (menuAction?.view ? "menu" : interactionValue || commandInput.trim());
+  const viewAction = menuAction?.view
+    ? menuAction
+    : !interactionValue
+      ? resolveMenuViewInteraction(commandInput.trim())
+      : undefined;
+  const trimmed = menuAction?.command || (viewAction?.view ? "menu" : interactionValue || commandInput.trim());
   if (
     getEmergencyState().enabled &&
     /^(?:[^\w\s]{1,3})?(?:menu|help|m)(?:\s|$)/i.test(trimmed)
@@ -126,8 +131,8 @@ export async function routeWhatsAppText(
   // Telegram Bridge is an already-authorized control-plane transport. It must
   // dispatch the command body independently of the target session's local
   // WhatsApp prefix. Direct WhatsApp messages still require their session prefix.
-  if (!interactionValue && !menuAction && !message.bridgeAuthorized && prefix && !trimmed.startsWith(prefix)) return null;
-  const raw = menuAction?.command || menuAction?.view
+  if (!interactionValue && !menuAction && !viewAction && !message.bridgeAuthorized && prefix && !trimmed.startsWith(prefix)) return null;
+  const raw = menuAction?.command || menuAction?.view || viewAction?.view
     ? trimmed
     : interactionValue
     ? trimmed
@@ -144,8 +149,8 @@ export async function routeWhatsAppText(
 
   const commandName = raw.trim().split(/\s+/, 1)[0]?.toLowerCase();
   const isOwner = isOwnerFor(message, session);
-  if (menuAction?.view) {
-    const payload = await buildWhatsappMenuPayload(session, isOwner, menuAction.view);
+  if (viewAction?.view) {
+    const payload = await buildWhatsappMenuPayload(session, isOwner, viewAction.view);
     return payload.media
       ? { media: payload.media, caption: payload.caption, richMenu: payload.richMenu }
       : { text: payload.text, richMenu: payload.richMenu };
