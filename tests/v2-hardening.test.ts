@@ -27,6 +27,7 @@ import {
   createSession,
   getSession,
   getSessionJoinSettings,
+  isExplicitlyLoggedOutSession,
   isPersistedWhatsAppSessionRecoverable,
   isSessionVisibleInTelegram,
   updateSession,
@@ -192,7 +193,9 @@ describe("V2 hardening", () => {
     expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, banned.sessionId))).toBe(false);
     expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, frozen.sessionId))).toBe(false);
     expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, ambiguous401.sessionId))).toBe(true);
+    expect(isExplicitlyLoggedOutSession(getSession(workspaceId, ambiguous401.sessionId))).toBe(false);
     expect(isSessionVisibleInTelegram(getSession(workspaceId, ambiguous401.sessionId))).toBe(true);
+    expect(isExplicitlyLoggedOutSession(getSession(workspaceId, loggedOut.sessionId))).toBe(true);
     expect(isSessionVisibleInTelegram(getSession(workspaceId, loggedOut.sessionId))).toBe(false);
   });
 

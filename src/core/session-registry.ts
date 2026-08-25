@@ -206,11 +206,14 @@ export function isPersistedWhatsAppSessionRecoverable(
   return session.authHealth !== "INVALID";
 }
 
+export function isExplicitlyLoggedOutSession(
+  session: WhatsAppSession,
+): boolean {
+  return session.status === "LOGGED_OUT" && session.authHealth === "INVALID";
+}
+
 export function isSessionVisibleInTelegram(session: WhatsAppSession): boolean {
-  if (
-    session.status === "BANNED" ||
-    (session.status === "LOGGED_OUT" && session.authHealth === "INVALID")
-  ) return false;
+  if (session.status === "BANNED" || isExplicitlyLoggedOutSession(session)) return false;
   return !(
     Boolean(session.workloadWorkerId) &&
     session.status === "DEGRADED" &&

@@ -22,6 +22,7 @@ import {
 import {
   getSession,
   hydrateSessionRegistry,
+  isExplicitlyLoggedOutSession,
   listAllSessions,
   isPersistedWhatsAppSessionRecoverable,
   updateSession,
@@ -353,8 +354,7 @@ async function cleanupLoggedOutSessions(): Promise<void> {
   const terminal = listAllSessions().filter(
     (session) =>
       (isWorkerProcess ? workerSessionIds.has(session.sessionId) : !excludedSessionIds.has(session.sessionId)) &&
-      (session.status === "LOGGED_OUT" ||
-        (session.authHealth === "INVALID" && session.status !== "ACTIVE")),
+      isExplicitlyLoggedOutSession(session),
   );
   for (const session of terminal) {
     await purgeWhatsAppSession(session.workspaceId, session.sessionId).catch(
