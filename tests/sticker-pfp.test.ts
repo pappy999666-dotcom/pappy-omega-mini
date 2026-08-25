@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import sharp from "sharp";
 
 const mocks = vi.hoisted(() => ({
   profilePictureUrl: vi.fn(async () => "https://profile.example/current.jpg"),
@@ -12,6 +13,7 @@ vi.mock("../src/whatsapp/session-manager.js", () => ({
 }));
 
 import { createSession, resolveUser } from "../src/core/session-registry.js";
+import { pairingHelpCardText } from "../src/telegram/ui.js";
 import { createCommandRegistry, executeCommand } from "../src/whatsapp/command-registry.js";
 import { routeWhatsAppText } from "../src/whatsapp/message-router.js";
 import {
@@ -19,6 +21,7 @@ import {
   clearAllStickerCommandBindingsForTests,
   setStickerCommandBinding,
 } from "../src/whatsapp/sticker-command-bindings.js";
+import { clearStickerPackNameForTests } from "../src/whatsapp/sticker-settings.js";
 import { extractStickerFingerprint } from "../src/whatsapp/quoted-payload-resolver.js";
 
 const registry = createCommandRegistry();
@@ -36,6 +39,7 @@ function commandContext(workspaceId: string, sessionId: string, extra: Record<st
 describe("WhatsApp sticker command bindings", () => {
   beforeEach(() => {
     clearAllStickerCommandBindingsForTests();
+    clearStickerPackNameForTests();
   });
 
   afterEach(() => {
@@ -157,6 +161,56 @@ describe("WhatsApp sticker command bindings", () => {
   });
 });
 
+describe("WhatsApp sticker media", () => {
+  it("creates a text/emoji bubble sticker with the quoted sender avatar and current pack name", async () => {
+    const user = resolveUser(`sticker-create-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "sticker-create" });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"), {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    })));
+    await executeCommand(registry, "spn My Pack", commandContext(user.workspaceId, session.sessionId, { rawPayload: " My Pack" }));
+    const result = await executeCommand(registry, "sticker ✨ hello", commandContext(user.workspaceId, session.sessionId, {
+      rawPayload: " ✨ hello",
+      quotedSenderJid: "2348099999999@s.whatsapp.net",
+    }));
+    const reply = result as { media?: { kind: string; bytes: Buffer; stickerPackName?: string }; caption?: string };
+    expect(reply.media?.kind).toBe("sticker");
+    expect(reply.media?.bytes.length).toBeGreaterThan(0);
+    expect(reply.media?.stickerPackName).toBe("My Pack");
+    expect(reply.caption).toContain("TEXT STICKER CREATED");
+    expect(reply.caption).toContain("Quoted sender profile picture");
+  });
+
+  it("converts a static sticker payload back to PNG media and preserves pack metadata on take", async () => {
+    const user = resolveUser(`sticker-convert-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "sticker-convert" });
+    const stickerBytes = await sharp({ create: { width: 2, height: 2, channels: 4, background: "#ff77aa" } }).webp().toBuffer();
+    const converted = await executeCommand(registry, "cs", commandContext(user.workspaceId, session.sessionId, {
+      rawPayload: "",
+      media: { kind: "sticker", bytes: stickerBytes, mimeType: "image/webp" },
+    }));
+    const convertedReply = converted as { media?: { kind: string; bytes: Buffer; mimeType?: string } };
+    expect(convertedReply.media?.kind).toBe("image");
+    expect(convertedReply.media?.mimeType).toBe("image/png");
+    expect(convertedReply.media?.bytes.length).toBeGreaterThan(0);
+    await executeCommand(registry, "stickerpname Brand Pack", commandContext(user.workspaceId, session.sessionId, { rawPayload: " Brand Pack" }));
+    const taken = await executeCommand(registry, "take", commandContext(user.workspaceId, session.sessionId, {
+      media: { kind: "sticker", bytes: stickerBytes, mimeType: "image/webp" },
+    }));
+    const reply = taken as { media?: { kind: string; stickerPackName?: string } };
+    expect(reply.media?.kind).toBe("sticker");
+    expect(reply.media?.stickerPackName).toBe("Brand Pack");
+  });
+});
+
+describe("formatting and surface isolation", () => {
+  it("uses real newlines in WhatsApp media captions and Telegram pairing syntax", () => {
+    expect(pairingHelpCardText()).toContain("/pair &lt;label&gt;");
+    expect(pairingHelpCardText()).not.toContain(".pair <label>");
+  });
+});
+
 describe("panel worker parity", () => {
   it("contains sticker-only admission, fingerprinting, and forwarding fields", async () => {
     const { readFile } = await import("node:fs/promises");
@@ -183,6 +237,8 @@ describe("WhatsApp profile picture media", () => {
     expect(reply.media?.bytes).toEqual(Buffer.from("jpeg-bytes"));
     expect(reply.media?.mimeType).toBe("image/jpeg");
     expect(reply.caption).toContain("PROFILE PICTURE");
+    expect(reply.caption).toContain("\n⎔ Media");
+    expect(reply.caption).not.toContain("\\n");
     expect(reply.caption).not.toContain("profile.example/current.jpg");
     expect(mocks.profilePictureUrl).toHaveBeenCalled();
   });

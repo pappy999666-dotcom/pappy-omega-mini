@@ -37,6 +37,7 @@ function serializeMedia(media: WhatsAppMediaPayload): SerializedMedia {
     ...(media.fileName !== undefined ? { fileName: media.fileName } : {}),
     ...(media.caption !== undefined ? { caption: media.caption } : {}),
     ...(media.ptt !== undefined ? { ptt: media.ptt } : {}),
+    ...(media.stickerPackName !== undefined ? { stickerPackName: media.stickerPackName } : {}),
   };
 }
 
@@ -48,6 +49,7 @@ function deserializeMedia(media: SerializedMedia): WhatsAppMediaPayload {
     ...(media.fileName !== undefined ? { fileName: media.fileName } : {}),
     ...(media.caption !== undefined ? { caption: media.caption } : {}),
     ...(media.ptt !== undefined ? { ptt: media.ptt } : {}),
+    ...(media.stickerPackName !== undefined ? { stickerPackName: media.stickerPackName } : {}),
   };
 }
 
@@ -74,6 +76,7 @@ function serializeReply(reply: BridgeResult): SerializedReply | string | null {
           ...(media.fileName !== undefined ? { fileName: media.fileName } : {}),
           ...(media.caption !== undefined ? { caption: media.caption } : {}),
           ...(media.ptt !== undefined ? { ptt: media.ptt } : {}),
+          ...(media.stickerPackName !== undefined ? { stickerPackName: media.stickerPackName } : {}),
         },
       }
     : rest;
@@ -92,6 +95,7 @@ function deserializeReply(reply: SerializedReply | string | null): BridgeResult 
           ...(media.fileName !== undefined ? { fileName: media.fileName } : {}),
           ...(media.caption !== undefined ? { caption: media.caption } : {}),
           ...(media.ptt !== undefined ? { ptt: media.ptt } : {}),
+          ...(media.stickerPackName !== undefined ? { stickerPackName: media.stickerPackName } : {}),
         },
       }
     : rest;

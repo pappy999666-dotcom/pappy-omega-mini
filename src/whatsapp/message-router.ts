@@ -31,6 +31,7 @@ import {
   sendPersonalStatus,
   sendGroupText,
   sendDirectText,
+  sendSticker,
   sendGroupPoll,
 } from "./transport-adapter.js";
 import {
@@ -562,6 +563,10 @@ export async function routeWhatsAppText(
       } else {
         await sendDirectText(message.workspaceId, message.sessionId, message.chatJid, text);
       }
+    },
+    sendCurrentSticker: async (media: WhatsAppMediaPayload) => {
+      if (!message.chatJid) throw new Error("The current WhatsApp chat could not be resolved.");
+      await sendSticker(message.workspaceId, message.sessionId, message.chatJid, media);
     },
     ...(runtime
       ? {

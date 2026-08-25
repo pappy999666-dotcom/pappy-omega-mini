@@ -248,11 +248,7 @@ export async function getProfilePictureUrl(
   return typeof result === "string" ? result : undefined;
 }
 
-export async function getProfilePictureMedia(
-  workspaceId: string,
-  sessionId: string,
-): Promise<WhatsAppMediaPayload | undefined> {
-  const url = await getProfilePictureUrl(workspaceId, sessionId);
+async function profilePictureMediaFromUrl(url: string | undefined): Promise<WhatsAppMediaPayload | undefined> {
   if (!url) return undefined;
   let parsed: URL;
   try {
@@ -286,6 +282,25 @@ export async function getProfilePictureMedia(
     mimeType: contentType,
     fileName: `profile-picture.${extension}`,
   };
+}
+
+export async function getProfilePictureMedia(
+  workspaceId: string,
+  sessionId: string,
+): Promise<WhatsAppMediaPayload | undefined> {
+  return profilePictureMediaFromUrl(await getProfilePictureUrl(workspaceId, sessionId));
+}
+
+export async function getProfilePictureMediaForJid(
+  workspaceId: string,
+  sessionId: string,
+  jid: string,
+): Promise<WhatsAppMediaPayload | undefined> {
+  const socket = socketFor(workspaceId, sessionId);
+  const get = method(socket, "profilePictureUrl");
+  if (!get) throw new Error("Unsupported capability: profilePicture");
+  const result = await get(jid, "image");
+  return profilePictureMediaFromUrl(typeof result === "string" ? result : undefined);
 }
 
 export async function getGroupProfilePictureUrl(
@@ -1221,6 +1236,8 @@ function messagePayload(
     return {
       sticker: media.bytes,
       mimetype: media.mimeType ?? "image/webp",
+      stickerPackName: media.stickerPackName ?? "PAPPY OMEGA MINI",
+      stickerPackPublisher: "PAPPY OMEGA MINI",
     };
   return {
     [media.kind]: media.bytes,
@@ -1230,6 +1247,20 @@ function messagePayload(
       ? { fileName: media.fileName ?? "document.bin" }
       : {}),
   };
+}
+
+export async function sendSticker(
+  workspaceId: string,
+  sessionId: string,
+  jid: string,
+  media: WhatsAppMediaPayload,
+): Promise<void> {
+  if (media.kind !== "sticker") throw new Error("Sticker transport requires sticker media.");
+  const socket = socketFor(workspaceId, sessionId);
+  const send = method(socket, "sendMessage");
+  if (!send) throw new Error("Unsupported capability: sendMessage");
+  const result = await send(jid, messagePayload("", media));
+  if (jid.endsWith("@g.us")) rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
 }
 
 export async function sendGroupText(

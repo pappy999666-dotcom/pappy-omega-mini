@@ -195,6 +195,7 @@ async function main(): Promise<void> {
               [result.media.kind]: result.media.bytes,
               ...(result.media.kind !== "audio" && (result.caption ?? "") ? { caption: result.caption } : {}),
               ...(result.media.mimeType ? { mimetype: result.media.mimeType } : {}),
+              ...(result.media.stickerPackName ? { stickerPackName: result.media.stickerPackName, stickerPackPublisher: "PAPPY OMEGA MINI" } : {}),
               ...(result.media.kind === "video" || result.media.kind === "document" ? { fileName: result.media.fileName } : {}),
               ...(result.nativeFlow ? { nativeFlow: result.nativeFlow } : {}),
               ...(result.nativeTable ? { nativeTable: result.nativeTable } : {}),

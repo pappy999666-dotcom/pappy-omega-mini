@@ -1175,9 +1175,9 @@ export function pairingHelpCardText(): string {
     "⌬ ⤷ <b>PAIRING HELP</b> ⚙︎",
     "",
     "─────────────",
-    "<b>⎔ Command</b> · ⇆ <code>.pair &lt;label&gt; &lt;number&gt;</code>",
+    "<b>⎔ Command</b> · ⇆ <code>/pair &lt;label&gt; &lt;number&gt;</code>",
     "─────────────",
-    "» <b>Example:</b> <code>.pair support 2348012345678</code>",
+    "» <b>Example:</b> <code>/pair support 2348012345678</code>",
     "» <b>Note:</b> Use full international format without the + symbol.",
   ].join("\n");
 }

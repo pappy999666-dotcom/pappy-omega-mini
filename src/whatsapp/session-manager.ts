@@ -756,7 +756,7 @@ async function openWhatsAppSession(
         const hasGroupInvite = extractWhatsAppGroupInviteUrls(combinedText).length > 0;
         const shouldTraceInbound = Boolean(text || quotedText || stickerFingerprint) && (isPrefixedCommand || hasGroupInvite);
         const mediaCommand =
-          /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate|allstatus|allchat|gstatus|tag|stag|status)/.test(
+          /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate|allstatus|allchat|gstatus|tag|stag|status|cs|convertsticker|sticker|makesticker|take|takesticker|stickerpname|spn)/.test(
             commandSource,
           );
         const inboundMedia = stickerFingerprint
@@ -975,6 +975,7 @@ async function openWhatsAppSession(
                     [mediaReply.media.kind]: mediaReply.media.bytes,
                     ...(mediaReply.media.kind !== "audio" && (mediaReply.caption ?? "") ? { caption: mediaReply.caption } : {}),
                     ...(mediaReply.media.mimeType ? { mimetype: mediaReply.media.mimeType } : {}),
+                    ...(mediaReply.media.stickerPackName ? { stickerPackName: mediaReply.media.stickerPackName, stickerPackPublisher: "PAPPY OMEGA MINI" } : {}),
                     ...(mediaReply.media.kind === "video" || mediaReply.media.kind === "document" ? { fileName: mediaReply.media.fileName } : {}),
                     ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
                     ...(mediaReply.nativeTable ? { nativeTable: mediaReply.nativeTable } : {}),
@@ -1195,14 +1196,14 @@ async function openWhatsAppSession(
             if (pendingWhatsAppPairingNotice.has(key) && selfJid) {
               pendingWhatsAppPairingNotice.delete(key);
               void sendTrackedMessage(selfJid, {
-                text: "✦ PAPPY OMEGA MINI · CONNECTED\\n\\nYour WhatsApp session is now connected and ready.\\n\\nStatus · ACTIVE · VALID\\nTransport · Baileys multi-device\\nAction · Commands are ready.",
+                text: "✦ PAPPY OMEGA MINI · CONNECTED\n\nYour WhatsApp session is now connected and ready.\n\nStatus · ACTIVE · VALID\nTransport · Baileys multi-device\nAction · Commands are ready.",
               }).catch(() => undefined);
             }
             if (chatId && pairingNotifier) {
               pairingNotifications.delete(key);
               void pairingNotifier(
                 chatId,
-                `🟢 <b>WhatsApp Session Connected</b>\\n\\n<blockquote><b>Session:</b> <code>${sessionId.slice(0, 12)}</code>\\n<b>Status:</b> ACTIVE · VALID\\n<b>Transport:</b> Baileys multi-device\\n<b>Action:</b> Ready to receive commands</blockquote>\\n\\nOpen <b>Workload</b> or <b>Sessions</b> to manage this connection.`,
+                `🟢 <b>WhatsApp Session Connected</b>\n\n<blockquote><b>Session:</b> <code>${sessionId.slice(0, 12)}</code>\n<b>Status:</b> ACTIVE · VALID\n<b>Transport:</b> Baileys multi-device\n<b>Action:</b> Ready to receive commands</blockquote>\n\nOpen <b>Workload</b> or <b>Sessions</b> to manage this connection.`,
               ).catch(() => undefined);
             }
           }, 5_000);

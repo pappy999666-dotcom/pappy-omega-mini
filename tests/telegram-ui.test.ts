@@ -116,7 +116,7 @@ describe("Telegram UI authorization", () => {
     expect(anti).toContain("How to use:");
     expect(anti).toContain(".antilink warn 3");
     expect(pairingHelpCardText()).toContain("PAIRING HELP");
-    expect(pairingHelpCardText()).toContain(".pair &lt;label&gt; &lt;number&gt;");
+    expect(pairingHelpCardText()).toContain("/pair &lt;label&gt; &lt;number&gt;");
     const pairing = sessionPairingCardText({ ...session, sessionName: "pappy" }, "2348012345678", "PAPPYBOT");
     expect(pairing).toContain("SESSION PAIRING");
     expect(pairing).toContain("PAPPYBOT");
