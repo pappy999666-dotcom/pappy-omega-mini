@@ -525,6 +525,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         text: typeof input.text === "string" ? input.text : "",
         ...(typeof input.messageId === "string" ? { messageId: input.messageId } : {}),
         ...(typeof input.interactionId === "string" ? { interactionId: input.interactionId } : {}),
+        ...(typeof input.interactionDisplayText === "string" ? { interactionDisplayText: input.interactionDisplayText } : {}),
         ...(typeof input.quotedText === "string" ? { quotedText: input.quotedText } : {}),
         ...(typeof input.quotedSenderJid === "string" ? { quotedSenderJid: input.quotedSenderJid } : {}),
         ...(input.quotedMessageKey && typeof input.quotedMessageKey === "object" && !Array.isArray(input.quotedMessageKey)

@@ -370,6 +370,40 @@ describe("WhatsApp command registry", () => {
     });
   });
 
+  it("dispatches rich-menu callbacks without the session prefix", async () => {
+    const user = resolveUser(`rich-menu-prefix-${Date.now()}-${Math.random()}`);
+    const session = createSession({
+      workspaceId: user.workspaceId,
+      sessionName: "rich-menu-prefix",
+      phoneNumber: "2348012345678",
+    });
+    updateSession(user.workspaceId, session.sessionId, {
+      status: "ACTIVE",
+      prefix: "!",
+      lastHealthyAt: Date.now(),
+    });
+    await expect(routeWhatsAppText({
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      senderJid: "2348012345678@s.whatsapp.net",
+      text: "",
+      interactionId: "cmd:ping:nonce",
+    })).resolves.toContain("ACTIVE");
+    await expect(routeWhatsAppText({
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      senderJid: "2348012345678@s.whatsapp.net",
+      text: "",
+      interactionDisplayText: ".ping",
+    })).resolves.toContain("ACTIVE");
+    await expect(routeWhatsAppText({
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      senderJid: "2348012345678@s.whatsapp.net",
+      text: "ping",
+    })).resolves.toBeNull();
+  });
+
   it("supports null no-prefix mode per session", async () => {
     const user = resolveUser(`prefix-null-${Date.now()}-${Math.random()}`);
     const session = createSession({

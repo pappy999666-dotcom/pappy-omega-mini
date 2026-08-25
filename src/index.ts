@@ -131,7 +131,7 @@ async function main(): Promise<void> {
       if (cached && cached.expiresAt > Date.now()) return cached.result;
       if (cached) inboundDedupe.delete(key!);
       const processInbound = async (): Promise<WorkloadInboundResult> => {
-      if (!event.interactionId && event.remoteJid.endsWith("@g.us") && !event.fromMe) {
+      if (!event.interactionId && !event.interactionDisplayText && event.remoteJid.endsWith("@g.us") && !event.fromMe) {
         let sessionPrefix = "";
         try {
           sessionPrefix = getSession(event.workspaceId, event.sessionId).prefix ?? "";
@@ -163,6 +163,7 @@ async function main(): Promise<void> {
         senderJid: event.senderJid,
         text: event.text,
         ...(event.interactionId ? { interactionId: event.interactionId } : {}),
+        ...(event.interactionDisplayText ? { interactionDisplayText: event.interactionDisplayText } : {}),
         ...(event.quotedText ? { quotedText: event.quotedText } : {}),
         ...(event.quotedSenderJid ? { quotedSenderJid: event.quotedSenderJid } : {}),
         ...(event.quotedMessageKey ? { quotedMessageKey: event.quotedMessageKey } : {}),

@@ -228,6 +228,8 @@ export interface WorkloadInboundEvent {
   senderJid: string;
   text: string;
   interactionId?: string;
+  /** Native rich-menu display text used when a panel omits the callback ID. */
+  interactionDisplayText?: string;
   quotedText?: string;
   quotedSenderJid?: string;
   quotedMessageKey?: Record<string, unknown>;

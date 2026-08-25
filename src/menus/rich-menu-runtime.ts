@@ -176,6 +176,10 @@ export function buildRichMenuContent(model: SessionMenuModel, view = "root", ima
 export function resolveMenuInteraction(value?: string): MenuInteraction | undefined {
   const key = String(value || "").trim();
   if (!key) return undefined;
+  if (key.startsWith(".")) {
+    const command = key.slice(1).trim().toLowerCase();
+    if (/^[a-z0-9][a-z0-9_-]{0,48}$/i.test(command)) return { command };
+  }
   const parts = key.split(":");
   const view = parts[2];
   if (parts[0] === "ui" && parts[1] === "menu" && view && CATEGORY_LABELS[view])

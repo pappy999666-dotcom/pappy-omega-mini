@@ -738,14 +738,15 @@ async function openWhatsAppSession(
         };
         const interaction = extractWhatsAppInteraction(envelope.message);
         const interactionId = interaction?.id ?? undefined;
-        const text = interactionId ?? extractMessageText(envelope.message);
+        const interactionDisplayText = interaction?.displayText?.trim() || undefined;
+        const text = interactionId ?? interactionDisplayText ?? extractMessageText(envelope.message);
         const quoted = extractQuotedMessage(envelope.message);
         const quotedText = extractQuotedText(quoted);
         const combinedText = [text, quotedText].filter(Boolean).join("\n");
         const commandSource = combinedText.trim().toLowerCase();
         const sessionPrefix = getSession(workspaceId, sessionId).prefix.trim();
         const isPrefixedCommand = Boolean(
-          interactionId || (sessionPrefix && commandSource.startsWith(sessionPrefix)),
+          interactionId || interactionDisplayText || (sessionPrefix && commandSource.startsWith(sessionPrefix)),
         );
         const hasGroupInvite = extractWhatsAppGroupInviteUrls(combinedText).length > 0;
         const shouldTraceInbound = Boolean(text || quotedText) && (isPrefixedCommand || hasGroupInvite);
@@ -881,8 +882,9 @@ async function openWhatsAppSession(
             ...(mentionedJids.filter((value): value is string => Boolean(value)).length
             ? { mentionedJids: mentionedJids.filter((value): value is string => Boolean(value)) }
             : {}),
-          text: interactionId ? "" : text,
+          text: interactionId || interactionDisplayText ? "" : text,
           ...(interactionId ? { interactionId } : {}),
+          ...(interactionDisplayText ? { interactionDisplayText } : {}),
           ...(message.key.fromMe ? { fromMe: true } : {}),
           ...(quotedText ? { quotedText } : {}),
           ...(inboundMedia ? { media: inboundMedia } : {}),

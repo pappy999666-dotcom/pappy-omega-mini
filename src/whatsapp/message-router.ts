@@ -61,6 +61,8 @@ export interface IncomingTextMessage {
   bridgeAuthorized?: boolean;
   fromMe?: boolean;
   interactionId?: string;
+  /** Native rich-menu display text used when a client omits the callback ID. */
+  interactionDisplayText?: string;
 }
 export interface WhatsAppReply {
   text?: string;
@@ -108,8 +110,10 @@ export async function routeWhatsAppText(
 ): Promise<string | WhatsAppReply | null> {
   const commandInput = mergeQuotedPayload(message.text, message.quotedText);
   const interactionId = message.interactionId?.trim();
-  const menuAction = resolveMenuInteraction(interactionId || commandInput.trim());
-  const trimmed = menuAction?.command || (menuAction?.view ? "menu" : interactionId || commandInput.trim());
+  const interactionDisplayText = message.interactionDisplayText?.trim();
+  const interactionValue = interactionId || interactionDisplayText;
+  const menuAction = interactionValue ? resolveMenuInteraction(interactionValue) : undefined;
+  const trimmed = menuAction?.command || (menuAction?.view ? "menu" : interactionValue || commandInput.trim());
   if (
     getEmergencyState().enabled &&
     /^(?:[^\w\s]{1,3})?(?:menu|help|m)(?:\s|$)/i.test(trimmed)
@@ -122,10 +126,10 @@ export async function routeWhatsAppText(
   // Telegram Bridge is an already-authorized control-plane transport. It must
   // dispatch the command body independently of the target session's local
   // WhatsApp prefix. Direct WhatsApp messages still require their session prefix.
-  if (!message.interactionId && !menuAction && !message.bridgeAuthorized && prefix && !trimmed.startsWith(prefix)) return null;
+  if (!interactionValue && !menuAction && !message.bridgeAuthorized && prefix && !trimmed.startsWith(prefix)) return null;
   const raw = menuAction?.command || menuAction?.view
     ? trimmed
-    : message.interactionId
+    : interactionValue
     ? trimmed
     : message.bridgeAuthorized
     ? prefix && trimmed.startsWith(prefix)
