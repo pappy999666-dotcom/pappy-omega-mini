@@ -118,6 +118,7 @@ import {
   getProfilePictureUrl,
   leaveWhatsAppGroup,
   listAdminGroups,
+  peekCachedAdminGroups,
   listGroups,
   removeProfilePicture,
   sendDirectText,
@@ -8915,17 +8916,23 @@ async function showSessionGroups(
 ): Promise<void> {
   const session = ownedSession(ctx, sessionId);
   if (!session) return deny(ctx);
-  await edit(
-    ctx,
-    pageText(
-      `${session.sessionName} · Admin Groups`,
-      infoResponse(
-        "Opening Administrator Groups",
-        "Reading the current WhatsApp group inventory. Your controls will appear in this message as soon as the session responds.",
-      ),
-    ),
-    keyboard([[btn("‹ Session Control", `session:${session.sessionId}:menu`)]]),
+  const cachedAdminGroups = peekCachedAdminGroups(
+    session.workspaceId,
+    session.sessionId,
   );
+  if (cachedAdminGroups === undefined) {
+    await edit(
+      ctx,
+      pageText(
+        `${session.sessionName} · Admin Groups`,
+        infoResponse(
+          "Opening Administrator Groups",
+          "Reading the current WhatsApp group inventory. Your controls will appear in this message as soon as the session responds.",
+        ),
+      ),
+      keyboard([[btn("‹ Session Control", `session:${session.sessionId}:menu`)]]),
+    );
+  }
   try {
     const inventory = groupInventorySingleFlight.run(
       `${session.workspaceId}:${session.sessionId}`,

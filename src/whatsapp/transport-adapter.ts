@@ -399,18 +399,16 @@ const groupParticipantCache = new Map<
 >();
 const groupParticipantInflight = new Map<string, Promise<string[]>>();
 
-function transientGroupInventoryError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /rate|over.?limit|429|timeout|tempor|network|closed|not connected/i.test(message);
-}
-
 async function loadGroupInventory(
   fetchGroups: (...args: unknown[]) => Promise<unknown>,
   identities: Set<string>,
   timeoutMs = GROUP_INVENTORY_TIMEOUT_MS,
 ): Promise<GroupSummary[]> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  // Inventory is a read snapshot, not a job that should amplify pressure.
+  // One request per single-flight key is enough; callers can use the retained
+  // snapshot or explicitly retry from Telegram later.
+  for (let attempt = 0; attempt < 1; attempt += 1) {
     try {
       const result = (await Promise.race([
         fetchGroups(),
@@ -429,8 +427,7 @@ async function loadGroupInventory(
       }));
     } catch (error) {
       lastError = error;
-      if (!transientGroupInventoryError(error) || attempt === 2) break;
-      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+      break;
     }
   }
   throw lastError instanceof Error
@@ -473,7 +470,10 @@ export async function listGroups(
     if (!fetchSummaries) return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>, identities);
     try {
       const result = await Promise.race([
-        fetchSummaries(ownJid(socket)),
+        // The worker resolves the live socket identity internally. Passing a
+        // control-plane identity hint disables its stale-while-revalidate path
+        // and forces the Telegram Groups screen to wait for a cold refresh.
+        fetchSummaries(),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("WhatsApp group inventory timed out. Retry after the session is fully connected.")), GROUP_INVENTORY_TIMEOUT_MS),
         ),
@@ -492,10 +492,18 @@ export async function listGroups(
           ...(typeof value.isAdmin === "boolean" ? { isAdmin: value.isAdmin } : {}),
         };
       });
-      // Older workloads do not include role metadata. Recompute from full metadata
-      // instead of showing a misleading empty Admin Groups screen until auto-update.
-      if (fetchGroups && summaries.length > 0 && !summaries.some((group) => group.isAdmin === true)) {
-        return loadGroupInventory(fetchGroups as (...args: unknown[]) => Promise<unknown>, identities, 60_000).catch(() => summaries);
+      // Only older workloads that omit role metadata need the expensive full
+      // metadata fallback. A current worker may legitimately return an all-false
+      // administrator set; treating that as "metadata missing" caused a second
+      // full inventory scan on every cold Groups open.
+      const roleMetadataComplete =
+        summaries.length > 0 && summaries.every((group) => typeof group.isAdmin === "boolean");
+      if (fetchGroups && summaries.length > 0 && !roleMetadataComplete) {
+        return loadGroupInventory(
+          fetchGroups as (...args: unknown[]) => Promise<unknown>,
+          identities,
+          60_000,
+        ).catch(() => summaries);
       }
       return summaries;
     } catch (error) {
@@ -561,6 +569,20 @@ export function filterAdminGroupSummaries(groups: GroupSummary[]): GroupSummary[
   return groups
     .filter((group) => group.isAdmin === true)
     .map((group) => ({ ...group }));
+}
+
+/**
+ * Return a fresh administrator-only snapshot when the local inventory cache is
+ * still valid. This is a display fast path only; destructive moderation flows
+ * continue to obtain a fresh group moderation snapshot before mutating state.
+ */
+export function peekCachedAdminGroups(
+  workspaceId: string,
+  sessionId: string,
+): GroupSummary[] | undefined {
+  const cached = groupInventoryCache.get(`${workspaceId}:${sessionId}`);
+  if (!cached || cached.expiresAt <= Date.now()) return undefined;
+  return filterAdminGroupSummaries(cached.groups);
 }
 
 export async function listAdminGroups(
