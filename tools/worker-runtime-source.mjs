@@ -1295,8 +1295,16 @@ async function sendLocalBroadcast(runtime, intent, jid, media, linkPreview, exec
     participants = [];
   }
   const materialized = materializeWorkloadContent(content);
-  // Prevent Baileys from auto-generating an incomplete invite/link preview.
-  const withPreview = { ...materialized, linkPreview: {} };
+  // Only attach a preview when the control server returned real metadata. An
+  // empty object is not a preview: Baileys serializes it as a blank card.
+  const previewIsUsable = Boolean(
+    linkPreview &&
+    typeof linkPreview === "object" &&
+    typeof linkPreview["canonical-url"] === "string" &&
+    String(linkPreview["canonical-url"]).trim() &&
+    (typeof linkPreview.title === "string" || typeof linkPreview.description === "string" || typeof linkPreview.jpegThumbnail === "string" || typeof linkPreview.thumbnailUrl === "string"),
+  );
+  const withPreview = previewIsUsable ? { ...materialized, linkPreview } : materialized;
   await runtime.socket.sendMessage(jid, {
     ...withPreview,
     ...(participants.length ? { mentions: participants } : {}),
@@ -1343,9 +1351,7 @@ async function runLocalBroadcast(runtime, intent, groups, media) {
   checkpoint.lastResult = "Preparing the exact content for delivery.";
   await writeBroadcastCheckpoint(checkpoint);
   await reportLocalBroadcast(activeRuntime, checkpoint);
-  const linkPreview = intent.kind === "allchat"
-    ? undefined
-    : await resolveBroadcastPreview(runtime, intent);
+  const linkPreview = await resolveBroadcastPreview(runtime, intent);
   checkpoint.currentAction = "broadcast ready";
   checkpoint.lastResult = `Resolved ${checkpoint.totalGroups} target group(s); starting delivery.`;
   await writeBroadcastCheckpoint(checkpoint);

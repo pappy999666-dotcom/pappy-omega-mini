@@ -103,8 +103,12 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("growth[- ]locked");
     expect(source).toContain('method === "previewUpload"');
     expect(source).toContain('control("/workload/preview"');
-    expect(source).toContain("const withPreview = linkPreview");
-    expect(source).toContain("await runtime.socket.sendMessage(jid, { ...withPreview, mentions: participants });");
+    expect(source).toContain("const linkPreview = await resolveBroadcastPreview(runtime, intent);");
+    expect(source).toContain("const previewIsUsable = Boolean(");
+    expect(source).toContain("const withPreview = previewIsUsable ? { ...materialized, linkPreview } : materialized;");
+    expect(source).toContain("await runtime.socket.sendMessage(jid, {");
+    expect(source).toContain("...(participants.length ? { mentions: participants } : {})");
+    expect(source).not.toContain("const withPreview = { ...materialized, linkPreview: {} }");
     expect(source).toContain("Preview thumbnail upload exceeds the 8 MiB safety limit.");
     expect(source).toContain("value.groupStatusMessage");
     expect(source).toContain("value.groupStatus === true");
