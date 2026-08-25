@@ -1,9 +1,13 @@
 import { spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import sharp from "sharp";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const FFMPEG_TIMEOUT_MS = 20_000;
+const MAX_ANIMATED_STICKER_FRAMES = 180;
 
 function runFfmpeg(input: Buffer, args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -40,6 +44,70 @@ function runFfmpeg(input: Buffer, args: string[]): Promise<Buffer> {
   });
 }
 
+function runFfmpegFromDirectory(directory: string, args: string[]): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", ...args], {
+      cwd: directory,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const output: Buffer[] = [];
+    const errors: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      fail(new Error("Sticker media conversion timed out."));
+    }, FFMPEG_TIMEOUT_MS);
+    child.stdout.on("data", (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > MAX_OUTPUT_BYTES) {
+        child.kill("SIGKILL");
+        fail(new Error("Converted sticker media exceeded the safe size limit."));
+        return;
+      }
+      output.push(chunk);
+    });
+    child.stderr.on("data", (chunk: Buffer) => errors.push(chunk));
+    child.once("error", (error) => fail(error));
+    child.once("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) resolve(Buffer.concat(output));
+      else reject(new Error(errors.join("").toString().trim().slice(-600) || `FFmpeg exited with code ${code ?? "unknown"}.`));
+    });
+  });
+}
+
+async function animatedStickerToMp4(input: Buffer, pages: number): Promise<Buffer> {
+  if (!Number.isInteger(pages) || pages < 2)
+    throw new Error("The sticker does not contain a valid animated frame sequence.");
+  if (pages > MAX_ANIMATED_STICKER_FRAMES)
+    throw new Error("The animated sticker exceeds the safe frame limit.");
+  const directory = await mkdtemp(join(tmpdir(), "pappy-cs-"));
+  try {
+    for (let page = 0; page < pages; page += 1) {
+      const frame = await sharp(input, { animated: true, page, pages: 1 })
+        .png()
+        .toBuffer();
+      if (!frame.length) throw new Error("An animated sticker frame was empty.");
+      await writeFile(join(directory, `frame-${String(page).padStart(4, "0")}.png`), frame);
+    }
+    return await runFfmpegFromDirectory(directory, [
+      "-framerate", "15", "-i", "frame-%04d.png",
+      "-movflags", "frag_keyframe+empty_moov", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "mp4", "pipe:1",
+    ]);
+  } finally {
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 function resizeOptions() {
   return {
     width: 512,
@@ -69,9 +137,9 @@ export async function convertStickerToMedia(media: WhatsAppMediaPayload): Promis
   if (media.kind !== "sticker") throw new Error("Reply to a sticker with .cs to convert it back to media.");
   const metadata = await sharp(media.bytes, { animated: true }).metadata();
   if (metadata.pages && metadata.pages > 1) {
-    const bytes = await runFfmpeg(media.bytes, [
-      "-movflags", "frag_keyframe+empty_moov", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "mp4", "pipe:1",
-    ]);
+    const bytes = await animatedStickerToMp4(media.bytes, metadata.pages);
+    if (!bytes.length || bytes.length > MAX_OUTPUT_BYTES)
+      throw new Error("The converted video exceeded the safe size limit.");
     return { kind: "video", bytes, mimeType: "video/mp4", fileName: "pappy-sticker.mp4" };
   }
   const bytes = await sharp(media.bytes).png().toBuffer();

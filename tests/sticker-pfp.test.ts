@@ -1,5 +1,12 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import sharp from "sharp";
+
+const execFileAsync = promisify(execFile);
 
 const mocks = vi.hoisted(() => ({
   profilePictureUrl: vi.fn(async () => "https://profile.example/current.jpg"),
@@ -257,6 +264,32 @@ describe("WhatsApp sticker media", () => {
       sticker: Buffer.from("webp-bytes"),
       mimetype: "image/webp",
     });
+  });
+
+  it("converts an animated WebP sticker payload back to MP4 video", async () => {
+    const user = resolveUser(`sticker-video-convert-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "sticker-video-convert" });
+    const directory = await mkdtemp(join(tmpdir(), "pappy-sticker-test-"));
+    try {
+      const first = await sharp({ create: { width: 24, height: 18, channels: 4, background: "#ff77aa" } }).png().toBuffer();
+      const second = await sharp({ create: { width: 24, height: 18, channels: 4, background: "#77aaff" } }).png().toBuffer();
+      await writeFile(join(directory, "frame-1.png"), first);
+      await writeFile(join(directory, "frame-2.png"), second);
+      await execFileAsync("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", "-framerate", "10", "-i", "frame-%d.png", "-loop", "0", "-c:v", "libwebp", "-f", "webp", "animated.webp"], { cwd: directory });
+      const stickerBytes = await readFile(join(directory, "animated.webp"));
+      const sourceMetadata = await sharp(stickerBytes, { animated: true }).metadata();
+      expect(sourceMetadata.pages).toBeGreaterThan(1);
+      const converted = await executeCommand(registry, "cs", commandContext(user.workspaceId, session.sessionId, {
+        media: { kind: "sticker", bytes: stickerBytes, mimeType: "image/webp" },
+      }));
+      const reply = converted as { media?: { kind: string; bytes: Buffer; mimeType?: string } };
+      expect(reply.media?.kind).toBe("video");
+      expect(reply.media?.mimeType).toBe("video/mp4");
+      expect(reply.media?.bytes.subarray(4, 8).toString()).toBe("ftyp");
+      expect(reply.media?.bytes.length).toBeGreaterThan(0);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("converts a static sticker payload back to PNG media and preserves pack metadata on take", async () => {
