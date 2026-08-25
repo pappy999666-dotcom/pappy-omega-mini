@@ -4,4 +4,4 @@ allowBuilds:
   msgpackr-extract: true
   protobufjs: true
 minimumReleaseAgeExclude:
-  - '@crysnovax/baileys@2.7.12'
+  - '@crysnovax/baileys@2.7.12 || 2.7.15'

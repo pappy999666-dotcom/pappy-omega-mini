@@ -16,7 +16,7 @@
     "format": "prettier --write ."
   },
   "dependencies": {
-    "@crysnovax/baileys": "^2.7.12",
+    "@crysnovax/baileys": "^2.7.15",
     "bullmq": "^5.58.0",
     "dotenv": "^17.2.1",
     "ioredis": "^5.7.0",
