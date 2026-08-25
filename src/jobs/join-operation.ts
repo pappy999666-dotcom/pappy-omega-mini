@@ -43,8 +43,12 @@ function isRequestRequired(error: string): boolean {
   );
 }
 
+function normalizedError(error: string): string {
+  return error.toLowerCase().replace(/[\s_-]+/g, " ").trim();
+}
 function isRateLimited(error: string): boolean {
-  return /rate.?limit|too many requests|\b429\b|flood|throttl|temporarily banned|try again later|spam.?limit/i.test(error);
+  const normalized = normalizedError(error);
+  return /rate(?: over)? limit|too many requests|\b429\b|flood|throttl|temporarily banned|try again later|spam limit/i.test(normalized);
 }
 
 function statusCodeFromError(error: unknown): number | undefined {
@@ -179,8 +183,9 @@ export async function joinWhatsAppInvite(
         error: "Already a member.",
       };
     }
+    const normalized = normalizedError(message);
     const rateLimited = isRateLimited(message) || statusCode === 429;
-    const accountRestricted = /spam.?limit|temporarily banned|account restricted|too many groups|rate[- ]over[- ]limit/i.test(message);
+    const accountRestricted = /spam limit|temporarily banned|account restricted|too many groups|rate over limit/i.test(normalized);
     return {
       success: false,
       requestRequired: isRequestRequired(message),

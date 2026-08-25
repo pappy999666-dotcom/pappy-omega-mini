@@ -202,6 +202,16 @@ describe("Baileys Join Operation", () => {
     expect(endpointThrottle.rateLimited).toBe(true);
     expect(endpointThrottle.accountRestricted).toBe(false);
 
+    const rateOverLimit = await joinWhatsAppInvite(
+      {
+        groupGetInviteInfo: async () => ({ id: "120@g.us" }),
+        groupAcceptInvite: async () => { throw new Error("rate-over-limit"); },
+      },
+      "https://chat.whatsapp.com/RATE_OVER_LIMIT",
+    );
+    expect(rateOverLimit.rateLimited).toBe(true);
+    expect(rateOverLimit.accountRestricted).toBe(true);
+
     const restricted = await joinWhatsAppInvite(
       {
         groupGetInviteInfo: async () => ({ id: "120@g.us" }),
