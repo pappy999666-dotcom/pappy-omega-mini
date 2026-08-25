@@ -780,7 +780,8 @@ describe("admin menu media", () => {
       sessionName: "media-menu-session",
     });
     const payload = await buildWhatsappMenuPayload(session, false);
-    expect(payload.media).toBeUndefined();
+    expect(payload.media).toMatchObject({ kind: "image", mimeType: "image/png", fileName: "menu.png" });
+    expect(payload.media?.bytes.byteLength).toBeGreaterThan(0);
     expect(payload.richMenu.header.image?.mime_type).toBe("image/png");
     expect(payload.richMenu.header.image?.url).toContain(media.mediaId);
     expect(payload.richMenu.header.image?.inline).toBe(true);
