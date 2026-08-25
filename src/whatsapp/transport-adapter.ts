@@ -739,6 +739,9 @@ export interface GroupModerationSnapshot {
   isAdmin: boolean;
   joinApprovalMode?: boolean;
   memberAddMode?: boolean;
+  chatAdminsOnly?: boolean;
+  infoAdminsOnly?: boolean;
+  ephemeralSeconds?: number;
 }
 
 const GROUP_METADATA_CACHE_MS = 30_000;
@@ -784,6 +787,9 @@ export async function getGroupModerationSnapshot(
       isAdmin: metadataHasOwnAdminRole(raw as GroupInventoryRecord, socketIdentityVariants(socket)),
       ...(typeof raw.joinApprovalMode === "boolean" ? { joinApprovalMode: raw.joinApprovalMode } : {}),
       ...(typeof raw.memberAddMode === "boolean" ? { memberAddMode: raw.memberAddMode } : {}),
+      ...(typeof raw.announce === "boolean" ? { chatAdminsOnly: raw.announce } : {}),
+      ...(typeof raw.restrict === "boolean" ? { infoAdminsOnly: raw.restrict } : {}),
+      ...(typeof raw.ephemeralDuration === "number" ? { ephemeralSeconds: raw.ephemeralDuration } : {}),
     } satisfies GroupModerationSnapshot;
     groupMetadataCache.set(cacheKey, { expiresAt: Date.now() + GROUP_METADATA_CACHE_MS, snapshot });
     return snapshot;

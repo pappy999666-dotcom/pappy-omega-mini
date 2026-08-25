@@ -399,6 +399,18 @@ const pendingGroupCountryConfirmation = new Map<
     countryCode: string;
   }
 >();
+const pendingGroupApprovalConfirmation = new Map<
+  string,
+  {
+    workspaceId: string;
+    sessionId: string;
+    groupJid: string;
+    index: number;
+    operation: "approve" | "reject";
+    participants: string[];
+    selectionLabel: string;
+  }
+>();
 const pendingGroupLeave = new Map<
   string,
   { workspaceId: string; sessionId: string; groupJid?: string }
@@ -530,6 +542,7 @@ function clearPendingInputs(userId: string): void {
   pendingGroupSetting.delete(userId);
   pendingGroupModerationInput.delete(userId);
   pendingGroupCountryConfirmation.delete(userId);
+  pendingGroupApprovalConfirmation.delete(userId);
   pendingGroupLeave.delete(userId);
   pendingSessionSetting.delete(userId);
   pendingJoinSettingInput.delete(userId);
@@ -1263,7 +1276,7 @@ export function createTelegramBot(): Telegraf<Context> {
                 "danger",
               ),
             ],
-            [btn("Cancel", `session:${groupLeave.sessionId}:action:groups`)],
+            [btn("Cancel", `session:${groupLeave.sessionId}:section:groups`)],
           ]),
         },
       );
@@ -1363,7 +1376,7 @@ export function createTelegramBot(): Telegraf<Context> {
             groupModerationInput.action === "approveAmount" ||
             groupModerationInput.action === "rejectAmount"
           ) {
-            if (!/^\\d+$/.test(value))
+            if (!/^\d+$/.test(value))
               throw new Error(
                 "Send a whole number of pending requests, or send cancel.",
               );
@@ -1378,8 +1391,8 @@ export function createTelegramBot(): Telegraf<Context> {
               );
             requests = requests.slice(0, amount);
           } else {
-            const countryDigits = value.replace(/\\D/g, "");
-            if (!/^\\d{1,15}$/.test(countryDigits))
+            const countryDigits = value.replace(/\D/g, "");
+            if (!/^\d{1,15}$/.test(countryDigits))
               throw new Error(
                 "Send a country calling code such as +234, +1, or +44.",
               );
@@ -1394,37 +1407,38 @@ export function createTelegramBot(): Telegraf<Context> {
           }
           const operation =
             groupModerationInput.action.startsWith("reject") ? "reject" : "approve";
-          const job = await enqueueGroupControlJob({
+          const selectionLabel = groupModerationInput.action.endsWith("Country")
+            ? `country +${value.replace(/\D/g, "")}`
+            : `first ${requests.length}`;
+          pendingGroupApprovalConfirmation.set(userId, {
             workspaceId: session.workspaceId,
             sessionId: session.sessionId,
             groupJid: groupModerationInput.groupJid,
+            index: groupModerationInput.index,
             operation,
             participants: requests.map((request) => request.jid),
+            selectionLabel,
           });
-          const response = await ctx.reply(
+          const preview = requests
+            .slice(0, 20)
+            .map((request, index) => escapeHtml(maskedPhoneLabel(firstVerifiedPhone(request.phoneNumber, request.jid), index)))
+            .join("\n");
+          await ctx.reply(
             pageText(
-              `Group Moderation · ${operation === "approve" ? "Approval" : "Rejection"} Job`,
-              infoResponse(
-              `${operation === "approve" ? "Approval" : "Rejection"} Job Queued`,
-              `<b>Selected:</b> ${requests.length}\n<b>Operation:</b> ${operation}\n<b>Job:</b> <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>\nThe durable worker will process requests one by one and preserve partial progress across recovery.`,
+              `Group Moderation · ${operation === "approve" ? "Approval" : "Rejection"}`,
+              dangerResponse(
+                `Confirm ${operation === "approve" ? "Approval" : "Rejection"}`,
+                `<b>Selection:</b> ${escapeHtml(selectionLabel)}\n<b>Requests:</b> ${requests.length}\n\n<code>${preview}</code>${requests.length > 20 ? "\n…and more" : ""}\n\nThis batch will be queued only after confirmation. LID-only requests are retained for exact processing but are not used for country matching.`,
               ),
             ),
             {
               parse_mode: "HTML",
               reply_markup: keyboard([
-                [btn("↻ Live Progress", `job:live:${job.jobCode ?? job.jobId.slice(0, 8)}`, "primary")],
-                [btn("↻ Refresh Moderation", `session:${session.sessionId}:group:moderation:${groupModerationInput.index}`, "primary")],
+                [btn("✅ Confirm Batch", `session:${session.sessionId}:group:moderation:approval:confirm:${groupModerationInput.index}`, operation === "approve" ? "success" : "danger")],
+                [btn("Cancel", `session:${session.sessionId}:group:moderation:approve:${groupModerationInput.index}`)],
               ]),
             },
           );
-          if (job.jobCode && response && "chat" in response && "message_id" in response)
-            startJobLiveLoop(
-              ctx,
-              session.workspaceId,
-              job.jobCode,
-              response.chat.id,
-              response.message_id,
-            );
           return;
         }
         const requestedDigits = phoneDigitsFromIdentity(value) ?? "";
@@ -4118,23 +4132,10 @@ export function createTelegramBot(): Telegraf<Context> {
     },
   );
   bot.action(/^session:([^:]+):group:moderation:(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery("Opening moderation…");
+    await ctx.answerCbQuery();
     const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
     if (!session) return deny(ctx);
     const index = Number(ctx.match[2] ?? -1);
-    await edit(
-      ctx,
-      pageText(
-        `${session.sessionName} · Moderation`,
-        infoResponse(
-          "Loading Moderation",
-          "Reading the selected group’s live settings and pending requests…",
-        ),
-      ),
-      keyboard([
-        [btn("‹ Group", `session:${session.sessionId}:group:view:${index}`)],
-      ]),
-    );
     try {
       await showGroupModeration(ctx, session.sessionId, index);
     } catch (error) {
@@ -4160,6 +4161,68 @@ export function createTelegramBot(): Telegraf<Context> {
       );
     }
   });
+  bot.action(
+    /^session:([^:]+):group:moderation:approval:confirm:(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCbQuery("Checking and queueing…");
+      const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
+      if (!session) return deny(ctx);
+      const actor = String(ctx.from?.id ?? "");
+      const pending = pendingGroupApprovalConfirmation.get(actor);
+      if (!pending || pending.sessionId !== session.sessionId) {
+        return edit(
+          ctx,
+          pageText("Group Approvals", infoResponse("Confirmation Expired", "Open Approvals again to review the current pending requests.")),
+          keyboard([[btn("‹ Moderation", `session:${session.sessionId}:group:moderation:${Number(ctx.match[2] ?? -1)}`)]]),
+        );
+      }
+      pendingGroupApprovalConfirmation.delete(actor);
+      const index = pending.index;
+      try {
+        const [snapshot, currentRequests] = await Promise.all([
+          getGroupModerationSnapshot(session.workspaceId, session.sessionId, pending.groupJid, { fresh: true }),
+          listGroupJoinRequests(session.workspaceId, session.sessionId, pending.groupJid),
+        ]);
+        if (!snapshot.isAdmin)
+          throw new Error("This WhatsApp identity is no longer an administrator in the group.");
+        const currentJids = new Set(currentRequests.map((request) => request.jid));
+        const participants = pending.participants.filter((jid) => currentJids.has(jid));
+        if (!participants.length)
+          throw new Error("Those pending requests are no longer available. Refresh Approvals and review the current list.");
+        const job = await enqueueGroupControlJob({
+          workspaceId: session.workspaceId,
+          sessionId: session.sessionId,
+          groupJid: pending.groupJid,
+          operation: pending.operation,
+          participants,
+        });
+        const response = await ctx.reply(
+          pageText(
+            `${session.sessionName} · ${pending.operation === "approve" ? "Approvals" : "Rejections"}`,
+            infoResponse(
+              `${pending.operation === "approve" ? "Approval" : "Rejection"} Batch Queued`,
+              `<b>Selection:</b> ${escapeHtml(pending.selectionLabel)}\\n<b>Queued now:</b> ${participants.length}\\n<b>Changed since preview:</b> ${pending.participants.length - participants.length}\\n<b>Job:</b> <code>${escapeHtml(job.jobCode ?? job.jobId.slice(0, 8))}</code>\\nThe durable worker will process the batch with partial-result tracking.`,
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([
+              [btn("↻ Live Progress", `job:live:${job.jobCode ?? job.jobId.slice(0, 8)}`, "primary")],
+              [btn("↻ Approvals", `session:${session.sessionId}:group:moderation:approve:${index}`, "primary")],
+            ]),
+          },
+        );
+        if (job.jobCode && response && "chat" in response && "message_id" in response)
+          startJobLiveLoop(ctx, session.workspaceId, job.jobCode, response.chat.id, response.message_id);
+      } catch (error) {
+        await edit(
+          ctx,
+          pageText(`${session.sessionName} · Approvals`, dangerResponse("Batch Not Queued", escapeHtml(error instanceof Error ? error.message : String(error)))),
+          keyboard([[btn("↻ Approvals", `session:${session.sessionId}:group:moderation:approve:${index}`, "primary")]]),
+        );
+      }
+    },
+  );
   bot.action(
     /^session:([^:]+):group:moderation:approve:(\d+)$/,
     async (ctx) => {
@@ -4194,7 +4257,7 @@ export function createTelegramBot(): Telegraf<Context> {
             `${session.sessionName} · Approvals`,
             infoResponse(
               "Pending Join Requests",
-              `<b>Group:</b> ${escapeHtml(group.subject)}\n<b>Pending:</b> ${requests.length}\n\nChoose a bounded approval operation. Country approval uses the phone number exposed by WhatsApp; LID-only requests are not guessed.`,
+              `<b>Group:</b> ${escapeHtml(group.subject)}\n\n${approvalDashboardDetails(requests)}\n\nChoose a bounded approval operation.`,
             ),
           ),
           keyboard([
@@ -4487,7 +4550,7 @@ export function createTelegramBot(): Telegraf<Context> {
       await ctx.answerCbQuery();
       const session = ownedSession(ctx, String(ctx.match[1] ?? ""));
       if (!session) return deny(ctx);
-      const operationRoute = ctx.match[1] === "reject" ? "reject" : "approve";
+      const operationRoute = ctx.match[2] === "reject" ? "reject" : "approve";
       const index = Number(ctx.match[4] ?? -1);
       const group = await getSessionGroupAt(
         ctx,
@@ -4496,9 +4559,9 @@ export function createTelegramBot(): Telegraf<Context> {
       ).catch(() => undefined);
       if (!group) return showSessionGroups(ctx, session.sessionId);
       const action =
-        ctx.match[1] === "reject"
-          ? ctx.match[2] === "country" ? "rejectCountry" : "rejectAmount"
-          : ctx.match[2] === "country" ? "approveCountry" : "approveAmount";
+          ctx.match[2] === "reject"
+            ? ctx.match[3] === "country" ? "rejectCountry" : "rejectAmount"
+            : ctx.match[3] === "country" ? "approveCountry" : "approveAmount";
       beginExclusiveInput(String(ctx.from?.id ?? ""));
       pendingGroupModerationInput.set(String(ctx.from?.id ?? ""), {
         workspaceId: session.workspaceId,
@@ -4667,7 +4730,7 @@ export function createTelegramBot(): Telegraf<Context> {
           [
             btn(
               "↻ Refresh Groups",
-              `session:${session.sessionId}:action:groups`,
+              `session:${session.sessionId}:section:groups`,
             ),
           ],
           [btn("‹ Session", `session:${session.sessionId}:menu`)],
@@ -4705,7 +4768,7 @@ export function createTelegramBot(): Telegraf<Context> {
           "Send the group JID ending in <code>@g.us</code>. A confirmation step is required before leaving.",
         ),
       ),
-      keyboard([[btn("Cancel", `session:${session.sessionId}:action:groups`)]]),
+      keyboard([[btn("Cancel", `session:${session.sessionId}:section:groups`)]]),
     );
   });
   bot.action(/^session:([^:]+):sudo:(list|add|remove)$/, async (ctx) => {
@@ -9047,6 +9110,42 @@ async function showSessionGroups(
   }
 }
 
+const TELEGRAM_APPROVAL_COUNTRY_CODES = [
+  "234", "233", "254", "255", "256", "260", "27", "20", "1", "7",
+  "33", "34", "39", "44", "49", "52", "55", "61", "62", "63", "64",
+  "65", "66", "81", "82", "84", "86", "90", "91", "92", "93", "94", "95", "98",
+];
+
+function approvalCountryPrefix(phone: string | undefined): string | undefined {
+  const digits = phone?.replace(/\D/g, "") ?? "";
+  if (!digits) return undefined;
+  return TELEGRAM_APPROVAL_COUNTRY_CODES.find((code) => digits.startsWith(code)) ?? digits.slice(0, 3);
+}
+
+function approvalDashboardDetails(
+  requests: Array<{ jid: string; phoneNumber?: string }>,
+): string {
+  const countries = new Map<string, number>();
+  let verified = 0;
+  for (const request of requests) {
+    const phone = firstVerifiedPhone(request.phoneNumber, request.jid);
+    const country = approvalCountryPrefix(phone);
+    if (!country) continue;
+    verified += 1;
+    countries.set(country, (countries.get(country) ?? 0) + 1);
+  }
+  const countryLines = [...countries.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 12)
+    .map(([country, count]) => `· +${country} — ${count}`)
+    .join("\n") || "· No verified phone countries available";
+  const preview = requests
+    .slice(0, 10)
+    .map((request, index) => maskedPhoneLabel(firstVerifiedPhone(request.phoneNumber, request.jid), index))
+    .join("\n") || "No pending requests";
+  return `<b>Pending:</b> ${requests.length}\n<b>Verified phone identities:</b> ${verified}\n<b>Unresolved/LID-only:</b> ${Math.max(0, requests.length - verified)}\n\n<b>Country breakdown</b>\n${countryLines}\n\n<b>Request preview</b>\n<code>${escapeHtml(preview)}</code>${requests.length > 10 ? "\n…and more" : ""}\n\nOnly verified requests are eligible for country-filtered operations. LID-only entries are never guessed.`;
+}
+
 async function showGroupModeration(
   ctx: Context,
   sessionId: string,
@@ -9112,13 +9211,31 @@ async function showGroupModeration(
         : snapshot.memberAddMode
           ? "ALL MEMBERS"
           : "ADMINS ONLY";
+    const chatMode =
+      snapshot.chatAdminsOnly === undefined
+        ? "UNKNOWN"
+        : snapshot.chatAdminsOnly
+          ? "ADMINS ONLY"
+          : "ALL MEMBERS";
+    const infoMode =
+      snapshot.infoAdminsOnly === undefined
+        ? "UNKNOWN"
+        : snapshot.infoAdminsOnly
+          ? "ADMINS ONLY"
+          : "ALL MEMBERS";
+    const ephemeralMode =
+      snapshot.ephemeralSeconds === undefined
+        ? "UNKNOWN"
+        : snapshot.ephemeralSeconds === 0
+          ? "OFF"
+          : `${snapshot.ephemeralSeconds / 86_400} DAYS`;
     await edit(
       ctx,
       pageText(
         `${session.sessionName} · Moderation`,
         infoResponse(
           "Per-Group Moderation",
-          `<b>Group:</b> ${escapeHtml(snapshot.subject)}\n<b>Members:</b> ${snapshot.participantCount}\n<b>Admins:</b> ${admins.length}\n<b>Join approval:</b> ${approval}\n<b>Member add:</b> ${memberAdd}\n<b>Pending requests:</b> ${requests.length}\n\nThis surface is available only because the WhatsApp identity is currently an administrator in this group. Every mutating action is checked again before execution.`,
+          `<b>Group:</b> ${escapeHtml(snapshot.subject)}\n<b>Members:</b> ${snapshot.participantCount}\n<b>Admins:</b> ${admins.length}\n<b>Join approval:</b> ${approval}\n<b>Member add:</b> ${memberAdd}\n<b>Chat:</b> ${chatMode}\n<b>Group info:</b> ${infoMode}\n<b>Disappearing messages:</b> ${ephemeralMode}\n<b>Pending requests:</b> ${requests.length}\n\nThis surface is available only because the WhatsApp identity is currently an administrator in this group. Every mutating action is checked again before execution.`,
         ),
       ),
       keyboard([
@@ -9137,26 +9254,16 @@ async function showGroupModeration(
         ],
         [
           btn(
-            "Chat: Admins Only",
-            `session:${session.sessionId}:group:moderation:chat:admins:${index}`,
-            "primary",
-          ),
-          btn(
-            "Chat: Everyone",
-            `session:${session.sessionId}:group:moderation:chat:all:${index}`,
-            "primary",
+            `Chat: ${snapshot.chatAdminsOnly === true ? "Admins Only → Allow All" : "Everyone → Admins Only"}`,
+            `session:${session.sessionId}:group:moderation:chat:${snapshot.chatAdminsOnly === true ? "all" : "admins"}:${index}`,
+            snapshot.chatAdminsOnly === true ? "success" : "primary",
           ),
         ],
         [
           btn(
-            "Info: Admins Only",
-            `session:${session.sessionId}:group:moderation:info:admins:${index}`,
-            "primary",
-          ),
-          btn(
-            "Info: Everyone",
-            `session:${session.sessionId}:group:moderation:info:all:${index}`,
-            "primary",
+            `Info: ${snapshot.infoAdminsOnly === true ? "Admins Only → Allow All" : "Everyone → Admins Only"}`,
+            `session:${session.sessionId}:group:moderation:info:${snapshot.infoAdminsOnly === true ? "all" : "admins"}:${index}`,
+            snapshot.infoAdminsOnly === true ? "success" : "primary",
           ),
         ],
         [
@@ -9200,10 +9307,10 @@ async function showGroupModeration(
             "⏳ 7 days",
             `session:${session.sessionId}:group:moderation:ephemeral:7d:${index}`,
           ),
-          btn(
-            "⏳ 90 days",
-            `session:${session.sessionId}:group:moderation:90d:${index}`,
-          ),
+              btn(
+                "⏳ 90 days",
+                `session:${session.sessionId}:group:moderation:ephemeral:90d:${index}`,
+              ),
         ],
         [
           btn(
