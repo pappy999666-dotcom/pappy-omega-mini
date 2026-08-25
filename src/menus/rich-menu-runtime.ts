@@ -191,7 +191,7 @@ function button(id: string, text: string, toast = ""): RichMenuButton {
 }
 
 function commandButton(command: string, nonce: string, prefix: string): RichMenuButton {
-  const commandText = `${prefix}open ${command}`;
+  const commandText = `${prefix}${command}`;
   return button(`cmd:${command}:${nonce}`, commandText, `Run ${commandText}`);
 }
 

@@ -133,15 +133,16 @@ export async function routeWhatsAppText(
   )
     return null;
   const prefix = session.prefix;
-  // Telegram Bridge is an already-authorized control-plane transport. It must
-  // dispatch the command body independently of the target session's local
-  // WhatsApp prefix. Direct WhatsApp messages still require their session prefix.
-  if (!interactionValue && !menuAction && !viewAction && !message.bridgeAuthorized && prefix && !trimmed.startsWith(prefix)) return null;
+  const selfAuthoredText = message.fromMe === true && !interactionValue;
+  // Telegram Bridge and a message authored by this authenticated WhatsApp
+  // identity are already trusted control-plane inputs. Native button clicks
+  // remain separately sender-authorized below.
+  if (!interactionValue && !menuAction && !viewAction && !message.bridgeAuthorized && !selfAuthoredText && prefix && !trimmed.startsWith(prefix)) return null;
   const raw = menuAction?.command || menuAction?.view || viewAction?.view
     ? trimmed
     : interactionValue
     ? trimmed
-    : message.bridgeAuthorized
+    : message.bridgeAuthorized || selfAuthoredText
     ? prefix && trimmed.startsWith(prefix)
       ? trimmed.slice(prefix.length)
       : trimmed.startsWith(".")

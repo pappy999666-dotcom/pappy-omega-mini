@@ -754,8 +754,9 @@ async function openWhatsAppSession(
         const combinedText = [text, quotedText].filter(Boolean).join("\n");
         const commandSource = combinedText.trim().toLowerCase();
         const sessionPrefix = getSession(workspaceId, sessionId).prefix.trim();
+        const selfAuthoredText = message.key.fromMe === true && !interactionId && !interactionDisplayText;
         const isPrefixedCommand = Boolean(
-          interactionId || interactionDisplayText || (sessionPrefix && commandSource.startsWith(sessionPrefix)),
+          interactionId || interactionDisplayText || selfAuthoredText || (sessionPrefix && commandSource.startsWith(sessionPrefix)),
         );
         const hasGroupInvite = extractWhatsAppGroupInviteUrls(combinedText).length > 0;
         const shouldTraceInbound = Boolean(text || quotedText) && (isPrefixedCommand || hasGroupInvite);
