@@ -60,6 +60,7 @@ import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
 import { getInceptor, startInceptor } from "./inceptor.js";
 import {
+  joinRestrictionStopReached,
   joinWhatsAppInvite,
   remixJoinRecords,
   selectJoinInventoryRecords,
@@ -1077,6 +1078,10 @@ export function startWorkerRuntime(): JobOrchestrator {
       0,
       Math.min(3600000, Number(payload.sessionCooldownMs ?? 30000)),
     );
+    const restrictionThreshold = Math.max(
+      1,
+      Math.min(5, Math.floor(Number(payload.restrictionThreshold ?? 5))),
+    );
     return runBoundedBatch({
       items: workItems,
       // Concurrency is bounded per Join Manager job and never shared globally.
@@ -1089,7 +1094,7 @@ export function startWorkerRuntime(): JobOrchestrator {
       // Only a confirmed account restriction stops this job. A rate-limited
       // invite lookup remains a link-level transient and the next remixed link
       // is still allowed to proceed.
-      shouldStop: () => accountRestrictionHits > 0,
+      shouldStop: () => joinRestrictionStopReached(accountRestrictionHits, restrictionThreshold),
       processItem: async (workItem, signal) => {
         const { record, cycle } = workItem;
         const prior = await joinResults.get(
@@ -1269,13 +1274,15 @@ export function startWorkerRuntime(): JobOrchestrator {
           await context.report({
             retrying: (context.job.progress.retrying ?? 0) + 1,
             rateLimitHits,
-            ...(accountRestrictionHits > 0 ? { rateLimitStopAt: 1 } : {}),
+            ...(accountRestrictionHits > 0 ? { rateLimitStopAt: restrictionThreshold } : {}),
             lastResult: result.accountRestricted
               ? `WhatsApp account restriction reported after ${rateLimitHits} attempt(s)`
               : `Join endpoint temporarily throttled after ${rateLimitHits} attempt(s)`,
             currentAction: result.accountRestricted
               ? "cooling down after WhatsApp account restriction"
-              : "continuing after link-level throttle",
+              : accountRestrictionHits >= restrictionThreshold
+                ? "restriction threshold reached; stopping this Join Manager job"
+                : `account restriction counted ${accountRestrictionHits}/${restrictionThreshold}; continuing`,
           });
           if (result.accountRestricted && sessionCooldownMs)
             await new Promise((resolve) =>

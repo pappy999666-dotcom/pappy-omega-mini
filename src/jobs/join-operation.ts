@@ -70,6 +70,17 @@ function isAlreadyMember(error: string, statusCode?: number): boolean {
   return statusCode === 409 || /already[- ]?(?:exists|a participant|member)|participant already exists|is already in the group/i.test(error);
 }
 
+export function joinRestrictionStopReached(
+  accountRestrictionHits: number,
+  configuredThreshold?: number,
+): boolean {
+  const threshold = Math.max(
+    1,
+    Math.min(5, Math.floor(Number(configuredThreshold ?? 5))),
+  );
+  return accountRestrictionHits >= threshold;
+}
+
 export function remixJoinRecords<T extends { canonicalUrl: string }>(
   records: readonly T[],
   seed: string,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { joinWhatsAppInvite } from "../src/jobs/join-operation.js";
+import { joinRestrictionStopReached, joinWhatsAppInvite } from "../src/jobs/join-operation.js";
 
 type Plan = {
   throttleAttempts: number;
@@ -52,6 +52,20 @@ async function runWithBackoff(
   }
   return { result, retries, backoff };
 }
+
+describe("Join Manager restriction threshold", () => {
+  it("does not stop after one explicit restriction when threshold is five", () => {
+    expect(joinRestrictionStopReached(1, 5)).toBe(false);
+    expect(joinRestrictionStopReached(4, 5)).toBe(false);
+    expect(joinRestrictionStopReached(5, 5)).toBe(true);
+  });
+
+  it("clamps unsafe thresholds to the supported range", () => {
+    expect(joinRestrictionStopReached(1, 0)).toBe(true);
+    expect(joinRestrictionStopReached(4, 99)).toBe(false);
+    expect(joinRestrictionStopReached(5, 99)).toBe(true);
+  });
+});
 
 describe("Join Manager simultaneous account rate limiting", () => {
   it("keeps retry backoff isolated when two accounts are throttled at once", async () => {
