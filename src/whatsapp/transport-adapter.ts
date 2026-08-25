@@ -905,7 +905,18 @@ export async function setGroupJoinApprovalMode(
 ): Promise<void> {
   const update = method(socketFor(workspaceId, sessionId), "groupJoinApprovalMode");
   if (!update) throw new Error("Unsupported capability: groupJoinApprovalMode");
-  await update(groupJid, enabled ? "on" : "off");
+  const mode = enabled ? "on" : "off";
+  logGroupInventoryDebug("moderation-toggle-request", workspaceId, sessionId, {
+    setting: "join-approval",
+    method: "groupJoinApprovalMode",
+    mode,
+  });
+  await update(groupJid, mode);
+  logGroupInventoryDebug("moderation-toggle-complete", workspaceId, sessionId, {
+    setting: "join-approval",
+    method: "groupJoinApprovalMode",
+    mode,
+  });
 }
 
 export async function setGroupMemberAddMode(
@@ -916,7 +927,18 @@ export async function setGroupMemberAddMode(
 ): Promise<void> {
   const update = method(socketFor(workspaceId, sessionId), "groupMemberAddMode");
   if (!update) throw new Error("Unsupported capability: groupMemberAddMode");
-  await update(groupJid, allMembers ? "all_member_add" : "admin_add");
+  const mode = allMembers ? "all_member_add" : "admin_add";
+  logGroupInventoryDebug("moderation-toggle-request", workspaceId, sessionId, {
+    setting: "member-add",
+    method: "groupMemberAddMode",
+    mode,
+  });
+  await update(groupJid, mode);
+  logGroupInventoryDebug("moderation-toggle-complete", workspaceId, sessionId, {
+    setting: "member-add",
+    method: "groupMemberAddMode",
+    mode,
+  });
 }
 
 export async function setGroupChatMode(

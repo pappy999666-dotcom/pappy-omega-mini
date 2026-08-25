@@ -35,12 +35,28 @@ describe("Telegram moderation parity", () => {
     expect(source).toContain("listGroupJoinRequests(session.workspaceId, session.sessionId, pending.groupJid)");
   });
 
+  it("keeps Join Approval and Member Add callbacks isolated", async () => {
+    const source = await readFile(botSourcePath, "utf8");
+    const approvalStart = source.indexOf("group:moderation:approval:(on|off)");
+    const memberStart = source.indexOf("group:moderation:memberadd:(all|admins)");
+    expect(approvalStart).toBeGreaterThanOrEqual(0);
+    expect(memberStart).toBeGreaterThan(approvalStart);
+    const approvalBlock = source.slice(approvalStart, memberStart);
+    const memberBlock = source.slice(memberStart, source.indexOf("group:moderation:chat:", memberStart));
+    expect(approvalBlock).toContain("setGroupJoinApprovalMode");
+    expect(approvalBlock).not.toContain("setGroupMemberAddMode");
+    expect(memberBlock).toContain("setGroupMemberAddMode");
+    expect(memberBlock).not.toContain("setGroupJoinApprovalMode");
+  });
+
   it("maps live group restriction fields into the moderation snapshot", async () => {
     const source = await readFile(transportSourcePath, "utf8");
     const botSource = await readFile(botSourcePath, "utf8");
     expect(source).toContain("raw.announce");
     expect(source).toContain("raw.restrict");
     expect(source).toContain("raw.ephemeralDuration");
+    expect(source).toContain('const mode = enabled ? "on" : "off"');
+    expect(source).toContain('const mode = allMembers ? "all_member_add" : "admin_add"');
     expect(botSource).toContain("{ fresh: true }");
   });
 });
