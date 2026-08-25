@@ -134,7 +134,7 @@ export async function routeWhatsAppText(
   if (shouldProxyWhatsAppSession(message.workspaceId, message.sessionId))
     return routeViaRemoteBridge(message);
   const session = getSession(message.workspaceId, message.sessionId);
-  const interactionContext = { workspaceId: message.workspaceId, sessionId: message.sessionId, prefix: session.prefix, allowCommandText: Boolean(interactionValue) };
+  const interactionContext = { workspaceId: message.workspaceId, sessionId: message.sessionId, prefix: session.prefix, allowCommandText: true };
   const menuAction = interactionValue ? resolveMenuInteraction(interactionValue, interactionContext) : undefined;
   const viewAction = menuAction?.view
     ? menuAction

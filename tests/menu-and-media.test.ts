@@ -9,6 +9,7 @@ import {
 import { buildSessionMenu, renderAsciiMenu } from "../src/menus/menu-model.js";
 import { buildWhatsappHelpPayload, buildWhatsappMenuPayload } from "../src/menus/whatsapp-menu.js";
 import {
+  isSelfExecutableWhatsAppCommand,
   mergeQuotedPayload,
   routeWhatsAppText,
 } from "../src/whatsapp/message-router.js";
@@ -129,6 +130,37 @@ describe("shared session menu", () => {
       expect(button.text).toBe(`!${command}`);
       expect(button.text).not.toBe(`!open ${command}`);
     }
+  });
+
+  it("resolves every plain open-label fallback to its registered menu view", async () => {
+    const user = resolveUser(`wa-menu-open-labels-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "open-labels", phoneNumber: "2348012345678" });
+    updateSession(user.workspaceId, session.sessionId, { status: "ACTIVE", prefix: "!", lastHealthyAt: Date.now() });
+    await buildWhatsappMenuPayload(getSession(user.workspaceId, session.sessionId), true, "root");
+    const labels = ["open identity", "open tools", "open broadcast", "open all", "open antisystem", "open root"] as const;
+    const expected = ["MEDIA & IDENTITY", "ACCESS & TOOLS", "BROADCAST & STATUS", "FULL COMMAND MENU", "ANTI-SYSTEM COMMANDS", "MENU HOME"] as const;
+    for (const [index, label] of labels.entries()) {
+      const result = await routeWhatsAppText({
+        workspaceId: user.workspaceId,
+        sessionId: session.sessionId,
+        senderJid: "2348012345678@s.whatsapp.net",
+        chatJid: "120363000000000000@g.us",
+        text: label,
+      });
+      expect(result).toMatchObject({ richMenu: { header: { title: expect.stringContaining(expected[index] ?? "") } } });
+    }
+  });
+
+  it("allows only safe self-generated status and tag commands", async () => {
+    const user = resolveUser(`wa-self-safe-commands-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "self-safe", phoneNumber: "2348012345678" });
+    updateSession(user.workspaceId, session.sessionId, { status: "ACTIVE", prefix: "!", lastHealthyAt: Date.now() });
+    expect(isSelfExecutableWhatsAppCommand("tag gstatus 🎀", "!")).toBe(true);
+    expect(isSelfExecutableWhatsAppCommand("gstatusd hello", "!")).toBe(true);
+    expect(isSelfExecutableWhatsAppCommand("kickall", "!")).toBe(false);
+    expect(isSelfExecutableWhatsAppCommand("approveall", "!")).toBe(false);
+    const selfPing = await routeWhatsAppText({ workspaceId: user.workspaceId, sessionId: session.sessionId, senderJid: "2348012345678@s.whatsapp.net", chatJid: "120363000000000000@g.us", text: "ping", fromMe: true });
+    expect(selfPing).toContain("ACTIVE");
   });
 
   it("keeps session changes inside the owning workspace", () => {

@@ -275,6 +275,12 @@ export function resolveMenuInteraction(value?: string, context?: MenuInteraction
     if (context && !expiresAt) return undefined;
     return { command: command.toLowerCase(), ...(expiresAt ? { expiresAt } : {}) };
   }
+  const displayAction = DISPLAY_ACTIONS.get(key.toLowerCase());
+  if (displayAction) {
+    const expiresAt = context ? activeMenuSession(context) : undefined;
+    if (context && !expiresAt) return undefined;
+    return { ...displayAction, ...(expiresAt ? { expiresAt } : {}) };
+  }
   const prefix = context?.prefix?.trim() ?? "";
   const commandText = prefix && key.startsWith(prefix)
     ? key.slice(prefix.length).trim()
