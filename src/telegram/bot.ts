@@ -137,6 +137,7 @@ import {
 } from "./group-selection.js";
 import { telegramSafeText } from "./text-safety.js";
 import { isClosedGroupTransportError } from "./group-inventory-error.js";
+import { SingleFlight } from "./single-flight.js";
 import { routeWhatsAppText } from "../whatsapp/message-router.js";
 import { effectiveSessionStatus } from "../menus/menu-model.js";
 import { isHealthyWhatsAppSession } from "../whatsapp/session-allocator.js";
@@ -354,6 +355,7 @@ const pendingGroupPicture = new Map<
 type AdminGroupSelection = Awaited<ReturnType<typeof listAdminGroups>>[number];
 const ADMIN_GROUP_SELECTION_CACHE_MS = 2 * 60_000;
 const adminGroupSelectionTokens = new StableSelectionStore<AdminGroupSelection>(ADMIN_GROUP_SELECTION_CACHE_MS);
+const groupRecoverySingleFlight = new SingleFlight<boolean>();
 const pendingGroupSetting = new Map<
   string,
   {
@@ -4786,22 +4788,26 @@ export function createTelegramBot(): Telegraf<Context> {
     if (action === "sudo" && !isAdmin(ctx)) return deny(ctx);
     if (action === "bridge") return showSessionBridge(ctx, session.sessionId);
     if (action === "reconnect") {
+      const recoveryKey = `${session.workspaceId}:${session.sessionId}`;
+      const recovery = groupRecoverySingleFlight.run(recoveryKey, () =>
+        restartWhatsAppSession(session.workspaceId, session.sessionId),
+      );
       await edit(
         ctx,
         pageText(
           `${session.sessionName} · Reconnect`,
           infoResponse(
-            "Transport Recovery",
-            "Stopping the current WhatsApp socket, reopening the persisted authentication, and waiting for a verified ACTIVE state. No session data is deleted.",
+            recovery.shared ? "Recovery Already In Progress" : "Transport Recovery",
+            recovery.shared
+              ? "Another click is already restarting this WhatsApp session. This request is attached to the same recovery attempt; no second socket will be created."
+              : "Stopping the current WhatsApp socket, reopening the persisted authentication, and waiting for a verified ACTIVE state. No session data is deleted.",
           ),
         ),
-        keyboard([[btn("‹ Session", `session:${session.sessionId}:menu`)]]),
+        keyboard([[btn("‹ Session", `session:${session.sessionId}:menu`)]],
+        ),
       );
       try {
-        const ready = await restartWhatsAppSession(
-          session.workspaceId,
-          session.sessionId,
-        );
+        const ready = await recovery.promise;
         const refreshed = getSession(session.workspaceId, session.sessionId);
         return edit(
           ctx,
