@@ -1342,13 +1342,12 @@ export function createTelegramBot(): Telegraf<Context> {
             participants: participants.map((participant) => participant.id),
             countryCode: countryDigits,
           });
-          const preview = participants.slice(0, 20).map((participant, index) => escapeHtml(maskedPhoneLabel(firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id), index))).join("\n");
           await ctx.reply(
             pageText(
               "Group Members · Confirmation",
               dangerResponse(
                 `${action === "block" ? "Block" : "Remove"} by Country`,
-                `<b>Country:</b> +${countryDigits}\n<b>Matching non-admins:</b> ${participants.length}\n\n<code>${preview}</code>${participants.length > 20 ? "\n…and more" : ""}\n\nThis action is destructive and will run as a durable job only after confirmation.`,
+                `<b>Country:</b> +${countryDigits}\n<b>Matching non-admins:</b> ${participants.length}\n<b>Identity details:</b> retained securely for the batch and not displayed.\n\nThis action is destructive and will run as a durable job only after confirmation.`,
               ),
             ),
             {
@@ -1419,16 +1418,13 @@ export function createTelegramBot(): Telegraf<Context> {
             participants: requests.map((request) => request.jid),
             selectionLabel,
           });
-          const preview = requests
-            .slice(0, 20)
-            .map((request, index) => escapeHtml(maskedPhoneLabel(firstVerifiedPhone(request.phoneNumber, request.jid), index)))
-            .join("\n");
+          const approvalDetails = approvalDashboardDetails(requests);
           await ctx.reply(
             pageText(
               `Group Moderation · ${operation === "approve" ? "Approval" : "Rejection"}`,
               dangerResponse(
                 `Confirm ${operation === "approve" ? "Approval" : "Rejection"}`,
-                `<b>Selection:</b> ${escapeHtml(selectionLabel)}\n<b>Requests:</b> ${requests.length}\n\n<code>${preview}</code>${requests.length > 20 ? "\n…and more" : ""}\n\nThis batch will be queued only after confirmation. LID-only requests are retained for exact processing but are not used for country matching.`,
+                `<b>Selection:</b> ${escapeHtml(selectionLabel)}\n\n${approvalDetails}\n\nThis batch will be queued only after confirmation. LID-only requests are retained for exact processing but are not used for country matching.`,
               ),
             ),
             {
@@ -9139,11 +9135,7 @@ function approvalDashboardDetails(
     .slice(0, 12)
     .map(([country, count]) => `· +${country} — ${count}`)
     .join("\n") || "· No verified phone countries available";
-  const preview = requests
-    .slice(0, 10)
-    .map((request, index) => maskedPhoneLabel(firstVerifiedPhone(request.phoneNumber, request.jid), index))
-    .join("\n") || "No pending requests";
-  return `<b>Pending:</b> ${requests.length}\n<b>Verified phone identities:</b> ${verified}\n<b>Unresolved/LID-only:</b> ${Math.max(0, requests.length - verified)}\n\n<b>Country breakdown</b>\n${countryLines}\n\n<b>Request preview</b>\n<code>${escapeHtml(preview)}</code>${requests.length > 10 ? "\n…and more" : ""}\n\nOnly verified requests are eligible for country-filtered operations. LID-only entries are never guessed.`;
+  return `<b>Pending:</b> ${requests.length}\n<b>Verified phone identities:</b> ${verified}\n<b>Unresolved/LID-only:</b> ${Math.max(0, requests.length - verified)}\n\n<b>Country breakdown</b>\n${countryLines}\n\n<b>Identity details:</b> securely retained for the selected batch and not displayed.\n\nOnly verified requests are eligible for country-filtered operations. LID-only entries are never guessed.`;
 }
 
 async function showGroupModeration(

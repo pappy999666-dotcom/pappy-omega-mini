@@ -161,6 +161,7 @@ async function main(): Promise<void> {
         sessionId: event.sessionId,
         chatJid: event.remoteJid,
         senderJid: event.senderJid,
+        ...(event.receivedAt ? { receivedAt: event.receivedAt } : {}),
         text: event.text,
         ...(event.interactionId ? { interactionId: event.interactionId } : {}),
         ...(event.interactionDisplayText ? { interactionDisplayText: event.interactionDisplayText } : {}),

@@ -1,11 +1,11 @@
 import type { CommandContext, WhatsAppCommandReply } from "./command-registry.js";
 import { getSession } from "../core/session-registry.js";
-import { firstVerifiedPhone, maskedPhoneLabel, phoneJidFromIdentity, verifiedTargetPhone } from "./identity-normalization.js";
+import { firstVerifiedPhone, phoneJidFromIdentity, verifiedTargetPhone } from "./identity-normalization.js";
 import { getGroupModerationSnapshot, setGroupChatMode, updateParticipantBlockStatus, updateGroupParticipantRole } from "./transport-adapter.js";
 import { registerGroupControlConfirmation } from "./group-control-confirmation.js";
 import { isPhoneBanned, listBannedPhones, setPhoneBanned, getManualWarning, incrementManualWarning, resetManualWarning } from "./group-moderation-state.js";
 import { buildModerationActionResponse, buildModerationWarningResponse, formatModerationMessage, realMention, withMentions } from "./moderation-response.js";
-import { banUsageCard, commandUsageCard } from "./response-cards.js";
+import { banUsageCard, sessionCommandUsageCard } from "./response-cards.js";
 import { listTrackedMessages, listTrackedOutboundMessages, forgetTrackedMessage } from "./moderation-message-tracker.js";
 import { deleteWhatsAppMessage } from "./transport-adapter.js";
 
@@ -35,7 +35,7 @@ async function targetOf(ctx: CommandContext, label: string): Promise<{ groupJid:
   try {
     const { groupJid, snapshot } = await freshGroup(ctx, label);
     const phone = verifiedTargetPhone(ctx.args, ctx.mentionedJids, ctx.quotedSenderJid);
-    if (!phone) return { error: label.toLowerCase() === "ban" ? banUsageCard() : commandUsageCard({ title: `${label} Command`, command: `.${ctx.invokedName ?? label.toLowerCase()}`, commandSyntax: `.${ctx.invokedName ?? label.toLowerCase()} <target>`, acceptedTargets: ["Phone Number  · +2348012345678", "Tag / Mention · Real WhatsApp mention", "Reply         · Reply to user's message with the command"], note: "LID-only targets are rejected. Target must have a valid verified phone identity." }) };
+    if (!phone) return { error: label.toLowerCase() === "ban" ? banUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix) : sessionCommandUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix, { title: `${label} Command`, command: `.${ctx.invokedName ?? label.toLowerCase()}`, commandSyntax: `.${ctx.invokedName ?? label.toLowerCase()} <target>`, acceptedTargets: ["Phone Number  · +2348012345678", "Tag / Mention · Real WhatsApp mention", "Reply         · Reply to user's message with the command"], note: "LID-only targets are rejected. Target must have a valid verified phone identity." }) };
     const participant = snapshot.participants.find((p) => firstVerifiedPhone(p.phoneNumber, p.jid, p.id) === phone);
     if (!participant) return { error: "That verified phone identity is not a current member of this group." };
     return { groupJid, target: { phone, jid: phoneJidFromIdentity(phone)!, isAdmin: Boolean(participant.admin), subject: snapshot.subject } };
@@ -125,7 +125,7 @@ export async function unblockMember(ctx: CommandContext): Promise<string | Whats
   try {
     await freshGroup(ctx, "Unblock");
     const phone = verifiedTargetPhone(ctx.args, ctx.mentionedJids, ctx.quotedSenderJid);
-    if (!phone) return commandUsageCard({ title: "Unblock Command", command: ".unblock", commandSyntax: ".unblock <target>", acceptedTargets: ["Phone Number  · +2348012345678", "Tag / Mention · Real WhatsApp mention", "Reply         · Reply to user's message with .unblock"], note: "LID-only targets are rejected. Target must have a valid verified phone identity." });
+    if (!phone) return sessionCommandUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix, { title: "Unblock Command", command: ".unblock", commandSyntax: ".unblock <target>", acceptedTargets: ["Phone Number  · +2348012345678", "Tag / Mention · Real WhatsApp mention", "Reply         · Reply to user's message with .unblock"], note: "LID-only targets are rejected. Target must have a valid verified phone identity." });
     await updateParticipantBlockStatus(ctx.workspaceId, ctx.sessionId, phoneJidFromIdentity(phone)!, false);
     return buildModerationActionResponse({ title: "MEMBER UNBLOCKED", action: "WhatsApp block removed", groupName: "This group only", targetPhone: phone, note: "Normal messaging access is restored." });
   } catch (error) { return error instanceof Error ? error.message : String(error); }
@@ -141,7 +141,7 @@ export async function banList(ctx: CommandContext): Promise<string> {
   try {
     const { groupJid } = await freshGroup(ctx, "Ban List");
     const phones = listBannedPhones(ctx.workspaceId, ctx.sessionId, groupJid);
-    return buildModerationActionResponse({ title: "BAN LIST", action: phones.length ? `${phones.length} local restriction(s)` : "No local restrictions", groupName: "This group only", note: phones.length ? phones.map((phone, index) => `${index + 1}. ${maskedPhoneLabel(phone)}`).join(" · ") : "No locally banned members." }).text;
+    return buildModerationActionResponse({ title: "BAN LIST", action: phones.length ? `${phones.length} local restriction(s)` : "No local restrictions", groupName: "This group only", note: phones.length ? "Restricted identities are retained privately; use a verified target with .unban to remove one restriction." : "No locally banned members." }).text;
   } catch (error) { return error instanceof Error ? error.message : String(error); }
 }
 
@@ -182,7 +182,7 @@ export async function deleteSingleMessage(ctx: CommandContext): Promise<string> 
     const { groupJid, snapshot } = await freshGroup(ctx, "Dlt");
     const key = ctx.quotedMessageKey;
     if (!key || typeof key.id !== "string" || !key.id)
-      return commandUsageCard({ title: "Delete Message Command", command: ".dlt", commandSyntax: ".dlt (reply to a message)", note: "Reply to the message that should be revoked. Only this group is affected." });
+      return sessionCommandUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix, { title: "Delete Message Command", command: ".dlt", commandSyntax: ".dlt (reply to a message)", note: "Reply to the message that should be revoked. Only this group is affected." });
     if (typeof key.remoteJid === "string" && key.remoteJid !== groupJid)
       return "The quoted message belongs to another chat; no message was deleted.";
     await deleteWhatsAppMessage(ctx.workspaceId, ctx.sessionId, groupJid, { ...key, remoteJid: groupJid });
@@ -271,7 +271,7 @@ export async function createPoll(ctx: CommandContext): Promise<string> {
     if (!ctx.sendCurrentGroupPoll) return "WhatsApp poll transport is unavailable.";
     const fullText = [ctx.rawPayload ?? ctx.args.join(" "), ctx.quotedText ?? ""].join(" ").trim();
     const parts = fullText.split("|").map((value) => value.trim()).filter(Boolean);
-    if (parts.length < 3) return commandUsageCard({ title: "Poll Command", command: ".poll", commandSyntax: ".poll Question | Option 1 | Option 2", howToUse: ["Separate the question and options with |.", "Provide at least two options."], note: "Example: .poll Choose a day | Monday | Friday" });
+    if (parts.length < 3) return sessionCommandUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix, { title: "Poll Command", command: ".poll", commandSyntax: ".poll Question | Option 1 | Option 2", howToUse: ["Separate the question and options with |.", "Provide at least two options."], note: "Example: .poll Choose a day | Monday | Friday" });
     const question = parts[0]!.slice(0, 300);
     const options = parts.slice(1, 13).map((value) => value.slice(0, 100));
     await ctx.sendCurrentGroupPoll({ question, options });
@@ -283,7 +283,7 @@ export async function filterCountry(ctx: CommandContext): Promise<string> {
   try {
     const { snapshot } = await freshGroup(ctx, "Filter");
     const country = (ctx.args[0] ?? "").replace(/\D/gu, "");
-    if (!/^\d{1,3}$/u.test(country)) return commandUsageCard({ title: "Filter Command", command: ".filter", commandSyntax: ".filter <country-code>", examples: [".filter 234"], note: "This view is read-only and never changes members." });
+    if (!/^\d{1,3}$/u.test(country)) return sessionCommandUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix, { title: "Filter Command", command: ".filter", commandSyntax: ".filter <country-code>", examples: [".filter 234"], note: "This view is read-only and never changes members." });
     const matching = snapshot.participants.filter((p) => firstVerifiedPhone(p.phoneNumber, p.jid, p.id)?.startsWith(country));
     const protectedCount = matching.filter((p) => Boolean(p.admin)).length;
     return formatModerationMessage(`FILTER +${country}`, [["Matching", String(matching.length)], ["Protected admins", String(protectedCount)], ["Eligible regular members", String(Math.max(0, matching.length - protectedCount))], ["Action", "Read-only"]]);
@@ -295,7 +295,7 @@ export async function filterOut(ctx: CommandContext): Promise<string | WhatsAppC
     const { groupJid, snapshot } = await freshGroup(ctx, "Filter Out");
     const requested = Number(ctx.args[0] ?? 0);
     const country = (ctx.args[1] ?? "").replace(/\D/gu, "");
-    if (!Number.isInteger(requested) || requested <= 0 || requested > 1000 || !/^\d{1,3}$/u.test(country)) return commandUsageCard({ title: "Filterout Command", command: ".filterout", commandSyntax: ".filterout <count 1-1000> <country-code>", examples: [".filterout 25 234"], note: "The preview is bounded and excludes administrators and unresolved identities. Confirm is required before removal." });
+    if (!Number.isInteger(requested) || requested <= 0 || requested > 1000 || !/^\d{1,3}$/u.test(country)) return sessionCommandUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix, { title: "Filterout Command", command: ".filterout", commandSyntax: ".filterout <count 1-1000> <country-code>", examples: [".filterout 25 234"], note: "The preview is bounded and excludes administrators and unresolved identities. Confirm is required before removal." });
     const self = firstVerifiedPhone(getSession(ctx.workspaceId, ctx.sessionId).phoneNumber);
     const targets = snapshot.participants
       .map((participant) => firstVerifiedPhone(participant.phoneNumber, participant.jid, participant.id))

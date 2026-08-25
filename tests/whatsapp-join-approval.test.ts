@@ -56,20 +56,28 @@ describe("WhatsApp Join Approval commands", () => {
     ]);
   });
 
-  it("lists the actual pending requests through a native table", async () => {
+  it("summarizes pending requests through a privacy-preserving native table", async () => {
     const result = await executeCommand(createCommandRegistry(), "pendingjoin", context());
     expect(result).toBeTypeOf("object");
-    expect((result as WhatsAppCommandReply).text).toContain("Pending · 3");
-    expect((result as WhatsAppCommandReply).nativeTable?.headers).toEqual(["#", "Identity", "Country"]);
-    expect((result as WhatsAppCommandReply).nativeTable?.rows[0]).toEqual(["1", "+234•••1111", "+2348"]);
+    expect((result as WhatsAppCommandReply).text).toContain("⎔ Pending      · ⇆ 3");
+    expect((result as WhatsAppCommandReply).text).toContain("⎔ Verified     · ⇆ 2");
+    expect((result as WhatsAppCommandReply).text).toContain("⎔ Unresolved   · ⇆ 1");
+    expect((result as WhatsAppCommandReply).nativeTable?.headers).toEqual(["Metric", "Value"]);
+    expect((result as WhatsAppCommandReply).nativeTable?.rows).toEqual(expect.arrayContaining([
+      ["Pending", "3"],
+      ["Verified", "2"],
+      ["Unresolved", "1"],
+    ]));
+    expect(JSON.stringify(result)).not.toContain("2348011111111");
+    expect(JSON.stringify(result)).not.toContain("447700000002");
     expect(mockedSnapshot).toHaveBeenCalledWith("approval-workspace", expect.any(String), "120363000000000000@g.us", { fresh: true });
   });
 
   it("never renders or accepts unresolved LID identities", async () => {
     const pending = await executeCommand(createCommandRegistry(), "pendingjoin", context());
     expect(JSON.stringify(pending)).not.toContain("lid-333@lid");
-    expect(JSON.stringify(pending)).not.toContain("LID-only");
-    expect(JSON.stringify(pending)).toContain("Verified phone unavailable");
+    expect(JSON.stringify(pending)).not.toContain("2348011111111");
+    expect(JSON.stringify(pending)).toContain("Unresolved");
     const sudo = await executeCommand(createCommandRegistry(), "setsudo add", context({ mentionedJids: ["lid-333@lid"], args: ["add"] }));
     expect(sudo).toContain("LID-only identities are not accepted");
     expect(sudo).not.toContain("lid-333@lid");

@@ -12,6 +12,8 @@ export interface SessionMenuModel {
   title: string;
   subtitle: string;
   statusLine: string;
+  /** The exact text-command prefix for this session; empty means prefixless. */
+  prefix: string;
   actions: MenuAction[];
 }
 
@@ -128,6 +130,7 @@ export function buildSessionMenu(
     title: `PAPPY OMEGA MINI · ${session.sessionName}`,
     subtitle: "Compact command surface",
     statusLine: `${liveStatus}|${isOwner ? "SUDO" : "USER"} · prefix ${session.prefix || "none"} · join ${session.autoJoinEnabled ? "ON" : "OFF"} · health ${formatHealthAge(session.lastHealthyAt)} · links ${session.collectedLinkCount ?? 0}/${session.validatedLinkCount ?? 0}`,
+    prefix: session.prefix || "",
     actions: actions.filter((action) => !action.ownerOnly || isOwner),
   };
 }
@@ -149,6 +152,7 @@ export function renderAsciiMenu(model: SessionMenuModel): string {
   const [statusValue = "UNKNOWN", role = "USER"] = rawStatus.split("|");
   const status = statusValue === "ACTIVE" ? `ONLINE [${role}]` : statusValue;
   const prefix = rawPrefix.replace("prefix ", "");
+  const commandPrefix = prefix === "none" ? "" : prefix;
   const autoJoin = rawAutoJoin.replace("join ", "");
   const links = rawLinks.replace("links ", "");
   const health = rawHealth.replace("health ", "");
@@ -166,7 +170,7 @@ export function renderAsciiMenu(model: SessionMenuModel): string {
     if (!commands.length) return [];
     return [
       `⌬ ⤷ *${title}* ${icon}`,
-      ...commands.map((command) => `${commandIndent}⊹ .${command}`),
+      ...commands.map((command) => `${commandIndent}⊹ ${commandPrefix}${command}`),
       "",
     ];
   };
@@ -178,7 +182,7 @@ export function renderAsciiMenu(model: SessionMenuModel): string {
     `⎔ Owner   · ⇆ ${toMathBold(sessionName)}`,
     `⎔ Status  · ⇆ ${status}`,
     `⎔ AutoJ   · ⇆ ${autoJoin}`,
-    `⎔ Prefix  · ⇆ [ ${prefix} ]`,
+    `⎔ Prefix  · ⇆ [ ${prefix || "none"} ]`,
     `⎔ Health  · ⇆ ${health}`,
     `⎔ Links   · ⇆ ${links}`,
     "─────────────",

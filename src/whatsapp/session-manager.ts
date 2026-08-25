@@ -883,6 +883,7 @@ async function openWhatsAppSession(
             ? { mentionedJids: mentionedJids.filter((value): value is string => Boolean(value)) }
             : {}),
           text: interactionId || interactionDisplayText ? "" : text,
+          receivedAt,
           ...(interactionId ? { interactionId } : {}),
           ...(interactionDisplayText ? { interactionDisplayText } : {}),
           ...(message.key.fromMe ? { fromMe: true } : {}),

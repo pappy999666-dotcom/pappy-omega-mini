@@ -224,6 +224,7 @@ export interface WorkloadInboundEvent {
   workspaceId: string;
   sessionId: string;
   messageId?: string;
+  receivedAt?: number;
   remoteJid: string;
   senderJid: string;
   text: string;

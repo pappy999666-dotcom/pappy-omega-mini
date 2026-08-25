@@ -50,6 +50,7 @@ export interface IncomingTextMessage {
   workspaceId: string;
   sessionId: string;
   messageId?: string;
+  receivedAt?: number;
   senderJid: string;
   quotedSenderJid?: string;
   quotedMessageKey?: Record<string, unknown>;
@@ -192,6 +193,7 @@ export async function routeWhatsAppText(
   const commandContext = {
     workspaceId: message.workspaceId,
     sessionId: message.sessionId,
+    ...(message.receivedAt ? { receivedAt: message.receivedAt } : {}),
     isOwner,
     senderJid: message.senderJid,
     ...(message.quotedSenderJid ? { quotedSenderJid: message.quotedSenderJid } : {}),

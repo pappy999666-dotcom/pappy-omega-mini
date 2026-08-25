@@ -92,6 +92,8 @@ export function buildWhatsappHelpPayload(
   isOwner: boolean,
 ): { text: string; nativeTable: GroupControlTable; nativeFlow: [] } {
   const model = buildSessionMenu(session, isOwner);
+  const prefix = model.prefix || "";
+  const command = (name: string) => `${prefix}${name}`;
   const table: GroupControlTable = {
     title: "PAPPY OMEGA MINI · HELP & USAGE",
     headers: ["Item", "Details"],
@@ -101,22 +103,22 @@ export function buildWhatsappHelpPayload(
       ["Version", "2.7.13"],
       ["Commands", `${model.actions.length} available registered commands`],
       ["Access", isOwner ? "Owner / sudo access" : "Authorized session access"],
-      ["Rich / text", ".menu for RichMenu · .menulist text for classic list"],
-      ["Usage", ".menu · .menulist rich|text · .help"],
+      ["Rich / text", `${command("menu")} for RichMenu · ${command("menulist")} text for classic list`],
+      ["Usage", `${command("menu")} · ${command("menulist")} rich|text · ${command("help")}`],
       ["Health", `${session.status} · ${session.authHealth ?? "UNKNOWN"}`],
       ["Author", "Pappy Omega Mini"],
       ["Keywords", "menu, commands, sudo, moderation, anti-system, broadcast"],
     ],
     buttons: [],
-    footer: "Use .menu for category navigation or .menulist text for the complete plain list.",
+    footer: `Use ${command("menu")} for category navigation or ${command("menulist")} text for the complete plain list.`,
   };
   const text = [
     "PAPPY OMEGA MINI · HELP & USAGE",
     "",
-    ".menu              RichMenu home",
-    ".menulist rich     Interactive full command menu",
-    ".menulist text     Classic plain command list",
-    ".help              Native usage table",
+    `${command("menu")}              RichMenu home`,
+    `${command("menulist")} rich     Interactive full command menu`,
+    `${command("menulist")} text     Classic plain command list`,
+    `${command("help")}              Native usage table`,
   ].join("\n");
   return { text, nativeTable: table, nativeFlow: [] };
 }

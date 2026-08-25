@@ -19,7 +19,7 @@ import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { firstVerifiedPhone, maskedPhoneLabel, phoneJidFromIdentity, verifiedTargetJid, verifiedTargetJids, verifiedTargetPhone } from "./identity-normalization.js";
 import { buildModerationActionResponse, buildModerationJobResponse, buildModerationReviewResponse, formatModerationMessage, realMention } from "./moderation-response.js";
 import { pappyHeader } from "./response-designs.js";
-import { banUsageCard, commandUsageCard, pairingHelpCard, sessionPairingCard } from "./response-cards.js";
+import { banUsageCard, commandUsageCard, pairingHelpCard, sessionCommandUsageCard, sessionPairingCard } from "./response-cards.js";
 import type { GroupControlTable } from "./group-control-confirmation.js";
 import { buildLyricsText, buildMediaJobText, buildPlayPreviewText, downloadPlay, fetchLyrics, playUsageText, resolvePlayMetadata, withMediaDownloadSlot, type PlayMode } from "./play-media.js";
 import { registerGroupControlConfirmation, consumeGroupControlConfirmation } from "./group-control-confirmation.js";
@@ -137,6 +137,8 @@ export interface WhatsAppCommandReply {
 export interface CommandContext {
   workspaceId: string;
   sessionId: string;
+  /** Timestamp captured when the WhatsApp event entered the listener. */
+  receivedAt?: number;
   isOwner: boolean;
   senderJid?: string;
   quotedSenderJid?: string;
@@ -252,22 +254,29 @@ function countryPrefixFromPhone(phone: string | undefined): string | undefined {
   return COMMON_COUNTRY_CODES.find((code) => digits.startsWith(code)) ?? digits.slice(0, 3);
 }
 
-function approvalPreviewLabel(request: { jid?: string; phoneNumber?: string }, index: number): string {
-  return maskedPhoneLabel(firstVerifiedPhone(request.phoneNumber, request.jid), index);
+function approvalCountrySummary(requests: Array<{ jid?: string; phoneNumber?: string }>): string {
+  const counts = new Map<string, number>();
+  for (const request of requests) {
+    const phone = firstVerifiedPhone(request.phoneNumber, request.jid);
+    if (!phone) continue;
+    const country = countryPrefixFromPhone(phone);
+    if (country) counts.set(country, (counts.get(country) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([country, count]) => `+${country} × ${count}`)
+    .join(" · ");
 }
 
-function buildApprovalTable(operation: "approve" | "reject", requests: Array<{ phoneNumber?: string }>, token: string): GroupControlTable {
-  const action = operation === "approve" ? "Approve" : "Reject";
-  return {
-    title: `Join Requests · ${action} Confirmation`,
-    headers: ["Request", "Selection"],
-    rows: requests.slice(0, 40).map((request, index) => [approvalPreviewLabel(request, index), "Pending request"]),
-    buttons: [
-      { text: `✅ Confirm ${action}`, id: `group-control:confirm:${token}` },
-      { text: "❌ Cancel", id: `group-control:cancel:${token}` },
-    ],
-    footer: `${requests.length} request(s) selected · This action queues one batch job after confirmation.`,
-  };
+function approvalSummaryRows(requests: Array<{ jid?: string; phoneNumber?: string }>, selectionLabel: string): string[][] {
+  const verified = requests.filter((request) => Boolean(firstVerifiedPhone(request.phoneNumber, request.jid))).length;
+  return [
+    ["Selected", String(requests.length)],
+    ["Verified", String(verified)],
+    ["Unresolved", String(Math.max(0, requests.length - verified))],
+    ["Scope", selectionLabel],
+    ["Countries", approvalCountrySummary(requests) || "none available"],
+  ];
 }
 
 async function approvalConfirmationReply(
@@ -280,10 +289,10 @@ async function approvalConfirmationReply(
   if (!senderJid) return { text: "Confirmation is unavailable because the requesting identity could not be verified." };
   const table: GroupControlTable = {
     title: `Join Requests · ${operation === "approve" ? "Approve" : "Reject"} Confirmation`,
-    headers: ["Request", "Selection"],
-    rows: requests.slice(0, 40).map((request, index) => [approvalPreviewLabel(request, index), selectionLabel]),
+    headers: ["Metric", "Value"],
+    rows: approvalSummaryRows(requests, selectionLabel),
     buttons: [],
-    footer: `${requests.length} request(s) selected · Confirm within 90 seconds or the plan expires.`,
+    footer: `${requests.length} request(s) selected · Verified identities are retained securely for the batch and are not displayed. Confirm within 90 seconds or the plan expires.`,
   };
   const pending = registerGroupControlConfirmation({
     workspaceId: ctx.workspaceId,
@@ -301,14 +310,14 @@ async function approvalConfirmationReply(
     { text: "❌ Cancel", id: `group-control:cancel:${pending.token}` },
   ];
   return {
-    text: [
-      `✦ PAPPY OMEGA MINI · JOIN ${operation.toUpperCase()} REVIEW`,
-      "─────────────────────",
-      `Selected      · ${requests.length}`,
-      `Scope         · ${selectionLabel}`,
-      "Safety        · No action has been queued.",
-      "Action        · Use the native Confirm or Cancel button below.",
-    ].join("\n"),
+    text: formatModerationMessage(`JOIN ${operation.toUpperCase()} REVIEW`, [
+      ["Selected", String(requests.length)],
+      ["Verified", String(requests.filter((request) => Boolean(firstVerifiedPhone(request.phoneNumber, request.jid))).length)],
+      ["Unresolved", String(Math.max(0, requests.length - requests.filter((request) => Boolean(firstVerifiedPhone(request.phoneNumber, request.jid))).length))],
+      ["Scope", selectionLabel],
+      ["Countries", approvalCountrySummary(requests) || "none available"],
+      ["Safety", "No action queued · confirm or cancel below"],
+    ]),
     nativeTable: pending.table,
     nativeFlow: pending.table.buttons,
   };
@@ -585,10 +594,11 @@ function formatDiagnosticTime(value?: number): string {
   return value ? new Date(value).toISOString().replace("T", " ").replace(".000Z", " UTC") : "—";
 }
 
-function buildPingResponse(current: WhatsAppSession): string {
+function buildPingResponse(current: WhatsAppSession, receivedAt?: number): string {
   const status = effectiveSessionStatus(current);
   const lastSync = current.lastHealthyAt ?? current.lastMessageReceivedAt ?? current.lastOutboundMessageAt ?? current.connectedAt;
   const state = status === "ACTIVE" ? "Socket stream is healthy." : "Re-establishing socket stream...";
+  const latency = receivedAt ? Math.max(0, Date.now() - receivedAt) : undefined;
   return [
     "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
     "",
@@ -596,7 +606,7 @@ function buildPingResponse(current: WhatsAppSession): string {
     "─────────────",
     `⎔ Session   · ⇆ ${current.sessionName}`,
     `⎔ Status    · ⇆ ${status}`,
-    "⎔ Latency   · ⇆ measured on delivery",
+    `⎔ Latency   · ⇆ ${latency === undefined ? "awaiting receipt timestamp" : `${latency}ms handler latency`}`,
     "⎔ Speed     · ⇆ queue-backed",
     `⎔ Last Sync · ⇆ ${formatDiagnosticTime(lastSync)}`,
     "─────────────",
@@ -874,12 +884,12 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const label = parts[0] ?? "whatsapp-session";
         const phoneNumber = parts[1] ?? "";
         if (!/^\d{8,15}$/.test(phoneNumber.replace(/\D/g, "")))
-          return `${pairingHelpCard()}\n\n» *Error:* Send a valid international phone number without the + symbol.`;
+          return `${pairingHelpCard(session(ctx).prefix)}\n\n» *Error:* Send a valid international phone number without the + symbol.`;
         try {
           const paired = await ctx.pairSession({ label, phoneNumber });
           return sessionPairingCard({ session: paired.sessionName, phone: paired.phoneNumber, code: paired.code });
         } catch (error) {
-          return `${pairingHelpCard()}\n\n» *Error:* ${error instanceof Error ? error.message : String(error)}`;
+          return `${pairingHelpCard(session(ctx).prefix)}\n\n» *Error:* ${error instanceof Error ? error.message : String(error)}`;
         }
       },
     },
@@ -887,7 +897,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
       name: "ping",
       aliases: [],
       description: "Fast session health check.",
-      run: async (ctx) => buildPingResponse(session(ctx)),
+      run: async (ctx) => buildPingResponse(session(ctx), ctx.receivedAt),
     },
     {
       name: "menu",
@@ -900,7 +910,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
       name: "menulist",
       aliases: [],
       description: "Choose the interactive rich menu or the classic text menu.",
-      run: async () => "Use .menulist rich for the interactive menu or .menulist text for the classic list.",
+      run: async (ctx) => `Use ${session(ctx).prefix}menulist rich for the interactive menu or ${session(ctx).prefix}menulist text for the classic list.`,
     },
     {
       name: "previewdebug",
@@ -1333,22 +1343,27 @@ export function createCommandRegistry(): RegisteredCommand[] {
       run: async (ctx) => {
         const { requests } = await pendingApprovalRequests(ctx);
         if (!requests.length) return "No pending WhatsApp join requests in this group.";
-        const lines = requests.slice(0, 50).map((request, index) =>
-          `${index + 1}. ${maskedPhoneLabel(firstVerifiedPhone(request.phoneNumber, request.jid))}`,
-        );
+        const verified = requests.filter((request) => Boolean(firstVerifiedPhone(request.phoneNumber, request.jid))).length;
         const table: GroupControlTable = {
           title: "Pending WhatsApp Join Requests",
-          headers: ["#", "Identity", "Country"],
-          rows: requests.slice(0, 100).map((request, index) => {
-            const phone = firstVerifiedPhone(request.phoneNumber, request.jid);
-            const country = phone ? `+${approvalCountry({ ...request, phoneNumber: phone }).slice(0, 4)}` : "unknown";
-            return [String(index + 1), maskedPhoneLabel(phone), country];
-          }),
+          headers: ["Metric", "Value"],
+          rows: [
+            ["Pending", String(requests.length)],
+            ["Verified", String(verified)],
+            ["Unresolved", String(Math.max(0, requests.length - verified))],
+            ["Countries", approvalCountrySummary(requests) || "none available"],
+          ],
           buttons: [],
-          footer: `${requests.length} pending request(s). Only verified phone identities are shown; unresolved identities are excluded from country matching.`,
+          footer: `${requests.length} pending request(s). Verified identities are retained securely for batch processing and are not displayed.`,
         };
         return {
-          text: `✦ PAPPY OMEGA MINI · PENDING JOIN REQUESTS\n─────────────────────\nPending · ${requests.length}\n\n${lines.join("\n")}${requests.length > 50 ? "\n…and more." : ""}`,
+          text: formatModerationMessage("PENDING JOIN REQUESTS", [
+            ["Pending", String(requests.length)],
+            ["Verified", String(verified)],
+            ["Unresolved", String(Math.max(0, requests.length - verified))],
+            ["Countries", approvalCountrySummary(requests) || "none available"],
+            ["Access", "Use Approve/Reject batch actions to review and confirm"],
+          ]),
           nativeTable: table,
         };
       },

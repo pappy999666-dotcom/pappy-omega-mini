@@ -7,7 +7,7 @@ import {
   updateSession,
 } from "../src/core/session-registry.js";
 import { buildSessionMenu, renderAsciiMenu } from "../src/menus/menu-model.js";
-import { buildWhatsappMenuPayload } from "../src/menus/whatsapp-menu.js";
+import { buildWhatsappHelpPayload, buildWhatsappMenuPayload } from "../src/menus/whatsapp-menu.js";
 import {
   mergeQuotedPayload,
   routeWhatsAppText,
@@ -81,6 +81,28 @@ describe("shared session menu", () => {
     expect(payload.text).not.toContain("┌");
     expect(payload.text).not.toContain("╔");
     expect(payload.text).not.toContain("One command surface, two polished interfaces.");
+  });
+
+  it("uses each session prefix for command labels while keeping navigation prefix-free", async () => {
+    const user = resolveUser(`wa-menu-custom-prefix-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "custom-prefix" });
+    updateSession(user.workspaceId, session.sessionId, { prefix: "!" });
+    const model = buildSessionMenu(getSession(user.workspaceId, session.sessionId), true);
+    const moderationPayload = await buildWhatsappMenuPayload(getSession(user.workspaceId, session.sessionId), true, "moderation");
+    const moderationButtons = moderationPayload.richMenu.body.cards.flatMap((card) => card.buttons);
+    expect(moderationButtons.some((item) => item.text === "!kick")).toBe(true);
+    expect(moderationButtons.some((item) => item.text === "Moderation")).toBe(true);
+    expect(moderationButtons.filter((item) => item.text === "Moderation")[0]?.id).toMatch(/^ui:menu:moderation:/);
+    const antiPayload = await buildWhatsappMenuPayload(getSession(user.workspaceId, session.sessionId), true, "antisystem");
+    const antiButtons = antiPayload.richMenu.body.cards.flatMap((card) => card.buttons);
+    expect(antiButtons.some((item) => item.text === "!antilink")).toBe(true);
+    expect(renderAsciiMenu(model)).toContain("!antilink");
+    expect(renderAsciiMenu(model)).not.toContain(".antilink");
+    const help = buildWhatsappHelpPayload(getSession(user.workspaceId, session.sessionId), true);
+    expect(help.text).toContain("!menu");
+    expect(help.text).toContain("!menulist");
+    expect(help.nativeTable.footer).toContain("!menu");
+    expect(help.nativeTable.footer).not.toContain(".menu");
   });
 
   it("keeps session changes inside the owning workspace", () => {
@@ -312,6 +334,36 @@ describe("WhatsApp command registry", () => {
       text: "hello",
       repeat: 1,
     });
+  });
+
+  it("reports measured handler latency for ping when a receipt timestamp is supplied", async () => {
+    const user = resolveUser(`ping-latency-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "ping-latency", phoneNumber: "2348012345678" });
+    updateSession(user.workspaceId, session.sessionId, { status: "ACTIVE", prefix: "!", lastHealthyAt: Date.now() });
+    const result = await executeCommand(createCommandRegistry(), "ping", {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      args: [],
+      receivedAt: Date.now() - 37,
+    });
+    expect(result).toMatch(/Latency\s+·\s+⇆\s+\d+ms handler latency/);
+    expect(result).not.toContain("measured on delivery");
+  });
+
+  it("shows the active prefix in pairing guidance", async () => {
+    const user = resolveUser(`pair-prefix-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "pair-prefix" });
+    updateSession(user.workspaceId, session.sessionId, { prefix: "!" });
+    const result = await executeCommand(createCommandRegistry(), "pair bad", {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      args: [],
+      pairSession: async () => ({ sessionName: "unused", phoneNumber: "2348012345678", code: "unused" }),
+    });
+    expect(result).toContain("!pair <label> <number>");
+    expect(result).not.toContain(".pair <label> <number>");
   });
 
   it("routes pstatus to the personal-status callback without requiring a group", async () => {

@@ -116,8 +116,9 @@ function button(id: string, text: string, toast = ""): RichMenuButton {
   return { id, text, toast };
 }
 
-function commandButton(command: string, nonce: string): RichMenuButton {
-  return button(`cmd:${command}:${nonce}`, `.${command}`, `Run .${command}`);
+function commandButton(command: string, nonce: string, prefix: string): RichMenuButton {
+  const commandText = `${prefix}${command}`;
+  return button(`cmd:${command}:${nonce}`, commandText, `Run ${commandText}`);
 }
 
 function navigationCards(nonce: string): RichMenuCard[] {
@@ -139,28 +140,30 @@ function rootCards(nonce: string): RichMenuCard[] {
   ];
 }
 
-function groupCards(keys: string[], actions: Set<string>, nonce: string): RichMenuCard[] {
+function groupCards(keys: string[], actions: Set<string>, nonce: string, prefix: string): RichMenuCard[] {
   const selected = new Set(keys);
   return GROUPS.filter((group) => selected.has(group.key)).map((group) => ({
     title: group.title,
     toast: `Registered commands in ${group.title.toLowerCase()}`,
-    buttons: group.commands.filter((command) => actions.has(command)).map((command) => commandButton(command, nonce)),
+    buttons: group.commands.filter((command) => actions.has(command)).map((command) => commandButton(command, nonce, prefix)),
   })).filter((card) => card.buttons.length);
 }
 
-function cardsForView(view: string, actions: Set<string>, nonce = "preview"): RichMenuCard[] {
+function cardsForView(view: string, actions: Set<string>, nonce = "preview", prefix = ""): RichMenuCard[] {
   if (view === "root") return rootCards(nonce);
-  if (view === "all") return [...navigationCards(nonce), ...GROUPS.flatMap((group) => groupCards([group.key], actions, nonce))];
+  if (view === "all") return [...navigationCards(nonce), ...GROUPS.flatMap((group) => groupCards([group.key], actions, nonce, prefix))];
   const map: Record<string, string[]> = { core: ["core"], session: ["session"], identity: ["identity"], groups: ["groups"], moderation: ["moderation"], broadcast: ["broadcast"], approvals: ["approvals"], antisystem: ["antisystem"], tools: ["tools"], media: ["identity", "broadcast"] };
-  return [...navigationCards(nonce), ...groupCards(map[view] || ["core"], actions, nonce)];
+  return [...navigationCards(nonce), ...groupCards(map[view] || ["core"], actions, nonce, prefix)];
 }
 
 export function textForView(model: SessionMenuModel, view: string): string {
   const title = CATEGORY_LABELS[view] || CATEGORY_LABELS.root;
+  const prefix = model.prefix || "";
+  const menuCommand = `${prefix}menu`;
   const body = view === "root"
     ? "Full menu · Anti-system · Broadcast · Session · Groups · Moderation · Approvals · Media · Help"
-    : cardsForView(view, new Set(model.actions.map((item) => item.command))).flatMap((card) => [card.title, ...card.buttons.map((item) => item.text)]).join("\n");
-  return [`PAPPY OMEGA MINI · ${title}`, model.statusLine, "", body, "", "Tap a category or command. Send .menu for a fresh set of buttons."].join("\n");
+    : cardsForView(view, new Set(model.actions.map((item) => item.command)), "preview", prefix).flatMap((card) => [card.title, ...card.buttons.map((item) => item.text)]).join("\n");
+  return [`PAPPY OMEGA MINI · ${title}`, model.statusLine, "", body, "", prefix ? `Tap a category or command. Send ${menuCommand} for a fresh set of buttons.` : "Tap a category or command. Use the buttons for a fresh set of controls."].join("\n");
 }
 
 export function buildRichMenuContent(model: SessionMenuModel, view = "root", image?: RichMenuImage): RichMenuContent {
@@ -168,7 +171,7 @@ export function buildRichMenuContent(model: SessionMenuModel, view = "root", ima
   const nonce = interactionNonce();
   return {
     header: { title: `PAPPY OMEGA MINI · ${CATEGORY_LABELS[view] || CATEGORY_LABELS.root}`, disclaimer: true, disclaimerText: "Private control surface · owner actions are filtered by session permissions", ...(image?.url ? { image } : {}) },
-    body: { cards: cardsForView(view, actions, nonce), carousel: false },
+    body: { cards: cardsForView(view, actions, nonce, model.prefix || ""), carousel: false },
     footer: { text: "Back to Pappy Omega Mini on Telegram", url: TELEGRAM_HOME_URL },
   };
 }

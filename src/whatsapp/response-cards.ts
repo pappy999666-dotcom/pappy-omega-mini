@@ -4,7 +4,7 @@ function clean(value: string, limit = 240): string {
   return (value || "—").replace(/[\r\n]/gu, " ").slice(0, limit);
 }
 
-export function commandUsageCard(input: {
+export interface CommandUsageCardInput {
   title: string;
   command: string;
   commandSyntax?: string;
@@ -12,7 +12,9 @@ export function commandUsageCard(input: {
   examples?: string[];
   howToUse?: string[];
   note?: string;
-}): string {
+}
+
+export function commandUsageCard(input: CommandUsageCardInput): string {
   const lines = [
     ...pappyHeader(input.command, input.title),
     `⎔ Command · ⇆ ${input.commandSyntax ?? input.command}`,
@@ -39,8 +41,25 @@ export function commandUsageCard(input: {
   return lines.join("\n").replace(/\n+$/u, "");
 }
 
-export function banUsageCard(): string {
+function applySessionPrefix(value: string, prefix: string): string {
+  return value.replace(/(^|[\s·])\.([a-z][a-z0-9]*)/giu, (_match, boundary: string, name: string) => `${boundary}${prefix}${name}`);
+}
+
+export function sessionCommandUsageCard(prefix: string, input: CommandUsageCardInput): string {
+  const transform = (value: string): string => applySessionPrefix(value, prefix);
   return commandUsageCard({
+    ...input,
+    command: transform(input.command),
+    ...(input.commandSyntax ? { commandSyntax: transform(input.commandSyntax) } : {}),
+    ...(input.acceptedTargets ? { acceptedTargets: input.acceptedTargets.map(transform) } : {}),
+    ...(input.examples ? { examples: input.examples.map(transform) } : {}),
+    ...(input.howToUse ? { howToUse: input.howToUse.map(transform) } : {}),
+    ...(input.note ? { note: input.note } : {}),
+  });
+}
+
+export function banUsageCard(prefix = "."): string {
+  return sessionCommandUsageCard(prefix, {
     title: "Ban Command",
     command: ".ban",
     commandSyntax: ".ban <target>",
@@ -53,8 +72,8 @@ export function banUsageCard(): string {
   });
 }
 
-export function pairingHelpCard(): string {
-  return commandUsageCard({
+export function pairingHelpCard(prefix = "."): string {
+  return sessionCommandUsageCard(prefix, {
     title: "Pairing Help",
     command: ".pair",
     commandSyntax: ".pair <label> <number>",

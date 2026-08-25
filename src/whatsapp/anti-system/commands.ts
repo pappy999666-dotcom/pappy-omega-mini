@@ -1,4 +1,5 @@
 import type { CommandContext, RegisteredCommand } from "../command-registry.js";
+import { getSession } from "../../core/session-registry.js";
 import {
   addWords,
   clearWords,
@@ -17,7 +18,7 @@ import { antiStatusRows } from "./engine.js";
 import type { AntiAction, AntiModuleKey, GroupSecurityMode, TargetMode } from "./types.js";
 import { firstVerifiedPhone, phoneJidFromIdentity, verifiedTargetPhone } from "../identity-normalization.js";
 import { antiModuleLabel, buildAntiModuleResponse } from "./response-format.js";
-import { commandUsageCard } from "../response-cards.js";
+import { sessionCommandUsageCard } from "../response-cards.js";
 import { formatModerationMessage } from "../moderation-response.js";
 
 const MODULE_LABELS: Record<AntiModuleKey, string> = {
@@ -146,7 +147,7 @@ async function configureSecurity(ctx: CommandContext, key: "antipromote" | "anti
 export async function antiPermit(ctx: CommandContext, key: AntiModuleKey, enabled: boolean): Promise<string> {
   const groupJid = await requireGroupAdmin(ctx);
   const identity = targetIdentity(ctx);
-  if (!identity) return commandUsageCard({ title: "Permit Command", command: `.${key}permit`, commandSyntax: `.${key}permit add|remove <target>`, acceptedTargets: ["Tag / Mention · Real WhatsApp mention", "Reply · Reply to a verified phone identity", "Phone · Explicit international number"], note: "LID-only identities are not accepted." });
+  if (!identity) return sessionCommandUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix, { title: "Permit Command", command: `.${key}permit`, commandSyntax: `.${key}permit add|remove <target>`, acceptedTargets: ["Tag / Mention · Real WhatsApp mention", "Reply · Reply to a verified phone identity", "Phone · Explicit international number"], note: "LID-only identities are not accepted." });
   const config = loadGroupAntiConfig(ctx.workspaceId, ctx.sessionId, groupJid);
   ensureModule(config, key);
   setPermit(config, key, identity, enabled);
@@ -156,7 +157,7 @@ export async function antiPermit(ctx: CommandContext, key: AntiModuleKey, enable
 export async function antiMessage(ctx: CommandContext, key: AntiModuleKey): Promise<string> {
   const groupJid = await requireGroupAdmin(ctx);
   const message = (ctx.rawPayload ?? ctx.args.join(" ")).trim() || (ctx.quotedText ?? "").trim();
-  if (!message) return commandUsageCard({ title: `${label(key)} Message`, command: `.${key}msg`, commandSyntax: `.${key}msg <text>`, howToUse: ["Send text after the command.", "Or reply to a message to save its text."], note: "The custom response is scoped to this group." });
+  if (!message) return sessionCommandUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix, { title: `${label(key)} Message`, command: `.${key}msg`, commandSyntax: `.${key}msg <text>`, howToUse: ["Send text after the command.", "Or reply to a message to save its text."], note: "The custom response is scoped to this group." });
   const config = loadGroupAntiConfig(ctx.workspaceId, ctx.sessionId, groupJid);
   ensureModule(config, key);
   setCustomMessage(config, key, message.slice(0, 500));
@@ -167,7 +168,7 @@ export async function antiSpamLimit(ctx: CommandContext): Promise<string> {
   const groupJid = await requireGroupAdmin(ctx);
   const limit = Number(ctx.args[0]);
   const seconds = Number(ctx.args[1]);
-  if (!Number.isInteger(limit) || !Number.isInteger(seconds) || limit < 1 || seconds < 1) return commandUsageCard({ title: "AntiSpam Limit", command: ".spamlimit", commandSyntax: ".spamlimit <messages> <seconds>", examples: [".spamlimit 5 10"], note: "Set the message count and time window for this group." });
+  if (!Number.isInteger(limit) || !Number.isInteger(seconds) || limit < 1 || seconds < 1) return sessionCommandUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix, { title: "AntiSpam Limit", command: ".spamlimit", commandSyntax: ".spamlimit <messages> <seconds>", examples: [".spamlimit 5 10"], note: "Set the message count and time window for this group." });
   const config = loadGroupAntiConfig(ctx.workspaceId, ctx.sessionId, groupJid);
   setSpamLimit(config, limit, seconds);
   return formatModerationMessage("ANTISPAM LIMIT", [["Window", `${limit} messages in ${seconds} seconds`], ["Scope", "This group only"]]);
@@ -183,10 +184,10 @@ export async function antiWords(ctx: CommandContext): Promise<string> {
     return buildAntiModuleResponse({ key: "antiwords", enabled: false, capability: "local-only", note: "Module is disabled for this group.", configStyle: true });
   }
   const parsed = parseAction(action);
-  if (!parsed) return commandUsageCard({ title: "AntiWords", command: ".antiwords", commandSyntax: ".antiwords <kick|warn N|delete|off> [words]", howToUse: ["Enclose blocked words in brackets, for example [scam, free money].", "Management: .antiaddword, .antirmword, .antiwordlist, .setantiwords, .rmantiwords, .clearantiwords."], note: "Configuration is scoped to this group." });
+  if (!parsed) return sessionCommandUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix, { title: "AntiWords", command: ".antiwords", commandSyntax: ".antiwords <kick|warn N|delete|off> [words]", howToUse: ["Enclose blocked words in brackets, for example [scam, free money].", "Management: .antiaddword, .antirmword, .antiwordlist, .setantiwords, .rmantiwords, .clearantiwords."], note: "Configuration is scoped to this group." });
   const threshold = parsed === "warn" ? Number(ctx.args[1] ?? 3) : 3;
   const wordsText = parsed === "warn" ? ctx.args.slice(2).join(" ") : ctx.args.slice(1).join(" ");
-  if (!wordsText.startsWith("[") || !wordsText.endsWith("]")) return commandUsageCard({ title: "AntiWords", command: ".antiwords", commandSyntax: ".antiwords <kick|warn N|delete|off> [words]", examples: [".antiwords delete [scam, free money]"], note: "Words must be enclosed in brackets." });
+  if (!wordsText.startsWith("[") || !wordsText.endsWith("]")) return sessionCommandUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix, { title: "AntiWords", command: ".antiwords", commandSyntax: ".antiwords <kick|warn N|delete|off> [words]", examples: [".antiwords delete [scam, free money]"], note: "Words must be enclosed in brackets." });
   const words = wordsText.slice(1, -1).split(",").map((word) => word.trim()).filter(Boolean);
   const module = ensureModule(config, "antiwords");
   if (!("words" in module)) (module as typeof module & { words: string[] }).words = [];
@@ -205,7 +206,7 @@ export async function antiWordManagement(ctx: CommandContext, operation: "add" |
     return formatModerationMessage("ANTIWORDS LIST", [["Blocked", words.length ? words.map((word, index) => `${index + 1}. ${word}`).join(", ") : "No blocked words configured."]]);
   }
   if (operation === "clear") return formatModerationMessage("ANTIWORDS CLEAR", [["Removed", `${clearWords(config)} blocked word(s)`]]);
-  if (!input) return commandUsageCard({ title: "AntiWords Management", command: `.${operation === "remove" ? "antirmword" : operation === "set" ? "setantiwords" : "antiaddword"}`, commandSyntax: `.${operation === "remove" ? "antirmword" : operation === "set" ? "setantiwords" : "antiaddword"} <word[,word...]>`, note: "Provide one word or a comma-separated list." });
+  if (!input) return sessionCommandUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix, { title: "AntiWords Management", command: `.${operation === "remove" ? "antirmword" : operation === "set" ? "setantiwords" : "antiaddword"}`, commandSyntax: `.${operation === "remove" ? "antirmword" : operation === "set" ? "setantiwords" : "antiaddword"} <word[,word...]>`, note: "Provide one word or a comma-separated list." });
   const words = input.split(",").map((word) => word.trim()).filter(Boolean);
   const changed = operation === "add" || operation === "set" ? addWords(config, words, operation === "set") : removeWords(config, words);
   return formatModerationMessage("ANTIWORDS UPDATED", [["Action", operation], ["Changed", String(changed.length)], ["Words", changed.join(", ") || "No changes."]]);
@@ -215,7 +216,7 @@ export async function antiSilent(ctx: CommandContext): Promise<string> {
   const groupJid = await requireGroupAdmin(ctx);
   const mode = (ctx.args[0] ?? "status").toLowerCase();
   const config = loadGroupAntiConfig(ctx.workspaceId, ctx.sessionId, groupJid);
-  if (!["on", "off", "status"].includes(mode)) return commandUsageCard({ title: "Silent Actions", command: ".silentactions", commandSyntax: ".silentactions <on|off|status>", note: "Choose whether enforcement notices are visible while enforcement remains active." });
+  if (!["on", "off", "status"].includes(mode)) return sessionCommandUsageCard(getSession(ctx.workspaceId, ctx.sessionId).prefix, { title: "Silent Actions", command: ".silentactions", commandSyntax: ".silentactions <on|off|status>", note: "Choose whether enforcement notices are visible while enforcement remains active." });
   if (mode === "status") return formatModerationMessage("SILENT ACTIONS", [["Notices", config.silentActionMessages ? "Silent" : "Visible"], ["Enforcement", "Remains active"]]);
   setSilentActionMessages(config, mode === "on");
   return formatModerationMessage("SILENT ACTIONS", [["Notices", mode === "on" ? "Silent" : "Visible"], ["Enforcement", "Remains active"]]);

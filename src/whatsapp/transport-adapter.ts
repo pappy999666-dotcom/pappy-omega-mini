@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { getWhatsAppSocket } from "./session-manager.js";
 import {
   firstHttpUrl,
+  getPreviewDebugSnapshot,
   prepareCanonicalPreviewContent,
   prepareCanonicalPreviewContentWithBudget,
 } from "./baileys-native-preview.js";
@@ -32,6 +33,31 @@ export interface GroupSummary {
 
 function socketFor(workspaceId: string, sessionId: string): WASocket {
   return getWhatsAppSocket(workspaceId, sessionId);
+}
+
+const DEBUG_GROUP_STATUS = process.env.PAPPY_DEBUG_WA_STATUS === "1";
+
+function groupStatusDebugToken(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
+
+function logGroupStatusStage(
+  stage: string,
+  startedAt: number,
+  workspaceId: string,
+  sessionId: string,
+  groupJid: string,
+  details: Record<string, unknown> = {},
+): void {
+  if (!DEBUG_GROUP_STATUS) return;
+  console.info("[pappy-omega-mini] gstatus-stage", JSON.stringify({
+    stage,
+    elapsedMs: Math.max(0, Date.now() - startedAt),
+    workspace: groupStatusDebugToken(workspaceId),
+    session: groupStatusDebugToken(sessionId),
+    group: groupStatusDebugToken(groupJid),
+    ...details,
+  }));
 }
 function ownJid(socket: WASocket): string {
   return (socket as WASocket & { user?: { id?: string } }).user?.id ?? "me";
@@ -1204,12 +1230,16 @@ export async function sendGroupStatus(
     media?: GroupMediaPayload;
   },
 ): Promise<void> {
+  const startedAt = Date.now();
+  const scope = `${workspaceId}:${sessionId}`;
   const socket = socketFor(workspaceId, sessionId);
   const native = method(socket, "sendGroupStatus");
   const text = payload.text ?? "";
+  logGroupStatusStage("transport-entry", startedAt, workspaceId, sessionId, jid, { hasMedia: Boolean(payload.media), hasUrl: Boolean(firstHttpUrl(text)) });
   if (native && !payload.media && !/https?:\/\/\S+/i.test(text)) {
     const result = await native(jid, payload);
     rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
+    logGroupStatusStage("send-complete", startedAt, workspaceId, sessionId, jid, { path: "native", preview: "not-needed" });
     return;
   }
   const send = method(socket, "sendMessage");
@@ -1221,13 +1251,20 @@ export async function sendGroupStatus(
       content: mediaContent,
       target: "group-status",
       socket,
-      cacheScope: `${workspaceId}:${sessionId}`,
+      cacheScope: scope,
+    });
+    const preview = getPreviewDebugSnapshot(scope);
+    logGroupStatusStage("preview-budget-complete", startedAt, workspaceId, sessionId, jid, {
+      path: "media",
+      cache: preview?.cache ?? "unknown",
+      result: preview?.result ?? "unknown",
     });
     const result = await send(jid, {
       ...preparedMedia,
       groupStatus: true,
     });
     rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
+    logGroupStatusStage("send-complete", startedAt, workspaceId, sessionId, jid, { path: "media", cache: preview?.cache ?? "unknown" });
     return;
   }
   const { media: _media, ...statusPayload } = payload;
@@ -1240,10 +1277,17 @@ export async function sendGroupStatus(
     content,
     target: "group-status",
     socket,
-    cacheScope: `${workspaceId}:${sessionId}`,
+    cacheScope: scope,
+  });
+  const preview = getPreviewDebugSnapshot(scope);
+  logGroupStatusStage("preview-budget-complete", startedAt, workspaceId, sessionId, jid, {
+    path: "text",
+    cache: preview?.cache ?? "unknown",
+    result: preview?.result ?? "unknown",
   });
   const result = await send(jid, prepared);
   rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
+  logGroupStatusStage("send-complete", startedAt, workspaceId, sessionId, jid, { path: "text", cache: preview?.cache ?? "unknown" });
 }
 
 export async function sendPersonalStatus(

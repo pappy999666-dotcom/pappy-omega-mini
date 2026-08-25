@@ -132,7 +132,9 @@ describe("WhatsApp remaining group moderation", () => {
     expect((banResult as WhatsAppCommandReply).mentions).toEqual(["2348022222222@s.whatsapp.net"]);
 
     const list = await executeCommand(createCommandRegistry(), "banlist", ctx);
-    expect(list).toContain("+234•••2222");
+    expect(list).toContain("1 local restriction(s)");
+    expect(list).toContain("retained privately");
+    expect(list).not.toContain("+234•••2222");
     expect(list).not.toContain("2348022222222@s.whatsapp.net");
   });
 

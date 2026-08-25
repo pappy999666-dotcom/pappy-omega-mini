@@ -524,6 +524,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         senderJid: stringField(input, "senderJid"),
         text: typeof input.text === "string" ? input.text : "",
         ...(typeof input.messageId === "string" ? { messageId: input.messageId } : {}),
+        ...(typeof input.receivedAt === "number" && Number.isFinite(input.receivedAt) ? { receivedAt: input.receivedAt } : {}),
         ...(typeof input.interactionId === "string" ? { interactionId: input.interactionId } : {}),
         ...(typeof input.interactionDisplayText === "string" ? { interactionDisplayText: input.interactionDisplayText } : {}),
         ...(typeof input.quotedText === "string" ? { quotedText: input.quotedText } : {}),

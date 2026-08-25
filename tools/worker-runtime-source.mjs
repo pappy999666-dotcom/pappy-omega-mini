@@ -700,6 +700,36 @@ function interactionIdFromMessage(message) {
   }
   return undefined;
 }
+function interactionDisplayTextFromMessage(message) {
+  const content = normalizedMessage(message);
+  const textValue = (value) => typeof value === "string" ? value.trim() : "";
+  const parseParams = (value) => {
+    if (value && typeof value === "object") return value;
+    if (typeof value !== "string" || !value) return undefined;
+    try {
+      const first = JSON.parse(value);
+      if (typeof first === "string") {
+        try { return JSON.parse(first); } catch { return undefined; }
+      }
+      return first && typeof first === "object" ? first : undefined;
+    } catch { return undefined; }
+  };
+  const native = content?.interactiveResponseMessage?.nativeFlowResponseMessage;
+  if (native && typeof native === "object") {
+    const params = parseParams(native.paramsJson ?? native.buttonParamsJson ?? native.params);
+    const label = textValue(params?.display_text) || textValue(params?.displayText) || textValue(params?.selectedDisplayText) || textValue(params?.text);
+    if (label) return label.slice(0, 240);
+  }
+  const list = content?.listResponseMessage?.singleSelectReply;
+  const listLabel = textValue(list?.title) || textValue(list?.selectedRowTitle) || textValue(list?.displayText);
+  if (listLabel) return listLabel.slice(0, 240);
+  const buttons = content?.buttonsResponseMessage;
+  const buttonLabel = textValue(buttons?.selectedDisplayText) || textValue(buttons?.selectedButtonText) || textValue(buttons?.displayText);
+  if (buttonLabel) return buttonLabel.slice(0, 240);
+  const template = content?.templateButtonReplyMessage;
+  const templateLabel = textValue(template?.selectedDisplayText) || textValue(template?.selectedButtonText) || textValue(template?.displayText);
+  return templateLabel ? templateLabel.slice(0, 240) : undefined;
+}
 function mediaKind(message) {
   const content = normalizedMessage(message);
   for (const kind of ["image", "video", "audio", "document", "sticker"]) {
@@ -748,11 +778,13 @@ function sanitizeAntiValue(value, depth = 0, seen = new WeakSet()) {
   return output;
 }
 async function emitInbound(runtime, message) {
+  const receivedAt = Date.now();
   if (trafficPaused) return;
   const key = message?.key ?? {};
   const remoteJid = key.remoteJid;
   if (typeof remoteJid !== "string" || !message.message) return;
   const interactionId = interactionIdFromMessage(message.message);
+  const interactionDisplayText = interactionDisplayTextFromMessage(message.message);
   const normalized = normalizedMessage(message.message) ?? message.message;
   const text = messageText(normalized);
   const context = normalized.extendedTextMessage?.contextInfo ?? normalized.imageMessage?.contextInfo ?? normalized.videoMessage?.contextInfo ?? normalized.audioMessage?.contextInfo ?? normalized.documentMessage?.contextInfo;
@@ -795,6 +827,8 @@ async function emitInbound(runtime, message) {
     ...(safeMessage && typeof safeMessage === "object" && !Array.isArray(safeMessage) ? { message: safeMessage } : {}),
     ...(safeKey && typeof safeKey === "object" && !Array.isArray(safeKey) ? { rawKey: safeKey } : {}),
     ...(interactionId ? { interactionId } : {}),
+    ...(interactionDisplayText ? { interactionDisplayText } : {}),
+    receivedAt,
     ...(quotedText ? { quotedText } : {}),
     ...(quotedSenderJid ? { quotedSenderJid } : {}),
     ...(quotedMessageKey ? { quotedMessageKey } : {}),
