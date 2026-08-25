@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { joinWhatsAppInvite, remixJoinRecords } from "../src/jobs/join-operation.js";
+import {
+  joinWhatsAppInvite,
+  remixJoinRecords,
+  selectJoinInventoryRecords,
+} from "../src/jobs/join-operation.js";
 import { JoinResultStore } from "../src/jobs/join-result-store.js";
 import { jobLiveText } from "../src/telegram/ui.js";
 import type { JobRecord } from "../src/jobs/job-contracts.js";
@@ -131,6 +135,31 @@ describe("Baileys Join Operation", () => {
     );
     expect(result.success).toBe(true);
     expect(membershipReads).toBe(0);
+  });
+
+  it("keeps the full Active inventory when full-inventory mode is enabled", () => {
+    const records = Array.from({ length: 150 }, (_, index) => ({
+      canonicalUrl: `https://chat.whatsapp.com/LINK_${index}`,
+    }));
+    const selected = selectJoinInventoryRecords(records, {
+      fullInventory: true,
+      targetCount: 1,
+    });
+    const remixed = remixJoinRecords(selected, "job-full", 0);
+    expect(selected).toHaveLength(150);
+    expect(remixed).toHaveLength(150);
+    expect(new Set(remixed.map((record) => record.canonicalUrl)).size).toBe(150);
+    expect(remixed.map((record) => record.canonicalUrl)).not.toEqual(
+      records.map((record) => record.canonicalUrl),
+    );
+  });
+
+  it("preserves an explicit finite target for single-link or bounded callers", () => {
+    const records = Array.from({ length: 10 }, (_, index) => ({
+      canonicalUrl: `https://chat.whatsapp.com/LINK_${index}`,
+    }));
+    expect(selectJoinInventoryRecords(records, { targetCount: 3 })).toHaveLength(3);
+    expect(selectJoinInventoryRecords(records, { fullInventory: true, targetCount: 3 })).toHaveLength(10);
   });
 
   it("remixes the same inventory between cycles deterministically", () => {

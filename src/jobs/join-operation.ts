@@ -82,6 +82,18 @@ export function remixJoinRecords<T extends { canonicalUrl: string }>(
     .map(({ record }) => record);
 }
 
+export function selectJoinInventoryRecords<T>(
+  records: readonly T[],
+  options: { fullInventory?: boolean; targetCount?: number } = {},
+): T[] {
+  if (options.fullInventory) return [...records];
+  const requested = Number(options.targetCount ?? records.length);
+  const limit = Number.isFinite(requested) && requested > 0
+    ? Math.min(10000, Math.floor(requested))
+    : records.length;
+  return records.slice(0, limit);
+}
+
 export async function joinWhatsAppInvite(
   socket: JoinSocket,
   target: string,

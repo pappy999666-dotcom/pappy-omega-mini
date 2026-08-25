@@ -62,6 +62,7 @@ import { getInceptor, startInceptor } from "./inceptor.js";
 import {
   joinWhatsAppInvite,
   remixJoinRecords,
+  selectJoinInventoryRecords,
   type JoinAttemptResult,
 } from "./join-operation.js";
 import { downloadPlay, withMediaDownloadSlot, type PlayMode } from "../whatsapp/play-media.js";
@@ -990,6 +991,7 @@ export function startWorkerRuntime(): JobOrchestrator {
       maxConcurrency?: number;
       sourceBucket?: "active";
       selectedLinks?: string[];
+      fullInventory?: boolean;
     };
     let membershipSnapshot: Record<string, unknown> | undefined;
     try {
@@ -1002,10 +1004,6 @@ export function startWorkerRuntime(): JobOrchestrator {
     const selectedLinks = new Set(
       (payload.selectedLinks ?? []).map((link) => link.trim()).filter(Boolean),
     );
-    const targetLimit =
-      payload.targetCount && payload.targetCount > 0
-        ? Math.min(10000, payload.targetCount)
-        : 10000;
     const sourceRecords: LinkRecord[] = [];
     if (selectedLinks.size) {
       for (const link of selectedLinks) {
@@ -1027,7 +1025,12 @@ export function startWorkerRuntime(): JobOrchestrator {
         cursor = page.nextCursor;
       } while (cursor !== 0);
     }
-    const selectedRecords = sourceRecords.slice(0, targetLimit);
+    const selectedRecords = selectJoinInventoryRecords(sourceRecords, {
+      fullInventory: payload.fullInventory === true,
+      ...(payload.targetCount !== undefined
+        ? { targetCount: payload.targetCount }
+        : {}),
+    });
     sourceRecords.length = 0;
     sourceRecords.push(...selectedRecords);
     const batchCycles = Math.max(
@@ -1039,7 +1042,7 @@ export function startWorkerRuntime(): JobOrchestrator {
     );
     await context.report({
       total: workItems.length,
-      currentAction: `shuffled Active inventory · selected ${sourceRecords.length} link(s)`,
+      currentAction: `${payload.fullInventory === true ? "remixed full Active inventory" : "shuffled selected Active inventory"} · ${sourceRecords.length} link(s)`,
     });
     let rateLimitHits = 0;
     let accountRestrictionHits = 0;
