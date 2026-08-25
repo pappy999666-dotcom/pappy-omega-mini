@@ -62,6 +62,10 @@ function isGroupFull(error: string): boolean {
   return /group[- ]?(?:is )?full|participant[- ]?limit|too many participants|group capacity/i.test(error);
 }
 
+function isAlreadyMember(error: string, statusCode?: number): boolean {
+  return statusCode === 409 || /already[- ]?(?:exists|a participant|member)|participant already exists|is already in the group/i.test(error);
+}
+
 export function remixJoinRecords<T extends { canonicalUrl: string }>(
   records: readonly T[],
   seed: string,
@@ -85,6 +89,8 @@ export async function joinWhatsAppInvite(
 ): Promise<JoinAttemptResult> {
   const trimmed = target.trim();
   let stage: JoinAttemptResult["stage"] = "membership";
+  let knownJid: string | undefined;
+  let knownTitle: string | undefined;
   try {
     const groups = options.participatingGroups ?? (await socket.groupFetchAllParticipating?.()) ?? {};
     if (trimmed.endsWith("@g.us") && groups[trimmed])
@@ -100,6 +106,8 @@ export async function joinWhatsAppInvite(
       return { success: false, error: "Invalid WhatsApp invite link.", linkUnavailable: true, stage: "invite-info" };
     stage = "invite-info";
     const info = await socket.groupGetInviteInfo?.(code);
+    knownJid = info?.id;
+    knownTitle = info?.subject;
     if (!info?.id)
       return {
         success: false,
@@ -149,6 +157,16 @@ export async function joinWhatsAppInvite(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const statusCode = statusCodeFromError(error);
+    if (isAlreadyMember(message, statusCode)) {
+      return {
+        success: false,
+        alreadyMember: true,
+        ...(knownJid ? { jid: knownJid } : {}),
+        ...(knownTitle ? { title: knownTitle } : {}),
+        stage,
+        error: "Already a member.",
+      };
+    }
     const rateLimited = isRateLimited(message) || statusCode === 429;
     const accountRestricted = /spam.?limit|temporarily banned|account restricted|too many groups|rate[- ]over[- ]limit/i.test(message);
     return {

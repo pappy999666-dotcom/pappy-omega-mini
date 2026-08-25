@@ -102,6 +102,19 @@ describe("Baileys Join Operation", () => {
     expect(calls).toEqual(["request:ABC_123"]);
   });
 
+  it("normalizes Baileys already-exists responses as already-member", async () => {
+    const result = await joinWhatsAppInvite(
+      {
+        groupGetInviteInfo: async () => ({ id: "120@g.us", subject: "Alpha" }),
+        groupAcceptInvite: async () => { throw new Error("already-exists"); },
+      },
+      "https://chat.whatsapp.com/ABC_123",
+    );
+    expect(result.alreadyMember).toBe(true);
+    expect(result.error).toBe("Already a member.");
+    expect(result.jid).toBe("120@g.us");
+  });
+
   it("reuses a supplied membership snapshot without fetching participating groups", async () => {
     let membershipReads = 0;
     const result = await joinWhatsAppInvite(
