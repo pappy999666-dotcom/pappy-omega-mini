@@ -1283,6 +1283,8 @@ function messagePayload(
       audio: media.bytes,
       ...(media.mimeType ? { mimetype: media.mimeType } : {}),
       ...(media.ptt !== undefined ? { ptt: media.ptt } : {}),
+      ...(media.durationSeconds !== undefined ? { seconds: media.durationSeconds } : {}),
+      ...(media.waveform?.length ? { waveform: Uint8Array.from(media.waveform) } : {}),
     };
   if (media.kind === "sticker")
     return {

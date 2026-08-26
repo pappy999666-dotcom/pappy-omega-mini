@@ -230,10 +230,50 @@ export async function resolvePlayMetadata(input: string, mode: PlayMode = "audio
   }
 }
 
+interface TranscodedAudio {
+  bytes: Buffer;
+  durationSeconds?: number;
+  waveform?: number[];
+}
+
+async function inspectAudioPresentation(filePath: string): Promise<Pick<TranscodedAudio, "durationSeconds" | "waveform">> {
+  let durationSeconds: number | undefined;
+  try {
+    const probe = await runExternalCommand(FFPROBE_BIN, ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filePath], 5_000);
+    const parsed = Number.parseFloat(probe.stdout.trim());
+    if (Number.isFinite(parsed) && parsed > 0) durationSeconds = Math.min(86_400, Math.round(parsed));
+  } catch {
+    // A missing probe is non-fatal; Baileys can still send a ptt audio payload.
+  }
+  let waveform: number[] | undefined;
+  const pcmPath = `${filePath}.pcm`;
+  try {
+    await runExternalCommand(FFMPEG_BIN, ["-v", "error", "-i", filePath, "-ac", "1", "-ar", "8000", "-f", "s16le", pcmPath], COMMAND_TIMEOUT_MS);
+    const pcm = await readFile(pcmPath);
+    const bins = 64;
+    const samplesPerBin = Math.max(1, Math.floor(pcm.length / 2 / bins));
+    waveform = Array.from({ length: bins }, (_, bin) => {
+      const start = bin * samplesPerBin * 2;
+      const end = Math.min(pcm.length, start + samplesPerBin * 2);
+      let peak = 0;
+      for (let offset = start; offset + 1 < end; offset += 2) peak = Math.max(peak, Math.abs(pcm.readInt16LE(offset)));
+      return Math.max(0, Math.min(100, Math.round((peak / 32767) * 100)));
+    });
+  } catch {
+    waveform = undefined;
+  } finally {
+    await rm(pcmPath, { force: true }).catch(() => undefined);
+  }
+  return {
+    ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+    ...(waveform ? { waveform } : {}),
+  };
+}
+
 async function transcodeAudioBytes(
   media: WhatsAppMediaPayload,
   output: "mp3" | "voice-note",
-): Promise<Buffer> {
+): Promise<TranscodedAudio> {
   if (media.kind !== "audio" && media.kind !== "video")
     throw new Error("Only audio or video media can be converted to audio.");
   if (!media.bytes.length || media.bytes.length > MAX_MEDIA_BYTES)
@@ -249,14 +289,15 @@ async function transcodeAudioBytes(
     await runExternalCommand(FFMPEG_BIN, args, COMMAND_TIMEOUT_MS);
     const info = await stat(outputPath);
     if (!info.size || info.size > MAX_MEDIA_BYTES) throw new Error("The converted audio exceeds the configured size limit.");
-    return await readFile(outputPath);
+    const bytes = await readFile(outputPath);
+    return { bytes, ...(await inspectAudioPresentation(outputPath)) };
   } finally {
     await rm(directory, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
 export async function convertMediaToMp3(media: WhatsAppMediaPayload): Promise<WhatsAppMediaPayload> {
-  const bytes = await transcodeAudioBytes(media, "mp3");
+  const { bytes } = await transcodeAudioBytes(media, "mp3");
   return {
     kind: "audio",
     bytes,
@@ -267,13 +308,15 @@ export async function convertMediaToMp3(media: WhatsAppMediaPayload): Promise<Wh
 }
 
 async function convertMediaToVoiceNote(media: WhatsAppMediaPayload): Promise<WhatsAppMediaPayload> {
-  const bytes = await transcodeAudioBytes(media, "voice-note");
+  const converted = await transcodeAudioBytes(media, "voice-note");
   return {
     kind: "audio",
-    bytes,
+    bytes: converted.bytes,
     mimeType: "audio/ogg; codecs=opus",
     fileName: "pappy-voice-note.ogg",
     ptt: true,
+    ...(converted.durationSeconds !== undefined ? { durationSeconds: converted.durationSeconds } : {}),
+    ...(converted.waveform ? { waveform: converted.waveform } : {}),
   };
 }
 

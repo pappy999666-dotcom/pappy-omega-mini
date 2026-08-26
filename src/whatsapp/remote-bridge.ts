@@ -37,6 +37,8 @@ function serializeMedia(media: WhatsAppMediaPayload): SerializedMedia {
     ...(media.fileName !== undefined ? { fileName: media.fileName } : {}),
     ...(media.caption !== undefined ? { caption: media.caption } : {}),
     ...(media.ptt !== undefined ? { ptt: media.ptt } : {}),
+    ...(media.durationSeconds !== undefined ? { durationSeconds: media.durationSeconds } : {}),
+    ...(media.waveform !== undefined ? { waveform: media.waveform } : {}),
     ...(media.stickerPackName !== undefined ? { stickerPackName: media.stickerPackName } : {}),
   };
 }
@@ -49,6 +51,8 @@ function deserializeMedia(media: SerializedMedia): WhatsAppMediaPayload {
     ...(media.fileName !== undefined ? { fileName: media.fileName } : {}),
     ...(media.caption !== undefined ? { caption: media.caption } : {}),
     ...(media.ptt !== undefined ? { ptt: media.ptt } : {}),
+    ...(media.durationSeconds !== undefined ? { durationSeconds: media.durationSeconds } : {}),
+    ...(media.waveform !== undefined ? { waveform: media.waveform } : {}),
     ...(media.stickerPackName !== undefined ? { stickerPackName: media.stickerPackName } : {}),
   };
 }

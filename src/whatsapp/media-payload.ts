@@ -8,5 +8,7 @@ export interface WhatsAppMediaPayload {
   fileName?: string;
   caption?: string;
   ptt?: boolean;
+  durationSeconds?: number;
+  waveform?: number[];
   stickerPackName?: string;
 }

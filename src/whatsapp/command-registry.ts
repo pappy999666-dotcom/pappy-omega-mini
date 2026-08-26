@@ -30,7 +30,7 @@ import {
 } from "./sticker-command-bindings.js";
 import { banUsageCard, commandUsageCard, pairingHelpCard, sessionCommandUsageCard, sessionPairingCard } from "./response-cards.js";
 import type { GroupControlTable } from "./group-control-confirmation.js";
-import { buildLyricsText, buildMusicPreviewMedia, buildPlayHeadsUpText, buildPlayPreviewText, convertMediaToMp3, downloadPlay, fetchLyrics, playUsageText, resolvePlayMetadata, withMediaDownloadSlot, type PlayMetadata, type PlayMode } from "./play-media.js";
+import { buildLyricsText, buildMusicPreviewMedia, buildPlayPreviewText, convertMediaToMp3, downloadPlay, fetchLyrics, playUsageText, resolvePlayMetadata, withMediaDownloadSlot, type PlayMetadata, type PlayMode } from "./play-media.js";
 import { registerGroupControlConfirmation, consumeGroupControlConfirmation } from "./group-control-confirmation.js";
 import {
   getPreviewDebugSnapshot,
@@ -574,18 +574,17 @@ export async function runPlayCommand(ctx: CommandContext, requestedMode?: PlayMo
     query = rest.join(" ").trim();
   }
   if (!query) return playUsageText();
-  if (!ctx.sendCurrentText)
-    return commandUsageCard({ title: "Play Unavailable", command: ".play", commandSyntax: ".play <song or video>", note: "The WhatsApp text transport is not ready for this session." });
+  if (!ctx.sendCurrentText && !ctx.sendCurrentMedia)
+    return commandUsageCard({ title: "Play Unavailable", command: ".play", commandSyntax: ".play <song or video>", note: "The WhatsApp media transport is not ready for this session." });
   try {
     if (ctx.sendCurrentReaction)
       void ctx.sendCurrentReaction(mode === "audio" ? "🎵" : "🎬").catch(() => undefined);
-    void ctx.sendCurrentText(buildPlayHeadsUpText(query, mode)).catch(() => undefined);
     const metadata = await resolvePlayMetadata(query, mode);
     const previewCaption = buildPlayPreviewText(metadata, mode);
     if (ctx.sendCurrentMedia) {
       const previewMedia = await buildMusicPreviewMedia(metadata, mode);
       await ctx.sendCurrentMedia({ media: previewMedia, caption: previewCaption });
-    } else {
+    } else if (ctx.sendCurrentText) {
       await ctx.sendCurrentText(previewCaption);
     }
     if (ctx.enqueuePlayJob && ctx.chatJid) {
