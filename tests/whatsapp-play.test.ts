@@ -35,10 +35,10 @@ describe("WhatsApp play/media flow", () => {
     expect(response).toContain(".lyrics <song title>");
   });
 
-  it("registers the three explicit media commands and the audio aliases", () => {
+  it("registers the media commands and the audio aliases", () => {
     const registry = createCommandRegistry();
     const names = registry.map((command) => command.name);
-    expect(names).toEqual(expect.arrayContaining(["play", "video", "lyrics", "mp3"]));
+    expect(names).toEqual(expect.arrayContaining(["play", "video", "lyrics", "mp3", "a2v"]));
     expect(registry.find((command) => command.name === "play")?.aliases).toEqual(expect.arrayContaining(["music", "audio"]));
   });
 

@@ -31,6 +31,7 @@ import {
 import { banUsageCard, commandUsageCard, pairingHelpCard, sessionCommandUsageCard, sessionPairingCard } from "./response-cards.js";
 import type { GroupControlTable } from "./group-control-confirmation.js";
 import { buildLyricsText, buildMusicPreviewMedia, buildPlayPreviewText, convertMediaToMp3, downloadPlay, fetchLyrics, playUsageText, resolvePlayMetadata, withMediaDownloadSlot, type PlayMetadata, type PlayMode } from "./play-media.js";
+import { a2vCacheStatusText, a2vMergedText, a2vUsageText, a2vWrongOrderText, stageA2v } from "./a2v-media.js";
 import { registerGroupControlConfirmation, consumeGroupControlConfirmation } from "./group-control-confirmation.js";
 import {
   getPreviewDebugSnapshot,
@@ -869,6 +870,24 @@ export function createCommandRegistry(): RegisteredCommand[] {
       aliases: [],
       description: "Resolve a public or authorized source, preview metadata, then deliver video.",
       run: async (ctx) => runPlayCommand(ctx, "video"),
+    },
+    {
+      name: "a2v",
+      aliases: ["audiotovideo", "mediaaudio"],
+      description: "Cache one audio or visual media item for five minutes and merge it with the opposite type.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.chatJid || !ctx.media || (ctx.media.kind !== "audio" && ctx.media.kind !== "image" && ctx.media.kind !== "video")) return a2vUsageText(session(ctx).prefix);
+        try {
+          const result = await stageA2v(ctx.workspaceId, ctx.sessionId, ctx.chatJid, ctx.media);
+          if (result.state === "wrong-order") return a2vWrongOrderText(result.expected);
+          if (result.state === "cached") return a2vCacheStatusText(result.expected, session(ctx).prefix);
+          if (!result.media) return "⛔ A2V could not produce an output media file.";
+          return { media: result.media, caption: a2vMergedText() };
+        } catch (error) {
+          return `⛔ A2V failed: ${(error instanceof Error ? error.message : "The media could not be merged safely.").slice(0, 420)}`;
+        }
+      },
     },
     {
       name: "lyrics",

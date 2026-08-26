@@ -49,6 +49,7 @@ const PIPED_API_BASES = (process.env.PIPED_API_BASES ?? "https://api.piped.priva
   .filter(Boolean);
 const DEFAULT_NOELIA_MUSIC_API_BASE = "https://noelia.noeldfa.dpdns.org/api/music";
 const NOELIA_REQUEST_TIMEOUT_MS = 15_000;
+const NOELIA_FAST_PATH_TIMEOUT_MS = 5_000;
 const NOELIA_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 let activeMediaJobs = 0;
@@ -210,15 +211,7 @@ async function resolveNoeliaMetadata(input: string): Promise<PlayMetadata> {
   };
 }
 
-export async function resolvePlayMetadata(input: string, mode: PlayMode = "audio"): Promise<PlayMetadata> {
-  const source = sourceFor(input);
-  if (mode === "audio" && process.env.NOELIA_MUSIC_API_KEY?.trim() && !/^https?:\/\//iu.test(input.trim())) {
-    try {
-      return await resolveNoeliaMetadata(input);
-    } catch {
-      // The established yt-dlp/Piped cascade remains the fallback provider.
-    }
-  }
+async function resolveFallbackPlayMetadata(input: string, source: string): Promise<PlayMetadata> {
   try {
     const result = await runCommand(["--dump-single-json", "--skip-download", "--no-playlist", "--no-warnings", source], PLAY_METADATA_TIMEOUT_MS);
     const line = result.stdout.trim().split("\n").filter(Boolean).at(-1);
@@ -228,6 +221,24 @@ export async function resolvePlayMetadata(input: string, mode: PlayMode = "audio
     if (/^https?:\/\//iu.test(input.trim())) throw primaryError;
     return resolvePipedMetadata(input);
   }
+}
+
+export async function resolvePlayMetadata(input: string, mode: PlayMode = "audio"): Promise<PlayMetadata> {
+  const source = sourceFor(input);
+  const hasNoelia = mode === "audio" && Boolean(process.env.NOELIA_MUSIC_API_KEY?.trim()) && !/^https?:\/\//iu.test(input.trim());
+  if (hasNoelia) {
+    try {
+      return await withTimeout(resolveNoeliaMetadata(input), NOELIA_FAST_PATH_TIMEOUT_MS, () => undefined);
+    } catch {
+      try {
+        return await resolveFallbackPlayMetadata(input, source);
+      } catch {
+        // Both compliant provider paths failed; preserve the normal failure response.
+        throw new Error("No music provider returned a usable result.");
+      }
+    }
+  }
+  return resolveFallbackPlayMetadata(input, source);
 }
 
 interface TranscodedAudio {
