@@ -44,6 +44,7 @@ import {
 import { phoneJidFromIdentity } from "./identity-normalization.js";
 import { trackInboundMessage, trackOutboundResult } from "./moderation-message-tracker.js";
 import { createAssignedWorkloadSocket, callAssignedWorkloadTransport } from "./workload-transport.js";
+import { isNoisyBaileysProtocolLog, sanitizeNoisyBaileysLogArgs } from "./baileys-log-safety.js";
 import {
   queueWorkloadCommand,
   revokeWorkloadSessionAssignment,
@@ -637,6 +638,11 @@ async function openWhatsAppSession(
     level: process.env.PAPPY_WA_LOG_LEVEL ?? "warn",
     hooks: {
       logMethod(inputArgs, method) {
+        if (isNoisyBaileysProtocolLog(inputArgs)) {
+          const safeArgs = sanitizeNoisyBaileysLogArgs(inputArgs);
+          method.call(this, safeArgs[0]);
+          return;
+        }
         const rendered = inputArgs
           .map((value) => {
             if (typeof value === "string") return value.slice(0, 2_000);
