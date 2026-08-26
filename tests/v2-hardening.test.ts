@@ -18,6 +18,7 @@ import {
   BAILEYS_SESSION_SOCKET_OPTIONS,
   BaileysRetryCounterCache,
   SessionCryptoFailureGuard,
+  SessionCryptoRecoveryCircuit,
   cryptoFailureGuardFor,
   isBaileysCryptoFailure,
   authenticatedOpenSessionPatch,
@@ -139,6 +140,16 @@ describe("V2 hardening", () => {
     expect(isLiveWhatsAppUpsert()).toBe(true);
     expect(isLiveWhatsAppUpsert("append")).toBe(false);
     expect(isLiveWhatsAppUpsert("history")).toBe(false);
+  });
+
+  it("pauses repeated crypto recovery storms after bounded attempts", () => {
+    const circuit = new SessionCryptoRecoveryCircuit(600_000, 2);
+    expect(circuit.allowRecovery(1_000)).toBe(true);
+    expect(circuit.allowRecovery(2_000)).toBe(true);
+    expect(circuit.allowRecovery(3_000)).toBe(false);
+    expect(circuit.getRecoveryCount()).toBe(3);
+    circuit.markStableConnected();
+    expect(circuit.allowRecovery(4_000)).toBe(true);
   });
 
   it("contains crypto failures and requests at most one recovery per cooldown", () => {
