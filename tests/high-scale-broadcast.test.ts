@@ -94,7 +94,8 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(runtime).toContain("const currentJoinSocket = (): JoinManagerSocket");
     expect(runtime).toContain("joinWhatsAppInvite(currentJoinSocket(), record.canonicalUrl");
     expect(runtime).toContain("session ready · selecting the first Active link");
-    expect(runtime).toContain("payload.fullInventory !== true && requestedTarget !== undefined");
+    expect(runtime).toContain("const sampleSize = Math.min(10_000, Math.max(target * 10, 250));");
+    expect(runtime).toContain("buckets.sample(GLOBAL_VALIDATOR_SCOPE, \"active\", sampleSize)");
     expect(telegram).toContain("fullInventory: false");
     expect(runtime).toContain('kind === "allstatus" || kind === "gstatus"');
     expect(runtime).toContain('payload.styled === true');

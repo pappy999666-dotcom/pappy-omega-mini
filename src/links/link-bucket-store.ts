@@ -37,6 +37,8 @@ export interface LinkRecord {
   duplicateCount: number;
   metadata?: {
     title?: string;
+    groupJid?: string;
+    groupTitle?: string;
     memberCount?: number;
     imageUrl?: string;
     inviteCode?: string;
@@ -252,6 +254,17 @@ export class LinkBucketStore {
 
   async count(workspaceId: string, bucket: LinkBucket): Promise<number> {
     return this.redis.scard(this.bucketKey(workspaceId, bucket));
+  }
+
+  async sample(
+    workspaceId: string,
+    bucket: LinkBucket,
+    count: number,
+  ): Promise<LinkRecord[]> {
+    const limit = Math.max(1, Math.min(10_000, Math.floor(count)));
+    const urls = await this.redis.srandmember(this.bucketKey(workspaceId, bucket), limit);
+    const records = await Promise.all(urls.map((url) => this.get(workspaceId, url)));
+    return records.filter((record): record is LinkRecord => record !== undefined && record.bucket === bucket);
   }
 
   async reconcileGlobalIndexes(): Promise<{ removed: number; restored: number }> {

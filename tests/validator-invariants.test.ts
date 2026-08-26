@@ -3,6 +3,7 @@ import {
   LinkBucketStore,
   GLOBAL_VALIDATOR_SCOPE,
 } from "../src/links/link-bucket-store.js";
+import { JoinMembershipStore } from "../src/jobs/join-membership-store.js";
 import { isHealthyWhatsAppSession } from "../src/whatsapp/session-allocator.js";
 
 type SetValue = Set<string>;
@@ -47,6 +48,14 @@ class FakeRedis {
 
   async scard(key: string): Promise<number> {
     return (this.sets.get(key) ?? new Set()).size;
+  }
+
+  async smembers(key: string): Promise<string[]> {
+    return [...(this.sets.get(key) ?? new Set())];
+  }
+
+  async srandmember(key: string, count: number): Promise<string[]> {
+    return [...(this.sets.get(key) ?? new Set())].slice(0, count);
   }
 
   async sscan(
@@ -140,6 +149,21 @@ describe("Validator Hub bucket invariants", () => {
     ).toBe("active");
     expect(await store.count(GLOBAL_VALIDATOR_SCOPE, "active")).toBe(1);
     expect(await store.count(GLOBAL_VALIDATOR_SCOPE, "main")).toBe(0);
+  });
+
+  it("samples active links through Redis random access and stores joined groups per session", async () => {
+    const redis = new FakeRedis();
+    const store = new LinkBucketStore(redis as never);
+    await store.upsert({ ...base, canonicalUrl: "https://chat.whatsapp.com/ACTIVE1", bucket: "active" });
+    await store.upsert({ ...base, canonicalUrl: "https://chat.whatsapp.com/ACTIVE2", bucket: "active" });
+    const sampled = await store.sample(GLOBAL_VALIDATOR_SCOPE, "active", 1);
+    expect(sampled).toHaveLength(1);
+    expect(sampled[0]?.bucket).toBe("active");
+
+    const memberships = new JoinMembershipStore(redis as never);
+    await memberships.add("workspace", "session", "120363123@g.us");
+    expect(await memberships.list("workspace", "session")).toEqual(new Set(["120363123@g.us"]));
+    expect(await memberships.list("workspace", "other-session")).toEqual(new Set());
   });
 
   it("admits only fresh ACTIVE/VALID sessions to validation", () => {

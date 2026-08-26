@@ -85,6 +85,7 @@ import {
   joinOutcomeFromClassification,
   type JoinResultOutcome,
 } from "./join-result-store.js";
+import { JoinMembershipStore } from "./join-membership-store.js";
 
 interface LinkValidationPayload {
   urls?: string[];
@@ -369,6 +370,7 @@ export function startWorkerRuntime(): JobOrchestrator {
     );
   };
   const joinResults = new JoinResultStore(redis);
+  const joinMemberships = new JoinMembershipStore(redis);
   activeBuckets = buckets;
   activeJoinResults = joinResults;
   orchestrator.addCloseHook(async () => {
@@ -1013,6 +1015,10 @@ export function startWorkerRuntime(): JobOrchestrator {
       // seeds the snapshot without turning a membership-read failure into an
       // account restriction.
     }
+    const persistedJoinedGroups = await joinMemberships
+      .list(context.job.workspaceId, sessionId)
+      .catch(() => new Set<string>());
+    if (membershipSnapshot) for (const groupJid of Object.keys(membershipSnapshot)) persistedJoinedGroups.add(groupJid);
     const selectedLinks = new Set(
       (payload.selectedLinks ?? []).map((link) => link.trim()).filter(Boolean),
     );
@@ -1024,29 +1030,36 @@ export function startWorkerRuntime(): JobOrchestrator {
       lastResult: "Join Manager is preparing the selected target set; the first attempt is not waiting for the inter-link delay.",
     });
     const sourceRecords: LinkRecord[] = [];
+    const seenUrls = new Set<string>();
+    const appendEligible = (record: LinkRecord): void => {
+      if (seenUrls.has(record.canonicalUrl)) return;
+      const knownGroupJid = record.metadata?.groupJid;
+      if (knownGroupJid && persistedJoinedGroups.has(knownGroupJid)) return;
+      seenUrls.add(record.canonicalUrl);
+      sourceRecords.push(record);
+    };
     if (selectedLinks.size) {
       for (const link of selectedLinks) {
         const record = await buckets.get(GLOBAL_VALIDATOR_SCOPE, link);
-        if (record?.bucket === "active") sourceRecords.push(record);
+        if (record?.bucket === "active") appendEligible(record);
       }
-    } else {
+    } else if (payload.fullInventory === true || requestedTarget === undefined) {
       let cursor = 0;
       do {
-        const page = await buckets.list(
-          GLOBAL_VALIDATOR_SCOPE,
-          "active",
-          cursor,
-          100,
-        );
-        for (const record of page.records) {
-          sourceRecords.push(record);
-          if (payload.fullInventory !== true && requestedTarget !== undefined && sourceRecords.length >= requestedTarget)
-            break;
-        }
+        const page = await buckets.list(GLOBAL_VALIDATOR_SCOPE, "active", cursor, 250);
+        for (const record of page.records) appendEligible(record);
         cursor = page.nextCursor;
-        if (payload.fullInventory !== true && requestedTarget !== undefined && sourceRecords.length >= requestedTarget)
-          break;
       } while (cursor !== 0);
+    } else {
+      const target = requestedTarget;
+      const sampleSize = Math.min(10_000, Math.max(target * 10, 250));
+      let attempts = 0;
+      while (sourceRecords.length < target && attempts < 5) {
+        const sampled = await buckets.sample(GLOBAL_VALIDATOR_SCOPE, "active", sampleSize);
+        for (const record of sampled) appendEligible(record);
+        attempts += 1;
+        if (sampled.length < sampleSize) break;
+      }
     }
     const selectedRecords = selectJoinInventoryRecords(sourceRecords, {
       fullInventory: payload.fullInventory === true,
@@ -1239,7 +1252,11 @@ export function startWorkerRuntime(): JobOrchestrator {
           joinRetryable: false,
         };
         if (result.success) {
-          if (result.jid) membershipSnapshot = { ...(membershipSnapshot ?? {}), [result.jid]: {} };
+          if (result.jid) {
+            membershipSnapshot = { ...(membershipSnapshot ?? {}), [result.jid]: {} };
+            persistedJoinedGroups.add(result.jid);
+            await joinMemberships.add(context.job.workspaceId, sessionId, result.jid);
+          }
           joined += 1;
           await buckets.move(
             GLOBAL_VALIDATOR_SCOPE,
@@ -1265,7 +1282,11 @@ export function startWorkerRuntime(): JobOrchestrator {
           return { status: "success" as const };
         }
         if (result.alreadyMember) {
-          if (result.jid) membershipSnapshot = { ...(membershipSnapshot ?? {}), [result.jid]: {} };
+          if (result.jid) {
+            membershipSnapshot = { ...(membershipSnapshot ?? {}), [result.jid]: {} };
+            persistedJoinedGroups.add(result.jid);
+            await joinMemberships.add(context.job.workspaceId, sessionId, result.jid);
+          }
           alreadyMember += 1;
           await buckets.move(
             GLOBAL_VALIDATOR_SCOPE,
