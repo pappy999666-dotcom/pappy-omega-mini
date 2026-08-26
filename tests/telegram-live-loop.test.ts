@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { classifyLiveEditError } from "../src/telegram/bot.js";
+import { classifyLiveEditError, liveEditRetryAfterMs } from "../src/telegram/bot.js";
 
 describe("Telegram Live Show refresh error handling", () => {
   it("keeps the loop alive when Telegram reports an unchanged message", () => {
     expect(classifyLiveEditError(new Error("Bad Request: message is not modified"))).toBe("benign");
+  });
+
+  it("honors Telegram Retry-After values for rate-limited live edits", () => {
+    expect(liveEditRetryAfterMs(new Error("429 Too Many Requests: retry after 73"))).toBe(73_000);
+    expect(liveEditRetryAfterMs(new Error("request timed out"))).toBeUndefined();
   });
 
   it("keeps the loop alive for transient Telegram or network failures", () => {

@@ -475,6 +475,24 @@ const pendingLiveJobCode = new Map<
   { workspaceId: string; chatId: number; messageId: number }
 >();
 
+let liveEditInFlight = false;
+let liveEditNotBefore = 0;
+const LIVE_EDIT_MIN_INTERVAL_MS = 1_500;
+
+function retryAfterMs(error: unknown): number | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  const match = message.match(/retry after\s+(\d+)/i);
+  if (!match) return undefined;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) && seconds > 0
+    ? Math.min(10 * 60_000, seconds * 1_000)
+    : undefined;
+}
+
+export function liveEditRetryAfterMs(error: unknown): number | undefined {
+  return retryAfterMs(error);
+}
+
 function stopJobLiveLoop(loopKey: string): void {
   const current = liveLoops.get(loopKey);
   if (!current) return;
@@ -516,13 +534,16 @@ function startJobLiveLoop(
   let refreshInFlight = false;
   let consecutiveRefreshFailures = 0;
   let retryAfter = 0;
-  const scheduleRetry = (): void => {
+  const scheduleRetry = (error?: unknown): void => {
     consecutiveRefreshFailures = Math.min(consecutiveRefreshFailures + 1, 6);
-    retryAfter = Date.now() + Math.min(30_000, 1_000 * 2 ** (consecutiveRefreshFailures - 1));
+    const exponential = Math.min(30_000, 1_000 * 2 ** (consecutiveRefreshFailures - 1));
+    retryAfter = Date.now() + Math.max(exponential, retryAfterMs(error) ?? 0);
   };
   const refresh = async (): Promise<void> => {
     if (refreshInFlight || Date.now() < retryAfter) return;
+    if (liveEditInFlight || Date.now() < liveEditNotBefore) return;
     refreshInFlight = true;
+    liveEditInFlight = true;
     try {
       const runtime = getWorkerRuntime();
       let job;
@@ -565,22 +586,26 @@ function startJobLiveLoop(
           stopJobLiveLoop(loopKey);
           return;
         } else if (editClass === "transient") {
-          scheduleRetry();
+          scheduleRetry(error);
+          liveEditNotBefore = Math.max(liveEditNotBefore, retryAfter);
           return;
         } else {
           // Bad HTML, a temporary Telegram API shape change, or a network
           // adapter error must be retried with backoff; never abandon a live
           // worker monitor because one edit failed.
-          scheduleRetry();
+          scheduleRetry(error);
+          liveEditNotBefore = Math.max(liveEditNotBefore, retryAfter);
           return;
         }
       }
       if (terminal) stopJobLiveLoop(loopKey);
-    } catch {
+    } catch (error) {
       // Keep monitoring through unexpected runtime/Telegram failures. The
       // display is stopped only by an explicit display-gone classification.
-      scheduleRetry();
+      scheduleRetry(error);
     } finally {
+      liveEditInFlight = false;
+      liveEditNotBefore = Math.max(liveEditNotBefore, Date.now() + LIVE_EDIT_MIN_INTERVAL_MS);
       refreshInFlight = false;
     }
   };
@@ -590,7 +615,7 @@ function startJobLiveLoop(
       // a transient transport failure must not stop future refreshes.
       if (!isLiveEditTransientError(error)) stopJobLiveLoop(loopKey);
     });
-  }, 1_000);
+  }, 2_000);
   liveLoops.set(loopKey, interval);
   void refresh();
   setTimeout(() => stopJobLiveLoop(loopKey), 6 * 60 * 60_000).unref?.();
@@ -10346,10 +10371,13 @@ async function edit(
       console.warn(
         `[pappy-omega-mini] Telegram callback view edit failed: ${errorMessage}`,
       );
-      await ctx.answerCbQuery(
-        "This view could not be updated. Tap Refresh to try again.",
-        { show_alert: true },
-      ).catch(() => undefined);
+      // Do not issue a second Telegram API request when the first one was
+      // rate-limited or timed out; that compounds the outage.
+      if (!isLiveEditTransientError(error))
+        await ctx.answerCbQuery(
+          "This view could not be updated. Tap Refresh to try again.",
+          { show_alert: true },
+        ).catch(() => undefined);
       return;
     }
     await ctx
