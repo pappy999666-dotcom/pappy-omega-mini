@@ -90,6 +90,8 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(control).toContain("currentAction");
     expect(control).toContain("lastResult");
     expect(runtime).toContain("sendGroupColorStatus(context.job.workspaceId, sessionId, jid");
+    expect(runtime).toContain("const currentJoinSocket = (): JoinManagerSocket");
+    expect(runtime).toContain("joinWhatsAppInvite(currentJoinSocket(), record.canonicalUrl");
     expect(runtime).toContain('kind === "allstatus" || kind === "gstatus"');
     expect(runtime).toContain('payload.styled === true');
     expect(source).toContain("/https?:\\/\\/\\S+/i.test(detectorText)");

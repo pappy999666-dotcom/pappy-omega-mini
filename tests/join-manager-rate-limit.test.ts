@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { joinFailureIsTemporary, joinRestrictionStopReached, joinWhatsAppInvite } from "../src/jobs/join-operation.js";
+import { runBoundedBatch } from "../src/jobs/bounded-batch.js";
 
 type Plan = {
   throttleAttempts: number;
@@ -52,6 +53,30 @@ async function runWithBackoff(
   }
   return { result, retries, backoff };
 }
+
+describe("Join Manager batch continuation", () => {
+  it("continues to the next link after one skipped item", async () => {
+    const processed: string[] = [];
+    const reports: Array<Record<string, unknown>> = [];
+    const context = {
+      waitIfPaused: async () => undefined,
+      isCancellationRequested: () => false,
+      report: async (progress: Record<string, unknown>) => { reports.push(progress); },
+    } as never;
+    const result = await runBoundedBatch({
+      items: ["first", "second", "third"],
+      concurrency: 1,
+      context,
+      processItem: async (item: string) => {
+        processed.push(item);
+        return item === "first" ? { status: "skipped" as const } : { status: "success" as const };
+      },
+    });
+    expect(processed).toEqual(["first", "second", "third"]);
+    expect(result).toEqual({ success: 2, failed: 0, skipped: 1 });
+    expect(reports.at(-1)).toMatchObject({ completed: 3, success: 2, skipped: 1 });
+  });
+});
 
 describe("Join Manager live-link failure policy", () => {
   it("keeps temporary active-link outcomes retryable instead of permanent failures", () => {

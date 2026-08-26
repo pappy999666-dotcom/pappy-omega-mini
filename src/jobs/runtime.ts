@@ -98,6 +98,18 @@ interface PlayDownloadPayload {
   metadata?: import("../whatsapp/play-media.js").PlayMetadata;
 }
 
+interface JoinManagerSocket {
+  groupFetchAllParticipating?: () => Promise<Record<string, unknown>>;
+  groupGetInviteInfo?: (code: string) => Promise<{
+    id?: string;
+    subject?: string;
+    size?: number;
+    participantsCount?: number;
+  }>;
+  groupAcceptInvite?: (code: string) => Promise<string | undefined>;
+  groupRequestJoin?: (code: string) => Promise<string | undefined>;
+}
+
 interface GroupControlPayload {
   groupJid: string;
   operation: "approve" | "reject" | "participant";
@@ -968,20 +980,11 @@ export function startWorkerRuntime(): JobOrchestrator {
     );
     if (!ready)
       throw new Error("WhatsApp session is not ready for Join Manager work yet.");
-    const socket = getWhatsAppSocket(
-      context.job.workspaceId,
-      sessionId,
-    ) as unknown as {
-      groupFetchAllParticipating?: () => Promise<Record<string, unknown>>;
-      groupGetInviteInfo?: (code: string) => Promise<{
-        id?: string;
-        subject?: string;
-        size?: number;
-        participantsCount?: number;
-      }>;
-      groupAcceptInvite?: (code: string) => Promise<string | undefined>;
-      groupRequestJoin?: (code: string) => Promise<string | undefined>;
-    };
+    const currentJoinSocket = (): JoinManagerSocket =>
+      getWhatsAppSocket(
+        context.job.workspaceId,
+        sessionId,
+      ) as unknown as JoinManagerSocket;
     const payload = context.job.payload as {
       targetCount?: number;
       delayMs?: number;
@@ -1002,7 +1005,7 @@ export function startWorkerRuntime(): JobOrchestrator {
     };
     let membershipSnapshot: Record<string, unknown> | undefined;
     try {
-      membershipSnapshot = await socket.groupFetchAllParticipating?.();
+      membershipSnapshot = await currentJoinSocket().groupFetchAllParticipating?.();
     } catch {
       // Invite metadata and join can still proceed; a later successful join
       // seeds the snapshot without turning a membership-read failure into an
@@ -1169,7 +1172,10 @@ export function startWorkerRuntime(): JobOrchestrator {
         });
         const runJoinAttempt = (): Promise<JoinAttemptResult> =>
           withTimeout(
-            joinWhatsAppInvite(socket, record.canonicalUrl, {
+            // A reconnect replaces the Baileys socket object. Never keep using
+            // the socket captured at job start: after one close, that stale
+            // object would turn every following link into a network skip.
+            joinWhatsAppInvite(currentJoinSocket(), record.canonicalUrl, {
               mode: payload.requestMode ?? "auto",
               ...(membershipSnapshot ? { participatingGroups: membershipSnapshot } : {}),
             }),
