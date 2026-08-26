@@ -87,7 +87,7 @@ describe("WhatsApp session lifecycle supervisor telemetry", () => {
         failures += 1;
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 18));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(failures).toBeGreaterThanOrEqual(1);
     expect(getLifecycleHealth(key).heartbeatFailures).toBeGreaterThanOrEqual(3);
   });

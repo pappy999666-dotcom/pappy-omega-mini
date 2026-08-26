@@ -73,6 +73,31 @@ function rememberGroupMessage(
   trackOutboundResult(workspaceId, sessionId, groupJid, ownJid(socket), result);
 }
 
+const GROUP_STATUS_METADATA_BUDGET_MS = 750;
+const GROUP_STATUS_PREVIEW_BUDGET_MS = 1_000;
+
+async function resolveWithinBudget<T>(
+  operation: Promise<T>,
+  budgetMs: number,
+  fallback: T,
+): Promise<T> {
+  // Attach the rejection handler immediately so a timed-out Baileys/fetch
+  // operation cannot become an unhandled rejection after the status is sent.
+  const safeOperation = operation.catch(() => fallback);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      safeOperation,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), budgetMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function jidVariants(value: unknown): Set<string> {
   if (typeof value !== "string") return new Set();
   const normalized = value.trim().toLowerCase().replace(/:\\d+(?=@)/, "");
@@ -1398,23 +1423,29 @@ export async function sendGroupColorStatus(
   const socket = socketFor(workspaceId, sessionId);
   const metadata = method(socket, "groupMetadata");
   if (!metadata) throw new Error("Unsupported capability: groupMetadata");
-  const group = (await metadata(jid)) as { subject?: string };
+  const group = (await resolveWithinBudget(
+    Promise.resolve().then(() => metadata(jid)) as Promise<{ subject?: string }>,
+    GROUP_STATUS_METADATA_BUDGET_MS,
+    {},
+  )) as { subject?: string };
   const sourceText = payload.text ?? "";
   const mediaCaption = payload.media?.caption?.trim() ?? "";
   const detectorText = sourceText || mediaCaption;
   // Designed status applies to both URL and ordinary text payloads. URL
   // metadata is preserved when available; text uses the text design templates.
+  // The metadata and preview paths are bounded so a cold or rate-limited URL
+  // cannot delay the first status post indefinitely.
   const groupName = String(group.subject ?? "WhatsApp Group").trim() || "WhatsApp Group";
   const sourceContent = payload.media
     ? messagePayload(detectorText, payload.media)
     : { text: detectorText };
-  const sourcePrepared = await prepareCanonicalPreviewContent({
+  const sourcePrepared = await prepareCanonicalPreviewContentWithBudget({
     text: detectorText,
     content: sourceContent,
     target: "group-status",
     socket,
     cacheScope: `${workspaceId}:${sessionId}`,
-  });
+  }, GROUP_STATUS_PREVIEW_BUDGET_MS);
   const sourcePreview = sourcePrepared.linkPreview as Record<string, unknown> | undefined;
   const previewTitle = typeof sourcePreview?.title === "string" ? sourcePreview.title.trim() : "";
   const design = createGroupStatusDesign({
@@ -1426,13 +1457,14 @@ export async function sendGroupColorStatus(
   const content = payload.media
     ? messagePayload(design.text, payload.media)
     : { text: design.text };
-  const prepared = await prepareCanonicalPreviewContent({
-    text: design.text,
-    content: sourcePreview ? { ...content, linkPreview: sourcePreview } : content,
-    target: "group-status",
-    socket,
-    cacheScope: `${workspaceId}:${sessionId}`,
-  });
+  // Reuse the one preview resolved from the original URL. Re-resolving after
+  // the design text is generated was the second avoidable network wait and
+  // could also attach metadata belonging to a different URL.
+  const prepared = {
+    ...content,
+    ...(sourcePreview ? { linkPreview: sourcePreview } : {}),
+    groupStatus: true,
+  };
   const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: groupStatus");
   const sendOptions = {

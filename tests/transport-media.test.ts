@@ -235,6 +235,31 @@ describe("styled group status transport", () => {
     expect(typeof options?.font).toBe("number");
   });
 
+  it("sends a cold link quickly when metadata and preview providers stall", async () => {
+    mocks.send.mockClear();
+    mocks.groupMetadata.mockImplementationOnce(() => new Promise(() => {}));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Promise<Response>(() => {})) as typeof fetch;
+    try {
+      const startedAt = Date.now();
+      await sendGroupColorStatus("workspace", "session", "120363000000000001@g.us", {
+        text: "https://example.com/cold-designed-status",
+      });
+      expect(Date.now() - startedAt).toBeLessThan(2_200);
+      expect(mocks.send).toHaveBeenCalledOnce();
+      const [, content, options] = mocks.send.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+        Record<string, unknown>,
+      ];
+      expect(content.groupStatus).toBe(true);
+      expect(content.text).toContain("https://example.com/cold-designed-status");
+      expect(options.backgroundColor).toMatch(/^#[0-9A-F]{6}$/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("sends group-aware color metadata through Baileys generation options", async () => {
     mocks.send.mockClear();
     const originalFetch = globalThis.fetch;
