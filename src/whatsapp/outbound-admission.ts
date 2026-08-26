@@ -145,7 +145,7 @@ export function outboundAdmissionSnapshot(now = Date.now()): OutboundAdmissionSn
     active,
     pending,
     oldestWaitMs: Math.round(oldestWaitMs),
-    perSession: {},
+    perSession,
   };
 }
 

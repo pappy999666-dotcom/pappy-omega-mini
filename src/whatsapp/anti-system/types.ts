@@ -106,6 +106,9 @@ export interface GroupAntiConfig {
   antigstatus?: AntiModuleConfig;
   silentActionMessages: boolean;
   messages: Record<string, string>;
+  /** Durable moderation state keyed by sender and module, bounded by the caller. */
+  warningCounts?: Record<string, number>;
+  spamWindows?: Record<string, number[]>;
   updatedAt: number;
 }
 

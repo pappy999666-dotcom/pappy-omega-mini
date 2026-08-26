@@ -514,21 +514,46 @@ export async function authenticateWorkloadWorker(
   return { worker, credential };
 }
 
+export interface WorkloadStatusAcceptanceInput {
+  expectedGeneration: number;
+  incomingGeneration?: number;
+  eventAt?: number;
+  currentEventAt?: number;
+}
+
+export function shouldAcceptWorkloadStatus(input: WorkloadStatusAcceptanceInput): boolean {
+  if (input.incomingGeneration !== undefined && input.incomingGeneration !== input.expectedGeneration) return false;
+  if (input.eventAt !== undefined && input.currentEventAt !== undefined && input.eventAt < input.currentEventAt) return false;
+  return true;
+}
+
 export async function recordWorkloadSessionStatus(
   workerId: string,
-  input: { workspaceId: string; sessionId: string; status: "PAIRING" | "ACTIVE" | "RECONNECTING" | "DEGRADED" | "ERROR" | "LOGGED_OUT"; authHealth?: "UNKNOWN" | "VALID" | "INVALID" | "DEGRADED"; phoneNumber?: string; reason?: string },
+  input: { workspaceId: string; sessionId: string; status: "PAIRING" | "ACTIVE" | "RECONNECTING" | "DEGRADED" | "ERROR" | "LOGGED_OUT"; authHealth?: "UNKNOWN" | "VALID" | "INVALID" | "DEGRADED"; phoneNumber?: string; reason?: string; eventAt?: number; generation?: number },
 ): Promise<void> {
   const worker = await getWorkloadWorker(workerId);
   if (!worker) throw new Error("Workload worker not found.");
   const assignment = await getAuthorizedWorkloadAssignment(workerId, input.sessionId);
   if (assignment.workspaceId !== input.workspaceId) throw new Error("Workload session workspace mismatch.");
+  const expectedGeneration = assignment.generation ?? 1;
+  const eventAt = Number.isSafeInteger(input.eventAt) && (input.eventAt as number) > 0 ? input.eventAt as number : Date.now();
+  let currentEventAt: number | undefined;
+  try {
+    currentEventAt = getSession(input.workspaceId, input.sessionId).lifecycleEventAt;
+  } catch {
+    currentEventAt = undefined;
+  }
+  const acceptanceInput: WorkloadStatusAcceptanceInput = { expectedGeneration, eventAt };
+  if (input.generation !== undefined) acceptanceInput.incomingGeneration = input.generation;
+  if (currentEventAt !== undefined) acceptanceInput.currentEventAt = currentEventAt;
+  if (!shouldAcceptWorkloadStatus(acceptanceInput)) return;
   updateSession(input.workspaceId, input.sessionId, {
     status: input.status,
     ...(input.authHealth ? { authHealth: input.authHealth } : {}),
     ...(input.phoneNumber ? { phoneNumber: input.phoneNumber } : {}),
     ...(input.reason ? { disconnectReason: input.reason.slice(0, 240) } : {}),
-    ...(input.status === "ACTIVE" ? { connectedAt: Date.now(), lastHealthyAt: Date.now(), disconnectReason: undefined } : {}),
-  });
+    ...(input.status === "ACTIVE" ? { connectedAt: eventAt, lastHealthyAt: eventAt, disconnectReason: undefined } : {}),
+  }, { eventAt, source: "workload" });
   await updateWorkloadAssignment(assignment.assignmentId, {
     status: input.status === "ACTIVE" ? "RUNNING" : input.status === "ERROR" ? "ERROR" : input.status === "LOGGED_OUT" ? "OFFLINE" : "DEGRADED",
     ...(input.reason ? { lastError: input.reason.slice(0, 500) } : input.status === "ACTIVE" ? { lastError: undefined } : {}),
@@ -719,6 +744,7 @@ export async function assignWorkloadSession(
         status: "ASSIGNED",
         assignedAt: now,
         updatedAt: now,
+        generation: (existing?.generation ?? 0) + 1,
       };
   if (!existing || existing.workerId !== workerId) await createWorkloadAssignment(assignment);
   const assignedSessionIds = [...new Set([...worker.assignedSessionIds, sessionId])];

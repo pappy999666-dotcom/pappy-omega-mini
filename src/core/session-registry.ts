@@ -253,17 +253,32 @@ export async function deleteSession(
   await deletePersistedSession(sessionId);
 }
 
+export interface SessionUpdateOptions {
+  /** Source event time. Older callbacks are ignored rather than regressing state. */
+  eventAt?: number;
+  source?: "local" | "workload";
+}
+
 export function updateSession(
   workspaceId: string,
   sessionId: string,
   patch: Partial<WhatsAppSession>,
+  options: SessionUpdateOptions = {},
 ): WhatsAppSession {
   const current = getSession(workspaceId, sessionId);
+  const eventAt = Number.isFinite(options.eventAt) ? Math.floor(options.eventAt as number) : undefined;
+  if (eventAt !== undefined && current.lifecycleEventAt !== undefined && eventAt < current.lifecycleEventAt)
+    return current;
   const next = {
     ...current,
     ...patch,
     sessionId: current.sessionId,
     workspaceId: current.workspaceId,
+    lifecycleVersion: (current.lifecycleVersion ?? 0) + 1,
+    ...(eventAt !== undefined
+      ? { lifecycleEventAt: eventAt }
+      : { lifecycleEventAt: Math.max(current.lifecycleEventAt ?? 0, Date.now()) }),
+    ...(options.source ? { lifecycleSource: options.source } : {}),
   };
   sessions.set(sessionId, next);
   void persistSession(next).catch(() => undefined);
@@ -394,12 +409,14 @@ export async function refreshSessionRegistry(): Promise<void> {
       const current = sessions.get(session.sessionId);
       const persisted = normalizedPersistedSession(session);
       // DB is authoritative for records not currently held by a live socket.
-      // Preserve a newer in-memory lifecycle update when it exists.
-      const persistedAt = Math.max(persisted.lastHealthyAt ?? 0, persisted.connectedAt ?? 0, persisted.lastMessageReceivedAt ?? 0);
-      const currentAt = current
-        ? Math.max(current.lastHealthyAt ?? 0, current.connectedAt ?? 0, current.lastMessageReceivedAt ?? 0)
+      // Preserve a newer in-memory lifecycle update when it exists. Lifecycle
+      // event ordering is stronger than health timestamps because a valid
+      // connection can have no recent message or heartbeat yet.
+      const persistedOrder = Math.max(persisted.lifecycleEventAt ?? 0, persisted.lifecycleVersion ?? 0, persisted.lastHealthyAt ?? 0, persisted.connectedAt ?? 0, persisted.lastMessageReceivedAt ?? 0);
+      const currentOrder = current
+        ? Math.max(current.lifecycleEventAt ?? 0, current.lifecycleVersion ?? 0, current.lastHealthyAt ?? 0, current.connectedAt ?? 0, current.lastMessageReceivedAt ?? 0)
         : 0;
-      if (!current || persistedAt >= currentAt) sessions.set(session.sessionId, persisted);
+      if (!current || persistedOrder >= currentOrder) sessions.set(session.sessionId, persisted);
     }
     lastRegistryRefreshAt = Date.now();
   })().finally(() => {

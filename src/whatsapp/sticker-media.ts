@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { runBoundedSubprocess } from "../core/subprocess.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,80 +9,26 @@ const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const FFMPEG_TIMEOUT_MS = 20_000;
 const MAX_ANIMATED_STICKER_FRAMES = 180;
 
-function runFfmpeg(input: Buffer, args: string[]): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", ...args], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    const output: Buffer[] = [];
-    const errors: Buffer[] = [];
-    let total = 0;
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error("Sticker media conversion timed out."));
-    }, FFMPEG_TIMEOUT_MS);
-    child.stdout.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > MAX_OUTPUT_BYTES) {
-        child.kill("SIGKILL");
-        reject(new Error("Converted sticker media exceeded the safe size limit."));
-        return;
-      }
-      output.push(chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => errors.push(chunk));
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) return resolve(Buffer.concat(output));
-      reject(new Error(errors.join("").toString().trim().slice(-600) || `FFmpeg exited with code ${code ?? "unknown"}.`));
-    });
-    child.stdin.end(input);
+async function runFfmpeg(input: Buffer, args: string[]): Promise<Buffer> {
+  const result = await runBoundedSubprocess("ffmpeg", ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", ...args], {
+    input,
+    timeoutMs: FFMPEG_TIMEOUT_MS,
+    maxStdoutBytes: MAX_OUTPUT_BYTES,
+    maxStderrBytes: 8 * 1024,
+    errorPrefix: "Sticker media conversion",
   });
+  return result.stdout;
 }
 
-function runFfmpegFromDirectory(directory: string, args: string[]): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", ...args], {
-      cwd: directory,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const output: Buffer[] = [];
-    const errors: Buffer[] = [];
-    let total = 0;
-    let settled = false;
-    const fail = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(error);
-    };
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      fail(new Error("Sticker media conversion timed out."));
-    }, FFMPEG_TIMEOUT_MS);
-    child.stdout.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > MAX_OUTPUT_BYTES) {
-        child.kill("SIGKILL");
-        fail(new Error("Converted sticker media exceeded the safe size limit."));
-        return;
-      }
-      output.push(chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => errors.push(chunk));
-    child.once("error", (error) => fail(error));
-    child.once("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (code === 0) resolve(Buffer.concat(output));
-      else reject(new Error(errors.join("").toString().trim().slice(-600) || `FFmpeg exited with code ${code ?? "unknown"}.`));
-    });
+async function runFfmpegFromDirectory(directory: string, args: string[]): Promise<Buffer> {
+  const result = await runBoundedSubprocess("ffmpeg", ["-hide_banner", "-loglevel", "error", ...args], {
+    cwd: directory,
+    timeoutMs: FFMPEG_TIMEOUT_MS,
+    maxStdoutBytes: MAX_OUTPUT_BYTES,
+    maxStderrBytes: 8 * 1024,
+    errorPrefix: "Sticker media conversion",
   });
+  return result.stdout;
 }
 
 async function animatedStickerToMp4(input: Buffer, pages: number): Promise<Buffer> {

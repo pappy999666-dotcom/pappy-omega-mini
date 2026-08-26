@@ -28,7 +28,7 @@ import {
   getWhatsAppSocket,
   restartWhatsAppSession,
 } from "../whatsapp/session-manager.js";
-import { getRuntimeHealthSnapshot } from "../core/runtime-health.js";
+import { getRuntimeCapacitySnapshot, getRuntimeHealthSnapshot } from "../core/runtime-health.js";
 import { inboundAdmissionSnapshot } from "../whatsapp/inbound-admission.js";
 import { outboundAdmissionSnapshot } from "../whatsapp/outbound-admission.js";
 import { listGroups } from "../whatsapp/transport-adapter.js";
@@ -51,6 +51,18 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 function bearer(request: IncomingMessage): string | undefined {
   const value = request.headers.authorization;
   return value?.startsWith("Bearer ") ? value.slice(7).trim() : undefined;
+}
+
+function internalControlToken(): string | undefined {
+  return env.INTERNAL_CONTROL_TOKEN ?? env.ENCRYPTION_SECRET;
+}
+
+function sessionRecoveryToken(): string | undefined {
+  return env.SESSION_RECOVERY_TOKEN ?? internalControlToken();
+}
+
+function panelDebugToken(): string | undefined {
+  return env.PANEL_DEBUG_TOKEN ?? internalControlToken();
 }
 
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -147,6 +159,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         ok: true,
         ...workloadControlSummary(),
         runtime: getRuntimeHealthSnapshot(),
+        capacity: getRuntimeCapacitySnapshot(),
         inbound: inboundAdmissionSnapshot(),
         outbound: outboundAdmissionSnapshot(),
       });
@@ -217,7 +230,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       const localAddress = request.socket.remoteAddress;
       if (
         env.NODE_ENV === "production" &&
-        (typeof token !== "string" || token !== env.ENCRYPTION_SECRET ||
+        (typeof token !== "string" || token !== sessionRecoveryToken() ||
           !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(localAddress ?? ""))
       ) {
         json(response, 403, { ok: false, error: "Local session recovery authorization required." });
@@ -235,7 +248,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       const localAddress = request.socket.remoteAddress;
       if (
         env.NODE_ENV === "production" &&
-        (typeof token !== "string" || token !== env.ENCRYPTION_SECRET || !["127.0.0.1", "::1"].includes(localAddress ?? ""))
+        (typeof token !== "string" || token !== panelDebugToken() || !["127.0.0.1", "::1"].includes(localAddress ?? ""))
       ) {
         json(response, 403, { ok: false, error: "Local panel inventory diagnostic authorization required." });
         return;
@@ -260,7 +273,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       const localAddress = request.socket.remoteAddress;
       if (
         env.NODE_ENV === "production" &&
-        (typeof token !== "string" || token !== env.ENCRYPTION_SECRET || !["127.0.0.1", "::1"].includes(localAddress ?? ""))
+        (typeof token !== "string" || token !== panelDebugToken() || !["127.0.0.1", "::1"].includes(localAddress ?? ""))
       ) {
         json(response, 403, { ok: false, error: "Local group selection diagnostic authorization required." });
         return;
@@ -299,7 +312,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       const localAddress = request.socket.remoteAddress;
       if (
         env.NODE_ENV === "production" &&
-        (typeof token !== "string" || token !== env.ENCRYPTION_SECRET || !["127.0.0.1", "::1"].includes(localAddress ?? ""))
+        (typeof token !== "string" || token !== panelDebugToken() || !["127.0.0.1", "::1"].includes(localAddress ?? ""))
       ) {
         json(response, 403, { ok: false, error: "Local preview diagnostic authorization required." });
         return;
@@ -531,6 +544,8 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         ...(input.authHealth !== undefined ? { authHealth: enumField(input, "authHealth", ["UNKNOWN", "VALID", "INVALID", "DEGRADED"] as const) } : {}),
         ...(typeof input.phoneNumber === "string" ? { phoneNumber: input.phoneNumber } : {}),
         ...(typeof input.reason === "string" ? { reason: input.reason } : {}),
+        ...(typeof input.eventAt === "number" && Number.isSafeInteger(input.eventAt) ? { eventAt: input.eventAt } : {}),
+        ...(typeof input.generation === "number" && Number.isSafeInteger(input.generation) && input.generation >= 1 ? { generation: input.generation } : {}),
       });
       json(response, 200, { ok: true, sessionId: stringField(input, "sessionId") });
       return;

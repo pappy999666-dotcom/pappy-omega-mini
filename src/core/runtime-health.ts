@@ -95,6 +95,26 @@ export function startRuntimeHealthMonitor(): void {
   sample();
 }
 
+export interface RuntimeCapacitySnapshot {
+  state: "HEALTHY" | "PRESSURED" | "OVERLOADED";
+  ready: boolean;
+  reasons: string[];
+}
+
+export function getRuntimeCapacitySnapshot(snapshot = latest): RuntimeCapacitySnapshot {
+  const reasons: string[] = [];
+  if (snapshot.eventLoopUtilization.utilization >= 0.95) reasons.push("event-loop-utilization-high");
+  else if (snapshot.eventLoopUtilization.utilization >= 0.80) reasons.push("event-loop-utilization-pressured");
+  if (snapshot.eventLoopLagMs.p99 >= 1_000) reasons.push("event-loop-p99-over-1s");
+  else if (snapshot.eventLoopLagMs.p99 >= 250) reasons.push("event-loop-p99-over-250ms");
+  const overloaded = snapshot.eventLoopUtilization.utilization >= 0.95 || snapshot.eventLoopLagMs.p99 >= 1_000;
+  return {
+    state: overloaded ? "OVERLOADED" : reasons.length ? "PRESSURED" : "HEALTHY",
+    ready: !overloaded,
+    reasons,
+  };
+}
+
 export function getRuntimeHealthSnapshot(): RuntimeHealthSnapshot {
   return {
     ...latest,

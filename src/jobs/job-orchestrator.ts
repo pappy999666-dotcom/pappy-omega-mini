@@ -267,11 +267,11 @@ export class JobOrchestrator {
   }
 
   async recoverStaleJobsNow(): Promise<void> {
-    await this.recoverOutstandingJobs(true);
+    await this.recoverOutstandingJobs();
     await this.reapStaleJobs();
   }
 
-  private async recoverOutstandingJobs(forceRunningRecovery: boolean): Promise<void> {
+  private async recoverOutstandingJobs(): Promise<void> {
     const now = Date.now();
     const recoveryJobs = (
       await Promise.all(
@@ -295,18 +295,15 @@ export class JobOrchestrator {
       const bullWaiting = bullJob ? await bullJob.isWaiting() : false;
       const bullActive = bullJob ? await bullJob.isActive() : false;
       const bullDelayed = bullJob ? await bullJob.isDelayed() : false;
-      const staleRunningRecovery =
-        record.state === "RUNNING" &&
-        !bullWaiting &&
-        !bullDelayed &&
-        (!bullActive || heartbeatAge > STALE_ACTIVE_JOB_GRACE_MS) &&
-        heartbeatAge > 10_000;
-      const shouldRecover =
-        !bullJob ||
-        (forceRunningRecovery && record.state === "RUNNING" && heartbeatAge > 0) ||
-        staleRunningRecovery ||
-        (record.state === "RETRYING" && !bullWaiting && !bullActive && !bullDelayed) ||
-        isRetryableBroadcastFailure(record, heartbeatAge);
+      const shouldRecover = shouldRecoverOutstandingJob({
+        state: record.state,
+        bullExists: Boolean(bullJob),
+        bullWaiting,
+        bullActive,
+        bullDelayed,
+        heartbeatAge,
+        retryableBroadcastFailure: isRetryableBroadcastFailure(record, heartbeatAge),
+      });
       if (!shouldRecover) continue;
       if (recoveryParents.has(record.jobId)) continue;
       const claimKey = `pappy-omega-mini:recovery:${record.jobId}`;
@@ -895,6 +892,29 @@ export class JobOrchestrator {
       this.reaperBusy = false;
     }
   }
+}
+
+export interface OutstandingJobRecoveryInput {
+  state: JobRecord["state"];
+  bullExists: boolean;
+  bullWaiting: boolean;
+  bullActive: boolean;
+  bullDelayed: boolean;
+  heartbeatAge: number;
+  retryableBroadcastFailure: boolean;
+}
+
+export function shouldRecoverOutstandingJob(input: OutstandingJobRecoveryInput): boolean {
+  if (!input.bullExists) return true;
+  const staleRunning =
+    input.state === "RUNNING" &&
+    !input.bullWaiting &&
+    !input.bullDelayed &&
+    (!input.bullActive || input.heartbeatAge > STALE_ACTIVE_JOB_GRACE_MS) &&
+    input.heartbeatAge > 10_000;
+  if (staleRunning) return true;
+  if (input.state === "RETRYING" && !input.bullWaiting && !input.bullActive && !input.bullDelayed) return true;
+  return input.retryableBroadcastFailure;
 }
 
 function isBroadcastKind(kind: JobKind): boolean {

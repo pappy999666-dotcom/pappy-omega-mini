@@ -1272,7 +1272,7 @@ export async function sendDirectMedia(
   rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
 }
 
-function messagePayload(
+export function messagePayload(
   text: string,
   media?: GroupMediaPayload,
 ): Record<string, unknown> {
@@ -1376,6 +1376,7 @@ export async function sendGroupStatus(
     image?: unknown;
     video?: unknown;
     media?: GroupMediaPayload;
+    preparedContent?: Record<string, unknown>;
   },
 ): Promise<void> {
   const startedAt = Date.now();
@@ -1392,6 +1393,12 @@ export async function sendGroupStatus(
   }
   const send = method(socket, "sendMessage");
   if (!send) throw new Error("Unsupported capability: groupStatus");
+  if (payload.preparedContent) {
+    const result = await send(jid, { ...payload.preparedContent, groupStatus: true });
+    rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
+    logGroupStatusStage("send-complete", startedAt, workspaceId, sessionId, jid, { path: "prepared" });
+    return;
+  }
   if (payload.media) {
     const mediaContent = messagePayload(text, payload.media);
     const preparedMedia = await prepareCanonicalPreviewContentWithBudget({
@@ -1472,7 +1479,7 @@ export async function sendGroupColorStatus(
   workspaceId: string,
   sessionId: string,
   jid: string,
-  payload: { text?: string; media?: GroupMediaPayload },
+  payload: { text?: string; media?: GroupMediaPayload; preparedPreview?: Record<string, unknown> },
 ): Promise<void> {
   const socket = socketFor(workspaceId, sessionId);
   const metadata = method(socket, "groupMetadata");
@@ -1493,13 +1500,15 @@ export async function sendGroupColorStatus(
   const sourceContent = payload.media
     ? messagePayload(detectorText, payload.media)
     : { text: detectorText };
-  const sourcePrepared = await prepareCanonicalPreviewContentWithBudget({
-    text: detectorText,
-    content: sourceContent,
-    target: "group-status",
-    socket,
-    cacheScope: `${workspaceId}:${sessionId}`,
-  }, GROUP_STATUS_PREVIEW_BUDGET_MS);
+  const sourcePrepared = payload.preparedPreview
+    ? { linkPreview: payload.preparedPreview }
+    : await prepareCanonicalPreviewContentWithBudget({
+        text: detectorText,
+        content: sourceContent,
+        target: "group-status",
+        socket,
+        cacheScope: `${workspaceId}:${sessionId}`,
+      }, GROUP_STATUS_PREVIEW_BUDGET_MS);
   const sourcePreview = sourcePrepared.linkPreview as Record<string, unknown> | undefined;
   const previewTitle = typeof sourcePreview?.title === "string" ? sourcePreview.title.trim() : "";
   const design = createGroupStatusDesign({

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { runBoundedSubprocessText } from "../core/subprocess.js";
 import sharp from "sharp";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { pappyHeader } from "./response-designs.js";
@@ -77,17 +77,12 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout: () =>
 }
 
 function runExternalCommand(binary: string, args: string[], timeoutMs = COMMAND_TIMEOUT_MS): Promise<{ stdout: string; stderr: string }> {
-  let childProcess: ReturnType<typeof spawn> | undefined;
-  return withTimeout(new Promise((resolve, reject) => {
-    childProcess = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"] });
-    const child = childProcess;
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.once("error", (error) => reject(error));
-    child.once("close", (code) => code === 0 ? resolve({ stdout, stderr }) : reject(new Error(stderr.trim().slice(-800) || `yt-dlp exited with code ${code ?? "unknown"}`)));
-  }), timeoutMs, () => { childProcess?.kill("SIGKILL"); });
+  return runBoundedSubprocessText(binary, args, {
+    timeoutMs,
+    maxStdoutBytes: 8 * 1024 * 1024,
+    maxStderrBytes: 8 * 1024,
+    errorPrefix: `${binary} command`,
+  });
 }
 
 function runCommand(args: string[], timeoutMs = COMMAND_TIMEOUT_MS): Promise<{ stdout: string; stderr: string }> {

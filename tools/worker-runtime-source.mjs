@@ -518,11 +518,12 @@ async function checkForUpdate() {
     noteError(error, "update check failed; current release retained");
   }
 }
-async function reportSessionStatus(runtime, status, authHealth, reason) {
+async function reportSessionStatus(runtime, status, authHealth, reason, eventAt = Date.now()) {
   await control("/workload/session-status", {
     workspaceId: runtime.workspaceId,
     sessionId: runtime.sessionId,
     status,
+    eventAt,
     ...(authHealth ? { authHealth } : {}),
     ...(runtime.socket.user?.id ? { phoneNumber: String(runtime.socket.user.id).split(":")[0].replace(/\D/g, "") } : {}),
     ...(reason ? { reason: String(reason).slice(0, 240) } : {}),
@@ -585,7 +586,7 @@ async function startSession(workspaceId, sessionId, waitForReady = true, readyTi
       matrix.lastAction = `session ${sessionId} connected`;
       matrix.lastError = "none";
       renderMatrix(true);
-      void reportSessionStatus(runtime, "ACTIVE", "VALID");
+      void reportSessionStatus(runtime, "ACTIVE", "VALID", undefined, Date.now());
       void loadGroupSummaries(runtime)
         .then(async (summaries) => {
           const groups = [...new Set(summaries.map((item) => item.jid).filter((jid) => typeof jid === "string" && jid.endsWith("@g.us")))];
@@ -617,10 +618,10 @@ async function startSession(workspaceId, sessionId, waitForReady = true, readyTi
           await runtime.store.flush().catch(() => undefined);
           await purgeLocalSessionData(workspaceId, sessionId);
           await deleteGroupSummarySnapshot(sessionId).catch(() => undefined);
-          await reportSessionStatus(runtime, "LOGGED_OUT", "INVALID", closeReason);
+          await reportSessionStatus(runtime, "LOGGED_OUT", "INVALID", closeReason, Date.now());
         })().catch((error) => noteError(error, "logged-out session cleanup failed"));
       } else {
-        void reportSessionStatus(runtime, "DEGRADED", "DEGRADED", closeReason);
+        void reportSessionStatus(runtime, "DEGRADED", "DEGRADED", closeReason, Date.now());
       }
       clearSessionInventoryState(sessionId);
       runtimes.delete(sessionId);
@@ -1602,7 +1603,7 @@ async function execute(command) {
     const runtime = await startSession(command.workspaceId, command.sessionId, false);
     runtime.pairingNoticePending = true;
     await runtime.pairingReady;
-    await reportSessionStatus(runtime, "PAIRING", "UNKNOWN");
+    await reportSessionStatus(runtime, "PAIRING", "UNKNOWN", undefined, Date.now());
     const phoneNumber = String(command.payload.phoneNumber ?? "").replace(/\D/g, "");
     const customCode = String(command.payload.customCode ?? "PAPPYBOT").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
     if (typeof runtime.socket.requestPairingCode !== "function") throw new Error("Pairing codes are not supported by this transport.");

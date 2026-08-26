@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSession } from "../src/core/session-registry.js";
 import { createCommandRegistry, executeCommand } from "../src/whatsapp/command-registry.js";
 import { buildSessionMenu, renderAsciiMenu } from "../src/menus/menu-model.js";
-import { loadGroupAntiConfig, updateModule } from "../src/whatsapp/anti-system/config.js";
+import { incrementWarn, loadGroupAntiConfig, recordSpam, updateModule } from "../src/whatsapp/anti-system/config.js";
 import { runAntiChecks, runAntiParticipantEvent } from "../src/whatsapp/anti-system/engine.js";
 import { getGroupModerationSnapshot, deleteWhatsAppMessage, sendGroupText, updateGroupParticipantBatch } from "../src/whatsapp/transport-adapter.js";
 
@@ -93,6 +93,19 @@ describe("Omega-V1 Anti System parity surface", () => {
     expect(loadGroupAntiConfig(first.workspaceId, first.sessionId, first.chatJid).antilink?.enabled).toBe(true);
     expect(loadGroupAntiConfig(second.workspaceId, second.sessionId, second.chatJid).antilink).toBeUndefined();
     expect(firstConfig.workspaceId).not.toBe(secondConfig.workspaceId);
+  });
+
+  it("persists warning counts and bounded spam windows in the session store", async () => {
+    const ctx = context({ chatJid: `120363${Date.now()}@g.us` });
+    const sender = "2348088888888@s.whatsapp.net";
+    expect(incrementWarn(ctx.workspaceId, ctx.sessionId, ctx.chatJid, sender, "antilink")).toBe(1);
+    expect(incrementWarn(ctx.workspaceId, ctx.sessionId, ctx.chatJid, sender, "antilink")).toBe(2);
+    expect(recordSpam(ctx.workspaceId, ctx.sessionId, ctx.chatJid, sender, 30)).toBe(1);
+    const immediate = loadGroupAntiConfig(ctx.workspaceId, ctx.sessionId, ctx.chatJid);
+    expect(immediate.warningCounts?.[`${sender}:antilink`]).toBe(2);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const persisted = loadGroupAntiConfig(ctx.workspaceId, ctx.sessionId, ctx.chatJid);
+    expect(persisted.spamWindows?.[sender]).toHaveLength(1);
   });
 
   it("requires a group and fresh group-admin permission for Anti configuration", async () => {

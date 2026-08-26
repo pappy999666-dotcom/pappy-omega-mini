@@ -9,6 +9,12 @@ const envSchema = z.object({
   WORKER_CONCURRENCY: z.coerce.number().int().positive().max(32).default(8),
   OWNER_TELEGRAM_IDS: z.string().default(""),
   ENCRYPTION_SECRET: z.string().min(32).optional(),
+  /** Dedicated HMAC secret for internal Redis bridge messages. */
+  BRIDGE_HMAC_SECRET: z.string().min(32).optional(),
+  /** Dedicated token for loopback recovery and diagnostics. */
+  INTERNAL_CONTROL_TOKEN: z.string().min(32).optional(),
+  SESSION_RECOVERY_TOKEN: z.string().min(32).optional(),
+  PANEL_DEBUG_TOKEN: z.string().min(32).optional(),
   OPTIONAL_DOMAIN: z.string().optional(),
   TELEGRAM_WEBHOOK_URL: z.string().url().optional(),
   OBJECT_STORAGE_BUCKET: z.string().optional(),

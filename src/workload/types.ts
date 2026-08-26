@@ -99,6 +99,8 @@ export interface WorkloadAssignmentRecord {
   status: WorkloadAssignmentStatus;
   assignedAt: number;
   updatedAt: number;
+  /** Increments whenever ownership is reassigned to a new worker. */
+  generation?: number;
   lastError?: string | undefined;
 }
 

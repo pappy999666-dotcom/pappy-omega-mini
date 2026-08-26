@@ -78,6 +78,18 @@ describe("bounded outbound admission", () => {
     expect(order).toEqual([9, 1, 2, 4]);
   });
 
+  it("reports per-session telemetry while work is active and pending", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const first = enqueueOutbound({ sessionId: "session-observed", priority: 1, run: () => blocked });
+    await wait(2);
+    const second = enqueueOutbound({ sessionId: "session-observed", priority: 1, run: async () => undefined });
+    const snapshot = outboundAdmissionSnapshot();
+    expect(snapshot.perSession["session-observed"]).toMatchObject({ active: 1, pending: 1 });
+    release();
+    await Promise.all([first, second]);
+  });
+
   it("rejects new work once the bounded pending queue is full", async () => {
     let releaseFirst!: () => void;
     const firstFinished = new Promise<void>((resolve) => { releaseFirst = resolve; });

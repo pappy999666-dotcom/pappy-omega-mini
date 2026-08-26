@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { Redis } from "ioredis";
 import { env, isWorkerProcess, workerSessionIds } from "../config/env.js";
 import { getSession } from "../core/session-registry.js";
@@ -10,6 +10,10 @@ const REQUEST_CHANNEL = "pappy-omega-mini:bridge-rpc:requests";
 const RESPONSE_PREFIX = "pappy-omega-mini:bridge-rpc:response:";
 const RESPONSE_TTL_MS = 45_000;
 const REQUEST_TIMEOUT_MS = 35_000;
+const BRIDGE_PROTOCOL_VERSION = 1;
+const BRIDGE_MAX_CLOCK_SKEW_MS = 60_000;
+const MAX_BRIDGE_MEDIA_BYTES = Math.min(env.MAX_MEDIA_BYTES, 8 * 1024 * 1024);
+const seenBridgeRequests = new Map<string, number>();
 
 type BridgeResult = string | WhatsAppReply | null;
 type BridgeHandler = (message: IncomingTextMessage) => Promise<BridgeResult>;
@@ -30,6 +34,8 @@ function redisConnection(): Redis {
 }
 
 function serializeMedia(media: WhatsAppMediaPayload): SerializedMedia {
+  if (media.bytes.byteLength > MAX_BRIDGE_MEDIA_BYTES)
+    throw new Error("Media exceeds the internal bridge payload limit.");
   return {
     kind: media.kind,
     bytes: media.bytes.toString("base64"),
@@ -57,6 +63,49 @@ function deserializeMedia(media: SerializedMedia): WhatsAppMediaPayload {
   };
 }
 
+function bridgeSecret(): string {
+  return env.BRIDGE_HMAC_SECRET ?? env.ENCRYPTION_SECRET ?? "pappy-omega-mini-development-bridge";
+}
+
+function bridgeSignature(input: {
+  requestId: string;
+  responseKey: string;
+  issuedAt: number;
+  message: SerializedMessage;
+}): string {
+  return createHmac("sha256", bridgeSecret())
+    .update(JSON.stringify({ v: BRIDGE_PROTOCOL_VERSION, ...input }))
+    .digest("hex");
+}
+
+function validBridgeSignature(
+  request: { requestId: string; responseKey: string; issuedAt: number; message: SerializedMessage; signature?: string },
+): boolean {
+  if (!request.responseKey.startsWith(RESPONSE_PREFIX)) return false;
+  if (!Number.isSafeInteger(request.issuedAt) || Math.abs(Date.now() - request.issuedAt) > BRIDGE_MAX_CLOCK_SKEW_MS)
+    return false;
+  if (!request.signature || !/^[a-f0-9]{64}$/iu.test(request.signature)) return false;
+  const expected = Buffer.from(
+    bridgeSignature({
+      requestId: request.requestId,
+      responseKey: request.responseKey,
+      issuedAt: request.issuedAt,
+      message: request.message,
+    }),
+    "hex",
+  );
+  const actual = Buffer.from(request.signature, "hex");
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function acceptBridgeRequest(requestId: string): boolean {
+  const now = Date.now();
+  for (const [id, expiresAt] of seenBridgeRequests) if (expiresAt <= now) seenBridgeRequests.delete(id);
+  if (seenBridgeRequests.has(requestId)) return false;
+  seenBridgeRequests.set(requestId, now + BRIDGE_MAX_CLOCK_SKEW_MS);
+  return true;
+}
+
 function serializeMessage(message: IncomingTextMessage): SerializedMessage {
   const { media, ...rest } = message;
   return media ? { ...rest, media: serializeMedia(media) } : rest;
@@ -70,6 +119,8 @@ function deserializeMessage(message: SerializedMessage): IncomingTextMessage {
 function serializeReply(reply: BridgeResult): SerializedReply | string | null {
   if (!reply || typeof reply === "string") return reply;
   const { media, ...rest } = reply;
+  if (media && media.bytes.byteLength > MAX_BRIDGE_MEDIA_BYTES)
+    throw new Error("Media exceeds the internal bridge payload limit.");
   return media
     ? {
         ...rest,
@@ -122,15 +173,58 @@ export function shouldProxyWhatsAppSession(
   }
 }
 
+export type RemoteBridgeSerializedMessage = SerializedMessage;
+
+/** Secret-safe seams for deterministic protocol tests; no secret is exposed. */
+export function signRemoteBridgeRequestForTests(input: {
+  requestId: string;
+  responseKey: string;
+  issuedAt: number;
+  message: SerializedMessage;
+}): string {
+  return bridgeSignature(input);
+}
+
+export function validateRemoteBridgeRequestForTests(request: {
+  requestId: string;
+  responseKey: string;
+  issuedAt: number;
+  message: SerializedMessage;
+  signature?: string;
+}): boolean {
+  return validBridgeSignature(request);
+}
+
+export function acceptRemoteBridgeRequestForTests(requestId: string): boolean {
+  return acceptBridgeRequest(requestId);
+}
+
+export function resetRemoteBridgeReplayForTests(): void {
+  seenBridgeRequests.clear();
+}
+
+export function remoteBridgeResponsePrefixForTests(): string {
+  return RESPONSE_PREFIX;
+}
+
 export async function routeViaRemoteBridge(
   message: IncomingTextMessage,
 ): Promise<BridgeResult> {
   publisher ??= redisConnection();
   const requestId = randomUUID();
   const responseKey = `${RESPONSE_PREFIX}${requestId}`;
+  const issuedAt = Date.now();
+  const serializedMessage = serializeMessage(message);
   await publisher.publish(
     REQUEST_CHANNEL,
-    JSON.stringify({ requestId, responseKey, message: serializeMessage(message) }),
+    JSON.stringify({
+      v: BRIDGE_PROTOCOL_VERSION,
+      requestId,
+      responseKey,
+      issuedAt,
+      message: serializedMessage,
+      signature: bridgeSignature({ requestId, responseKey, issuedAt, message: serializedMessage }),
+    }),
   );
   const deadline = Date.now() + REQUEST_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -160,10 +254,11 @@ export async function startRemoteBridgeResponder(
   await subscriber.subscribe(REQUEST_CHANNEL);
   subscriber.on("message", (_channel, raw) => {
     void (async () => {
-      let request: { requestId: string; responseKey: string; message: SerializedMessage };
+      let request: { v?: number; requestId: string; responseKey: string; issuedAt: number; message: SerializedMessage; signature?: string };
       try {
         request = JSON.parse(raw) as typeof request;
-        if (!request?.requestId || !request.responseKey || !request.message?.sessionId) return;
+        if (request.v !== BRIDGE_PROTOCOL_VERSION || !request?.requestId || !request.responseKey || !request.message?.sessionId) return;
+        if (!validBridgeSignature(request) || !acceptBridgeRequest(request.requestId)) return;
         if (!workerSessionIds.has(request.message.sessionId)) return;
         const result = await handler(deserializeMessage(request.message));
         await publisher?.set(

@@ -45,6 +45,7 @@ import {
   sendGroupStatus,
   sendGroupColorStatus,
   sendGroupText,
+  messagePayload,
   sendDirectText,
   type GroupMediaPayload,
   validateInviteLink,
@@ -69,6 +70,7 @@ import {
   type JoinAttemptResult,
 } from "./join-operation.js";
 import { downloadPlay, withMediaDownloadSlot, type PlayMode } from "../whatsapp/play-media.js";
+import { prepareCanonicalPreviewContentWithBudget } from "../whatsapp/baileys-native-preview.js";
 import {
   purgeAutoPromoteSession,
   recordAutoPromoteChildCompletion,
@@ -1684,6 +1686,20 @@ export function startWorkerRuntime(): JobOrchestrator {
             : {}),
         };
       }
+      let preparedStatusContent: Record<string, unknown> | undefined;
+      let preparedStatusPreview: Record<string, unknown> | undefined;
+      if (kind === "gstatus" || kind === "allstatus") {
+        const prepared = await prepareCanonicalPreviewContentWithBudget({
+          text,
+          content: { ...messagePayload(text, media), groupStatus: true },
+          target: "group-status",
+          socket: getWhatsAppSocket(context.job.workspaceId, sessionId),
+          cacheScope: `${context.job.workspaceId}:${sessionId}:${context.job.jobId}`,
+        }, 1_200);
+        preparedStatusContent = { ...prepared, groupStatus: true };
+        if (prepared.linkPreview && typeof prepared.linkPreview === "object")
+          preparedStatusPreview = prepared.linkPreview as Record<string, unknown>;
+      }
       const deliverWithRetries = async (
         targetJid: string,
         send: () => Promise<unknown>,
@@ -1801,12 +1817,14 @@ export function startWorkerRuntime(): JobOrchestrator {
                     {
                       text,
                       ...(media ? { media } : {}),
+                      ...(preparedStatusPreview ? { preparedPreview: preparedStatusPreview } : {}),
                     },
                   )
                 : kind === "gstatus" || kind === "allstatus"
                   ? sendGroupStatus(context.job.workspaceId, sessionId, jid, {
                       text,
                       ...(media ? { media } : {}),
+                      ...(preparedStatusContent ? { preparedContent: preparedStatusContent } : {}),
                     })
                   : sendGroupMentions(
                       context.job.workspaceId,

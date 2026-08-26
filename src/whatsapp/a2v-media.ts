@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { spawn } from "node:child_process";
+import { runBoundedSubprocess } from "../core/subprocess.js";
 import { randomUUID } from "node:crypto";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 
@@ -48,21 +48,13 @@ function extensionFor(media: WhatsAppMediaPayload): string {
   return ".ogg";
 }
 
-function runFfmpeg(args: string[], directory: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", ...args], { cwd: directory, stdio: ["ignore", "ignore", "pipe"] });
-    const errors: Buffer[] = [];
-    let settled = false;
-    const timer = setTimeout(() => { child.kill("SIGKILL"); finish(new Error("Audio injection timed out.")); }, FFMPEG_TIMEOUT_MS);
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error); else resolve();
-    };
-    child.stderr.on("data", (chunk: Buffer) => errors.push(chunk));
-    child.once("error", (error) => finish(error));
-    child.once("close", (code) => code === 0 ? finish() : finish(new Error(errors.join("").toString().trim().slice(-800) || `FFmpeg exited with code ${code ?? "unknown"}.`)));
+async function runFfmpeg(args: string[], directory: string): Promise<void> {
+  await runBoundedSubprocess("ffmpeg", ["-hide_banner", "-loglevel", "error", ...args], {
+    cwd: directory,
+    timeoutMs: FFMPEG_TIMEOUT_MS,
+    maxStdoutBytes: 64 * 1024,
+    maxStderrBytes: 8 * 1024,
+    errorPrefix: "Audio injection",
   });
 }
 

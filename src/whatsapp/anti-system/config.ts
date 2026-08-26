@@ -237,27 +237,80 @@ export function getCustomMessage(config: GroupAntiConfig, key: string): string |
 
 const warnCounts = new Map<string, number>();
 const spamWindows = new Map<string, number[]>();
+const loadedCounterGroups = new Set<string>();
+const pendingCounterFlushes = new Map<string, NodeJS.Timeout>();
+const MAX_PERSISTED_SPAM_EVENTS = 2_000;
+
+function counterGroupKey(workspaceId: string, sessionId: string, groupJid: string): string {
+  return `${workspaceId}:${sessionId}:${groupJid}`;
+}
+
+function hydrateCounters(workspaceId: string, sessionId: string, groupJid: string): void {
+  const groupKey = counterGroupKey(workspaceId, sessionId, groupJid);
+  if (loadedCounterGroups.has(groupKey)) return;
+  const config = loadGroupAntiConfig(workspaceId, sessionId, groupJid);
+  for (const [key, count] of Object.entries(config.warningCounts ?? {})) {
+    if (Number.isSafeInteger(count) && count > 0) warnCounts.set(`${groupKey}:${key}`, count);
+  }
+  for (const [sender, values] of Object.entries(config.spamWindows ?? {})) {
+    if (Array.isArray(values)) spamWindows.set(`${groupKey}:${sender}`, values.filter((value) => Number.isFinite(value)).slice(-MAX_PERSISTED_SPAM_EVENTS));
+  }
+  loadedCounterGroups.add(groupKey);
+}
+
+function persistCounters(workspaceId: string, sessionId: string, groupJid: string): void {
+  const groupKey = counterGroupKey(workspaceId, sessionId, groupJid);
+  const config = loadGroupAntiConfig(workspaceId, sessionId, groupJid);
+  const warningCounts: Record<string, number> = {};
+  const warningPrefix = `${groupKey}:`;
+  for (const [key, count] of warnCounts) if (key.startsWith(warningPrefix)) warningCounts[key.slice(warningPrefix.length)] = count;
+  const persistedSpamWindows: Record<string, number[]> = {};
+  const spamPrefix = `${groupKey}:`;
+  for (const [key, values] of spamWindows) if (key.startsWith(spamPrefix)) persistedSpamWindows[key.slice(spamPrefix.length)] = values.slice(-MAX_PERSISTED_SPAM_EVENTS);
+  config.warningCounts = warningCounts;
+  config.spamWindows = persistedSpamWindows;
+  saveGroupAntiConfig(config);
+}
+
+function scheduleCounterFlush(workspaceId: string, sessionId: string, groupJid: string): void {
+  const groupKey = counterGroupKey(workspaceId, sessionId, groupJid);
+  if (pendingCounterFlushes.has(groupKey)) return;
+  const timer = setTimeout(() => {
+    pendingCounterFlushes.delete(groupKey);
+    persistCounters(workspaceId, sessionId, groupJid);
+  }, 250);
+  timer.unref?.();
+  pendingCounterFlushes.set(groupKey, timer);
+}
 
 export function incrementWarn(workspaceId: string, sessionId: string, groupJid: string, sender: string, module: string): number {
-  const key = `${workspaceId}:${sessionId}:${groupJid}:${sender}:${module}`;
+  hydrateCounters(workspaceId, sessionId, groupJid);
+  const key = `${counterGroupKey(workspaceId, sessionId, groupJid)}:${sender}:${module}`;
   const count = (warnCounts.get(key) ?? 0) + 1;
   warnCounts.set(key, count);
+  persistCounters(workspaceId, sessionId, groupJid);
   return count;
 }
 
 export function resetWarn(workspaceId: string, sessionId: string, groupJid: string, sender: string, module: string): void {
-  warnCounts.delete(`${workspaceId}:${sessionId}:${groupJid}:${sender}:${module}`);
+  hydrateCounters(workspaceId, sessionId, groupJid);
+  warnCounts.delete(`${counterGroupKey(workspaceId, sessionId, groupJid)}:${sender}:${module}`);
+  persistCounters(workspaceId, sessionId, groupJid);
 }
 
 export function recordSpam(workspaceId: string, sessionId: string, groupJid: string, sender: string, windowSeconds: number): number {
-  const key = `${workspaceId}:${sessionId}:${groupJid}:${sender}`;
+  hydrateCounters(workspaceId, sessionId, groupJid);
+  const key = `${counterGroupKey(workspaceId, sessionId, groupJid)}:${sender}`;
   const cutoff = Date.now() - windowSeconds * 1000;
   const values = (spamWindows.get(key) ?? []).filter((value) => value > cutoff);
   values.push(Date.now());
-  spamWindows.set(key, values);
+  spamWindows.set(key, values.slice(-MAX_PERSISTED_SPAM_EVENTS));
+  scheduleCounterFlush(workspaceId, sessionId, groupJid);
   return values.length;
 }
 
 export function resetSpam(workspaceId: string, sessionId: string, groupJid: string, sender: string): void {
-  spamWindows.delete(`${workspaceId}:${sessionId}:${groupJid}:${sender}`);
+  hydrateCounters(workspaceId, sessionId, groupJid);
+  spamWindows.delete(`${counterGroupKey(workspaceId, sessionId, groupJid)}:${sender}`);
+  scheduleCounterFlush(workspaceId, sessionId, groupJid);
 }

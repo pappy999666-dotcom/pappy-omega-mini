@@ -347,11 +347,12 @@ const workloadAssignmentSchema =
       sessionId: { type: String, required: true, unique: true, index: true },
       workerId: { type: String, required: true, index: true },
       status: { type: String, required: true, index: true },
-      assignedAt: { type: Number, required: true },
-      updatedAt: { type: Number, required: true, index: true },
-      lastError: String,
-    },
-    { collection: "workload_assignments", versionKey: false },
+    assignedAt: { type: Number, required: true },
+    updatedAt: { type: Number, required: true },
+    generation: { type: Number, default: 1 },
+    lastError: String,
+  },
+  { collection: "workload_assignments", versionKey: false },
   );
 workloadAssignmentSchema.index({ workerId: 1, status: 1, updatedAt: -1 });
 
@@ -429,6 +430,9 @@ const sessionSchema = new mongoose.Schema<SessionDocument>(
     lastReconnectAt: Number,
     reconnectCount: Number,
     socketGeneration: Number,
+    lifecycleVersion: Number,
+    lifecycleEventAt: Number,
+    lifecycleSource: String,
     authHealth: String,
     workerNodeId: String,
     workloadWorkerId: String,

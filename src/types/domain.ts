@@ -70,6 +70,11 @@ export interface WhatsAppSession {
   lastReconnectAt?: number;
   reconnectCount?: number;
   socketGeneration?: number;
+  /** Monotonic in-process/persisted lifecycle observation sequence. */
+  lifecycleVersion?: number;
+  /** Event time used to reject delayed lifecycle callbacks. */
+  lifecycleEventAt?: number;
+  lifecycleSource?: "local" | "workload";
   authHealth?: "UNKNOWN" | "VALID" | "INVALID" | "DEGRADED";
   validatorRetiredUntil?: number;
   validatorRetireReason?: string;
