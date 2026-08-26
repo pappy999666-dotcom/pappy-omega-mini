@@ -34,7 +34,12 @@ function messageText(inputArgs: unknown[]): string {
 
 export function isNoisyBaileysProtocolLog(inputArgs: unknown[]): boolean {
   const lower = messageText(inputArgs).toLowerCase();
-  return lower.includes("mex newsletter") || lower.includes("newsletter notification");
+  const hasProtocolNode = inputArgs.some((value) => {
+    if (!value || typeof value !== "object") return false;
+    const record = value as Record<string, unknown>;
+    return ["node", "fullErrorNode", "reasonNode", "payloadNode", "child"].some((key) => key in record);
+  });
+  return hasProtocolNode || lower.includes("mex newsletter") || lower.includes("newsletter notification");
 }
 
 /**

@@ -33,6 +33,16 @@ describe("CPU forensic audit guards", () => {
     expect(JSON.stringify(safe)).not.toContain("newsletter@g.us");
   });
 
+  it("summarizes the fork raw-node error shape without forwarding its node string", () => {
+    const rawNode = "<message>" + "x".repeat(100_000) + "</message>";
+    const args = [{ error: new Error("decode failed"), node: rawNode }, "error in handling message"];
+
+    expect(isNoisyBaileysProtocolLog(args)).toBe(true);
+    const safe = sanitizeNoisyBaileysLogArgs(args);
+    expect(JSON.stringify(safe).length).toBeLessThan(2_000);
+    expect(JSON.stringify(safe)).not.toContain(rawNode);
+  });
+
   it("does not classify ordinary errors as noisy newsletter logs", () => {
     expect(isNoisyBaileysProtocolLog([new Error("temporary network failure")])).toBe(false);
   });
