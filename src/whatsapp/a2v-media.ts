@@ -6,24 +6,33 @@ import { randomUUID } from "node:crypto";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const MAX_CACHE_ENTRIES = 128;
-const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
-const FFMPEG_TIMEOUT_MS = 30_000;
+const MAX_CACHE_ENTRIES = 16;
+const MAX_CACHE_BYTES = 256 * 1024 * 1024;
+const MAX_MEDIA_BYTES = Math.min(250 * 1024 * 1024, Math.max(50 * 1024 * 1024, Number(process.env.A2V_MAX_BYTES ?? 100 * 1024 * 1024)));
+const FFMPEG_TIMEOUT_MS = Math.min(120_000, Math.max(30_000, Number(process.env.A2V_FFMPEG_TIMEOUT_MS ?? 120_000)));
 
 type A2vExpected = "music" | "image/video";
 interface A2vCacheEntry { media: WhatsAppMediaPayload; createdAt: number; }
 const a2vCache = new Map<string, A2vCacheEntry>();
+let a2vCacheBytes = 0;
 
 function cacheKey(workspaceId: string, sessionId: string, chatJid: string): string {
   return `${workspaceId}\u0000${sessionId}\u0000${chatJid}`;
 }
 
 function prune(now = Date.now()): void {
-  for (const [key, value] of a2vCache) if (now - value.createdAt > CACHE_TTL_MS) a2vCache.delete(key);
-  while (a2vCache.size > MAX_CACHE_ENTRIES) {
+  for (const [key, value] of a2vCache) {
+    if (now - value.createdAt > CACHE_TTL_MS) {
+      a2vCache.delete(key);
+      a2vCacheBytes -= value.media.bytes.length;
+    }
+  }
+  while (a2vCache.size > MAX_CACHE_ENTRIES || a2vCacheBytes > MAX_CACHE_BYTES) {
     const oldest = a2vCache.keys().next().value;
     if (typeof oldest !== "string") break;
+    const removed = a2vCache.get(oldest);
     a2vCache.delete(oldest);
+    if (removed) a2vCacheBytes -= removed.media.bytes.length;
   }
 }
 
@@ -86,18 +95,26 @@ export async function stageA2v(workspaceId: string, sessionId: string, chatJid: 
   const previous = a2vCache.get(key);
   if (!previous) {
     a2vCache.set(key, { media, createdAt: Date.now() });
+    a2vCacheBytes += media.bytes.length;
+    prune();
     return { state: "cached", expected: media.kind === "audio" ? "image/video" : "music" };
   }
   const previousLabel = mediaLabel(previous.media);
   const currentLabel = mediaLabel(media);
   if (previousLabel === currentLabel) return { state: "wrong-order", expected: previousLabel === "music" ? "image/video" : "music" };
   const merged = previousLabel === "music" ? await mergeAudioWithVisual(media, previous.media) : await mergeAudioWithVisual(previous.media, media);
+  const removed = a2vCache.get(key);
   a2vCache.delete(key);
+  if (removed) a2vCacheBytes -= removed.media.bytes.length;
   return { state: "merged", expected: "music", media: merged };
 }
 
 export function a2vUsageText(prefix: string): string {
   return [`⌬ ⤷ *A2V USAGE* ⚙︎`, "", "─────────────", `⎔ Command     · ⇆ ${prefix}a2v`, "─────────────", "» *How to use:*", `· Reply to music or a voice note with ${prefix}a2v, then reply to an image or video with ${prefix}a2v.`, `· Or reply to an image/video first, then reply to music or a voice note with ${prefix}a2v.`, "", "» *Note:* The first media is cached for 5 minutes and the second media must be the opposite type."].join("\n");
+}
+
+export function a2vWorkingText(): string {
+  return ["⌬ ⤷ *A2V WORKING* ⚙︎", "", "─────────────", "⎔ Status      · ⇆ Processing quoted media", "⎔ Action      · ⇆ Checking cache and media order", "» *Please wait:* The result will return to this chat."].join("\n");
 }
 
 export function a2vCacheStatusText(expected: A2vExpected, prefix: string): string {
@@ -112,6 +129,6 @@ export function a2vWrongOrderText(expected: A2vExpected): string {
   return `⛔ A2V needs ${expected} next. The cached media is still valid for 5 minutes.`;
 }
 
-export function clearA2vCacheForTests(): void { a2vCache.clear(); }
+export function clearA2vCacheForTests(): void { a2vCache.clear(); a2vCacheBytes = 0; }
 export function a2vCacheSizeForTests(): number { prune(); return a2vCache.size; }
 export const A2V_CACHE_TTL_MS = CACHE_TTL_MS;

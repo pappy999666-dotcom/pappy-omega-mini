@@ -31,7 +31,7 @@ import {
 import { banUsageCard, commandUsageCard, pairingHelpCard, sessionCommandUsageCard, sessionPairingCard } from "./response-cards.js";
 import type { GroupControlTable } from "./group-control-confirmation.js";
 import { buildLyricsText, buildMusicPreviewMedia, buildPlayPreviewText, convertMediaToMp3, downloadPlay, fetchLyrics, playUsageText, resolvePlayMetadata, withMediaDownloadSlot, type PlayMetadata, type PlayMode } from "./play-media.js";
-import { a2vCacheStatusText, a2vMergedText, a2vUsageText, a2vWrongOrderText, stageA2v } from "./a2v-media.js";
+import { a2vCacheStatusText, a2vMergedText, a2vUsageText, a2vWorkingText, a2vWrongOrderText, stageA2v } from "./a2v-media.js";
 import { registerGroupControlConfirmation, consumeGroupControlConfirmation } from "./group-control-confirmation.js";
 import {
   getPreviewDebugSnapshot,
@@ -884,6 +884,10 @@ export function createCommandRegistry(): RegisteredCommand[] {
       run: async (ctx) => {
         if (!ctx.chatJid || !ctx.media || (ctx.media.kind !== "audio" && ctx.media.kind !== "image" && ctx.media.kind !== "video")) return a2vUsageText(session(ctx).prefix);
         try {
+          await Promise.allSettled([
+            ...(ctx.sendCurrentReaction ? [ctx.sendCurrentReaction("🪄")] : []),
+            ...(ctx.sendCurrentText ? [ctx.sendCurrentText(a2vWorkingText())] : []),
+          ]);
           const result = await stageA2v(ctx.workspaceId, ctx.sessionId, ctx.chatJid, ctx.media);
           if (result.state === "wrong-order") return a2vWrongOrderText(result.expected);
           if (result.state === "cached") return a2vCacheStatusText(result.expected, session(ctx).prefix);
@@ -1278,6 +1282,10 @@ export function createCommandRegistry(): RegisteredCommand[] {
         if (!ctx.media || ctx.media.kind !== "sticker")
           return commandUsageCard({ title: "Convert Sticker", command: `${session(ctx).prefix}cs`, commandSyntax: `${session(ctx).prefix}cs (reply to a sticker)`, note: "Static stickers return as PNG media; animated stickers return as MP4 video." });
         try {
+          await Promise.allSettled([
+            ...(ctx.sendCurrentReaction ? [ctx.sendCurrentReaction("🪩")] : []),
+            ...(ctx.sendCurrentText ? [ctx.sendCurrentText([...pappyHeader(`${ctx.workspaceId}:${ctx.sessionId}:cs-working`, "STICKER CONVERSION"), "⎔ Status     · ⇆ Processing quoted sticker", "⎔ Action     · ⇆ Converting safely now…"].join("\n"))] : []),
+          ]);
           const media = await convertStickerToMedia(ctx.media);
           return {
             media,
