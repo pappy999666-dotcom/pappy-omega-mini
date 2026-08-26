@@ -130,7 +130,7 @@ const GROUPS: MenuGroup[] = [
   { key: "identity", title: "MEDIA & IDENTITY", commands: ["pfp", "setgpp", "setname", "setbio"] },
   { key: "groups", title: "GROUPS & LOCAL CONTROL", commands: ["groups", "creategroup", "iggc", "poll"] },
   { key: "moderation", title: "GROUP MODERATION", commands: ["kick", "promote", "demote", "dnkick", "block", "unblock", "ban", "unban", "banlist", "warn", "unwarn", "warns", "mute", "unmute", "filter", "filterout", "blockall", "dlt", "deleteall"] },
-  { key: "broadcast", title: "BROADCAST & STATUS", commands: ["broadcastdelay", "allstatus", "dallstatus", "allstatusx", "gstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "pstatus", "dgstatus", "gstatus", "tag", "stag", "stopstag"] },
+  { key: "broadcast", title: "BROADCAST & STATUS", commands: ["broadcastdelay", "allstatus", "dallstatus", "allstatusx", "gstatusx", "togstatus", "togstatusx", "stopstatus", "allchat", "allchatx", "stopchat", "pstatus", "dgstatus", "gstatus", "tag", "stag", "stopstag"] },
   { key: "approvals", title: "JOIN APPROVALS & BATCH ACTIONS", commands: ["pendingjoin", "approve", "reject", "approveall", "rejectall", "approveamt", "rejectamt", "approvecountry", "rejectcountry", "reqamt", "kickall", "kickamt", "kickcountry"] },
   { key: "antisystem", title: "ANTI-SYSTEM", commands: [
     "antistatus", "spamlimit", "antiwords", "antiaddword", "antirmword", "antiwordlist", "setantiwords", "rmantiwords", "clearantiwords", "silentactions",

@@ -179,6 +179,7 @@ export interface CommandContext {
     payload: Record<string, unknown>;
   }) => Promise<string | EnqueueJoinJobResult>;
   joinInvite?: (target: string, mode?: JoinMode) => Promise<JoinAttemptResult>;
+  resolveGroupInvite?: (inviteUrl: string) => Promise<{ jid?: string; subject?: string; participantCount?: number }>;
   enqueueGroupControlJob?: (input: {
     groupJid: string;
     operation: "approve" | "reject" | "participant";
@@ -507,6 +508,35 @@ function directJoinResponse(result: JoinAttemptResult): string {
     ...(result.requestRequired ? ["» *Note:* The request was submitted; membership is not confirmed until the group approves it."] : []),
     ...(result.success ? ["» *Note:* WhatsApp accepted the join operation. The next group sync will confirm inventory membership."] : []),
   ].join("\n");
+}
+
+function targetedStatusInput(ctx: CommandContext, repeated: boolean): { repeat: number; inviteUrl: string; text: string } | undefined {
+  const raw = (ctx.rawPayload ?? ctx.args.join(" ")).trim();
+  const inviteMatch = raw.match(/https?:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]+(?:\?[^\s]*)?/iu);
+  if (!inviteMatch?.[0]) return undefined;
+  const inviteUrl = inviteMatch[0].replace(/[),.;!?]+$/u, "");
+  const before = raw.slice(0, inviteMatch.index ?? 0).trim();
+  const after = raw.slice((inviteMatch.index ?? 0) + inviteMatch[0].length).trim();
+  const countMatch = repeated ? before.match(/^(\d+)$/u) : null;
+  const repeat = repeated
+    ? Math.max(1, Math.min(200, Number(countMatch?.[1] ?? 1)))
+    : 1;
+  const inlineText = (countMatch ? "" : before) + (before && after ? " " : "") + after;
+  return { repeat, inviteUrl, text: inlineText.trim() || ctx.quotedText?.trim() || "" };
+}
+
+function targetedStatusUsage(prefix: string, repeated: boolean): string {
+  return commandUsageCard({
+    title: repeated ? "Targeted Group Status X" : "Targeted Group Status",
+    command: `${prefix}${repeated ? "togstatusx" : "togstatus"}`,
+    commandSyntax: `${prefix}${repeated ? "togstatusx <count>" : "togstatus"} <target group invite> <text or media>`,
+    howToUse: [
+      "Put the target WhatsApp group invite link in the command.",
+      "Use inline text/link, reply to text, or quote/attach media.",
+      ...(repeated ? ["Repeat count is bounded to 200 and uses the same color/font status renderer."] : []),
+    ],
+    note: "The target invite is resolved to its actual group JID; the originating chat is never used as the target.",
+  });
 }
 
 function directJoinTarget(ctx: CommandContext): string {
@@ -1880,6 +1910,83 @@ export function createCommandRegistry(): RegisteredCommand[] {
           return commandUsageCard({ title: "Personal Status", command: ".pstatus", commandSyntax: ".pstatus <text or media>", howToUse: ["Send text or attach media.", "You may reply to a message to use its payload."], note: "Personal status is separate from group status." });
         await ctx.sendCurrentPersonalStatus({ text });
         return "Personal status posted successfully.";
+      },
+    },
+    {
+      name: "togstatus",
+      aliases: [],
+      description: "Send one color/font-designed group status to an explicit target invite.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const parsed = targetedStatusInput(ctx, false);
+        if (!parsed) return targetedStatusUsage(session(ctx).prefix, false);
+        if (!ctx.enqueueJob || !ctx.resolveGroupInvite)
+          return "Queue runtime is unavailable.";
+        if (!parsed.text && !ctx.media)
+          return targetedStatusUsage(session(ctx).prefix, false);
+        const target = await ctx.resolveGroupInvite(parsed.inviteUrl);
+        if (!target.jid)
+          return "⛔ Target group could not be resolved from that invite. No status was dispatched.";
+        const queued = await ctx.enqueueJob({
+          kind: "gstatus",
+          payload: {
+            groups: [target.jid],
+            text: parsed.text,
+            count: 1,
+            styled: true,
+            targeted: true,
+            delayMs: 1500,
+          },
+        });
+        const jobCode = typeof queued === "string" ? queued : queued.jobCode;
+        return [
+          "✦ PAPPY OMEGA MINI · TARGET STATUS STARTED",
+          "─────────────────────",
+          `Target      · ${target.subject ?? "Resolved WhatsApp group"}`,
+          "Style       · Color background + designed font",
+          "Payload     · Text/media/link",
+          `Live code   · ${jobCode}`,
+          "Action      · Posting to the resolved target group.",
+        ].join("\n");
+      },
+    },
+    {
+      name: "togstatusx",
+      aliases: [],
+      description: "Repeat a color/font-designed group status to an explicit target invite.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const parsed = targetedStatusInput(ctx, true);
+        if (!parsed) return targetedStatusUsage(session(ctx).prefix, true);
+        if (!ctx.enqueueJob || !ctx.resolveGroupInvite)
+          return "Queue runtime is unavailable.";
+        if (!parsed.text && !ctx.media)
+          return targetedStatusUsage(session(ctx).prefix, true);
+        const target = await ctx.resolveGroupInvite(parsed.inviteUrl);
+        if (!target.jid)
+          return "⛔ Target group could not be resolved from that invite. No status was dispatched.";
+        const queued = await ctx.enqueueJob({
+          kind: "gstatus",
+          payload: {
+            groups: [target.jid],
+            text: parsed.text,
+            count: parsed.repeat,
+            styled: true,
+            targeted: true,
+            delayMs: 1500,
+          },
+        });
+        const jobCode = typeof queued === "string" ? queued : queued.jobCode;
+        return [
+          "✦ PAPPY OMEGA MINI · TARGET STATUS X STARTED",
+          "─────────────────────",
+          `Target      · ${target.subject ?? "Resolved WhatsApp group"}`,
+          `Repeat      · ${parsed.repeat}`,
+          "Style       · Color background + designed font",
+          "Payload     · Text/media/link",
+          `Live code   · ${jobCode}`,
+          "Action      · Durable delivery started; normal commands remain responsive.",
+        ].join("\n");
       },
     },
     {

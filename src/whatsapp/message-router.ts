@@ -38,6 +38,7 @@ import {
   sendSticker,
   sendStickerPack,
   sendGroupPoll,
+  validateInviteLink,
 } from "./transport-adapter.js";
 import {
   buildWhatsappHelpPayload,
@@ -112,7 +113,7 @@ function identityMatches(left: string, right: string): boolean {
 
 const SELF_EXECUTABLE_COMMANDS = new Set([
   "ping", "health", "profile", "help", "menu", "menulist",
-  "gstatus", "gstatusd", "dgstatus", "gstatusx", "tag", "stag", "pstatus", "setcmd", "flushcmd",
+  "gstatus", "gstatusd", "dgstatus", "gstatusx", "togstatus", "togstatusx", "tag", "stag", "pstatus", "setcmd", "flushcmd",
   "play", "music", "audio", "video", "lyrics", "lyric", "mp3", "toaudio", "extractaudio", "a2v", "audiotovideo", "mediaaudio", "tg", "tgsticker", "telegramsticker",
 ]);
 
@@ -305,6 +306,12 @@ export async function routeWhatsAppText(
               groupRequestJoin?: (code: string) => Promise<string | undefined>;
             };
             return joinWhatsAppInvite(socket, target, { mode });
+          },
+          resolveGroupInvite: async (inviteUrl: string) => {
+            const canonical = inviteUrl.trim().replace(/[),.;!?]+$/u, "");
+            const code = canonical.split("/").pop()?.split("?")[0] ?? "";
+            if (!/^[A-Za-z0-9_-]+$/u.test(code)) throw new Error("Invalid WhatsApp group invite link.");
+            return validateInviteLink(message.workspaceId, message.sessionId, code);
           },
           enqueueJoinJob: async ({
  payload }: { payload: Record<string, unknown> }) => {

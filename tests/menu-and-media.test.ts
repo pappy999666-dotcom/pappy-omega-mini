@@ -523,6 +523,73 @@ describe("WhatsApp command registry", () => {
     });
   });
 
+  it("resolves togstatus to the invite target and preserves quoted media", async () => {
+    const user = resolveUser(`togstatus-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "target-status", phoneNumber: "2348012345678" });
+    let resolvedInvite = "";
+    let queued: Record<string, unknown> | undefined;
+    const result = await executeCommand(createCommandRegistry(), "togstatus https://chat.whatsapp.com/TARGET123", {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      chatJid: "120363SOURCE@g.us",
+      args: [],
+      media: { kind: "image", bytes: Buffer.from([1, 2, 3]), mimeType: "image/jpeg" },
+      resolveGroupInvite: async (inviteUrl) => {
+        resolvedInvite = inviteUrl;
+        return { jid: "120363TARGET@g.us", subject: "Target group" };
+      },
+      enqueueJob: async ({ payload }) => {
+        queued = payload;
+        return { jobCode: "TARGET01" };
+      },
+    });
+    expect(resolvedInvite).toBe("https://chat.whatsapp.com/TARGET123");
+    expect(queued).toMatchObject({ groups: ["120363TARGET@g.us"], count: 1, styled: true, targeted: true });
+    expect(queued?.groups).not.toContain("120363SOURCE@g.us");
+    expect(result).toContain("TARGET01");
+  });
+
+  it("bounds togstatusx and keeps the explicit target when inline payload is present", async () => {
+    const user = resolveUser(`togstatusx-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "target-status-x", phoneNumber: "2348012345678" });
+    let queued: Record<string, unknown> | undefined;
+    const result = await executeCommand(createCommandRegistry(), "togstatusx 999 https://chat.whatsapp.com/TARGET456 hello link", {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      chatJid: "120363SOURCE2@g.us",
+      args: [],
+      resolveGroupInvite: async () => ({ jid: "120363TARGET2@g.us", subject: "Target two" }),
+      enqueueJob: async ({ payload }) => {
+        queued = payload;
+        return "TARGET02";
+      },
+    });
+    expect(queued).toMatchObject({ groups: ["120363TARGET2@g.us"], count: 200, text: "hello link", styled: true, targeted: true, delayMs: 1500 });
+    expect(result).toContain("Repeat      · 200");
+    expect(isSelfExecutableWhatsAppCommand(".togstatusx 2 https://chat.whatsapp.com/TARGET456 hi")).toBe(true);
+  });
+
+  it("rejects targeted status without a valid WhatsApp invite before enqueueing", async () => {
+    const user = resolveUser(`togstatus-invalid-${Date.now()}-${Math.random()}`);
+    const session = createSession({ workspaceId: user.workspaceId, sessionName: "target-status-invalid", phoneNumber: "2348012345678" });
+    let enqueued = false;
+    const result = await executeCommand(createCommandRegistry(), "togstatus https://example.com not-a-group", {
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      isOwner: true,
+      args: [],
+      enqueueJob: async () => {
+        enqueued = true;
+        return "unexpected";
+      },
+    });
+    expect(enqueued).toBe(false);
+    expect(result).toContain("TARGETED GROUP STATUS");
+    expect(result).toContain("target group invite");
+  });
+
   it("dispatches rich-menu callbacks without the session prefix", async () => {
     const user = resolveUser(`rich-menu-prefix-${Date.now()}-${Math.random()}`);
     const session = createSession({

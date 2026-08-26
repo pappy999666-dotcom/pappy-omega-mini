@@ -90,7 +90,8 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(control).toContain("currentAction");
     expect(control).toContain("lastResult");
     expect(runtime).toContain("sendGroupColorStatus(context.job.workspaceId, sessionId, jid");
-    expect(runtime).toContain('kind === "allstatus" && payload.styled === true');
+    expect(runtime).toContain('kind === "allstatus" || kind === "gstatus"');
+    expect(runtime).toContain('payload.styled === true');
     expect(source).toContain("/https?:\\/\\/\\S+/i.test(detectorText)");
     expect(source).toContain("createWorkerStatusDesign");
     expect(source).toContain("statusDesignUrlTemplates");

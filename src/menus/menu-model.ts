@@ -84,6 +84,8 @@ export function buildSessionMenu(
     { id: "dallstatus", label: "Color all status", command: "dallstatus", description: "Post randomized per-group color/design statuses.", ownerOnly: true },
     { id: "allstatusx", label: "All status ×", command: "allstatusx", description: "Repeat status per group.", ownerOnly: true },
     { id: "gstatusx", label: "Group status ×", command: "gstatusx", description: "Repeat status in the current group.", ownerOnly: true },
+    { id: "togstatus", label: "Target group status", command: "togstatus", description: "Post a designed status to one explicit group invite.", ownerOnly: true },
+    { id: "togstatusx", label: "Target group status ×", command: "togstatusx", description: "Repeat a designed status to one explicit group invite, bounded to 200.", ownerOnly: true },
     { id: "stopstatus", label: "Stop status", command: "stopstatus", description: "Stop active all-status jobs.", ownerOnly: true },
     { id: "allchat", label: "All chat", command: "allchat", description: "Mention members across groups.", ownerOnly: true },
     { id: "allchatx", label: "All chat ×", command: "allchatx", description: "Repeat hidden-member mentions.", ownerOnly: true },

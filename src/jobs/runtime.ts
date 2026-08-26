@@ -1418,6 +1418,7 @@ export function startWorkerRuntime(): JobOrchestrator {
         media?: JobMediaReference;
         workerLocal?: boolean;
         styled?: boolean;
+        targeted?: boolean;
       };
       if (kind === "allstatus" || kind === "allchat") {
         const readinessHeartbeat = setInterval(() => {
@@ -1445,9 +1446,10 @@ export function startWorkerRuntime(): JobOrchestrator {
         }
       }
       const text = typeof payload.text === "string" ? payload.text : "";
+      const repeatLimit = kind === "gstatus" && payload.targeted === true ? 200 : 20;
       const repeat =
         kind === "gstatus" || kind === "allstatus" || kind === "allchat"
-          ? Math.max(1, Math.min(20, Number(payload.count ?? 1)))
+          ? Math.max(1, Math.min(repeatLimit, Number(payload.count ?? 1)))
           : 1;
       const delayMs = Math.max(
         1500,
@@ -1617,7 +1619,7 @@ export function startWorkerRuntime(): JobOrchestrator {
       const ignoredLinks =
         getSession(context.job.workspaceId, sessionId).ignoredGroupLinks ?? [];
       const ignoredJids = new Set<string>();
-      await Promise.all(
+      if (payload.targeted !== true) await Promise.all(
         ignoredLinks.map(async (link) => {
           const code = link.split("/").pop()?.split("?")[0];
           if (!code || !/^[A-Za-z0-9_-]+$/.test(code)) return;
@@ -1777,7 +1779,7 @@ export function startWorkerRuntime(): JobOrchestrator {
           lastPostAt = Date.now();
           try {
             const deliveryOutcome = await deliverWithRetries(jid, () =>
-              kind === "allstatus" && payload.styled === true
+              ((kind === "allstatus" || kind === "gstatus") && payload.styled === true)
                 ? sendGroupColorStatus(context.job.workspaceId, sessionId, jid,
                     {
                       text,
