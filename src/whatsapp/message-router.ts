@@ -31,6 +31,7 @@ import {
   sendGroupColorStatus,
   sendPersonalStatus,
   sendGroupText,
+  sendDirectMedia,
   sendDirectText,
   sendSticker,
   sendGroupPoll,
@@ -563,6 +564,14 @@ export async function routeWhatsAppText(
         await sendGroupText(message.workspaceId, message.sessionId, message.chatJid, text);
       } else {
         await sendDirectText(message.workspaceId, message.sessionId, message.chatJid, text);
+      }
+    },
+    sendCurrentMedia: async ({ media, caption }: { media: WhatsAppMediaPayload; caption: string }) => {
+      if (!message.chatJid) throw new Error("The current WhatsApp chat could not be resolved.");
+      if (message.chatJid.endsWith("@g.us")) {
+        await sendGroupText(message.workspaceId, message.sessionId, message.chatJid, caption, media);
+      } else {
+        await sendDirectMedia(message.workspaceId, message.sessionId, message.chatJid, media, caption);
       }
     },
     sendCurrentSticker: async (media: WhatsAppMediaPayload) => {

@@ -30,7 +30,7 @@ import {
 } from "./sticker-command-bindings.js";
 import { banUsageCard, commandUsageCard, pairingHelpCard, sessionCommandUsageCard, sessionPairingCard } from "./response-cards.js";
 import type { GroupControlTable } from "./group-control-confirmation.js";
-import { buildLyricsText, buildMediaJobText, buildPlayPreviewText, downloadPlay, fetchLyrics, playUsageText, resolvePlayMetadata, withMediaDownloadSlot, type PlayMetadata, type PlayMode } from "./play-media.js";
+import { buildLyricsText, buildMusicPreviewMedia, buildPlayPreviewText, downloadPlay, fetchLyrics, playUsageText, resolvePlayMetadata, withMediaDownloadSlot, type PlayMetadata, type PlayMode } from "./play-media.js";
 import { registerGroupControlConfirmation, consumeGroupControlConfirmation } from "./group-control-confirmation.js";
 import {
   getPreviewDebugSnapshot,
@@ -191,6 +191,7 @@ export interface CommandContext {
   }) => Promise<void>;
   sendCurrentPersonalStatus?: (input: { text: string }) => Promise<void>;
   sendCurrentText?: (text: string) => Promise<void>;
+  sendCurrentMedia?: (input: { media: WhatsAppMediaPayload; caption: string }) => Promise<void>;
   sendCurrentSticker?: (media: WhatsAppMediaPayload) => Promise<void>;
   enqueuePlayJob?: (input: { query: string; mode: PlayMode; sourceChatJid: string; metadata?: PlayMetadata }) => Promise<string>;
 
@@ -575,10 +576,18 @@ export async function runPlayCommand(ctx: CommandContext, requestedMode?: PlayMo
     return commandUsageCard({ title: "Play Unavailable", command: ".play", commandSyntax: ".play <song or video>", note: "The WhatsApp text transport is not ready for this session." });
   try {
     const metadata = await resolvePlayMetadata(query, mode);
-    await ctx.sendCurrentText(buildPlayPreviewText(metadata, mode));
+    const previewCaption = buildPlayPreviewText(metadata, mode);
+    if (ctx.sendCurrentMedia) {
+      const previewMedia = await buildMusicPreviewMedia(metadata, mode);
+      await ctx.sendCurrentMedia({ media: previewMedia, caption: previewCaption });
+    } else {
+      await ctx.sendCurrentText(previewCaption);
+    }
     if (ctx.enqueuePlayJob && ctx.chatJid) {
-      const jobCode = await ctx.enqueuePlayJob({ query, mode, sourceChatJid: ctx.chatJid, metadata });
-      return { text: buildMediaJobText(metadata, mode, jobCode) };
+      await ctx.enqueuePlayJob({ query, mode, sourceChatJid: ctx.chatJid, metadata });
+      // The preview card already communicates extraction status. Do not add a
+      // second text-only job card; the worker will deliver the clean media.
+      return "";
     }
     const result = await withSessionPlaySlot(ctx, () => withMediaDownloadSlot(() => downloadPlay(query, mode, metadata)));
     return { text: `${mode === "audio" ? "🎵 Audio" : "🎬 Video"} ready · ${metadata.title}`, media: result.media };

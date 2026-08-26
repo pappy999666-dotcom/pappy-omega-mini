@@ -3,6 +3,7 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import sharp from "sharp";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { pappyHeader } from "./response-designs.js";
 
@@ -365,20 +366,63 @@ export function playUsageText(): string {
   ].join("\n");
 }
 
+function escapeXml(value: string): string {
+  return value.replace(/[<>&'\"]/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '\"': "&quot;" })[character] ?? character);
+}
+
+async function fetchThumbnail(url: string): Promise<Buffer | undefined> {
+  try {
+    const response = await withTimeout(fetch(url, { headers: { "User-Agent": "Pappy-Omega-Mini/1.0 (music preview)" } }), 1_200, () => undefined);
+    if (!response.ok || !(response.headers.get("content-type") ?? "").toLowerCase().startsWith("image/")) return undefined;
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (!bytes.length || bytes.length > 8 * 1024 * 1024) return undefined;
+    await sharp(bytes, { limitInputPixels: 100_000_000 }).metadata();
+    return bytes;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function buildMusicPreviewMedia(metadata: PlayMetadata, mode: PlayMode): Promise<WhatsAppMediaPayload> {
+  let image = metadata.thumbnailUrl ? await fetchThumbnail(metadata.thumbnailUrl) : undefined;
+  if (!image) {
+    const title = escapeXml(metadata.title.slice(0, 96));
+    const creator = escapeXml((metadata.uploader ?? "Unknown artist").slice(0, 64));
+    const label = mode === "audio" ? "MUSIC EXTRACTION" : "VIDEO EXTRACTION";
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#111820"/><stop offset="0.58" stop-color="#27323a"/><stop offset="1" stop-color="#b14f2a"/></linearGradient><linearGradient id="glow" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd166" stop-opacity="0.85"/><stop offset="1" stop-color="#ff6b35" stop-opacity="0.15"/></linearGradient></defs><rect width="1280" height="720" fill="url(#bg)"/><circle cx="1080" cy="120" r="260" fill="url(#glow)" opacity="0.45"/><circle cx="180" cy="590" r="260" fill="#0b1015" opacity="0.5"/><text x="92" y="118" fill="#ffd166" font-family="DejaVu Sans, sans-serif" font-size="28" font-weight="700" letter-spacing="7">PAPPY OMEGA MINI</text><text x="96" y="300" fill="#ffffff" font-family="DejaVu Sans, sans-serif" font-size="92" font-weight="700">♫</text><text x="230" y="284" fill="#ffffff" font-family="DejaVu Sans, sans-serif" font-size="42" font-weight="700">${escapeXml(label)}</text><text x="230" y="368" fill="#ffffff" font-family="DejaVu Sans, sans-serif" font-size="48" font-weight="700">${title}</text><text x="230" y="430" fill="#d9e2e8" font-family="DejaVu Sans, sans-serif" font-size="30">${creator}</text><path d="M96 572h1088" stroke="#ffd166" stroke-width="4" opacity="0.75"/><text x="96" y="635" fill="#d9e2e8" font-family="DejaVu Sans, sans-serif" font-size="24">Preparing a clean media delivery</text></svg>`;
+    image = Buffer.from(svg);
+  }
+  const bytes = await sharp(image, { limitInputPixels: 100_000_000 })
+    .resize(1280, 720, { fit: "cover" })
+    .jpeg({ quality: 88, chromaSubsampling: "4:4:4" })
+    .toBuffer();
+  return { kind: "image", bytes, mimeType: "image/jpeg", fileName: "pappy-music-preview.jpg" };
+}
+
 export function buildPlayPreviewText(metadata: PlayMetadata, mode: PlayMode): string {
   const duration = metadata.durationSeconds ? `${Math.floor(metadata.durationSeconds / 60)}m ${metadata.durationSeconds % 60}s` : "Unavailable";
+  const source = /^https?:\/\//iu.test(metadata.webpageUrl ?? "")
+    ? metadata.webpageUrl
+    : metadata.provider === "noelia"
+      ? "Noelia Music API"
+      : metadata.sourceUrl;
+  const extraction = metadata.provider === "noelia"
+    ? "NOELIA MUSIC EXTRACTION"
+    : mode === "audio"
+      ? "MUSIC EXTRACTION"
+      : "VIDEO EXTRACTION";
   return [
     "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
     "",
-    `˗ˏˋ ${mode === "audio" ? "🎵" : "🎬"} ˎˊ˗  *${mode === "audio" ? "MUSIC" : "VIDEO"} PREVIEW*  ✦`,
+    `˗ˏˋ ${mode === "audio" ? "🎵" : "🎬"} ˎˊ˗  *${extraction}*  ✦`,
     "─────────────",
     `⎔ Title       · ⇆ ${metadata.title.slice(0, 180)}`,
-    `⎔ Creator     · ⇆ ${(metadata.uploader ?? "Unknown").slice(0, 120)}`,
+    `⎔ Author      · ⇆ ${(metadata.uploader ?? "Unknown artist").slice(0, 120)}`,
     `⎔ Duration    · ⇆ ${duration}`,
-    `⎔ Source      · ⇆ ${metadata.webpageUrl ?? metadata.sourceUrl}`,
+    `⎔ Link        · ⇆ ${String(source).slice(0, 300)}`,
     "─────────────",
-    "» *Action:* Preparing the requested media now.",
-    "ℹ️ _Preview resolved before download; failures stay isolated to this request._",
+    `» *Status:* Extracting ${mode === "audio" ? "audio" : "video"}…`,
+    "ℹ️ _A clean media attachment will be delivered next._",
   ].join("\n");
 }
 

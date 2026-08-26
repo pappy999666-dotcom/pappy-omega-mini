@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildDownloadArgs,
   buildLyricsText,
+  buildMusicPreviewMedia,
   buildPlayPreviewText,
   downloadPlay,
   fetchLyrics,
@@ -46,11 +47,12 @@ describe("WhatsApp play/media flow", () => {
       webpageUrl: "https://example.test/watch/demo",
       sourceUrl: "https://example.test/watch/demo",
     }, "audio");
-    expect(text).toContain("*MUSIC PREVIEW*");
+    expect(text).toContain("*MUSIC EXTRACTION*");
     expect(text).toContain("Demo Track");
     expect(text).toContain("3m 7s");
     expect(text).toContain("https://example.test/watch/demo");
-    expect(text).toContain("Preview resolved before download");
+    expect(text).toContain("MUSIC EXTRACTION");
+    expect(text).toContain("A clean media attachment will be delivered next.");
   });
 
   it("uses a declared client identity and safely formats catalogue lyrics", async () => {
@@ -101,6 +103,18 @@ describe("WhatsApp play/media flow", () => {
     expect(result.media.mimeType).toBe("audio/mpeg");
     expect(result.media.bytes).toEqual(audio);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("builds a branded image preview when provider artwork is unavailable", async () => {
+    const preview = await buildMusicPreviewMedia({
+      title: "Demo Track",
+      uploader: "Demo Artist",
+      sourceUrl: "Demo Track",
+      provider: "noelia",
+    }, "audio");
+    expect(preview.kind).toBe("image");
+    expect(preview.mimeType).toBe("image/jpeg");
+    expect(preview.bytes.subarray(0, 2).toString("hex")).toBe("ffd8");
   });
 
   it("uses bounded, non-playlist yt-dlp arguments for distinct audio and video modes", () => {
