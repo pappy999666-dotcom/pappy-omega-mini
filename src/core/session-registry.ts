@@ -136,10 +136,14 @@ export function updateSessionJoinSettings(
   patch: Partial<SessionJoinSettings>,
 ): WhatsAppSession {
   const current = getSessionJoinSettings(workspaceId, sessionId);
+  const delayChanged = patch.delayMs !== undefined;
   return updateSession(workspaceId, sessionId, {
     joinSettings: normalizedSessionJoinSettings(workspaceId, {
       ...current,
       ...patch,
+      ...(delayChanged && patch.minDelayMs === undefined && patch.maxDelayMs === undefined
+        ? { minDelayMs: patch.delayMs, maxDelayMs: patch.delayMs }
+        : {}),
     }),
   });
 }

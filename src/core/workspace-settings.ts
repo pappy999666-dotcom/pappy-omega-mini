@@ -116,6 +116,24 @@ export function updateWorkspaceSettings(
   patch: Partial<Omit<WorkspaceSettings, "workspaceId" | "updatedAt">>,
 ): WorkspaceSettings {
   const current = getWorkspaceSettings(workspaceId);
+  const clampDelay = (value: unknown, fallback: number): number =>
+    Math.max(1000, Math.min(60000, Number(value ?? fallback)));
+  const delayChanged = patch.defaultJoinDelayMs !== undefined;
+  const defaultJoinDelayMs = clampDelay(
+    patch.defaultJoinDelayMs,
+    current.defaultJoinDelayMs,
+  );
+  const defaultJoinMinDelayMs = clampDelay(
+    patch.defaultJoinMinDelayMs ?? (delayChanged ? defaultJoinDelayMs : undefined),
+    current.defaultJoinMinDelayMs ?? current.defaultJoinDelayMs,
+  );
+  const defaultJoinMaxDelayMs = Math.max(
+    defaultJoinMinDelayMs,
+    clampDelay(
+      patch.defaultJoinMaxDelayMs ?? (delayChanged ? defaultJoinDelayMs : undefined),
+      current.defaultJoinMaxDelayMs ?? current.defaultJoinDelayMs,
+    ),
+  );
   const next: WorkspaceSettings = {
     ...current,
     ...patch,
@@ -124,35 +142,9 @@ export function updateWorkspaceSettings(
       0,
       3,
     ),
-    defaultJoinDelayMs: Math.max(
-      1000,
-      Math.min(
-        60000,
-        Number(patch.defaultJoinDelayMs ?? current.defaultJoinDelayMs),
-      ),
-    ),
-    defaultJoinMinDelayMs: Math.max(
-      1000,
-      Math.min(
-        60000,
-        Number(
-          patch.defaultJoinMinDelayMs ??
-            current.defaultJoinMinDelayMs ??
-            current.defaultJoinDelayMs,
-        ),
-      ),
-    ),
-    defaultJoinMaxDelayMs: Math.max(
-      1000,
-      Math.min(
-        60000,
-        Number(
-          patch.defaultJoinMaxDelayMs ??
-            current.defaultJoinMaxDelayMs ??
-            current.defaultJoinDelayMs,
-        ),
-      ),
-    ),
+    defaultJoinDelayMs,
+    defaultJoinMinDelayMs,
+    defaultJoinMaxDelayMs,
     defaultJoinRetryBaseMs: Math.max(
       1000,
       Math.min(

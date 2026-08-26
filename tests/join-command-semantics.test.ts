@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createSession, getSession, resolveUser, updateSessionJoinSettings } from "../src/core/session-registry.js";
+import { createSession, getSession, getSessionJoinSettings, resolveUser, updateSessionJoinSettings } from "../src/core/session-registry.js";
 import { createCommandRegistry, executeCommand } from "../src/whatsapp/command-registry.js";
 import { joinWhatsAppInvite } from "../src/jobs/join-operation.js";
 
@@ -45,6 +45,8 @@ describe("WhatsApp join command semantics", () => {
   it("makes .jm off cancel Join Manager and .jm on pass an exact configured delay", async () => {
     const user = resolveUser(`jm-toggle-${Date.now()}-${Math.random()}`);
     const session = createSession({ workspaceId: user.workspaceId, sessionName: "jm-toggle" });
+    updateSessionJoinSettings(user.workspaceId, session.sessionId, { delayMs: 30_000 });
+    expect(getSessionJoinSettings(user.workspaceId, session.sessionId)).toMatchObject({ delayMs: 30_000, minDelayMs: 30_000, maxDelayMs: 30_000 });
     updateSessionJoinSettings(user.workspaceId, session.sessionId, {
       delayMs: 30_000,
       minDelayMs: 1_000,

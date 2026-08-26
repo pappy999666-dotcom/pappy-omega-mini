@@ -29,6 +29,9 @@ describe("live workspace settings", () => {
     });
 
     expect(settings.defaultAutoJoinEnabled).toBe(true);
+    expect(settings.defaultJoinDelayMs).toBe(10000);
+    expect(settings.defaultJoinMinDelayMs).toBe(10000);
+    expect(settings.defaultJoinMaxDelayMs).toBe(10000);
     expect(getWorkspaceDefaults(workspaceId).defaultPrefix).toBe("!");
     expect(getWorkspaceDefaults(workspaceId).defaultBroadcastDelayMs).toBe(10000);
     expect(
