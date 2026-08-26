@@ -161,9 +161,11 @@ describe("Validator Hub bucket invariants", () => {
     expect(sampled[0]?.bucket).toBe("active");
 
     const memberships = new JoinMembershipStore(redis as never);
-    await memberships.add("workspace", "session", "120363123@g.us");
+    await memberships.add("workspace", "session", "120363123@g.us", "https://chat.whatsapp.com/ACTIVE1");
     expect(await memberships.list("workspace", "session")).toEqual(new Set(["120363123@g.us"]));
+    expect(await memberships.listLinks("workspace", "session")).toEqual(new Set(["https://chat.whatsapp.com/ACTIVE1"]));
     expect(await memberships.list("workspace", "other-session")).toEqual(new Set());
+    expect(await memberships.listLinks("workspace", "other-session")).toEqual(new Set());
   });
 
   it("admits only fresh ACTIVE/VALID sessions to validation", () => {

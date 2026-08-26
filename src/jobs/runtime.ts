@@ -1018,6 +1018,9 @@ export function startWorkerRuntime(): JobOrchestrator {
     const persistedJoinedGroups = await joinMemberships
       .list(context.job.workspaceId, sessionId)
       .catch(() => new Set<string>());
+    const persistedJoinedLinks = await joinMemberships
+      .listLinks(context.job.workspaceId, sessionId)
+      .catch(() => new Set<string>());
     if (membershipSnapshot) for (const groupJid of Object.keys(membershipSnapshot)) persistedJoinedGroups.add(groupJid);
     const selectedLinks = new Set(
       (payload.selectedLinks ?? []).map((link) => link.trim()).filter(Boolean),
@@ -1032,7 +1035,7 @@ export function startWorkerRuntime(): JobOrchestrator {
     const sourceRecords: LinkRecord[] = [];
     const seenUrls = new Set<string>();
     const appendEligible = (record: LinkRecord): void => {
-      if (seenUrls.has(record.canonicalUrl)) return;
+      if (seenUrls.has(record.canonicalUrl) || persistedJoinedLinks.has(record.canonicalUrl)) return;
       const knownGroupJid = record.metadata?.groupJid;
       if (knownGroupJid && persistedJoinedGroups.has(knownGroupJid)) return;
       seenUrls.add(record.canonicalUrl);
@@ -1255,7 +1258,7 @@ export function startWorkerRuntime(): JobOrchestrator {
           if (result.jid) {
             membershipSnapshot = { ...(membershipSnapshot ?? {}), [result.jid]: {} };
             persistedJoinedGroups.add(result.jid);
-            await joinMemberships.add(context.job.workspaceId, sessionId, result.jid);
+            await joinMemberships.add(context.job.workspaceId, sessionId, result.jid, record.canonicalUrl);
           }
           joined += 1;
           await buckets.move(
@@ -1285,7 +1288,7 @@ export function startWorkerRuntime(): JobOrchestrator {
           if (result.jid) {
             membershipSnapshot = { ...(membershipSnapshot ?? {}), [result.jid]: {} };
             persistedJoinedGroups.add(result.jid);
-            await joinMemberships.add(context.job.workspaceId, sessionId, result.jid);
+            await joinMemberships.add(context.job.workspaceId, sessionId, result.jid, record.canonicalUrl);
           }
           alreadyMember += 1;
           await buckets.move(
