@@ -995,6 +995,7 @@ export function startWorkerRuntime(): JobOrchestrator {
       sourceBucket?: "active";
       selectedLinks?: string[];
       fullInventory?: boolean;
+      fixedDelay?: boolean;
     };
     let membershipSnapshot: Record<string, unknown> | undefined;
     try {
@@ -1058,16 +1059,21 @@ export function startWorkerRuntime(): JobOrchestrator {
     const fallbackDelay = immediateMode
       ? 0
       : Math.max(1000, Math.min(60000, Number(payload.delayMs ?? 8000)));
+    const fixedDelay = payload.fixedDelay === true;
     const minDelayMs = immediateMode
       ? 0
+      : fixedDelay
+        ? fallbackDelay
+        : Math.max(
+            1000,
+            Math.min(60000, Number(payload.minDelayMs ?? fallbackDelay)),
+          );
+    const maxDelayMs = immediateMode || fixedDelay
+      ? minDelayMs
       : Math.max(
-          1000,
-          Math.min(60000, Number(payload.minDelayMs ?? fallbackDelay)),
+          minDelayMs,
+          Math.min(60000, Number(payload.maxDelayMs ?? minDelayMs)),
         );
-    const maxDelayMs = Math.max(
-      minDelayMs,
-      Math.min(60000, Number(payload.maxDelayMs ?? minDelayMs)),
-    );
     const retryLimit = Math.max(
       0,
       Math.min(5, Number(payload.retryLimit ?? 2)),

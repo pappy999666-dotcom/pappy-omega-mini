@@ -39,6 +39,7 @@ import {
 } from "./baileys-native-preview.js";
 import { createSupportTicket } from "../persistence/mongo.js";
 import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
+import type { JoinAttemptResult, JoinMode } from "../jobs/join-operation.js";
 import {
   applyModerationConfirmation,
   banList,
@@ -176,6 +177,7 @@ export interface CommandContext {
   enqueueJoinJob?: (input: {
     payload: Record<string, unknown>;
   }) => Promise<string | EnqueueJoinJobResult>;
+  joinInvite?: (target: string, mode?: JoinMode) => Promise<JoinAttemptResult>;
   enqueueGroupControlJob?: (input: {
     groupJid: string;
     operation: "approve" | "reject" | "participant";
@@ -474,6 +476,42 @@ function formatDuration(milliseconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}m ${seconds}s`;
+}
+
+function directJoinResponse(result: JoinAttemptResult): string {
+  const status = result.success
+    ? "JOINED · ACCEPTED BY WHATSAPP"
+    : result.alreadyMember
+      ? "ALREADY A MEMBER"
+      : result.requestRequired
+        ? "REQUEST SUBMITTED · PENDING APPROVAL"
+        : result.groupFull
+          ? "GROUP UNAVAILABLE · FULL"
+          : result.linkUnavailable
+            ? "INVITE UNAVAILABLE"
+            : result.rateLimited
+              ? "TEMPORARILY RATE-LIMITED"
+              : "JOIN FAILED";
+  const detail = (result.error ?? (result.success ? "Membership action accepted by WhatsApp." : "No membership action was confirmed.")).replace(/[\\r\\n\\t]+/g, " ").slice(0, 300);
+  return [
+    "⌬ ⤷ *DIRECT JOIN RESULT* ⚙︎",
+    "",
+    "─────────────",
+    `⎔ Status      · ⇆ ${status}`,
+    `⎔ Group       · ⇆ ${result.title ?? "Invite target"}`,
+    `⎔ Stage       · ⇆ ${result.stage ?? "unknown"}`,
+    "─────────────",
+    `» *Detail:* ${detail}`,
+    ...(result.requestRequired ? ["» *Note:* The request was submitted; membership is not confirmed until the group approves it."] : []),
+    ...(result.success ? ["» *Note:* WhatsApp accepted the join operation. The next group sync will confirm inventory membership."] : []),
+  ].join("\n");
+}
+
+function directJoinTarget(ctx: CommandContext): string {
+  const raw = [mediaCommandPayload(ctx), ctx.quotedText ?? ""].filter(Boolean).join(" ").trim();
+  const url = raw.match(/https?:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]+/i)?.[0];
+  if (url) return url;
+  return raw.split(/\s+/)[0] ?? "";
 }
 
 function queuedJobAcknowledgement(
@@ -1071,8 +1109,8 @@ export function createCommandRegistry(): RegisteredCommand[] {
     },
     {
       name: "autojoin",
-      aliases: ["aj"],
-      description: "Toggle conservative invite-link auto-join handling.",
+      aliases: ["aj", "jm"],
+      description: "Toggle the Active-bucket Join Manager on or off.",
       run: async (ctx) => {
         const current = session(ctx);
         const requested = ctx.args[0]?.toLowerCase();
@@ -1085,6 +1123,10 @@ export function createCommandRegistry(): RegisteredCommand[] {
         const next = updateSession(ctx.workspaceId, ctx.sessionId, {
           autoJoinEnabled: enabled,
         });
+        if (!enabled && ctx.cancelJobs) {
+          const cancelled = await ctx.cancelJobs("join-manager");
+          return `Join Manager is OFF for ${next.sessionName}.\nCancelled   · ${cancelled} active job${cancelled === 1 ? "" : "s"}.`;
+        }
         if (enabled && ctx.enqueueJoinJob) {
           const settings = getSessionJoinSettings(ctx.workspaceId, ctx.sessionId);
           const started = await ctx.enqueueJoinJob({
@@ -1099,6 +1141,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
               restrictionThreshold: settings.restrictionThreshold,
               requestMode: settings.mode,
               sourceBucket: "active",
+              fixedDelay: true,
             },
           });
           if (typeof started === "string") return `${started}`;
@@ -1110,27 +1153,25 @@ export function createCommandRegistry(): RegisteredCommand[] {
     },
     {
       name: "join",
-      aliases: ["joinmanager", "joinstart"],
-      description: "Start a real Active-bucket Join Manager worker.",
+      aliases: ["joinlink"],
+      description: "Join one WhatsApp group invite directly, from a link or quoted message.",
       run: async (ctx) => {
-        if (!ctx.enqueueJoinJob) return "Join Manager is unavailable until the worker runtime is ready.";
-        const current = getSessionJoinSettings(ctx.workspaceId, ctx.sessionId);
-        const started = await ctx.enqueueJoinJob({
-          payload: {
-            targetCount: current.targetCount,
-            delayMs: current.delayMs,
-            minDelayMs: current.minDelayMs,
-            maxDelayMs: current.maxDelayMs,
-            retryLimit: current.retryLimit,
-            retryBaseMs: current.retryBaseMs,
-            sessionCooldownMs: current.sessionCooldownMs,
-            restrictionThreshold: current.restrictionThreshold,
-            requestMode: current.mode,
-            sourceBucket: "active",
-          },
-        });
-        if (typeof started === "string") return started;
-        return `Join Manager started.\nTarget       · ${started.targetCount} Active link(s)\nDelay        · ${formatSeconds(started.delayMs)}\nExpected time · ${formatDuration(started.expectedTimeMs)}\nLive code    · ${started.jobCode}`;
+        const target = directJoinTarget(ctx);
+        if (!target)
+          return commandUsageCard({
+            title: "Direct Join Usage",
+            command: `${session(ctx).prefix}join`,
+            commandSyntax: `${session(ctx).prefix}join <invite-link>`,
+            howToUse: ["Send a WhatsApp group invite link after the command.", "Or reply to a message containing one WhatsApp group invite link."],
+            examples: [`${session(ctx).prefix}join https://chat.whatsapp.com/INVITE_CODE`],
+            note: "This joins only the supplied group. It never starts Join Manager.",
+          });
+        if (!ctx.joinInvite) return "Direct join is unavailable until the WhatsApp transport is ready.";
+        try {
+          return directJoinResponse(await ctx.joinInvite(target, "auto"));
+        } catch (error) {
+          return directJoinResponse({ success: false, error: error instanceof Error ? error.message : String(error), stage: "membership" });
+        }
       },
     },
     {

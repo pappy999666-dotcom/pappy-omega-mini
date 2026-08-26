@@ -116,6 +116,7 @@ export async function joinWhatsAppInvite(
 ): Promise<JoinAttemptResult> {
   const trimmed = target.trim();
   let stage: JoinAttemptResult["stage"] = "membership";
+  let knownCode: string | undefined;
   let knownJid: string | undefined;
   let knownTitle: string | undefined;
   try {
@@ -129,6 +130,7 @@ export async function joinWhatsAppInvite(
       };
 
     const code = inviteCode(trimmed);
+    knownCode = code;
     if (!code)
       return { success: false, error: "Invalid WhatsApp invite link.", linkUnavailable: true, stage: "invite-info" };
     stage = "invite-info";
@@ -184,6 +186,31 @@ export async function joinWhatsAppInvite(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const statusCode = statusCodeFromError(error);
+    const requestRequired = isRequestRequired(message);
+    if (requestRequired && options.mode !== "immediate" && knownCode && socket.groupRequestJoin) {
+      try {
+        stage = "request";
+        await socket.groupRequestJoin(knownCode);
+        return {
+          success: false,
+          requestRequired: true,
+          ...(knownJid ? { jid: knownJid } : {}),
+          ...(knownTitle ? { title: knownTitle } : {}),
+          error: "Join request submitted.",
+          stage: "request",
+        };
+      } catch (requestError) {
+        const requestMessage = requestError instanceof Error ? requestError.message : String(requestError);
+        return {
+          success: false,
+          requestRequired: true,
+          ...(knownJid ? { jid: knownJid } : {}),
+          ...(knownTitle ? { title: knownTitle } : {}),
+          error: requestMessage,
+          stage: "request",
+        };
+      }
+    }
     if (isAlreadyMember(message, statusCode)) {
       return {
         success: false,
@@ -199,7 +226,7 @@ export async function joinWhatsAppInvite(
     const accountRestricted = /spam limit|temporarily banned|account restricted|too many groups|rate over ?limit|rate overlimit/i.test(normalized);
     return {
       success: false,
-      requestRequired: isRequestRequired(message),
+      requestRequired,
       rateLimited,
       accountRestricted,
       linkUnavailable: isLinkUnavailable(message),

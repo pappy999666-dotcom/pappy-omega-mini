@@ -22,7 +22,8 @@ import { persistJobMedia } from "./job-media-store.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 import type { GroupControlTable } from "./group-control-confirmation.js";
 import { getWorkerRuntime } from "../jobs/runtime.js";
-import { requestWhatsAppPairingCode } from "./session-manager.js";
+import { getWhatsAppSocket, requestWhatsAppPairingCode } from "./session-manager.js";
+import { joinWhatsAppInvite, type JoinMode } from "../jobs/join-operation.js";
 import type { PlayMetadata } from "./play-media.js";
 import {
   listGroups,
@@ -295,7 +296,17 @@ export async function routeWhatsAppText(
     },
     ...(runtime
       ? {
-          enqueueJoinJob: async ({ payload }: { payload: Record<string, unknown> }) => {
+                    joinInvite: async (target: string, mode: JoinMode = "auto") => {
+            const socket = getWhatsAppSocket(message.workspaceId, message.sessionId) as unknown as {
+              groupFetchAllParticipating?: () => Promise<Record<string, unknown>>;
+              groupGetInviteInfo?: (code: string) => Promise<{ id?: string; subject?: string; size?: number; participantsCount?: number }>;
+              groupAcceptInvite?: (code: string) => Promise<string | undefined>;
+              groupRequestJoin?: (code: string) => Promise<string | undefined>;
+            };
+            return joinWhatsAppInvite(socket, target, { mode });
+          },
+          enqueueJoinJob: async ({
+ payload }: { payload: Record<string, unknown> }) => {
             if (session.status !== "ACTIVE")
               return `\u26d4 Join Manager not started: WhatsApp session is ${session.status.toLowerCase()}, not ACTIVE.`;
             const settings = getSessionJoinSettings(message.workspaceId, message.sessionId);
