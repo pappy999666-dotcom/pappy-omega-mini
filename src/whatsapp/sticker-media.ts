@@ -196,29 +196,48 @@ function wrapText(value: string, maxChars = 22, maxLines = 7): string[] {
   return lines.slice(0, maxLines);
 }
 
-export async function renderTextSticker(input: { text: string; profilePicture?: Buffer }): Promise<WhatsAppMediaPayload> {
-  const lines = wrapText(input.text);
+function isEmojiGrapheme(value: string): boolean {
+  return /\p{Extended_Pictographic}|\p{Emoji_Presentation}|\p{Regional_Indicator}|\p{Emoji_Component}/u.test(value);
+}
+
+function stickerTextRuns(line: string): string {
+  return graphemes(line).map((part) => `<tspan font-family="${isEmojiGrapheme(part) ? "Noto Color Emoji" : "DejaVu Sans"}">${escapeXml(part)}</tspan>`).join("");
+}
+
+export async function renderTextSticker(input: { text: string; profilePicture?: Buffer; senderName?: string }): Promise<WhatsAppMediaPayload> {
+  const lines = wrapText(input.text, 20, 6);
   if (!lines.length) throw new Error("Add text or reply to a text/emoji message to create a sticker.");
-  const textSvg = lines.map((line, index) => `<text x="512" y="${390 + index * 74}" text-anchor="middle" font-family="DejaVu Sans, Noto Color Emoji, sans-serif" font-size="52" font-weight="700" fill="#172033">${escapeXml(line)}</text>`).join("");
-  const avatar = input.profilePicture
-    ? `data:image/png;base64,${(await sharp(input.profilePicture).resize(180, 180, { fit: "cover" }).png().toBuffer()).toString("base64")}`
-    : "";
+  const emojiOnly = lines.every((line) => graphemes(line).every(isEmojiGrapheme));
+  const fontSize = emojiOnly ? 78 : 46;
+  const lineGap = emojiOnly ? 86 : 64;
+  const firstBaseline = emojiOnly ? 560 - ((lines.length - 1) * lineGap) / 2 : 438 - ((lines.length - 1) * lineGap) / 2;
+  const textSvg = lines.map((line, index) => `<text x="512" y="${firstBaseline + index * lineGap}" text-anchor="middle" font-family="DejaVu Sans" font-size="${fontSize}" font-weight="700" fill="#172033">${stickerTextRuns(line)}</text>`).join("");
+  let avatar = "";
+  if (input.profilePicture) {
+    try {
+      avatar = `data:image/png;base64,${(await sharp(input.profilePicture, { limitInputPixels: 20_000_000 }).resize(156, 156, { fit: "cover" }).png().toBuffer()).toString("base64")}`;
+    } catch {
+      avatar = "";
+    }
+  }
   const avatarMarkup = avatar
-    ? `<image href="${avatar}" x="422" y="95" width="180" height="180" preserveAspectRatio="xMidYMid slice" clip-path="url(#avatarClip)"/>`
-    : `<text x="512" y="210" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="82" fill="#172033">✦</text>`;
+    ? `<image href="${avatar}" x="434" y="72" width="156" height="156" preserveAspectRatio="xMidYMid slice" clip-path="url(#avatarClip)"/>`
+    : `<circle cx="512" cy="150" r="78" fill="#dbe7f5"/><text x="512" y="178" text-anchor="middle" font-family="DejaVu Sans" font-size="68" fill="#41536b">●</text>`;
+  const senderName = escapeXml((input.senderName ?? "You").slice(0, 32));
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#26314b" flood-opacity="0.22"/></filter><clipPath id="avatarClip"><circle cx="512" cy="185" r="90"/></clipPath></defs>
+  <defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="16" stdDeviation="15" flood-color="#243247" flood-opacity="0.24"/></filter><clipPath id="avatarClip"><circle cx="512" cy="150" r="78"/></clipPath></defs>
   <rect width="1024" height="1024" fill="transparent"/>
-  <rect x="76" y="72" width="872" height="820" rx="116" fill="#fffdf8" stroke="#172033" stroke-width="10" filter="url(#shadow)"/>
-  <circle cx="512" cy="185" r="96" fill="#dce8ff" stroke="#172033" stroke-width="8"/>
+  <rect x="92" y="76" width="840" height="822" rx="92" fill="#fffdf9" stroke="#1b2635" stroke-width="8" filter="url(#shadow)"/>
+  <circle cx="512" cy="150" r="84" fill="#dbe7f5" stroke="#1b2635" stroke-width="7"/>
   ${avatarMarkup}
-  <path d="M164 330 Q164 296 198 296 H826 Q860 296 860 330 V790 Q860 824 826 824 H500 L408 884 V824 H198 Q164 824 164 790Z" fill="#e8f0ff" stroke="#172033" stroke-width="8"/>
-  <text x="512" y="355" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="25" letter-spacing="5" fill="#52617c">PAPPY OMEGA MINI</text>
+  <text x="512" y="272" text-anchor="middle" font-family="DejaVu Sans" font-size="29" font-weight="700" fill="#31435a">${senderName}</text>
+  <path d="M146 326 Q146 292 180 292 H844 Q878 292 878 326 V754 Q878 788 844 788 H544 L456 852 V788 H180 Q146 788 146 754Z" fill="#edf4ff" stroke="#1b2635" stroke-width="7"/>
+  <text x="512" y="356" text-anchor="middle" font-family="DejaVu Sans" font-size="23" letter-spacing="4" fill="#6a7890">PAPPY OMEGA MINI</text>
   ${textSvg}
-  <text x="512" y="758" text-anchor="middle" font-family="DejaVu Sans, Noto Color Emoji, sans-serif" font-size="30" fill="#52617c">quoted message sticker</text>
+  <text x="512" y="734" text-anchor="middle" font-family="DejaVu Sans" font-size="25" fill="#6a7890">quoted message</text>
 </svg>`;
-  const bytes = await sharp(Buffer.from(svg)).png().toBuffer();
-  const stickerBytes = await sharp(bytes).resize(resizeOptions()).webp({ quality: 86, effort: 4 }).toBuffer();
+  const bytes = await sharp(Buffer.from(svg), { limitInputPixels: 20_000_000 }).png().toBuffer();
+  const stickerBytes = await sharp(bytes).resize(resizeOptions()).webp({ quality: 88, effort: 4 }).toBuffer();
   if (!stickerBytes.length || stickerBytes.length > MAX_OUTPUT_BYTES) throw new Error("The generated text sticker exceeded the safe size limit.");
   return { kind: "sticker", bytes: stickerBytes, mimeType: "image/webp", fileName: "pappy-text-sticker.webp" };
 }

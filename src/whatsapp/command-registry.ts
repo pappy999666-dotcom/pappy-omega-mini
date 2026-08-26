@@ -1311,7 +1311,7 @@ export function createCommandRegistry(): RegisteredCommand[] {
             ? await getProfilePictureMediaForJid(ctx.workspaceId, ctx.sessionId, avatarJid).then((value) => value?.bytes).catch(() => undefined)
             : undefined;
           const packName = getStickerPackName(ctx.workspaceId, ctx.sessionId);
-          const media = await renderTextSticker({ text, ...(profilePicture ? { profilePicture } : {}) });
+          const media = await renderTextSticker({ text, senderName: "You", ...(profilePicture ? { profilePicture } : {}) });
           validateWhatsAppSticker(media.bytes);
           return {
             media: { ...media, bytes: applyStickerPackMetadata(media.bytes, { packName, emojis: Array.from(text).filter((character) => /\p{Extended_Pictographic}/u.test(character)).slice(0, 8) }), stickerPackName: packName },
