@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
+import { performance } from "node:perf_hooks";
 import { env } from "../config/env.js";
 import { attachRedisErrorHandler } from "../core/redis-events.js";
 import type { JobProgress, WorkerContext } from "./job-contracts.js";
@@ -1054,7 +1055,8 @@ export function startWorkerRuntime(): JobOrchestrator {
     let alreadyMember = 0;
     let deadLinks = 0;
     let joined = 0;
-    let lastAttemptAt = 0;
+    let lastAttemptAtMono: number | undefined;
+    let nextIntervalMs = 0;
     const immediateMode = payload.requestMode === "immediate";
     const fallbackDelay = immediateMode
       ? 0
@@ -1092,12 +1094,12 @@ export function startWorkerRuntime(): JobOrchestrator {
     );
     return runBoundedBatch({
       items: workItems,
-      // Concurrency is bounded per Join Manager job and never shared globally.
-      // The default remains one invite at a time to avoid socket bursts.
-      concurrency: Math.max(
-        1,
-        Math.min(3, Number(payload.maxConcurrency ?? 1)),
-      ),
+      // Fixed-delay mode is intentionally single-flight: the next attempt is
+      // scheduled from the previous attempt's completion, not from a wall
+      // clock read taken before an overlapping worker starts.
+      concurrency: fixedDelay
+        ? 1
+        : Math.max(1, Math.min(3, Number(payload.maxConcurrency ?? 1))),
       context,
       // Only a confirmed account restriction stops this job. A rate-limited
       // invite lookup remains a link-level transient and the next remixed link
@@ -1140,18 +1142,20 @@ export function startWorkerRuntime(): JobOrchestrator {
         );
         if (!currentRecord || currentRecord.bucket !== "active")
           return { status: "skipped" as const };
-        const now = Date.now();
-        if (lastAttemptAt) {
-          const interval =
-            minDelayMs === maxDelayMs
-              ? minDelayMs
-              : minDelayMs +
-                Math.floor(Math.random() * (maxDelayMs - minDelayMs + 1));
-          const wait = Math.max(0, interval - (now - lastAttemptAt));
-          if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+        const nowMono = performance.now();
+        if (lastAttemptAtMono !== undefined && nextIntervalMs > 0) {
+          const elapsedSinceCompletion = Math.max(0, nowMono - lastAttemptAtMono);
+          const wait = Math.max(0, nextIntervalMs - elapsedSinceCompletion);
+          if (wait) {
+            await context.report({
+              nextActionAt: Date.now() + wait,
+              currentAction: `waiting ${Math.ceil(wait / 1000)}s before next attempt`,
+            });
+            await new Promise((resolve) => setTimeout(resolve, wait));
+          }
         }
-        lastAttemptAt = Date.now();
         await context.report({
+          nextActionAt: Date.now(),
           currentLink: record.canonicalUrl,
           currentAction: `checking invite via ${boundSession.sessionName} · socket ${sessionId.slice(0, 8)} · generation ${boundSession.socketGeneration ?? "—"}`,
         });
@@ -1221,7 +1225,10 @@ export function startWorkerRuntime(): JobOrchestrator {
             joined,
             lastResult: `Joined ${result.title ?? result.jid ?? record.canonicalUrl}`,
             currentAction: "joined",
+            ...(fixedDelay ? { nextActionAt: Date.now() + minDelayMs } : {}),
           });
+          lastAttemptAtMono = performance.now();
+          nextIntervalMs = minDelayMs;
           return { status: "success" as const };
         }
         if (result.alreadyMember) {
@@ -1244,7 +1251,10 @@ export function startWorkerRuntime(): JobOrchestrator {
             alreadyMember,
             lastResult: `Already joined ${result.title ?? result.jid ?? record.canonicalUrl}`,
             currentAction: "already member",
+            ...(fixedDelay ? { nextActionAt: Date.now() + minDelayMs } : {}),
           });
+          lastAttemptAtMono = performance.now();
+          nextIntervalMs = minDelayMs;
           return { status: "skipped" as const };
         }
         const classified = classifyJoinAttempt(result);
@@ -1273,7 +1283,10 @@ export function startWorkerRuntime(): JobOrchestrator {
             requested,
             lastResult: `Request pending for ${result.title ?? result.jid ?? record.canonicalUrl}`,
             currentAction: "request pending",
+            ...(fixedDelay ? { nextActionAt: Date.now() + minDelayMs } : {}),
           });
+          lastAttemptAtMono = performance.now();
+          nextIntervalMs = minDelayMs;
           return { status: "skipped" as const };
         }
         if (classified.classification === "rate-limit") {
@@ -1359,6 +1372,14 @@ export function startWorkerRuntime(): JobOrchestrator {
             },
           );
         }
+        lastAttemptAtMono = performance.now();
+        nextIntervalMs = fixedDelay
+          ? minDelayMs
+          : minDelayMs === maxDelayMs
+            ? minDelayMs
+            : minDelayMs + Math.floor(Math.random() * (maxDelayMs - minDelayMs + 1));
+        if (fixedDelay)
+          await context.report({ nextActionAt: Date.now() + nextIntervalMs });
         return { status: "failed" as const };
       },
     });
