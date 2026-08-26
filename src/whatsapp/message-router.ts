@@ -97,6 +97,7 @@ export interface WhatsAppReply {
   mentions?: string[];
   nativeFlow?: Array<{ text: string; copy?: string; id?: string; url?: string }>;
   nativeTable?: GroupControlTable;
+  richResponse?: Array<Record<string, unknown>>;
   richMenu?: RichMenuContent;
   media?: WhatsAppMediaPayload;
   caption?: string;

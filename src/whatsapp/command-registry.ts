@@ -40,6 +40,7 @@ import {
 } from "./baileys-native-preview.js";
 import { createSupportTicket } from "../persistence/mongo.js";
 import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
+import { runGameAction, runGameCommand } from "./game-prototype.js";
 import type { JoinAttemptResult, JoinMode } from "../jobs/join-operation.js";
 import {
   applyModerationConfirmation,
@@ -145,6 +146,7 @@ export interface WhatsAppCommandReply {
   media?: WhatsAppMediaPayload;
   nativeFlow?: Array<{ text: string; copy?: string; id?: string; url?: string }>;
   nativeTable?: GroupControlTable;
+  richResponse?: Array<Record<string, unknown>>;
 }
 
 export interface CommandContext {
@@ -1104,6 +1106,30 @@ export function createCommandRegistry(): RegisteredCommand[] {
       aliases: [],
       description: "Fast session health check.",
       run: async (ctx) => buildPingResponse(session(ctx), ctx.receivedAt),
+    },
+    {
+      name: "game",
+      aliases: ["fruitbonanza"],
+      description: "Open the rich-response Fruit Bonanza demo dashboard.",
+      run: async (ctx) => runGameCommand(ctx),
+    },
+    {
+      name: "spin",
+      aliases: [],
+      description: "Play one Fruit Bonanza demo round.",
+      run: async (ctx) => runGameCommand({ ...ctx, args: ["spin"] }),
+    },
+    {
+      name: "balance",
+      aliases: [],
+      description: "Show the Fruit Bonanza demo balance.",
+      run: async (ctx) => runGameCommand({ ...ctx, args: ["balance"] }),
+    },
+    {
+      name: "resetgame",
+      aliases: [],
+      description: "Reset the Fruit Bonanza demo state.",
+      run: async (ctx) => runGameCommand({ ...ctx, args: ["reset"] }),
     },
     {
       name: "menu",
@@ -2237,6 +2263,12 @@ export async function executeCommand(
   ctx: CommandContext,
 ): Promise<string | WhatsAppCommandReply> {
   const normalizedRaw = raw.trim();
+  const gameInteraction = /^game:(spin|balance|reset|help)$/iu.exec(normalizedRaw);
+  if (gameInteraction) {
+    const action = gameInteraction[1]?.toLowerCase() as "spin" | "balance" | "reset" | "help";
+    if (action === "help") return runGameCommand({ ...ctx, args: ["help"] });
+    return runGameAction(ctx, action);
+  }
   if (/^group-control:(?:confirm|cancel):[a-z0-9]+$/iu.test(normalizedRaw)) {
     try {
       return (await handleGroupControlInteraction(normalizedRaw, ctx)) ?? "This interaction is no longer available.";
