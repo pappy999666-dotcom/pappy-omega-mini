@@ -24,7 +24,10 @@ import type { WorkloadInboundEvent, WorkloadRegistrationRequest } from "./types.
 import { getBroadcastProgress, isBroadcastCancellationRequested, saveBroadcastProgress } from "./broadcast-progress.js";
 import { readJobMedia } from "../whatsapp/job-media-store.js";
 import { readMenuMedia } from "../media/menu-media-store.js";
-import { getWhatsAppSocket } from "../whatsapp/session-manager.js";
+import {
+  getWhatsAppSocket,
+  restartWhatsAppSession,
+} from "../whatsapp/session-manager.js";
 import { getRuntimeHealthSnapshot } from "../core/runtime-health.js";
 import { inboundAdmissionSnapshot } from "../whatsapp/inbound-admission.js";
 import { outboundAdmissionSnapshot } from "../whatsapp/outbound-admission.js";
@@ -209,6 +212,24 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       return;
     }
     const credential = bearer(request);
+    if (path === "/internal/session-reconnect") {
+      const token = request.headers["x-pappy-session-recovery-token"];
+      const localAddress = request.socket.remoteAddress;
+      if (
+        env.NODE_ENV === "production" &&
+        (typeof token !== "string" || token !== env.ENCRYPTION_SECRET ||
+          !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(localAddress ?? ""))
+      ) {
+        json(response, 403, { ok: false, error: "Local session recovery authorization required." });
+        return;
+      }
+      const input = await body(request);
+      const workspaceId = stringField(input, "workspaceId");
+      const sessionId = stringField(input, "sessionId");
+      const ready = await restartWhatsAppSession(workspaceId, sessionId);
+      json(response, 200, { ok: true, ready });
+      return;
+    }
     if (path === "/internal/panel-inventory-debug") {
       const token = request.headers["x-pappy-preview-debug-token"];
       const localAddress = request.socket.remoteAddress;

@@ -165,10 +165,11 @@ describe("V2 hardening", () => {
     expect(guard.observe(new Error("ordinary failure"), 125_000)).toMatchObject({ matched: false, shouldRecover: false });
   });
 
-  it("recognizes the production decrypt storm without hiding unrelated transaction failures", () => {
-    expect(isBaileysCryptoFailure({ msg: "failed to decrypt message", err: { message: "No session found to decrypt message" } })).toBe(true);
-    expect(isBaileysCryptoFailure({ msg: "failed to decrypt message", err: { message: "Received message with old counter: 22, 18" } })).toBe(true);
-    expect(isBaileysCryptoFailure({ msg: "failed to decrypt message", err: { message: "Expected Buffer instead of: Object", stack: "GroupCipher.decrypt" } })).toBe(true);
+  it("ignores per-message decrypt failures but recognizes real crypto counter storms", () => {
+    expect(isBaileysCryptoFailure({ msg: "failed to decrypt message", err: { message: "No session found to decrypt message" } })).toBe(false);
+    expect(isBaileysCryptoFailure({ msg: "MessageCounterError", err: { message: "Received message with old counter: 22, 18" } })).toBe(true);
+    expect(isBaileysCryptoFailure({ msg: "failed to decrypt message", err: { message: "Expected Buffer instead of: Object", stack: "GroupCipher.decrypt" } })).toBe(false);
+    expect(isBaileysCryptoFailure("Bad MAC")).toBe(true);
     expect(isBaileysCryptoFailure("transaction failed, rolling back")).toBe(false);
   });
 

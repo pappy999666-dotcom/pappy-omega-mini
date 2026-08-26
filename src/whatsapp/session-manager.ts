@@ -401,21 +401,13 @@ export function isBaileysCryptoFailure(input: unknown): boolean {
     lower.includes("messagecountererror") ||
     lower.includes("key used already or never filled") ||
     lower.includes("bad mac") ||
-    lower.includes("no session found to decrypt message") ||
     lower.includes("received message with old counter")
   ) return true;
-  // These signatures are only crypto failures when tied to Baileys' decrypt
-  // path; do not swallow unrelated application transaction errors.
-  if (
-    lower.includes("failed to decrypt message") &&
-    /decrypt|cipher|counter|bad mac|session/.test(lower)
-  ) return true;
-  if (
-    lower.includes("expected buffer instead of: object") &&
-    /decrypt|groupcipher|sender-message-key|sessioncipher/.test(lower)
-  ) return true;
+  // Missing Signal sessions, failed decrypts, and malformed per-message
+  // payloads are isolated to a message/recipient. They must not close an
+  // otherwise usable authenticated socket or create a reconnect storm.
   return lower.includes("transaction failed, rolling back") &&
-    /messagecountererror|bad mac|decrypt|cipher|old counter/.test(lower);
+    /messagecountererror|bad mac|old counter/.test(lower);
 }
 
 export class SessionCryptoRecoveryCircuit {

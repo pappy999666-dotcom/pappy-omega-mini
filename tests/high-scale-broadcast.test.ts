@@ -200,6 +200,14 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(bot).toContain("listAccessibleWorkspaceWorkloadWorkers(user.workspaceId)");
   });
 
+  it("keeps terminal session recovery local, authenticated, and session-scoped", async () => {
+    const control = await readFile(workloadControlServerPath, "utf8");
+    expect(control).toContain('path === "/internal/session-reconnect"');
+    expect(control).toContain('x-pappy-session-recovery-token');
+    expect(control).toContain("restartWhatsAppSession(workspaceId, sessionId)");
+    expect(control).toContain('"::ffff:127.0.0.1"');
+  });
+
   it("exposes allstatusd as a designed Auto Promote command", async () => {
     const autopromoteTypes = await readFile(new URL("../src/autopromote/types.ts", import.meta.url), "utf8");
     const autopromoteService = await readFile(new URL("../src/autopromote/service.ts", import.meta.url), "utf8");
