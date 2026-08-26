@@ -1245,6 +1245,20 @@ export async function sendDirectText(
 
 export type GroupMediaPayload = WhatsAppMediaPayload;
 
+export async function sendDirectMedia(
+  workspaceId: string,
+  sessionId: string,
+  jid: string,
+  media: GroupMediaPayload,
+  caption: string,
+): Promise<void> {
+  const socket = socketFor(workspaceId, sessionId);
+  const send = method(socket, "sendMessage");
+  if (!send) throw new Error("Unsupported capability: sendMessage");
+  const result = await send(jid, messagePayload(caption, media));
+  rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
+}
+
 function messagePayload(
   text: string,
   media?: GroupMediaPayload,
