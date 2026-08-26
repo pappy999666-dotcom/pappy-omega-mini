@@ -997,6 +997,7 @@ export function startWorkerRuntime(): JobOrchestrator {
       selectedLinks?: string[];
       fullInventory?: boolean;
       fixedDelay?: boolean;
+      joinAttemptTimeoutMs?: number;
     };
     let membershipSnapshot: Record<string, unknown> | undefined;
     try {
@@ -1088,6 +1089,10 @@ export function startWorkerRuntime(): JobOrchestrator {
       0,
       Math.min(3600000, Number(payload.sessionCooldownMs ?? 30000)),
     );
+    const joinAttemptTimeoutMs = Math.max(
+      15000,
+      Math.min(120000, Number(payload.joinAttemptTimeoutMs ?? 30000)),
+    );
     const restrictionThreshold = Math.max(
       1,
       Math.min(5, Math.floor(Number(payload.restrictionThreshold ?? 5))),
@@ -1147,11 +1152,13 @@ export function startWorkerRuntime(): JobOrchestrator {
           const elapsedSinceCompletion = Math.max(0, nowMono - lastAttemptAtMono);
           const wait = Math.max(0, nextIntervalMs - elapsedSinceCompletion);
           if (wait) {
-            await context.report({
-              nextActionAt: Date.now() + wait,
+            const nextActionAt = Date.now() + wait;
+            await waitWithHeartbeat(context, wait, {
+              nextActionAt,
               currentAction: `waiting ${Math.ceil(wait / 1000)}s before next attempt`,
             });
-            await new Promise((resolve) => setTimeout(resolve, wait));
+            if (signal.aborted || context.isCancellationRequested())
+              return { status: "skipped" as const };
           }
         }
         await context.report({
@@ -1159,11 +1166,21 @@ export function startWorkerRuntime(): JobOrchestrator {
           currentLink: record.canonicalUrl,
           currentAction: `checking invite via ${boundSession.sessionName} · socket ${sessionId.slice(0, 8)} · generation ${boundSession.socketGeneration ?? "—"}`,
         });
+        const runJoinAttempt = (): Promise<JoinAttemptResult> =>
+          withTimeout(
+            joinWhatsAppInvite(socket, record.canonicalUrl, {
+              mode: payload.requestMode ?? "auto",
+              ...(membershipSnapshot ? { participatingGroups: membershipSnapshot } : {}),
+            }),
+            joinAttemptTimeoutMs,
+            `Join attempt timed out after ${Math.ceil(joinAttemptTimeoutMs / 1000)}s.`,
+          ).catch((error: unknown) => ({
+            success: false,
+            stage: "invite-info" as const,
+            error: error instanceof Error ? error.message : String(error),
+          }));
         let retryAttempt = 0;
-        let result = await joinWhatsAppInvite(socket, record.canonicalUrl, {
-          mode: payload.requestMode ?? "auto",
-          ...(membershipSnapshot ? { participatingGroups: membershipSnapshot } : {}),
-        });
+        let result = await runJoinAttempt();
         while (
           !result.success &&
           !result.alreadyMember &&
@@ -1176,18 +1193,14 @@ export function startWorkerRuntime(): JobOrchestrator {
           )
             break;
           retryAttempt += 1;
-          await context.report({
-            retrying: retryAttempt,
-            currentAction: `retrying in ${retryBaseMs * retryAttempt}ms`,
+          const retryWaitMs = retryBaseMs * retryAttempt;
+          await waitWithHeartbeat(context, retryWaitMs, {
+            nextActionAt: Date.now() + retryWaitMs,
+            currentAction: `retrying in ${retryWaitMs}ms`,
           });
-          await new Promise((resolve) =>
-            setTimeout(resolve, retryBaseMs * retryAttempt),
-          );
-          if (signal.aborted) return { status: "skipped" as const };
-            result = await joinWhatsAppInvite(socket, record.canonicalUrl, {
-              mode: payload.requestMode ?? "auto",
-              ...(membershipSnapshot ? { participatingGroups: membershipSnapshot } : {}),
-            });
+          if (signal.aborted || context.isCancellationRequested())
+            return { status: "skipped" as const };
+          result = await runJoinAttempt();
         }
         const joinClassification: NonNullable<
           LinkRecord["metadata"]
@@ -1306,9 +1319,10 @@ export function startWorkerRuntime(): JobOrchestrator {
                 : `account restriction counted ${accountRestrictionHits}/${restrictionThreshold}; continuing`,
           });
           if (result.accountRestricted && sessionCooldownMs)
-            await new Promise((resolve) =>
-              setTimeout(resolve, sessionCooldownMs),
-            );
+            await waitWithHeartbeat(context, sessionCooldownMs, {
+              nextActionAt: Date.now() + sessionCooldownMs,
+              currentAction: `cooling down for ${Math.ceil(sessionCooldownMs / 1000)}s after account restriction`,
+            });
         }
         if (classified.classification === "invalid-invite") {
           deadLinks += 1;

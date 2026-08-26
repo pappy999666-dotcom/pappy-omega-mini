@@ -59,7 +59,7 @@ function statusCodeFromError(error: unknown): number | undefined {
 }
 
 function isLinkUnavailable(error: string): boolean {
-  return /invite.*(?:revoked|expired|invalid|not found|gone)|unknown invite|group.*(?:not found|does not exist)|not-authorized|group-invite-invalid|invite-link-revoked|\b(?:410|gone)\b/i.test(error);
+  return /(?:invite|group-invite).*(?:revoked|expired|invalid|not found|gone)|unknown invite|invite-link-(?:revoked|expired)|\b(?:410|gone)\b/i.test(error);
 }
 
 function isGroupFull(error: string): boolean {
@@ -134,16 +134,35 @@ export async function joinWhatsAppInvite(
     if (!code)
       return { success: false, error: "Invalid WhatsApp invite link.", linkUnavailable: true, stage: "invite-info" };
     stage = "invite-info";
-    const info = await socket.groupGetInviteInfo?.(code);
+    let info: { id?: string; subject?: string; size?: number; participantsCount?: number } | undefined;
+    try {
+      info = await socket.groupGetInviteInfo?.(code);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isLinkUnavailable(message)) throw error;
+      // Metadata lookup can be unavailable for a live invite. Continue to the
+      // real join/request operation instead of declaring the link dead.
+      info = undefined;
+    }
     knownJid = info?.id;
     knownTitle = info?.subject;
-    if (!info?.id)
+    if (!info?.id) {
+      if (options.mode === "request" && socket.groupRequestJoin) {
+        stage = "request";
+        await socket.groupRequestJoin(code);
+        return { success: false, requestRequired: true, error: "Join request submitted.", stage: "request" };
+      }
+      if (socket.groupAcceptInvite) {
+        stage = "accept";
+        const joined = await socket.groupAcceptInvite(code);
+        return { success: true, ...(joined ? { jid: joined } : {}), stage: "accept" };
+      }
       return {
         success: false,
-        error: "Group invite is dead or no longer available.",
-        linkUnavailable: true,
+        error: "Invite metadata unavailable and direct join is not supported by the transport.",
         stage: "invite-info",
       };
+    }
     const membershipGroups = options.participatingGroups ?? (await socket.groupFetchAllParticipating?.()) ?? {};
     if (membershipGroups[info.id])
       return {

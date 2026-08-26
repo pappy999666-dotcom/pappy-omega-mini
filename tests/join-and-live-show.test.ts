@@ -67,6 +67,22 @@ describe("Baileys Join Operation", () => {
     expect(calls).toEqual(["info:ABC_123", "accept:ABC_123"]);
   });
 
+  it("still attempts a live invite when metadata is unavailable", async () => {
+    let accepted = false;
+    const result = await joinWhatsAppInvite(
+      {
+        groupGetInviteInfo: async () => ({}),
+        groupAcceptInvite: async () => {
+          accepted = true;
+          return "120@g.us";
+        },
+      },
+      "https://chat.whatsapp.com/LIVE_WITHOUT_METADATA",
+    );
+    expect(result.success).toBe(true);
+    expect(accepted).toBe(true);
+  });
+
   it("returns already-member without accepting again", async () => {
     let accepted = false;
     const result = await joinWhatsAppInvite(
