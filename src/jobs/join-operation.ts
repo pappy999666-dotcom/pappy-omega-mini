@@ -70,6 +70,16 @@ function isAlreadyMember(error: string, statusCode?: number): boolean {
   return statusCode === 409 || /already[- ]?(?:exists|a participant|member)|participant already exists|is already in the group/i.test(error);
 }
 
+export function joinFailureIsTemporary(classification: string): boolean {
+  return new Set([
+    "network-error",
+    "timeout",
+    "rate-limit",
+    "group-unavailable",
+    "permission-denied",
+  ]).has(classification);
+}
+
 export function joinRestrictionStopReached(
   accountRestrictionHits: number,
   configuredThreshold?: number,

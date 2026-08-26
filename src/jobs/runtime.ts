@@ -61,6 +61,7 @@ import { runBoundedBatch } from "./bounded-batch.js";
 import { JobOrchestrator } from "./job-orchestrator.js";
 import { getInceptor, startInceptor } from "./inceptor.js";
 import {
+  joinFailureIsTemporary,
   joinRestrictionStopReached,
   joinWhatsAppInvite,
   remixJoinRecords,
@@ -1394,7 +1395,13 @@ export function startWorkerRuntime(): JobOrchestrator {
             : minDelayMs + Math.floor(Math.random() * (maxDelayMs - minDelayMs + 1));
         if (fixedDelay)
           await context.report({ nextActionAt: Date.now() + nextIntervalMs });
-        return { status: "failed" as const };
+        // Active inventory entries are not invalidated by a transient join
+        // outcome. Keep them eligible for a later remix and do not present a
+        // network/timeout/throttle/full-group/permission response as a
+        // permanent failure of the link itself.
+        return joinFailureIsTemporary(classified.classification)
+          ? { status: "skipped" as const }
+          : { status: "failed" as const };
       },
     });
   });

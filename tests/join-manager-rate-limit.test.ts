@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { joinRestrictionStopReached, joinWhatsAppInvite } from "../src/jobs/join-operation.js";
+import { joinFailureIsTemporary, joinRestrictionStopReached, joinWhatsAppInvite } from "../src/jobs/join-operation.js";
 
 type Plan = {
   throttleAttempts: number;
@@ -52,6 +52,18 @@ async function runWithBackoff(
   }
   return { result, retries, backoff };
 }
+
+describe("Join Manager live-link failure policy", () => {
+  it("keeps temporary active-link outcomes retryable instead of permanent failures", () => {
+    expect(joinFailureIsTemporary("network-error")).toBe(true);
+    expect(joinFailureIsTemporary("timeout")).toBe(true);
+    expect(joinFailureIsTemporary("rate-limit")).toBe(true);
+    expect(joinFailureIsTemporary("group-unavailable")).toBe(true);
+    expect(joinFailureIsTemporary("permission-denied")).toBe(true);
+    expect(joinFailureIsTemporary("invalid-invite")).toBe(false);
+    expect(joinFailureIsTemporary("expired")).toBe(false);
+  });
+});
 
 describe("Join Manager restriction threshold", () => {
   it("does not stop after one explicit restriction when threshold is five", () => {
