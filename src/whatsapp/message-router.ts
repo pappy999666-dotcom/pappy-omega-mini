@@ -111,6 +111,7 @@ function identityMatches(left: string, right: string): boolean {
 const SELF_EXECUTABLE_COMMANDS = new Set([
   "ping", "health", "profile", "help", "menu", "menulist",
   "gstatus", "gstatusd", "dgstatus", "gstatusx", "tag", "stag", "pstatus", "setcmd", "flushcmd",
+  "play", "music", "audio", "video", "lyrics", "lyric", "mp3", "toaudio", "extractaudio", "a2v", "audiotovideo", "mediaaudio",
 ]);
 
 export function isSelfExecutableWhatsAppCommand(text: string, prefix = ""): boolean {

@@ -582,7 +582,12 @@ export async function runPlayCommand(ctx: CommandContext, requestedMode?: PlayMo
       void ctx.sendCurrentReaction(mode === "audio" ? "🎵" : "🎬").catch(() => undefined);
     const metadata = await resolvePlayMetadata(query, mode);
     const previewCaption = buildPlayPreviewText(metadata, mode);
-    if (ctx.sendCurrentMedia) {
+    const hasNativeSourceUrl = Boolean(metadata.webpageUrl && /^https?:\/\//iu.test(metadata.webpageUrl));
+    if (hasNativeSourceUrl && ctx.sendCurrentText) {
+      // Let the shared Baileys-native preview pipeline build the real link card
+      // from the exact source URL instead of wrapping it in a normal thumbnail.
+      await ctx.sendCurrentText(previewCaption);
+    } else if (ctx.sendCurrentMedia) {
       const previewMedia = await buildMusicPreviewMedia(metadata, mode);
       await ctx.sendCurrentMedia({ media: previewMedia, caption: previewCaption });
     } else if (ctx.sendCurrentText) {

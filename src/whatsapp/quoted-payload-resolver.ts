@@ -209,7 +209,7 @@ export async function resolveMediaPayload(
     );
     if (!Buffer.isBuffer(bytes) || bytes.length === 0)
       throw new Error("WhatsApp returned an empty media payload for the quoted message.");
-    const mediaBody = content?.[`${media.kind}Message`];
+    const mediaBody = content?.[media.messageKey];
     const body = isRecord(mediaBody) ? mediaBody : {};
     const caption = typeof body.caption === "string" ? body.caption : undefined;
     const mimeType =
@@ -262,11 +262,21 @@ function normalizedContent(
   return current;
 }
 
+type MediaReference = { kind: WhatsAppMediaKind; messageKey: string };
+
 function findMedia(
   message: Record<string, unknown> | undefined,
-): { kind: WhatsAppMediaKind } | undefined {
+): MediaReference | undefined {
   for (const kind of MEDIA_KINDS) {
-    if (isRecord(message?.[`${kind}Message`])) return { kind };
+    const messageKey = `${kind}Message`;
+    if (isRecord(message?.[messageKey])) return { kind, messageKey };
+  }
+  const document = message?.documentMessage;
+  if (isRecord(document)) {
+    const mimeType = typeof document.mimetype === "string" ? document.mimetype.toLowerCase() : "";
+    if (mimeType.startsWith("audio/")) return { kind: "audio", messageKey: "documentMessage" };
+    if (mimeType.startsWith("video/")) return { kind: "video", messageKey: "documentMessage" };
+    if (mimeType.startsWith("image/")) return { kind: "image", messageKey: "documentMessage" };
   }
   return undefined;
 }

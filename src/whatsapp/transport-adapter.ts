@@ -1247,12 +1247,12 @@ export async function sendDirectText(
   if (!send) throw new Error("Unsupported capability: sendMessage");
   await send(
     jid,
-    await prepareCanonicalPreviewContent({
+    await prepareCanonicalPreviewContentWithBudget({
       text,
       content: { text },
       socket,
       cacheScope: `${workspaceId}:${sessionId}`,
-    }),
+    }, 1_200),
   );
 }
 
@@ -1332,12 +1332,12 @@ export async function sendGroupText(
   };
   const result = await send(
     jid,
-    await prepareCanonicalPreviewContent({
+    await prepareCanonicalPreviewContentWithBudget({
       text,
       content,
       socket,
       cacheScope: `${workspaceId}:${sessionId}`,
-    }),
+    }, 1_200),
   );
   rememberGroupMessage(workspaceId, sessionId, jid, socket, result);
 }
