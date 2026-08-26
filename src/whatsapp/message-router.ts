@@ -31,6 +31,7 @@ import {
   sendGroupColorStatus,
   sendPersonalStatus,
   sendGroupText,
+  sendReaction,
   sendDirectMedia,
   sendDirectText,
   sendSticker,
@@ -70,6 +71,7 @@ export interface IncomingTextMessage {
   workspaceId: string;
   sessionId: string;
   messageId?: string;
+  messageKey?: Record<string, unknown>;
   receivedAt?: number;
   senderJid: string;
   quotedSenderJid?: string;
@@ -574,6 +576,11 @@ export async function routeWhatsAppText(
         await sendDirectMedia(message.workspaceId, message.sessionId, message.chatJid, media, caption);
       }
     },
+    ...(message.messageKey && message.chatJid
+      ? {
+          sendCurrentReaction: async (text: string) => sendReaction(message.workspaceId, message.sessionId, message.chatJid!, message.messageKey!, text),
+        }
+      : {}),
     sendCurrentSticker: async (media: WhatsAppMediaPayload) => {
       if (!message.chatJid) throw new Error("The current WhatsApp chat could not be resolved.");
       await sendSticker(message.workspaceId, message.sessionId, message.chatJid, media);

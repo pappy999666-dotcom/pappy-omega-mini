@@ -1223,6 +1223,19 @@ export async function updateGroupJoinRequests(
   return result;
 }
 
+export async function sendReaction(
+  workspaceId: string,
+  sessionId: string,
+  jid: string,
+  messageKey: Record<string, unknown>,
+  text: string,
+): Promise<void> {
+  const socket = socketFor(workspaceId, sessionId);
+  const send = method(socket, "sendMessage");
+  if (!send) throw new Error("Unsupported capability: sendMessage");
+  await send(jid, { react: { text, key: messageKey } });
+}
+
 export async function sendDirectText(
   workspaceId: string,
   sessionId: string,

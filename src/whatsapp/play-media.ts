@@ -40,6 +40,7 @@ const MAX_LYRICS_CHARS = 12_000;
 const MAX_MEDIA_BYTES = Math.max(1_000_000, Number(process.env.PLAY_MAX_BYTES ?? process.env.MAX_MEDIA_BYTES ?? 50 * 1024 * 1024));
 const MAX_MEDIA_SIZE_ARG = process.env.PLAY_MAX_FILESIZE?.trim() || "50M";
 const YT_DLP_BIN = process.env.YT_DLP_BIN?.trim() || "yt-dlp";
+const FFMPEG_BIN = process.env.FFMPEG_BIN?.trim() || "ffmpeg";
 const FFPROBE_BIN = process.env.FFPROBE_BIN?.trim() || "ffprobe";
 const MAX_CONCURRENT_MEDIA_JOBS = 2;
 const PIPED_API_BASES = (process.env.PIPED_API_BASES ?? "https://api.piped.private.coffee,https://pipedapi.kavin.rocks,https://pipedapi.leptons.xyz")
@@ -229,6 +230,53 @@ export async function resolvePlayMetadata(input: string, mode: PlayMode = "audio
   }
 }
 
+async function transcodeAudioBytes(
+  media: WhatsAppMediaPayload,
+  output: "mp3" | "voice-note",
+): Promise<Buffer> {
+  if (media.kind !== "audio" && media.kind !== "video")
+    throw new Error("Only audio or video media can be converted to audio.");
+  if (!media.bytes.length || media.bytes.length > MAX_MEDIA_BYTES)
+    throw new Error("The source media exceeds the configured size limit.");
+  const directory = await mkdtemp(join(tmpdir(), `pappy-audio-${randomUUID()}-`));
+  const inputPath = join(directory, media.kind === "video" ? "input.mp4" : "input.audio");
+  const outputPath = join(directory, output === "mp3" ? "output.mp3" : "output.ogg");
+  try {
+    await writeFile(inputPath, media.bytes);
+    const args = output === "mp3"
+      ? ["-y", "-i", inputPath, "-vn", "-map_metadata", "0", "-c:a", "libmp3lame", "-q:a", "2", outputPath]
+      : ["-y", "-i", inputPath, "-vn", "-map_metadata", "-1", "-c:a", "libopus", "-b:a", "48k", "-vbr", "on", "-application", "voip", outputPath];
+    await runExternalCommand(FFMPEG_BIN, args, COMMAND_TIMEOUT_MS);
+    const info = await stat(outputPath);
+    if (!info.size || info.size > MAX_MEDIA_BYTES) throw new Error("The converted audio exceeds the configured size limit.");
+    return await readFile(outputPath);
+  } finally {
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+export async function convertMediaToMp3(media: WhatsAppMediaPayload): Promise<WhatsAppMediaPayload> {
+  const bytes = await transcodeAudioBytes(media, "mp3");
+  return {
+    kind: "audio",
+    bytes,
+    mimeType: "audio/mpeg",
+    fileName: "pappy-audio.mp3",
+    ptt: false,
+  };
+}
+
+async function convertMediaToVoiceNote(media: WhatsAppMediaPayload): Promise<WhatsAppMediaPayload> {
+  const bytes = await transcodeAudioBytes(media, "voice-note");
+  return {
+    kind: "audio",
+    bytes,
+    mimeType: "audio/ogg; codecs=opus",
+    fileName: "pappy-voice-note.ogg",
+    ptt: true,
+  };
+}
+
 async function downloadNoeliaAudio(metadata: PlayMetadata): Promise<WhatsAppMediaPayload> {
   const url = noeliaDownloadUrl(metadata.downloadUrl);
   if (!url) throw new Error("Noelia temporary download URL is missing or invalid.");
@@ -303,9 +351,12 @@ export async function downloadPlay(input: string, mode: PlayMode, resolvedMetada
   const metadata = resolvedMetadata ?? await resolvePlayMetadata(input, mode);
   if (metadata.provider === "noelia") {
     if (mode !== "audio") throw new Error("Noelia Music API provides audio; use .play for this request.");
-    return { metadata, media: await downloadNoeliaAudio(metadata) };
+    return { metadata, media: await convertMediaToVoiceNote(await downloadNoeliaAudio(metadata)) };
   }
-  if (metadata.provider === "piped") return { metadata, media: await downloadPipedMedia(metadata, mode) };
+  if (metadata.provider === "piped") {
+    const media = await downloadPipedMedia(metadata, mode);
+    return { metadata, media: mode === "audio" ? await convertMediaToVoiceNote(media) : media };
+  }
   const directory = await mkdtemp(join(tmpdir(), `pappy-play-${randomUUID()}-`));
   try {
     const output = join(directory, "media.%(ext)s");
@@ -319,16 +370,14 @@ export async function downloadPlay(input: string, mode: PlayMode, resolvedMetada
     if (fileInfo.size > MAX_MEDIA_BYTES) throw new Error("The media output exceeds the configured size limit.");
     await runExternalCommand(FFPROBE_BIN, ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", mediaPath], 10_000);
     const bytes = await readFile(mediaPath);
-    return {
-      metadata,
-      media: {
-        kind: mode,
-        bytes,
-        mimeType: mode === "audio" ? "audio/mpeg" : "video/mp4",
-        fileName: `${metadata.title.replace(/[^a-z0-9._-]+/giu, "_").slice(0, 80) || "pappy-media"}.${mode === "audio" ? "mp3" : "mp4"}`,
-        ...(mode === "audio" ? { ptt: false } : {}),
-      },
+    const media: WhatsAppMediaPayload = {
+      kind: mode,
+      bytes,
+      mimeType: mode === "audio" ? "audio/mpeg" : "video/mp4",
+      fileName: `${metadata.title.replace(/[^a-z0-9._-]+/giu, "_").slice(0, 80) || "pappy-media"}.${mode === "audio" ? "mp3" : "mp4"}`,
+      ...(mode === "audio" ? { ptt: false } : {}),
     };
+    return { metadata, media: mode === "audio" ? await convertMediaToVoiceNote(media) : media };
   } finally {
     await rm(directory, { recursive: true, force: true }).catch(() => undefined);
   }
@@ -348,6 +397,20 @@ export async function fetchLyrics(input: string): Promise<LyricsResult> {
     plainLyrics: record.plainLyrics.slice(0, MAX_LYRICS_CHARS),
     ...(typeof record.syncedLyrics === "string" && record.syncedLyrics.trim() ? { syncedLyrics: record.syncedLyrics.slice(0, MAX_LYRICS_CHARS) } : {}),
   };
+}
+
+export function buildPlayHeadsUpText(query: string, mode: PlayMode = "audio"): string {
+  return [
+    "ㅤ   ⚫︎  𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜  ⚫︎",
+    "",
+    `˗ˏˋ ${mode === "audio" ? "🎵" : "🎬"} ˎˊ˗  *${mode === "audio" ? "MUSIC" : "VIDEO"} REQUEST*  ✦`,
+    "─────────────",
+    `⎔ Request     · ⇆ ${query.slice(0, 180)}`,
+    "⎔ Status      · ⇆ Accepted",
+    `⎔ Action      · ⇆ Finding ${mode === "audio" ? "the track" : "the video"} now…`,
+    "─────────────",
+    "» *Next:* A rich preview will arrive before the clean media.",
+  ].join("\n");
 }
 
 export function playUsageText(): string {

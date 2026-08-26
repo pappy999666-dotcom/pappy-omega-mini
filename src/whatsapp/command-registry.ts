@@ -30,7 +30,7 @@ import {
 } from "./sticker-command-bindings.js";
 import { banUsageCard, commandUsageCard, pairingHelpCard, sessionCommandUsageCard, sessionPairingCard } from "./response-cards.js";
 import type { GroupControlTable } from "./group-control-confirmation.js";
-import { buildLyricsText, buildMusicPreviewMedia, buildPlayPreviewText, downloadPlay, fetchLyrics, playUsageText, resolvePlayMetadata, withMediaDownloadSlot, type PlayMetadata, type PlayMode } from "./play-media.js";
+import { buildLyricsText, buildMusicPreviewMedia, buildPlayHeadsUpText, buildPlayPreviewText, convertMediaToMp3, downloadPlay, fetchLyrics, playUsageText, resolvePlayMetadata, withMediaDownloadSlot, type PlayMetadata, type PlayMode } from "./play-media.js";
 import { registerGroupControlConfirmation, consumeGroupControlConfirmation } from "./group-control-confirmation.js";
 import {
   getPreviewDebugSnapshot,
@@ -192,6 +192,8 @@ export interface CommandContext {
   sendCurrentPersonalStatus?: (input: { text: string }) => Promise<void>;
   sendCurrentText?: (text: string) => Promise<void>;
   sendCurrentMedia?: (input: { media: WhatsAppMediaPayload; caption: string }) => Promise<void>;
+  sendCurrentReaction?: (text: string) => Promise<void>;
+
   sendCurrentSticker?: (media: WhatsAppMediaPayload) => Promise<void>;
   enqueuePlayJob?: (input: { query: string; mode: PlayMode; sourceChatJid: string; metadata?: PlayMetadata }) => Promise<string>;
 
@@ -575,6 +577,9 @@ export async function runPlayCommand(ctx: CommandContext, requestedMode?: PlayMo
   if (!ctx.sendCurrentText)
     return commandUsageCard({ title: "Play Unavailable", command: ".play", commandSyntax: ".play <song or video>", note: "The WhatsApp text transport is not ready for this session." });
   try {
+    if (ctx.sendCurrentReaction)
+      void ctx.sendCurrentReaction(mode === "audio" ? "🎵" : "🎬").catch(() => undefined);
+    void ctx.sendCurrentText(buildPlayHeadsUpText(query, mode)).catch(() => undefined);
     const metadata = await resolvePlayMetadata(query, mode);
     const previewCaption = buildPlayPreviewText(metadata, mode);
     if (ctx.sendCurrentMedia) {
@@ -1219,6 +1224,25 @@ export function createCommandRegistry(): RegisteredCommand[] {
           return commandUsageCard({ title: "Profile Picture", command: ".pfp", commandSyntax: ".pfp get | .pfp set | .pfp remove", howToUse: ["Reply to an image with .pfp set or .setpfp.", "Use .pfp get to retrieve the current picture.", "Use .pfp remove to clear it."], note: "The set operation requires a real replied image." });
         } catch (error) {
           return error instanceof Error ? error.message : String(error);
+        }
+      },
+    },
+    {
+      name: "mp3",
+      aliases: ["toaudio", "extractaudio"],
+      description: "Convert quoted audio or video media to MP3.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.media || (ctx.media.kind !== "audio" && ctx.media.kind !== "video"))
+          return commandUsageCard({ title: "MP3 CONVERSION USAGE", command: `${session(ctx).prefix}mp3`, commandSyntax: `${session(ctx).prefix}mp3 (reply to audio or video)`, howToUse: ["Reply to a voice note or audio file with .mp3.", "Reply to a video with .mp3 to extract its audio track."], note: "The result is delivered as a clean MP3 attachment." });
+        try {
+          const media = await convertMediaToMp3(ctx.media);
+          return {
+            media,
+            caption: [...pappyHeader(`${ctx.workspaceId}:${ctx.sessionId}:mp3`, "MP3 CONVERSION"), `⎔ Output     · ⇆ ${media.fileName ?? "pappy-audio.mp3"}`, "⎔ Source     · ⇆ Quoted audio or video media", "⎔ Status     · ⇆ Ready"].join("\n"),
+          };
+        } catch (error) {
+          return commandUsageCard({ title: "MP3 CONVERSION FAILED", command: `${session(ctx).prefix}mp3`, commandSyntax: `${session(ctx).prefix}mp3 (reply to audio or video)`, note: error instanceof Error ? error.message : "The media could not be converted to MP3 safely." });
         }
       },
     },

@@ -965,7 +965,7 @@ async function openWhatsAppSession(
         const hasGroupInvite = extractWhatsAppGroupInviteUrls(combinedText).length > 0;
         const shouldTraceInbound = Boolean(text || quotedText || stickerFingerprint) && (isPrefixedCommand || hasGroupInvite);
         const mediaCommand =
-          /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate|allstatus|allchat|gstatus|tag|stag|status|cs|convertsticker|sticker|makesticker|take|takesticker|stickerpname|spn|stickerinfo|sinfo|sticker-info)/.test(
+          /(?:pfp|setpfp|setgpp|gpp|creategroup|newgroup|groupcreate|allstatus|allchat|gstatus|tag|stag|status|cs|convertsticker|sticker|makesticker|take|takesticker|stickerpname|spn|stickerinfo|sinfo|sticker-info|mp3|toaudio|extractaudio)/.test(
             commandSource,
           );
         const quotedEnvelope = buildQuotedMessageEnvelope(
@@ -1093,6 +1093,7 @@ async function openWhatsAppSession(
             workspaceId,
             sessionId,
             ...(messageKey.id ? { messageId: messageKey.id } : {}),
+            messageKey: messageKey as Record<string, unknown>,
             chatJid: message.key.remoteJid,
             senderJid: resolvedSenderJid ?? senderJid,
             ...(quotedSenderJid ? { quotedSenderJid } : {}),

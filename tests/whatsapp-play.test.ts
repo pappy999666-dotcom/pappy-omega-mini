@@ -1,9 +1,12 @@
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildDownloadArgs,
   buildLyricsText,
   buildMusicPreviewMedia,
+  buildPlayHeadsUpText,
   buildPlayPreviewText,
+  convertMediaToMp3,
   downloadPlay,
   fetchLyrics,
   resolvePlayMetadata,
@@ -35,7 +38,7 @@ describe("WhatsApp play/media flow", () => {
   it("registers the three explicit media commands and the audio aliases", () => {
     const registry = createCommandRegistry();
     const names = registry.map((command) => command.name);
-    expect(names).toEqual(expect.arrayContaining(["play", "video", "lyrics"]));
+    expect(names).toEqual(expect.arrayContaining(["play", "video", "lyrics", "mp3"]));
     expect(registry.find((command) => command.name === "play")?.aliases).toEqual(expect.arrayContaining(["music", "audio"]));
   });
 
@@ -53,6 +56,7 @@ describe("WhatsApp play/media flow", () => {
     expect(text).toContain("https://example.test/watch/demo");
     expect(text).toContain("MUSIC EXTRACTION");
     expect(text).toContain("A clean media attachment will be delivered next.");
+    expect(buildPlayHeadsUpText("Demo Track")).toContain("*MUSIC REQUEST*");
   });
 
   it("uses a declared client identity and safely formats catalogue lyrics", async () => {
@@ -74,10 +78,10 @@ describe("WhatsApp play/media flow", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the configured Noelia provider for an audio search and temporary download", async () => {
+  it("uses the configured Noelia provider and returns a real voice note", async () => {
     vi.stubEnv("NOELIA_MUSIC_API_KEY", "test-noelia-key");
     vi.stubEnv("NOELIA_MUSIC_API_BASE", "https://noelia.test/api/music");
-    const audio = Buffer.from("ID3-realistic-audio-payload");
+    const audio = execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-f", "wav", "pipe:1"]);
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/search?q=Demo%20Track")) {
@@ -100,9 +104,21 @@ describe("WhatsApp play/media flow", () => {
     expect(metadata.title).toBe("Demo Track");
     const result = await downloadPlay("Demo Track", "audio", metadata);
     expect(result.media.kind).toBe("audio");
-    expect(result.media.mimeType).toBe("audio/mpeg");
-    expect(result.media.bytes).toEqual(audio);
+    expect(result.media.mimeType).toBe("audio/ogg; codecs=opus");
+    expect(result.media.ptt).toBe(true);
+    expect(result.media.fileName).toBe("pappy-voice-note.ogg");
+    expect(result.media.bytes.length).toBeGreaterThan(100);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("converts quoted audio to an MP3 attachment", async () => {
+    const audio = execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-f", "wav", "pipe:1"]);
+    const media = await convertMediaToMp3({ kind: "audio", bytes: audio, mimeType: "audio/wav", fileName: "voice.wav", ptt: true });
+    expect(media.kind).toBe("audio");
+    expect(media.mimeType).toBe("audio/mpeg");
+    expect(media.fileName).toBe("pappy-audio.mp3");
+    expect(media.ptt).toBe(false);
+    expect(media.bytes.length).toBeGreaterThan(100);
   });
 
   it("builds a branded image preview when provider artwork is unavailable", async () => {
