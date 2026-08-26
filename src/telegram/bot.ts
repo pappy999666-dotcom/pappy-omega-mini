@@ -6184,7 +6184,7 @@ export function createTelegramBot(): Telegraf<Context> {
             restrictionThreshold: settings.restrictionThreshold,
             requestMode: settings.mode,
             fixedDelay: true,
-            fullInventory: true,
+            fullInventory: false,
           },
           idempotencyKey: `join-manager:${user.workspaceId}:${session.sessionId}:${Date.now()}`,
         });

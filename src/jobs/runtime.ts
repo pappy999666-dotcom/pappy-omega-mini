@@ -1014,6 +1014,13 @@ export function startWorkerRuntime(): JobOrchestrator {
     const selectedLinks = new Set(
       (payload.selectedLinks ?? []).map((link) => link.trim()).filter(Boolean),
     );
+    const requestedTarget = payload.targetCount !== undefined
+      ? Math.max(1, Math.min(10_000, Math.floor(Number(payload.targetCount))))
+      : undefined;
+    await context.report({
+      currentAction: "session ready · selecting the first Active link",
+      lastResult: "Join Manager is preparing the selected target set; the first attempt is not waiting for the inter-link delay.",
+    });
     const sourceRecords: LinkRecord[] = [];
     if (selectedLinks.size) {
       for (const link of selectedLinks) {
@@ -1031,8 +1038,12 @@ export function startWorkerRuntime(): JobOrchestrator {
         );
         for (const record of page.records) {
           sourceRecords.push(record);
+          if (payload.fullInventory !== true && requestedTarget !== undefined && sourceRecords.length >= requestedTarget)
+            break;
         }
         cursor = page.nextCursor;
+        if (payload.fullInventory !== true && requestedTarget !== undefined && sourceRecords.length >= requestedTarget)
+          break;
       } while (cursor !== 0);
     }
     const selectedRecords = selectJoinInventoryRecords(sourceRecords, {

@@ -82,6 +82,7 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(source).toContain("for (const command of commands) void processCommand(command);");
     expect(source).toContain("intent.styled === true");
     const runtime = await readFile(runtimePath, "utf8");
+    const telegram = await readFile(telegramBotPath, "utf8");
     const orchestrator = await readFile(orchestratorPath, "utf8");
     const control = await readFile(workloadControlServerPath, "utf8");
     expect(orchestrator).toContain("reconcileWorkerLocalBroadcast(record)");
@@ -92,6 +93,9 @@ describe("high-scale worker-local broadcast contract", () => {
     expect(runtime).toContain("sendGroupColorStatus(context.job.workspaceId, sessionId, jid");
     expect(runtime).toContain("const currentJoinSocket = (): JoinManagerSocket");
     expect(runtime).toContain("joinWhatsAppInvite(currentJoinSocket(), record.canonicalUrl");
+    expect(runtime).toContain("session ready · selecting the first Active link");
+    expect(runtime).toContain("payload.fullInventory !== true && requestedTarget !== undefined");
+    expect(telegram).toContain("fullInventory: false");
     expect(runtime).toContain('kind === "allstatus" || kind === "gstatus"');
     expect(runtime).toContain('payload.styled === true');
     expect(source).toContain("/https?:\\/\\/\\S+/i.test(detectorText)");
