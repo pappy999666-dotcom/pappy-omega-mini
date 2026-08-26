@@ -93,6 +93,7 @@ interface PlayDownloadPayload {
   query?: string;
   mode?: PlayMode;
   sourceChatJid?: string;
+  metadata?: import("../whatsapp/play-media.js").PlayMetadata;
 }
 
 interface GroupControlPayload {
@@ -368,12 +369,13 @@ export function startWorkerRuntime(): JobOrchestrator {
     const query = typeof payload.query === "string" ? payload.query.trim() : "";
     const mode = payload.mode === "video" ? "video" : payload.mode === "audio" ? "audio" : undefined;
     const sourceChatJid = typeof payload.sourceChatJid === "string" ? payload.sourceChatJid.trim() : "";
+    const metadata = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : undefined;
     if (!sessionId || !query || !mode || !sourceChatJid)
       throw new Error("Play download payload is incomplete.");
     if (context.isCancellationRequested()) return { success: 0, failed: 0, skipped: 1 };
     await waitForWhatsAppSessionReady(context.job.workspaceId, sessionId, 60_000);
     await context.report({ total: 1, currentAction: `downloading ${mode}`, lastResult: "Media source accepted; download is isolated from command handling." });
-    const result = await withMediaDownloadSlot(() => downloadPlay(query, mode));
+    const result = await withMediaDownloadSlot(() => downloadPlay(query, mode, metadata));
     if (context.isCancellationRequested()) return { success: 0, failed: 0, skipped: 1 };
     await sendGroupText(context.job.workspaceId, sessionId, sourceChatJid, `${mode === "audio" ? "🎵 Audio" : "🎬 Video"} ready · ${result.metadata.title}`, result.media);
     await context.report({ completed: 1, success: 1, failed: 0, skipped: 0, currentAction: "delivered", lastResult: "Media delivered." });

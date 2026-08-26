@@ -3,7 +3,9 @@ import {
   buildDownloadArgs,
   buildLyricsText,
   buildPlayPreviewText,
+  downloadPlay,
   fetchLyrics,
+  resolvePlayMetadata,
   withMediaDownloadSlot,
 } from "../src/whatsapp/play-media.js";
 import { createCommandRegistry, runPlayCommand, type CommandContext } from "../src/whatsapp/command-registry.js";
@@ -68,6 +70,37 @@ describe("WhatsApp play/media flow", () => {
     expect(result.plainLyrics).toContain("Second line");
     expect(buildLyricsText(result)).toContain("*LYRICS RESULT*");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the configured Noelia provider for an audio search and temporary download", async () => {
+    vi.stubEnv("NOELIA_MUSIC_API_KEY", "test-noelia-key");
+    vi.stubEnv("NOELIA_MUSIC_API_BASE", "https://noelia.test/api/music");
+    const audio = Buffer.from("ID3-realistic-audio-payload");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/search?q=Demo%20Track")) {
+        expect(new Headers(init?.headers).get("x-api-key")).toBe("test-noelia-key");
+        return new Response(JSON.stringify({
+          success: true,
+          track: {
+            title: "Demo Track",
+            author: "Demo Artist",
+            downloadUrl: "https://noelia.test/api/music/download/temporary-token",
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(audio, { status: 200, headers: { "content-type": "audio/mpeg" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const metadata = await resolvePlayMetadata("Demo Track", "audio");
+    expect(metadata.provider).toBe("noelia");
+    expect(metadata.title).toBe("Demo Track");
+    const result = await downloadPlay("Demo Track", "audio", metadata);
+    expect(result.media.kind).toBe("audio");
+    expect(result.media.mimeType).toBe("audio/mpeg");
+    expect(result.media.bytes).toEqual(audio);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("uses bounded, non-playlist yt-dlp arguments for distinct audio and video modes", () => {

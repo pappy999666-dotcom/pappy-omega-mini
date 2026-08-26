@@ -20,6 +20,8 @@ const envSchema = z.object({
   APP_TIMEZONE: z.string().default("Africa/Lagos"),
   SESSION_ROOT: z.string().default("./storage/sessions"),
   MEDIA_ROOT: z.string().default("./data/media"),
+  NOELIA_MUSIC_API_BASE: z.string().url().default("https://noelia.noeldfa.dpdns.org/api/music"),
+  NOELIA_MUSIC_API_KEY: z.string().min(1).optional(),
   MAX_MEDIA_BYTES: z.coerce
     .number()
     .int()

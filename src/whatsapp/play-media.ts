@@ -15,8 +15,10 @@ export interface PlayMetadata {
   thumbnailUrl?: string;
   webpageUrl?: string;
   sourceUrl: string;
-  provider?: "yt-dlp" | "piped";
+  provider?: "yt-dlp" | "piped" | "noelia";
   sourceId?: string;
+  downloadUrl?: string;
+  expiresAt?: string;
 }
 
 export interface LyricsResult {
@@ -43,6 +45,9 @@ const PIPED_API_BASES = (process.env.PIPED_API_BASES ?? "https://api.piped.priva
   .split(",")
   .map((value) => value.trim().replace(/\/$/u, ""))
   .filter(Boolean);
+const DEFAULT_NOELIA_MUSIC_API_BASE = "https://noelia.noeldfa.dpdns.org/api/music";
+const NOELIA_REQUEST_TIMEOUT_MS = 15_000;
+const NOELIA_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 let activeMediaJobs = 0;
 const mediaJobWaiters: Array<() => void> = [];
@@ -148,8 +153,70 @@ async function resolvePipedMetadata(input: string): Promise<PlayMetadata> {
   };
 }
 
-export async function resolvePlayMetadata(input: string): Promise<PlayMetadata> {
+function noeliaApiBase(): string {
+  return (process.env.NOELIA_MUSIC_API_BASE?.trim() || DEFAULT_NOELIA_MUSIC_API_BASE).replace(/\/$/u, "");
+}
+
+function noeliaDownloadUrl(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  try {
+    const candidate = new URL(value);
+    const base = new URL(noeliaApiBase());
+    if (candidate.protocol !== "https:" || candidate.origin !== base.origin) return undefined;
+    return candidate.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveNoeliaMetadata(input: string): Promise<PlayMetadata> {
+  const key = process.env.NOELIA_MUSIC_API_KEY?.trim();
+  if (!key) throw new Error("Noelia Music API is not configured.");
+  if (/^https?:\/\//iu.test(input.trim())) throw new Error("Noelia search accepts a song query, not a direct URL.");
+  const endpoint = `${noeliaApiBase()}/search?q=${encodeURIComponent(input.trim())}`;
+  const response = await withTimeout(fetch(endpoint, {
+    headers: {
+      "x-api-key": key,
+      "User-Agent": "Pappy-Omega-Mini/1.0 (music downloader)",
+      Accept: "application/json",
+    },
+  }), NOELIA_REQUEST_TIMEOUT_MS, () => undefined);
+  let body: Record<string, unknown> = {};
+  try {
+    body = await response.json() as Record<string, unknown>;
+  } catch {
+    // Keep the provider error below generic and avoid exposing upstream bodies.
+  }
+  if (!response.ok || body.success !== true) {
+    const status = response.status;
+    throw new Error(status === 401 ? "Noelia Music API rejected the configured key." : status === 429 ? "Noelia Music API rate limit reached." : status >= 500 ? "Noelia Music API is temporarily unavailable." : String(body.error ?? `Noelia Music API search failed (${status}).`));
+  }
+  const track = body.track && typeof body.track === "object" ? body.track as Record<string, unknown> : {};
+  const downloadUrl = noeliaDownloadUrl(track.downloadUrl);
+  if (!downloadUrl) throw new Error("Noelia Music API returned an invalid temporary download URL.");
+  const expiresAt = typeof track.expiresAt === "string" ? track.expiresAt : undefined;
+  if (expiresAt && Number.isFinite(Date.parse(expiresAt)) && Date.parse(expiresAt) <= Date.now())
+    throw new Error("Noelia Music API returned an expired download URL.");
+  return {
+    title: String(track.title ?? input).trim().slice(0, 180) || input.trim(),
+    ...(track.author ? { uploader: String(track.author).slice(0, 120) } : {}),
+    webpageUrl: input.trim(),
+    sourceUrl: input.trim(),
+    provider: "noelia",
+    downloadUrl,
+    ...(expiresAt ? { expiresAt } : {}),
+  };
+}
+
+export async function resolvePlayMetadata(input: string, mode: PlayMode = "audio"): Promise<PlayMetadata> {
   const source = sourceFor(input);
+  if (mode === "audio" && process.env.NOELIA_MUSIC_API_KEY?.trim() && !/^https?:\/\//iu.test(input.trim())) {
+    try {
+      return await resolveNoeliaMetadata(input);
+    } catch {
+      // The established yt-dlp/Piped cascade remains the fallback provider.
+    }
+  }
   try {
     const result = await runCommand(["--dump-single-json", "--skip-download", "--no-playlist", "--no-warnings", source], PLAY_METADATA_TIMEOUT_MS);
     const line = result.stdout.trim().split("\n").filter(Boolean).at(-1);
@@ -159,6 +226,30 @@ export async function resolvePlayMetadata(input: string): Promise<PlayMetadata> 
     if (/^https?:\/\//iu.test(input.trim())) throw primaryError;
     return resolvePipedMetadata(input);
   }
+}
+
+async function downloadNoeliaAudio(metadata: PlayMetadata): Promise<WhatsAppMediaPayload> {
+  const url = noeliaDownloadUrl(metadata.downloadUrl);
+  if (!url) throw new Error("Noelia temporary download URL is missing or invalid.");
+  if (metadata.expiresAt && Number.isFinite(Date.parse(metadata.expiresAt)) && Date.parse(metadata.expiresAt) <= Date.now())
+    throw new Error("The Noelia temporary download URL has expired; retry the command.");
+  const response = await withTimeout(fetch(url, {
+    headers: { "User-Agent": "Pappy-Omega-Mini/1.0 (music downloader)", Accept: "audio/mpeg,audio/*" },
+  }), NOELIA_DOWNLOAD_TIMEOUT_MS, () => undefined);
+  if (!response.ok) throw new Error(response.status === 404 ? "The Noelia temporary download URL expired or is invalid." : `Noelia audio download failed (${response.status}).`);
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (contentType && !contentType.startsWith("audio/")) throw new Error("Noelia returned a non-audio response.");
+  const contentLength = Number(response.headers.get("content-length") ?? 0);
+  if (contentLength > MAX_MEDIA_BYTES) throw new Error("The audio output exceeds the configured size limit.");
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length || bytes.length > MAX_MEDIA_BYTES) throw new Error("The audio output exceeds the configured size limit.");
+  return {
+    kind: "audio",
+    bytes,
+    mimeType: "audio/mpeg",
+    fileName: `${metadata.title.replace(/[^a-z0-9._-]+/giu, "_").slice(0, 80) || "pappy-music"}.mp3`,
+    ptt: false,
+  };
 }
 
 async function downloadPipedMedia(metadata: PlayMetadata, mode: PlayMode): Promise<WhatsAppMediaPayload> {
@@ -208,7 +299,11 @@ export function buildDownloadArgs(mode: PlayMode, output: string, source: string
 }
 
 export async function downloadPlay(input: string, mode: PlayMode, resolvedMetadata?: PlayMetadata): Promise<{ metadata: PlayMetadata; media: WhatsAppMediaPayload }> {
-  const metadata = resolvedMetadata ?? await resolvePlayMetadata(input);
+  const metadata = resolvedMetadata ?? await resolvePlayMetadata(input, mode);
+  if (metadata.provider === "noelia") {
+    if (mode !== "audio") throw new Error("Noelia Music API provides audio; use .play for this request.");
+    return { metadata, media: await downloadNoeliaAudio(metadata) };
+  }
   if (metadata.provider === "piped") return { metadata, media: await downloadPipedMedia(metadata, mode) };
   const directory = await mkdtemp(join(tmpdir(), `pappy-play-${randomUUID()}-`));
   try {

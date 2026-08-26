@@ -23,6 +23,7 @@ import type { WhatsAppMediaPayload } from "./media-payload.js";
 import type { GroupControlTable } from "./group-control-confirmation.js";
 import { getWorkerRuntime } from "../jobs/runtime.js";
 import { requestWhatsAppPairingCode } from "./session-manager.js";
+import type { PlayMetadata } from "./play-media.js";
 import {
   listGroups,
   sendGroupMentions,
@@ -368,8 +369,8 @@ export async function routeWhatsAppText(
               jobCode: record.jobCode ?? record.jobId.slice(0, 8),
             };
           },
-          enqueuePlayJob: async ({ query, mode, sourceChatJid }: { query: string; mode: "audio" | "video"; sourceChatJid: string }) => {
-            const payload = { query, mode, sourceChatJid };
+          enqueuePlayJob: async ({ query, mode, sourceChatJid, metadata }: { query: string; mode: "audio" | "video"; sourceChatJid: string; metadata?: PlayMetadata }) => {
+            const payload = { query, mode, sourceChatJid, ...(metadata ? { metadata } : {}) };
             const payloadHash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
             const record = await runtime.enqueue({
               workspaceId: message.workspaceId,
