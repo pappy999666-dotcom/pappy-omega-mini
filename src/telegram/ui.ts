@@ -923,7 +923,10 @@ export function jobLiveClockText(job: JobRecord, now = Date.now()): string {
   const end = terminal ? (job.completedAt ?? now) : now;
   const started = job.startedAt ?? job.createdAt;
   const updated = new Date(now).toISOString().slice(11, 19);
-  return `<b>Live clock</b> ${formatLiveClock(end - started)} · <b>Updated</b> ${updated} UTC`;
+  const nextAttempt = terminal || job.progress.nextActionAt === undefined
+    ? ""
+    : ` · <b>Next attempt in</b> ${Math.ceil(Math.max(0, job.progress.nextActionAt - now) / 1000)}s`;
+  return `<b>Live clock</b> ${formatLiveClock(end - started)}${nextAttempt} · <b>Updated</b> ${updated} UTC`;
 }
 
 export function jobLiveText(job: JobRecord | undefined): string {
