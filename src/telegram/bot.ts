@@ -514,13 +514,33 @@ function startJobLiveLoop(
   const loopKey = `job-live:${workspaceId}:${chatId}:${messageId}`;
   stopJobLiveLoop(loopKey);
   let refreshInFlight = false;
+  let consecutiveRefreshFailures = 0;
+  let retryAfter = 0;
+  const scheduleRetry = (): void => {
+    consecutiveRefreshFailures = Math.min(consecutiveRefreshFailures + 1, 6);
+    retryAfter = Date.now() + Math.min(30_000, 1_000 * 2 ** (consecutiveRefreshFailures - 1));
+  };
   const refresh = async (): Promise<void> => {
-    if (refreshInFlight) return;
+    if (refreshInFlight || Date.now() < retryAfter) return;
     refreshInFlight = true;
     try {
       const runtime = getWorkerRuntime();
-      const job = runtime ? await runtime.getByCode(workspaceId, code) : undefined;
-      if (!job) return;
+      let job;
+      try {
+        job = runtime ? await runtime.getByCode(workspaceId, code) : undefined;
+      } catch {
+        // Redis/worker recovery must not kill the Telegram display loop.
+        scheduleRetry();
+        return;
+      }
+      if (!job) {
+        // A queued/recovering record can be briefly unavailable. Keep the
+        // display alive; only a deleted Telegram message is terminal here.
+        scheduleRetry();
+        return;
+      }
+      consecutiveRefreshFailures = 0;
+      retryAfter = 0;
       const terminal = [
         "COMPLETED",
         "PARTIAL",
@@ -545,12 +565,21 @@ function startJobLiveLoop(
           stopJobLiveLoop(loopKey);
           return;
         } else if (editClass === "transient") {
+          scheduleRetry();
           return;
         } else {
-          throw error;
+          // Bad HTML, a temporary Telegram API shape change, or a network
+          // adapter error must be retried with backoff; never abandon a live
+          // worker monitor because one edit failed.
+          scheduleRetry();
+          return;
         }
       }
       if (terminal) stopJobLiveLoop(loopKey);
+    } catch {
+      // Keep monitoring through unexpected runtime/Telegram failures. The
+      // display is stopped only by an explicit display-gone classification.
+      scheduleRetry();
     } finally {
       refreshInFlight = false;
     }
@@ -564,7 +593,7 @@ function startJobLiveLoop(
   }, 1_000);
   liveLoops.set(loopKey, interval);
   void refresh();
-  setTimeout(() => stopJobLiveLoop(loopKey), 30 * 60_000).unref?.();
+  setTimeout(() => stopJobLiveLoop(loopKey), 6 * 60 * 60_000).unref?.();
 }
 
 async function withTelegramTimeout<T>(
