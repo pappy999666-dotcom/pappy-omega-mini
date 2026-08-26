@@ -49,7 +49,7 @@ const PIPED_API_BASES = (process.env.PIPED_API_BASES ?? "https://api.piped.priva
   .filter(Boolean);
 const DEFAULT_NOELIA_MUSIC_API_BASE = "https://noelia.noeldfa.dpdns.org/api/music";
 const NOELIA_REQUEST_TIMEOUT_MS = 15_000;
-const NOELIA_FAST_PATH_TIMEOUT_MS = 5_000;
+const NOELIA_FAST_PATH_TIMEOUT_MS = 9_000;
 const NOELIA_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 let activeMediaJobs = 0;
@@ -200,9 +200,17 @@ async function resolveNoeliaMetadata(input: string): Promise<PlayMetadata> {
   const expiresAt = typeof track.expiresAt === "string" ? track.expiresAt : undefined;
   if (expiresAt && Number.isFinite(Date.parse(expiresAt)) && Date.parse(expiresAt) <= Date.now())
     throw new Error("Noelia Music API returned an expired download URL.");
+  const durationCandidate = Number(track.durationSeconds ?? track.duration);
+  const thumbnailCandidate = typeof track.thumbnailUrl === "string"
+    ? track.thumbnailUrl
+    : typeof track.thumbnail === "string"
+      ? track.thumbnail
+      : undefined;
   return {
     title: String(track.title ?? input).trim().slice(0, 180) || input.trim(),
     ...(track.author ? { uploader: String(track.author).slice(0, 120) } : {}),
+    ...(Number.isFinite(durationCandidate) && durationCandidate > 0 ? { durationSeconds: Math.round(durationCandidate) } : {}),
+    ...(thumbnailCandidate ? { thumbnailUrl: thumbnailCandidate } : {}),
     webpageUrl: input.trim(),
     sourceUrl: input.trim(),
     provider: "noelia",
@@ -227,13 +235,16 @@ export async function resolvePlayMetadata(input: string, mode: PlayMode = "audio
   const source = sourceFor(input);
   const hasNoelia = mode === "audio" && Boolean(process.env.NOELIA_MUSIC_API_KEY?.trim()) && !/^https?:\/\//iu.test(input.trim());
   if (hasNoelia) {
+    // Keep the fast path single-flight: a successful Noelia result must not
+    // trigger a second metadata request in parallel. The budget is bounded
+    // but now covers the provider's observed 8-second tail latency; only a
+    // genuine Noelia timeout/error falls through to yt-dlp/Piped.
     try {
       return await withTimeout(resolveNoeliaMetadata(input), NOELIA_FAST_PATH_TIMEOUT_MS, () => undefined);
     } catch {
       try {
         return await resolveFallbackPlayMetadata(input, source);
       } catch {
-        // Both compliant provider paths failed; preserve the normal failure response.
         throw new Error("No music provider returned a usable result.");
       }
     }

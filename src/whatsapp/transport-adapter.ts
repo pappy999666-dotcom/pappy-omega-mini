@@ -1301,6 +1301,31 @@ function messagePayload(
   };
 }
 
+export async function sendStickerPack(
+  workspaceId: string,
+  sessionId: string,
+  jid: string,
+  input: { stickers: Buffer[]; packName: string; publisher: string; description: string },
+): Promise<boolean> {
+  if (input.stickers.length < 2 || input.stickers.length > 60) return false;
+  const socket = socketFor(workspaceId, sessionId) as unknown as {
+    sendMessage?: (target: string, content: Record<string, unknown>) => Promise<unknown>;
+  };
+  if (typeof socket.sendMessage !== "function") return false;
+  try {
+    await socket.sendMessage(jid, {
+      stickers: input.stickers.map((data) => ({ data, emojis: ["✨"] })),
+      cover: input.stickers[0],
+      name: input.packName,
+      publisher: input.publisher,
+      description: input.description,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function sendSticker(
   workspaceId: string,
   sessionId: string,

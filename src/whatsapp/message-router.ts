@@ -36,6 +36,7 @@ import {
   sendDirectMedia,
   sendDirectText,
   sendSticker,
+  sendStickerPack,
   sendGroupPoll,
 } from "./transport-adapter.js";
 import {
@@ -112,7 +113,7 @@ function identityMatches(left: string, right: string): boolean {
 const SELF_EXECUTABLE_COMMANDS = new Set([
   "ping", "health", "profile", "help", "menu", "menulist",
   "gstatus", "gstatusd", "dgstatus", "gstatusx", "tag", "stag", "pstatus", "setcmd", "flushcmd",
-  "play", "music", "audio", "video", "lyrics", "lyric", "mp3", "toaudio", "extractaudio", "a2v", "audiotovideo", "mediaaudio",
+  "play", "music", "audio", "video", "lyrics", "lyric", "mp3", "toaudio", "extractaudio", "a2v", "audiotovideo", "mediaaudio", "tg", "tgsticker", "telegramsticker",
 ]);
 
 export function isSelfExecutableWhatsAppCommand(text: string, prefix = ""): boolean {
@@ -596,6 +597,10 @@ export async function routeWhatsAppText(
     sendCurrentSticker: async (media: WhatsAppMediaPayload) => {
       if (!message.chatJid) throw new Error("The current WhatsApp chat could not be resolved.");
       await sendSticker(message.workspaceId, message.sessionId, message.chatJid, media);
+    },
+    sendCurrentStickerPack: async (input: { stickers: Buffer[]; packName: string; publisher: string; description: string }) => {
+      if (!message.chatJid) throw new Error("The current WhatsApp chat could not be resolved.");
+      return sendStickerPack(message.workspaceId, message.sessionId, message.chatJid, input);
     },
     ...(runtime
       ? {

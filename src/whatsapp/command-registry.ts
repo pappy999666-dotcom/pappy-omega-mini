@@ -17,6 +17,7 @@ import {
 } from "../menus/menu-model.js";
 import type { WhatsAppMediaPayload } from "./media-payload.js";
 import { convertMediaToSticker, convertStickerToMedia, renderTextSticker } from "./sticker-media.js";
+import { runTelegramStickerCommand } from "./telegram-sticker.js";
 import { applyStickerPackMetadata, validateWhatsAppSticker } from "./sticker-exif.js";
 import { inspectSticker } from "./sticker-info.js";
 import { getStickerPackName, setStickerPackName } from "./sticker-settings.js";
@@ -198,6 +199,7 @@ export interface CommandContext {
   sendCurrentReaction?: (text: string) => Promise<void>;
 
   sendCurrentSticker?: (media: WhatsAppMediaPayload) => Promise<void>;
+  sendCurrentStickerPack?: (input: { stickers: Buffer[]; packName: string; publisher: string; description: string }) => Promise<boolean>;
   enqueuePlayJob?: (input: { query: string; mode: PlayMode; sourceChatJid: string; metadata?: PlayMetadata }) => Promise<string>;
 
   sendCurrentGroupHidetag?: (input: {
@@ -901,6 +903,27 @@ export function createCommandRegistry(): RegisteredCommand[] {
       aliases: [],
       description: "Without a target, review deletion of all recent cached bot messages in this group; with a target, review that member’s tracked messages.",
       run: async (ctx) => deleteAllMember(ctx),
+    },
+    {
+      name: "tg",
+      aliases: ["tgsticker", "telegramsticker"],
+      description: "Download a Telegram sticker pack and send it as WhatsApp sticker pack chunks.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        if (!ctx.sendCurrentSticker || !ctx.sendCurrentText)
+          return commandUsageCard({ title: "TG Sticker Unavailable", command: `${session(ctx).prefix}tg`, commandSyntax: `${session(ctx).prefix}tg <Telegram pack link> [number]`, note: "The WhatsApp sticker transport is not ready for this session." });
+        try {
+          return await runTelegramStickerCommand({
+            rawInput: mediaCommandPayload(ctx),
+            packName: getStickerPackName(ctx.workspaceId, ctx.sessionId),
+            sendText: ctx.sendCurrentText,
+            sendSticker: ctx.sendCurrentSticker,
+            ...(ctx.sendCurrentStickerPack ? { sendStickerPack: ctx.sendCurrentStickerPack } : {}),
+          });
+        } catch (error) {
+          return commandUsageCard({ title: "TG Sticker Failed", command: `${session(ctx).prefix}tg`, commandSyntax: `${session(ctx).prefix}tg <Telegram pack link> [number]`, note: error instanceof Error ? error.message : "Telegram sticker import failed safely." });
+        }
+      },
     },
     {
       name: "play",
