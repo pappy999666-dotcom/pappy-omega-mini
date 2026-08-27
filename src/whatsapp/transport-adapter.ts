@@ -404,7 +404,7 @@ export async function createWhatsAppGroup(
     .filter(Boolean);
   const self = ownJid(socket);
   const selfParticipant = panelAssigned ? "me" : self;
-  if (!normalizedParticipants.length && selfParticipant && self !== "me")
+  if (!normalizedParticipants.length && selfParticipant)
     normalizedParticipants.push(selfParticipant);
   else if (panelAssigned && self) {
     const selfVariants = socketIdentityVariants(socket);
@@ -463,8 +463,20 @@ export async function getGroupInviteCode(
 ): Promise<string | undefined> {
   const get = method(socketFor(workspaceId, sessionId), "groupInviteCode");
   if (!get) throw new Error("Unsupported capability: groupInviteLink");
-  const result = await get(groupJid);
-  return typeof result === "string" ? result : undefined;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const result = await get(groupJid);
+      if (typeof result === "string" && /^[A-Za-z0-9_-]{6,160}$/.test(result.trim()))
+        return result.trim();
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 2)
+      await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+  }
+  if (lastError instanceof Error) throw lastError;
+  return undefined;
 }
 
 export async function updateProfileName(

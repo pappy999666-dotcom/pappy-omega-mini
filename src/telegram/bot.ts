@@ -209,6 +209,7 @@ import {
   autoPromotePostsKeyboard,
   autoPromoteConfirmKeyboard,
   autoPromoteDashboardKeyboard,
+  sessionAutoPromoteDashboardKeyboard,
   autoPromoteGlobalTargetsKeyboard,
   autoPromoteText,
   btn,
@@ -338,9 +339,11 @@ const pendingGroupCreate = new Map<
   {
     workspaceId: string;
     sessionId: string;
-    stage: "subject" | "participants" | "description";
+    stage: "subject" | "participants" | "description" | "profile";
     subject?: string;
     participants?: string[];
+    description?: string;
+    profilePicture?: Buffer;
   }
 >();
 const pendingProfilePicture = new Map<
@@ -2023,8 +2026,27 @@ export function createTelegramBot(): Telegraf<Context> {
         );
         return;
       }
+      if (groupCreate.stage === "description") {
+        pendingGroupCreate.set(userId, {
+          ...groupCreate,
+          stage: "profile",
+          description: input.toLowerCase() === "skip" ? "" : input,
+        });
+        await ctx.reply(
+          pageText(
+            "Create Group",
+            infoResponse(
+              "Group Picture",
+              "Send the group profile picture as a Telegram photo, or send <code>skip</code> to create without one.",
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+        return;
+      }
+      if (groupCreate.stage !== "profile") return;
       pendingGroupCreate.delete(userId);
-      const description = input.toLowerCase() === "skip" ? "" : input;
+      const description = groupCreate.description ?? "";
       try {
         const jid = await createWhatsAppGroup(
           groupCreate.workspaceId,
@@ -2039,11 +2061,20 @@ export function createTelegramBot(): Telegraf<Context> {
             jid,
             description,
           );
+        if (groupCreate.profilePicture)
+          await updateGroupProfilePicture(
+            groupCreate.workspaceId,
+            groupCreate.sessionId,
+            jid,
+            groupCreate.profilePicture,
+          );
         const invite = await getGroupInviteCode(
           groupCreate.workspaceId,
           groupCreate.sessionId,
           jid,
-        ).catch(() => undefined);
+        );
+        if (!invite)
+          throw new Error("Group was created, but WhatsApp did not return a usable administrator invite code. Open the group and request a fresh invite link.");
         await ctx.reply(
           pageText(
             "Create Group",
@@ -2868,6 +2899,66 @@ export function createTelegramBot(): Telegraf<Context> {
         ),
         { parse_mode: "HTML", reply_markup: autoPromoteConfirmKeyboard() },
       );
+      return;
+    }
+    const groupCreate = pendingGroupCreate.get(userId);
+    if (groupCreate?.stage === "profile") {
+      pendingGroupCreate.delete(userId);
+      try {
+        const photo = ctx.message.photo.at(-1);
+        if (!photo) throw new Error("Telegram did not provide the uploaded group picture.");
+        const file = await ctx.telegram.getFileLink(photo.file_id);
+        const response = await fetch(file.href);
+        if (!response.ok) throw new Error(`Telegram group-picture download failed (${response.status}).`);
+        const profilePicture = Buffer.from(await response.arrayBuffer());
+        const jid = await createWhatsAppGroup(
+          groupCreate.workspaceId,
+          groupCreate.sessionId,
+          groupCreate.subject ?? "",
+          groupCreate.participants ?? [],
+        );
+        if (groupCreate.description)
+          await updateGroupDescription(
+            groupCreate.workspaceId,
+            groupCreate.sessionId,
+            jid,
+            groupCreate.description,
+          );
+        await updateGroupProfilePicture(
+          groupCreate.workspaceId,
+          groupCreate.sessionId,
+          jid,
+          profilePicture,
+        );
+        const invite = await getGroupInviteCode(
+          groupCreate.workspaceId,
+          groupCreate.sessionId,
+          jid,
+        );
+        if (!invite)
+          throw new Error("Group was created, but WhatsApp did not return a usable administrator invite code. Open the group and request a fresh invite link.");
+        await ctx.reply(
+          pageText(
+            "Create Group",
+            successResponse(
+              "Group Created",
+              `<b>${escapeHtml(groupCreate.subject ?? "")}</b>\n<code>${escapeHtml(jid)}</code>${groupCreate.description ? "\nDescription initialized." : ""}\nProfile picture applied without bot-side cropping.\nInvite: <code>https://chat.whatsapp.com/${escapeHtml(invite)}</code>\n\nThe group was created and initialized through the live WhatsApp transport.`,
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+      } catch (error) {
+        await ctx.reply(
+          pageText(
+            "Create Group",
+            dangerResponse(
+              "Creation Failed",
+              escapeHtml(error instanceof Error ? error.message : String(error)),
+            ),
+          ),
+          { parse_mode: "HTML" },
+        );
+      }
       return;
     }
     const profilePicture = pendingProfilePicture.get(userId);
@@ -6509,6 +6600,12 @@ export function createTelegramBot(): Telegraf<Context> {
     await ctx.answerCbQuery();
     const session = ownedSession(ctx, ctx.match[1] ?? "");
     if (!session) return deny(ctx);
+    await showSessionAutoPromoteDashboard(ctx, session);
+  });
+  bot.action(/^session:([^:]+):autopromote:new$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = ownedSession(ctx, ctx.match[1] ?? "");
+    if (!session) return deny(ctx);
     beginExclusiveInput(String(ctx.from?.id ?? ""));
     pendingAutoPromote.set(String(ctx.from?.id ?? ""), {
       workspaceId: session.workspaceId,
@@ -6524,10 +6621,10 @@ export function createTelegramBot(): Telegraf<Context> {
     await edit(
       ctx,
       pageText(
-        "Session Auto Promote",
+        "Auto Promote",
         infoResponse(
           "Choose Command",
-          `<b>Session:</b> ${escapeHtml(session.sessionName)}\nThis configuration affects only this WhatsApp session.`,
+          "Select the canonical operation to schedule for this WhatsApp session.",
         ),
       ),
       autoPromoteCommandKeyboard(),
@@ -10681,6 +10778,26 @@ async function showOwnerAutoPromoteDashboard(ctx: Context): Promise<void> {
       "admin:autopromote:new",
       "admin:panel",
     ),
+  );
+}
+
+async function showSessionAutoPromoteDashboard(
+  ctx: Context,
+  session: Exclude<ReturnType<typeof getSession>, undefined>,
+): Promise<void> {
+  const [configs, runs] = await Promise.all([
+    listAutoPromoteConfigs({ limit: 500 }),
+    listAutoPromoteRuns({ sessionId: session.sessionId, limit: 100 }),
+  ]);
+  const sessionConfigs = configs.filter(
+    (config) => config.scope === "SESSION" && config.sessionId === session.sessionId,
+  );
+  const sessionConfigIds = new Set(sessionConfigs.map((config) => config.id));
+  const sessionRuns = runs.filter((run) => sessionConfigIds.has(run.configId));
+  await edit(
+    ctx,
+    autoPromoteText(sessionConfigs, sessionRuns),
+    sessionAutoPromoteDashboardKeyboard(sessionConfigs, session.sessionId),
   );
 }
 

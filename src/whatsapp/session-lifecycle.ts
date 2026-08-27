@@ -34,6 +34,8 @@ export interface SessionLifecycleState {
 
 const states = new Map<string, SessionLifecycleState>();
 const starts = new Map<string, Promise<void>>();
+const RECONNECT_DEGRADED_AFTER_ATTEMPTS = 6;
+const RECONNECT_LONG_BACKOFF_MS = 5 * 60_000;
 
 export function lifecycleKey(workspaceId: string, sessionId: string): string {
   return `${workspaceId}:${sessionId}`;
@@ -168,13 +170,21 @@ export function scheduleReconnect(input: {
     return;
   }
   state.reconnectAttempt += 1;
-  const base = Math.min(60_000, 1_000 * 2 ** (state.reconnectAttempt - 1));
+  const exponentialBase = Math.min(60_000, 1_000 * 2 ** (state.reconnectAttempt - 1));
+  const base = state.reconnectAttempt >= RECONNECT_DEGRADED_AFTER_ATTEMPTS
+    ? RECONNECT_LONG_BACKOFF_MS
+    : exponentialBase;
   const jitter = Math.floor(Math.random() * Math.max(250, base * 0.2));
   const delay = base + jitter;
-  setLifecycleStatus(input.key, "RECONNECTING");
+  const visibleStatus = state.reconnectAttempt >= RECONNECT_DEGRADED_AFTER_ATTEMPTS
+    ? "DEGRADED"
+    : "RECONNECTING";
+  setLifecycleStatus(input.key, visibleStatus);
   updateSession(input.workspaceId, input.sessionId, {
-    status: "RECONNECTING",
-    disconnectReason: `reconnect scheduled in ${delay}ms`,
+    status: visibleStatus,
+    disconnectReason: visibleStatus === "DEGRADED"
+      ? `reconnect backoff active; next recovery attempt in ${delay}ms`
+      : `reconnect scheduled in ${delay}ms`,
   });
   state.reconnectTimer = setTimeout(() => {
     state.reconnectTimer = undefined;
