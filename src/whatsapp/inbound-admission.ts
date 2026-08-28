@@ -22,26 +22,28 @@ export interface InboundAdmissionSnapshot {
 
 const GLOBAL_CONCURRENCY = Math.max(
   1,
-  Math.min(64, Number.parseInt(process.env.INBOUND_WA_CONCURRENCY ?? "12", 10) || 12),
+  Math.min(64, Number.parseInt(process.env.INBOUND_WA_CONCURRENCY ?? "24", 10) || 24),
 );
 const PER_SESSION_ACTIVE = Math.max(
   1,
   Math.min(
     GLOBAL_CONCURRENCY,
-    Number.parseInt(process.env.INBOUND_WA_PER_SESSION_ACTIVE ?? "2", 10) || 2,
+    Number.parseInt(process.env.INBOUND_WA_PER_SESSION_ACTIVE ?? "3", 10) || 3,
   ),
 );
 const MAX_PENDING = Math.max(
   50,
-  Number.parseInt(process.env.INBOUND_WA_MAX_PENDING ?? "500", 10) || 500,
+  Number.parseInt(process.env.INBOUND_WA_MAX_PENDING ?? "800", 10) || 800,
 );
 const PER_SESSION_MAX_PENDING = Math.max(
   10,
   Math.min(
     MAX_PENDING,
-    Number.parseInt(process.env.INBOUND_WA_MAX_PENDING_PER_SESSION ?? "100", 10) || 100,
+    Number.parseInt(process.env.INBOUND_WA_MAX_PENDING_PER_SESSION ?? "150", 10) || 150,
   ),
 );
+const MAX_SESSIONS_TRACKED = 500;
+const SESSION_STALENESS_MS = 10 * 60_000;
 
 interface PendingTask extends InboundAdmissionTask {
   queuedAt: number;
@@ -81,6 +83,26 @@ function cleanupSession(sessionId: string): void {
   if (index >= 0) {
     sessionOrder.splice(index, 1);
     roundRobinCursor = sessionOrder.length ? roundRobinCursor % sessionOrder.length : 0;
+  }
+}
+
+function evictStaleSessions(): void {
+  if (sessionOrder.length <= MAX_SESSIONS_TRACKED) return;
+  const now = Date.now();
+  const staleSessions: string[] = [];
+  for (const sessionId of sessionOrder) {
+    const queue = pendingBySession.get(sessionId);
+    if (!queue || queue.length === 0) {
+      const lastActive = activeBySession.get(sessionId) ?? 0;
+      if (lastActive === 0) {
+        staleSessions.push(sessionId);
+      }
+    }
+  }
+  const toRemove = sessionOrder.length - MAX_SESSIONS_TRACKED;
+  for (let i = 0; i < Math.min(toRemove, staleSessions.length); i++) {
+    const session = staleSessions[i];
+    if (session) cleanupSession(session);
   }
 }
 
@@ -128,6 +150,7 @@ export function enqueueInbound(task: InboundAdmissionTask): boolean {
     pendingBySession.set(task.sessionId, queue);
     sessionOrder.push(task.sessionId);
   }
+  evictStaleSessions();
   queue.push({
     ...task,
     queuedAt: task.queuedAt ?? Date.now(),

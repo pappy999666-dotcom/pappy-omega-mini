@@ -47,6 +47,7 @@ import { closeLinkCollector } from "./links/link-collector.js";
 import { closeBroadcastProgress } from "./workload/broadcast-progress.js";
 import { closeCanonicalPreview } from "./whatsapp/baileys-native-preview.js";
 import { closeSessionLockRedis } from "./core/session-lock.js";
+import { closeAllRedisPools } from "./core/redis-pool.js";
 import { routeWhatsAppText, type WhatsAppReply } from "./whatsapp/message-router.js";
 import { runAntiChecks } from "./whatsapp/anti-system/engine.js";
 import { callAssignedWorkloadTransport } from "./whatsapp/workload-transport.js";
@@ -62,8 +63,24 @@ import {
 } from "./workload/control-server.js";
 
 const INBOUND_DEDUPE_TTL_MS = 5 * 60_000;
+const INBOUND_DEDUPE_MAX_SIZE = env.DEDUPE_MAP_MAX_SIZE;
 let processShutdownInProgress = false;
 const inboundDedupe = new Map<string, { expiresAt: number; result: Promise<WorkloadInboundResult> }>();
+
+function enforceDedupeBounds(): void {
+  if (inboundDedupe.size <= INBOUND_DEDUPE_MAX_SIZE) return;
+  const now = Date.now();
+  for (const [key, entry] of inboundDedupe) {
+    if (entry.expiresAt <= now) inboundDedupe.delete(key);
+  }
+  if (inboundDedupe.size <= INBOUND_DEDUPE_MAX_SIZE) return;
+  const entries = [...inboundDedupe.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+  const toRemove = inboundDedupe.size - INBOUND_DEDUPE_MAX_SIZE;
+  for (let i = 0; i < toRemove && i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry) inboundDedupe.delete(entry[0]);
+  }
+}
 
 process.on("uncaughtException", (error) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -227,6 +244,7 @@ async function main(): Promise<void> {
         if (inboundDedupe.get(key)?.result === result) inboundDedupe.delete(key);
         throw error;
       });
+      enforceDedupeBounds();
       inboundDedupe.set(key, { expiresAt: Date.now() + INBOUND_DEDUPE_TTL_MS, result });
       const timer = setTimeout(() => {
         if (inboundDedupe.get(key)?.result === result) inboundDedupe.delete(key);
@@ -340,6 +358,7 @@ async function main(): Promise<void> {
     await closeSafely("canonical preview", closeCanonicalPreview);
     await closeSafely("session lock", closeSessionLockRedis);
     await closeSafely("remote bridge", stopRemoteBridgeResponder);
+    await closeSafely("redis pools", closeAllRedisPools);
     stopRuntimeHealthMonitor();
     console.log("[pappy-omega-mini] transports closed; shutdown complete.");
     // A few library-owned handles (for example duplicated Redis clients) can

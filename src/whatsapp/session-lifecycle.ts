@@ -1,4 +1,5 @@
 import { updateSession } from "../core/session-registry.js";
+import { enqueueSessionReconnect, removeSessionReconnect } from "../core/reconnect-coordinator.js";
 
 export type AuthoritativeLifecycleState =
   | "CREATING"
@@ -158,9 +159,6 @@ export function scheduleReconnect(input: {
 }): void {
   const state = getLifecycleState(input.key);
   if (state.stopping || state.reconnectTimer) return;
-  // Persistent WhatsApp sessions must keep recovering from transient failures.
-  // A caller may still provide a finite cap for a deliberately bounded operation;
-  // normal session transport recovery has no retry ceiling.
   const maxAttempts = input.maxAttempts;
   if (maxAttempts !== undefined && state.reconnectAttempt >= maxAttempts) {
     updateSession(input.workspaceId, input.sessionId, {
@@ -186,10 +184,29 @@ export function scheduleReconnect(input: {
       ? `reconnect backoff active; next recovery attempt in ${delay}ms`
       : `reconnect scheduled in ${delay}ms`,
   });
-  state.reconnectTimer = setTimeout(() => {
-    state.reconnectTimer = undefined;
+  const runWithCoordination = () => {
+    removeSessionReconnect(input.key);
     input.run();
-  }, delay);
+  };
+  if (delay <= 1_000) {
+    state.reconnectTimer = setTimeout(() => {
+      state.reconnectTimer = undefined;
+      enqueueSessionReconnect({
+        key: input.key,
+        run: runWithCoordination,
+        priority: state.reconnectAttempt >= RECONNECT_DEGRADED_AFTER_ATTEMPTS ? 5 : 1,
+      });
+    }, delay);
+  } else {
+    state.reconnectTimer = setTimeout(() => {
+      state.reconnectTimer = undefined;
+      enqueueSessionReconnect({
+        key: input.key,
+        run: runWithCoordination,
+        priority: state.reconnectAttempt >= RECONNECT_DEGRADED_AFTER_ATTEMPTS ? 5 : 1,
+      });
+    }, delay);
+  }
 }
 
 export function startHeartbeat(input: {
@@ -284,6 +301,7 @@ export function getLifecycleHealth(
 
 export function clearLifecycle(key: string): void {
   markStopping(key);
+  removeSessionReconnect(key);
   states.delete(key);
   starts.delete(key);
 }

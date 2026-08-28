@@ -63,6 +63,18 @@ const envSchema = z.object({
   WORKLOAD_RELEASE_PRIVATE_KEY_PATH: z.string().default("./.secrets/worker-release-private.pem"),
   WORKLOAD_RELEASE_VERSION: z.string().default("1.2.97"),
   WORKLOAD_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().min(30_000).max(10 * 60_000).default(75_000),
+  /** Max concurrent WhatsApp session reconnects to prevent storms */
+  MAX_CONCURRENT_RECONNECTS: z.coerce.number().int().positive().max(10).default(3),
+  /** Batch flush interval for MongoDB trace writes (ms) */
+  MONGO_BATCH_FLUSH_MS: z.coerce.number().int().positive().max(5_000).default(500),
+  /** Max batch size for MongoDB trace writes */
+  MONGO_BATCH_MAX_SIZE: z.coerce.number().int().positive().max(500).default(100),
+  /** Circuit breaker failure threshold before opening */
+  CIRCUIT_BREAKER_THRESHOLD: z.coerce.number().int().positive().max(20).default(5),
+  /** Circuit breaker reset timeout (ms) */
+  CIRCUIT_BREAKER_RESET_MS: z.coerce.number().int().positive().max(60_000).default(10_000),
+  /** Max entries in inbound dedupe map before forced cleanup */
+  DEDUPE_MAP_MAX_SIZE: z.coerce.number().int().positive().max(10_000).default(2_000),
 });
 
 export const env = envSchema.parse(process.env);
