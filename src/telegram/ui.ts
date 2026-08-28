@@ -307,11 +307,13 @@ export function sessionSettingsKeyboard(
 
 export function sessionAccessKeyboard(sessionId: string): InlineKeyboardMarkup {
   return keyboard([
-    [btn("◉ List Sudo", `session:${sessionId}:sudo:list`)],
+    [btn("◉ List Session Sudo", `session:${sessionId}:sudo:list`)],
     [
-      btn("＋ Add Sudo", `session:${sessionId}:sudo:add`, "success"),
-      btn("− Remove Sudo", `session:${sessionId}:sudo:remove`, "danger"),
+      btn("＋ Add Session Sudo", `session:${sessionId}:sudo:add`, "success"),
+      btn("− Remove Session Sudo", `session:${sessionId}:sudo:remove`, "danger"),
     ],
+    [btn("Global Sudo · All User Sessions", "owner:sudo:global:list", "primary")],
+    [btn("Omni Sudo · All Owner Sessions", "owner:sudo:omni:list", "primary")],
     [btn("‹ Session Control", `session:${sessionId}:menu`)],
   ]);
 }

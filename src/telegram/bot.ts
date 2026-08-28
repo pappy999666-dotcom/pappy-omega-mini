@@ -358,6 +358,10 @@ const pendingSessionSudo = new Map<
   string,
   { workspaceId: string; sessionId: string; action: "add" | "remove" }
 >();
+const pendingOwnerSudo = new Map<
+  string,
+  { workspaceId: string; scope: "global" | "omni"; action: "add" | "remove" }
+>();
 const pendingGroupPicture = new Map<
   string,
   { workspaceId: string; sessionId: string; groupJid?: string; index?: number }
@@ -653,6 +657,7 @@ function clearPendingInputs(userId: string): void {
   pendingGroupCreate.delete(userId);
   pendingProfilePicture.delete(userId);
   pendingSessionSudo.delete(userId);
+  pendingOwnerSudo.delete(userId);
   pendingGroupPicture.delete(userId);
   pendingGroupSetting.delete(userId);
   pendingGroupModerationInput.delete(userId);
@@ -1915,6 +1920,17 @@ export function createTelegramBot(): Telegraf<Context> {
           { parse_mode: "HTML" },
         );
       }
+      return;
+    }
+    const ownerSudo = pendingOwnerSudo.get(userId);
+    if (ownerSudo && !ctx.message.text.startsWith("/")) {
+      pendingOwnerSudo.delete(userId);
+      const digits = ctx.message.text.replace(/\D/g, "");
+      if (digits.length < 7 || digits.length > 15) return ctx.reply("Provide a valid WhatsApp number in international format.");
+      const identity = `${digits}@s.whatsapp.net`;
+      if (ownerSudo.scope === "global") updateWorkspaceSudo(ownerSudo.workspaceId, ownerSudo.action, identity);
+      else updateWorkspaceOmniSudo(ownerSudo.workspaceId, ownerSudo.action, identity);
+      await ctx.reply(`${ownerSudo.scope.toUpperCase()} WhatsApp sudo ${ownerSudo.action === "add" ? "added" : "removed"}: ${digits}`);
       return;
     }
     const sessionSudo = pendingSessionSudo.get(userId);
@@ -4989,6 +5005,19 @@ export function createTelegramBot(): Telegraf<Context> {
       ),
       keyboard([[btn("Cancel", `session:${session.sessionId}:section:groups`)]]),
     );
+  });
+  bot.action(/^owner:sudo:(global|omni):(list|add|remove)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!ctx.from || !ownerTelegramIds.has(String(ctx.from.id))) return deny(ctx);
+    const user = resolveTelegramUser(ctx);
+    const scope = ctx.match[1] as "global" | "omni";
+    const action = ctx.match[2] as "list" | "add" | "remove";
+    if (action === "list") {
+      const identities = (scope === "global" ? getWorkspaceSudo(user.workspaceId) : getWorkspaceOmniSudo(user.workspaceId));
+      return edit(ctx, pageText(`${scope === "global" ? "Global" : "Omni"} Sudo`, infoResponse(`${scope === "global" ? "All User Sessions" : "All Owner Sessions"}`, identities.length ? identities.map((item) => `<code>${escapeHtml(item)}</code>`).join("\n") : "No WhatsApp sudo identities configured.")), keyboard([[btn("＋ Add", `owner:sudo:${scope}:add`, "success"), btn("− Remove", `owner:sudo:${scope}:remove`, "danger")], [btn("↻ Refresh", `owner:sudo:${scope}:list`)], [btn("‹ Back", "menu:main")]]));
+    }
+    pendingOwnerSudo.set(String(ctx.from.id), { workspaceId: user.workspaceId, scope, action });
+    return edit(ctx, pageText(`${scope === "global" ? "Global" : "Omni"} Sudo`, infoResponse(action === "add" ? "Add WhatsApp Identity" : "Remove WhatsApp Identity", "Send the full WhatsApp number in international format, without a plus sign.")), keyboard([[btn("Cancel", `owner:sudo:${scope}:list`)], [btn("‹ Back", "menu:main")]]));
   });
   bot.action(/^session:([^:]+):sudo:(list|add|remove)$/, async (ctx) => {
     await ctx.answerCbQuery();
