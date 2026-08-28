@@ -7927,6 +7927,24 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!requireAdmin(ctx)) return;
     await showAdminUsers(ctx, Number(ctx.match?.[1] ?? 0));
   });
+  bot.action(/^admin:user:settings:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const telegramUserId = ctx.match[1] ?? "";
+    const target = (await listUsers(1000)).find((item) => item.telegramUserId === telegramUserId);
+    if (!target) return deny(ctx);
+    const identities = getWorkspaceSudo(target.workspaceId);
+    return edit(ctx, pageText("User Settings · Global Sudo", infoResponse(`Global Sudo · ${escapeHtml(target.displayName || target.username || telegramUserId)}`, identities.length ? identities.map((item) => `<code>${escapeHtml(item)}</code>`).join("\n") : "No WhatsApp identities are configured for this user.")), keyboard([[btn("＋ Add WhatsApp Number", `admin:user:global-sudo:add:${telegramUserId}`, "success"), btn("− Remove", `admin:user:global-sudo:remove:${telegramUserId}`, "danger")], [btn("↻ Refresh", `admin:user:settings:${telegramUserId}`)], [btn("‹ Users", "admin:users")]]));
+  });
+  bot.action(/^admin:user:global-sudo:(add|remove):(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireAdmin(ctx)) return;
+    const telegramUserId = ctx.match[2] ?? "";
+    const target = (await listUsers(1000)).find((item) => item.telegramUserId === telegramUserId);
+    if (!target) return deny(ctx);
+    pendingOwnerSudo.set(String(ctx.from?.id ?? ""), { workspaceId: target.workspaceId, scope: "global", action: ctx.match[1] as "add" | "remove" });
+    return edit(ctx, pageText("User Settings · Global Sudo", infoResponse(ctx.match[1] === "add" ? "Add Global WhatsApp Sudo" : "Remove Global WhatsApp Sudo", "Send the verified WhatsApp number in international format, without a plus sign.")), keyboard([[btn("Cancel", `admin:user:settings:${telegramUserId}`)]]));
+  });
   bot.action(/^admin:user:(ban|unban):(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireAdmin(ctx)) return;

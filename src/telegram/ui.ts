@@ -667,6 +667,7 @@ export function adminUsersKeyboard(
       `admin:user:${user.status === "active" ? "ban" : "unban"}:${user.telegramUserId}`,
       user.status === "active" ? "danger" : "success",
     ),
+    btn("⚙ Global Sudo", `admin:user:settings:${user.telegramUserId}`, "primary"),
   ]);
   rows.push([
     ...(page > 0
@@ -841,7 +842,7 @@ export function adminKeyboard(): InlineKeyboardMarkup {
   return keyboard([
     [btn("⚙ Force Join", "admin:forcejoin"), btn("⚡ Global Auto Promote", "admin:autopromote")],
     [btn("◉ Users", "admin:users")],
-    [btn("🔐 WhatsApp Sudo Scopes", "owner:sudo:global:list", "primary")],
+    [btn("🔐 Omni Sudo · All Owner Sessions", "owner:sudo:omni:list", "primary")],
     [
       btn("▣ Media", "admin:media"),
       btn("🌉 Global Bridge Ops", "admin:bridge"),
