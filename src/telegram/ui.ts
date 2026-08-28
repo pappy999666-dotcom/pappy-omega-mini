@@ -114,6 +114,7 @@ export function dashboardKeyboard(isAdmin: boolean): InlineKeyboardMarkup {
     ],
     [btn("◌ Workload", "workload:menu", "success")],
     [btn("⚙ Settings", "settings:menu")],
+    [btn("🔐 My Global Sudo", "user:sudo:global:list", "primary")],
     [btn("◌ Support", "support:menu"), btn("▤ Help", "help:main")],
   ];
   if (isAdmin) rows.push([btn("♛ Admin Panel", "admin:panel")]);
@@ -667,7 +668,6 @@ export function adminUsersKeyboard(
       `admin:user:${user.status === "active" ? "ban" : "unban"}:${user.telegramUserId}`,
       user.status === "active" ? "danger" : "success",
     ),
-    btn("⚙ Global Sudo", `admin:user:settings:${user.telegramUserId}`, "primary"),
   ]);
   rows.push([
     ...(page > 0

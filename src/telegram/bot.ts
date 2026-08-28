@@ -5006,6 +5006,17 @@ export function createTelegramBot(): Telegraf<Context> {
       keyboard([[btn("Cancel", `session:${session.sessionId}:section:groups`)]]),
     );
   });
+  bot.action(/^user:sudo:global:(list|add|remove)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = resolveTelegramUser(ctx);
+    const action = ctx.match[1] as "list" | "add" | "remove";
+    if (action === "list") {
+      const identities = getWorkspaceSudo(user.workspaceId);
+      return edit(ctx, pageText("My Global Sudo", infoResponse("All My WhatsApp Sessions", identities.length ? identities.map((item) => `<code>${escapeHtml(item)}</code>`).join("\n") : "No Global WhatsApp sudo identities configured.")), keyboard([[btn("＋ Add WhatsApp Number", "user:sudo:global:add", "success"), btn("− Remove", "user:sudo:global:remove", "danger")], [btn("↻ Refresh", "user:sudo:global:list")], [btn("‹ Main Menu", "menu:main")]]));
+    }
+    pendingOwnerSudo.set(String(ctx.from?.id ?? ""), { workspaceId: user.workspaceId, scope: "global", action });
+    return edit(ctx, pageText("My Global Sudo", infoResponse(action === "add" ? "Add Global WhatsApp Sudo" : "Remove Global WhatsApp Sudo", "Send the verified WhatsApp number in international format, without a plus sign.")), keyboard([[btn("Cancel", "user:sudo:global:list")], [btn("‹ Main Menu", "menu:main")]]));
+  });
   bot.action(/^owner:sudo:(global|omni):(list|add|remove)$/, async (ctx) => {
     await ctx.answerCbQuery();
     if (!ctx.from || !ownerTelegramIds.has(String(ctx.from.id))) return deny(ctx);
