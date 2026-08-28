@@ -312,8 +312,6 @@ export function sessionAccessKeyboard(sessionId: string): InlineKeyboardMarkup {
       btn("＋ Add Session Sudo", `session:${sessionId}:sudo:add`, "success"),
       btn("− Remove Session Sudo", `session:${sessionId}:sudo:remove`, "danger"),
     ],
-    [btn("Global Sudo · All User Sessions", "owner:sudo:global:list", "primary")],
-    [btn("Omni Sudo · All Owner Sessions", "owner:sudo:omni:list", "primary")],
     [btn("‹ Session Control", `session:${sessionId}:menu`)],
   ]);
 }
@@ -843,6 +841,7 @@ export function adminKeyboard(): InlineKeyboardMarkup {
   return keyboard([
     [btn("⚙ Force Join", "admin:forcejoin"), btn("⚡ Global Auto Promote", "admin:autopromote")],
     [btn("◉ Users", "admin:users")],
+    [btn("🔐 WhatsApp Sudo Scopes", "owner:sudo:global:list", "primary")],
     [
       btn("▣ Media", "admin:media"),
       btn("🌉 Global Bridge Ops", "admin:bridge"),
