@@ -307,13 +307,11 @@ export function sessionSettingsKeyboard(
 
 export function sessionAccessKeyboard(sessionId: string): InlineKeyboardMarkup {
   return keyboard([
-    [btn("◉ Session Sudo", `session:${sessionId}:sudo:list`)],
+    [btn("◉ List Sudo", `session:${sessionId}:sudo:list`)],
     [
-      btn("＋ Add Session", `session:${sessionId}:sudo:add`, "success"),
-      btn("− Remove Session", `session:${sessionId}:sudo:remove`, "danger"),
+      btn("＋ Add Sudo", `session:${sessionId}:sudo:add`, "success"),
+      btn("− Remove Sudo", `session:${sessionId}:sudo:remove`, "danger"),
     ],
-    [btn("◉ Global Sudo", `session:${sessionId}:sudo:global:list`)],
-    [btn("◉ Omni Sudo", `session:${sessionId}:sudo:omni:list`)],
     [btn("‹ Session Control", `session:${sessionId}:menu`)],
   ]);
 }
@@ -1356,14 +1354,11 @@ export function sessionAutoPromoteDashboardKeyboard(
   configs: AutoPromoteConfig[],
   sessionId: string,
 ): InlineKeyboardMarkup {
-  const rows: Button[][] = configs.slice(0, 20).map((config) => [
-    btn(
-      `${config.enabled ? "■" : "□"} ${config.command.toUpperCase()} · ${config.state}`,
-      `autopromote:view:${config.id}`,
-    ),
+  const rows: Button[][] = configs.filter((config) => config.sessionId === sessionId).slice(0, 20).map((config) => [
+    btn(`${config.enabled ? "■" : "□"} ${config.command.toUpperCase()} · ${config.state}`, `autopromote:view:${config.id}`),
   ]);
-  rows.push([btn("＋ New Session Auto Promote", `session:${sessionId}:autopromote:new`, "success")]);
-  rows.push([btn("‹ Session", `session:${sessionId}:menu`)]);
+  rows.push([btn("＋ New Auto Promote", `session:${sessionId}:autopromote:new`, "success")]);
+  rows.push([btn(ui.back, `session:${sessionId}:menu`)]);
   return keyboard(rows);
 }
 
