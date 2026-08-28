@@ -27,7 +27,10 @@ export interface SessionJoinSettings {
 export interface Workspace {
   workspaceId: string;
   ownerTelegramUserId: string;
+  /** Sudo identities inherited by every session owned by this workspace user. */
   globalSudoList: string[];
+  /** Owner-level identities authorized across all sessions in the owner scope. */
+  omniSudoList: string[];
   /** Existing workspaces default to owner-VPS placement for zero-regression rollout. */
   workloadMode?: "ON" | "OFF";
   createdAt: number;

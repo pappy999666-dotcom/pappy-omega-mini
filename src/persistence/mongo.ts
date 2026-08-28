@@ -259,6 +259,7 @@ const workspaceSchema = new mongoose.Schema<WorkspaceDocument>(
     workspaceId: { type: String, required: true, unique: true, index: true },
     ownerTelegramUserId: { type: String, required: true, index: true },
     globalSudoList: { type: [String], default: [] },
+    omniSudoList: { type: [String], default: [] },
     workloadMode: {
       type: String,
       enum: ["ON", "OFF"],

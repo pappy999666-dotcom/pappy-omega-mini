@@ -16,7 +16,11 @@ import {
   setUserStatusLocal,
   getWorkspaceDefaults,
   getWorkspaceOwnerTelegramUserId,
+  getWorkspaceSudo,
+  getWorkspaceOmniSudo,
   updateWorkspaceDefaults,
+  updateWorkspaceSudo,
+  updateWorkspaceOmniSudo,
   isActiveWhatsAppSession,
 } from "../core/session-registry.js";
 import {
@@ -352,7 +356,7 @@ const pendingProfilePicture = new Map<
 >();
 const pendingSessionSudo = new Map<
   string,
-  { workspaceId: string; sessionId: string; action: "add" | "remove" }
+  { workspaceId: string; sessionId: string; scope: "session" | "global" | "omni"; action: "add" | "remove" }
 >();
 const pendingGroupPicture = new Map<
   string,
@@ -1901,25 +1905,31 @@ export function createTelegramBot(): Telegraf<Context> {
         .replace(/[^0-9A-Za-z:_.@-]/g, "");
       const current = ownedSession(ctx, sessionSudo.sessionId);
       if (!current || !identity) return;
-      const next =
-        sessionSudo.action === "add"
-          ? [...new Set([...current.sudoList, identity])]
-          : current.sudoList.filter((item) => item !== identity);
-      updateSession(sessionSudo.workspaceId, sessionSudo.sessionId, {
-        sudoList: next,
-      });
+      if (sessionSudo.scope === "global") {
+        updateWorkspaceSudo(sessionSudo.workspaceId, sessionSudo.action, identity);
+      } else if (sessionSudo.scope === "omni") {
+        updateWorkspaceOmniSudo(sessionSudo.workspaceId, sessionSudo.action, identity);
+      } else {
+        const next =
+          sessionSudo.action === "add"
+            ? [...new Set([...current.sudoList, identity])]
+            : current.sudoList.filter((item) => item !== identity);
+        updateSession(sessionSudo.workspaceId, sessionSudo.sessionId, {
+          sudoList: next,
+        });
+      }
       await ctx.reply(
         pageText(
-          "Session · Sudo",
+          `${sessionSudo.scope} · Sudo`,
           successResponse(
             sessionSudo.action === "add" ? "Sudo Added" : "Sudo Removed",
-            `<code>${escapeHtml(identity)}</code> is ${sessionSudo.action === "add" ? "now authorized" : "no longer authorized"} for this session.`,
+            `<code>${escapeHtml(identity)}</code> is ${sessionSudo.action === "add" ? "now authorized" : "no longer authorized"} for the ${sessionSudo.scope} scope.`,
           ),
         ),
         {
           parse_mode: "HTML",
           reply_markup: keyboard([
-            [btn("‹ Sudo", `session:${sessionSudo.sessionId}:sudo:list`)],
+            [btn("‹ Sudo", `session:${sessionSudo.sessionId}:sudo:${sessionSudo.scope}:list`)],
             [btn("‹ Session", `session:${sessionSudo.sessionId}:menu`)],
           ]),
         },
@@ -4966,6 +4976,46 @@ export function createTelegramBot(): Telegraf<Context> {
       keyboard([[btn("Cancel", `session:${session.sessionId}:section:groups`)]]),
     );
   });
+  bot.action(/^session:([^:]+):sudo:(global|omni):(list|add|remove)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return deny(ctx);
+    const session = ownedSession(ctx, ctx.match[1] ?? "");
+    if (!session) return deny(ctx);
+    const scope = (ctx.match[2] ?? "global") as "global" | "omni";
+    const action = ctx.match[3] ?? "list";
+    const identities = scope === "global"
+      ? getWorkspaceSudo(session.workspaceId)
+      : getWorkspaceOmniSudo(session.workspaceId);
+    if (action === "list") {
+      return edit(
+        ctx,
+        pageText(
+          `${scope === "global" ? "Global" : "Omni"} · Sudo`,
+          infoResponse(
+            `${scope === "global" ? "Global" : "Omni"} Sudo`,
+            `<b>Scope:</b> ${scope === "global" ? "Every session owned by this user, including future sessions." : "Every eligible session in the owner scope."}<br/><br/>` +
+              (identities.length ? identities.map((item) => `<code>${escapeHtml(item)}</code>`).join("\n") : `No ${scope} sudo identities are configured.`),
+          ),
+        ),
+        keyboard([
+          [btn("＋ Add Identity", `session:${session.sessionId}:sudo:${scope}:add`, "success"), btn("− Remove Identity", `session:${session.sessionId}:sudo:${scope}:remove`, "danger")],
+          [btn("↻ Refresh", `session:${session.sessionId}:sudo:${scope}:list`)],
+          [btn("‹ Access", `session:${session.sessionId}:section:access`)],
+        ]),
+      );
+    }
+    pendingSessionSudo.set(String(ctx.from?.id ?? ""), {
+      workspaceId: session.workspaceId,
+      sessionId: session.sessionId,
+      scope,
+      action: action as "add" | "remove",
+    });
+    return edit(
+      ctx,
+      pageText(`${scope === "global" ? "Global" : "Omni"} · Sudo`, infoResponse(action === "add" ? "Add Sudo Identity" : "Remove Sudo Identity", "Send a verified WhatsApp phone identity now.")),
+      keyboard([[btn("Cancel", `session:${session.sessionId}:sudo:${scope}:list`)], [btn("‹ Access", `session:${session.sessionId}:section:access`)] ]),
+    );
+  });
   bot.action(/^session:([^:]+):sudo:(list|add|remove)$/, async (ctx) => {
     await ctx.answerCbQuery();
     if (!isAdmin(ctx)) return deny(ctx);
@@ -5007,6 +5057,7 @@ export function createTelegramBot(): Telegraf<Context> {
     pendingSessionSudo.set(String(ctx.from?.id ?? ""), {
       workspaceId: session.workspaceId,
       sessionId: session.sessionId,
+      scope: "session",
       action: action as "add" | "remove",
     });
     return edit(

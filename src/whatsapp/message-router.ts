@@ -11,6 +11,7 @@ import {
   getWorkspaceDefaults,
   getWorkspaceOwnerTelegramUserId,
   getWorkspaceSudo,
+  getWorkspaceOmniSudo,
 } from "../core/session-registry.js";
 import { createHash } from "node:crypto";
 import { getEmergencyState } from "../core/control-plane.js";
@@ -142,6 +143,9 @@ function isOwnerFor(
       identityMatches(message.senderJid, identity),
     ) ||
     getWorkspaceSudo(session.workspaceId).some((identity) =>
+      identityMatches(message.senderJid, identity),
+    ) ||
+    getWorkspaceOmniSudo(session.workspaceId).some((identity) =>
       identityMatches(message.senderJid, identity),
     )
   );
