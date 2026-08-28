@@ -10,11 +10,12 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 describe("bounded inbound admission", () => {
   afterEach(() => resetInboundAdmissionForTests());
 
-  it("keeps message work asynchronous and limits one session to two active tasks", async () => {
+  it("keeps message work asynchronous and limits one session to configured active tasks", async () => {
     let active = 0;
     let maxActive = 0;
     const completions: number[] = [];
-    for (let index = 0; index < 6; index += 1) {
+    const perSessionActive = inboundAdmissionSnapshot().perSessionActive;
+    for (let index = 0; index < perSessionActive + 4; index += 1) {
       expect(enqueueInbound({
         sessionId: "session-a",
         priority: 1,
@@ -29,8 +30,8 @@ describe("bounded inbound admission", () => {
     }
     expect(inboundAdmissionSnapshot().pending).toBeGreaterThan(0);
     await wait(45);
-    expect(maxActive).toBeLessThanOrEqual(2);
-    expect(completions).toHaveLength(6);
+    expect(maxActive).toBeLessThanOrEqual(perSessionActive);
+    expect(completions).toHaveLength(perSessionActive + 4);
     expect(inboundAdmissionSnapshot().active).toBe(0);
   });
 
@@ -39,7 +40,8 @@ describe("bounded inbound admission", () => {
     const blocked = new Promise<void>((resolve) => { release = resolve; });
     let dropped = 0;
     const cap = inboundAdmissionSnapshot().perSessionMaxPending;
-    for (let index = 0; index < cap + 5; index += 1) {
+    const perSessionActive = inboundAdmissionSnapshot().perSessionActive;
+    for (let index = 0; index < cap + perSessionActive + 2; index += 1) {
       enqueueInbound({
         sessionId: "noisy-session",
         priority: 1,
@@ -47,7 +49,7 @@ describe("bounded inbound admission", () => {
         onDrop: () => { dropped += 1; },
       });
     }
-    expect(dropped).toBe(3);
+    expect(dropped).toBe(2);
     expect(inboundAdmissionSnapshot().perSession["noisy-session"]?.pending).toBe(cap);
     expect(enqueueInbound({
       sessionId: "quiet-session",
@@ -81,17 +83,21 @@ describe("bounded inbound admission", () => {
     const order: number[] = [];
     let releaseFirst!: () => void;
     let releaseSecond!: () => void;
+    let releaseThird!: () => void;
     const firstFinished = new Promise<void>((resolve) => { releaseFirst = resolve; });
     const secondFinished = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const thirdFinished = new Promise<void>((resolve) => { releaseThird = resolve; });
     enqueueInbound({ sessionId: "session-p", priority: 1, run: async () => { await firstFinished; order.push(9); } });
     enqueueInbound({ sessionId: "session-p", priority: 1, run: async () => { await secondFinished; order.push(8); } });
+    enqueueInbound({ sessionId: "session-p", priority: 1, run: async () => { await thirdFinished; order.push(7); } });
     await wait(1);
     enqueueInbound({ sessionId: "session-p", priority: 4, run: async () => { order.push(4); } });
     enqueueInbound({ sessionId: "session-p", priority: 1, run: async () => { order.push(1); } });
     enqueueInbound({ sessionId: "session-p", priority: 2, run: async () => { order.push(2); } });
     releaseFirst();
     releaseSecond();
+    releaseThird();
     await wait(15);
-    expect(order.slice(0, 5)).toEqual([9, 8, 1, 2, 4]);
+    expect(order.slice(0, 6)).toEqual([9, 8, 7, 1, 2, 4]);
   });
 });

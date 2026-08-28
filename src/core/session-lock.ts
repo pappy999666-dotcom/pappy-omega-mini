@@ -1,14 +1,10 @@
 import crypto from "node:crypto";
-import { Redis } from "ioredis";
 import { env } from "../config/env.js";
-import { attachRedisErrorHandler } from "./redis-events.js";
+import { getSharedRedisPool, type PooledRedis } from "./redis-pool.js";
 
 const LOCK_TTL_SECONDS = 30;
 const LOCK_REFRESH_MS = 10_000;
-const redis = attachRedisErrorHandler(
-  new Redis(env.REDIS_URL, { maxRetriesPerRequest: null }),
-  "session-lock",
-);
+const pool = getSharedRedisPool("session-lock", { maxConnections: 5, minConnections: 1 });
 
 export interface SessionLock {
   key: string;
@@ -38,18 +34,15 @@ async function acquireLock(
   const createdAt = Date.now();
   const ownerId = processOwnerId;
   const lockValue = JSON.stringify({ token, ownerId, createdAt });
-  const acquired = await redis.set(key, lockValue, "EX", LOCK_TTL_SECONDS, "NX");
-  if (acquired !== "OK") return undefined;
+  const redis = await pool.acquire();
+  try {
+    const acquired = await redis.set(key, lockValue, "EX", LOCK_TTL_SECONDS, "NX");
+    if (acquired !== "OK") return undefined;
+  } finally {
+    pool.release(redis);
+  }
   const timer = setInterval(() => {
-    void redis
-      .eval(
-        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end",
-        1,
-        key,
-        lockValue,
-        LOCK_TTL_SECONDS,
-      )
-      .catch(() => undefined);
+    void withRedisLockRefresh(key, lockValue);
   }, LOCK_REFRESH_MS);
   timer.unref?.();
   let released = false;
@@ -62,16 +55,42 @@ async function acquireLock(
       if (released) return;
       released = true;
       clearInterval(timer);
-      await redis
-        .eval(
-          "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
-          1,
-          key,
-          lockValue,
-        )
-        .catch(() => undefined);
+      await withRedisLockRelease(key, lockValue);
     },
   };
+}
+
+async function withRedisLockRefresh(key: string, lockValue: string): Promise<void> {
+  const redis = await pool.acquire();
+  try {
+    await redis
+      .eval(
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end",
+        1,
+        key,
+        lockValue,
+        LOCK_TTL_SECONDS,
+      )
+      .catch(() => undefined);
+  } finally {
+    pool.release(redis);
+  }
+}
+
+async function withRedisLockRelease(key: string, lockValue: string): Promise<void> {
+  const redis = await pool.acquire();
+  try {
+    await redis
+      .eval(
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+        1,
+        key,
+        lockValue,
+      )
+      .catch(() => undefined);
+  } finally {
+    pool.release(redis);
+  }
 }
 
 export function acquireSessionLock(
@@ -94,7 +113,14 @@ export async function getSessionLockSnapshot(
   namespace: "lifecycle" | "operation",
 ): Promise<SessionLockSnapshot> {
   const key = `workspace:${workspaceId}:session:${sessionId}:${namespace}-lock`;
-  const [raw, ttl] = await Promise.all([redis.get(key), redis.ttl(key)]);
+  const redis = await pool.acquire();
+  let raw: string | null;
+  let ttl: number;
+  try {
+    [raw, ttl] = await Promise.all([redis.get(key), redis.ttl(key)]);
+  } finally {
+    pool.release(redis);
+  }
   if (!raw) return { key, tokenPresent: false };
   try {
     const parsed = JSON.parse(raw) as { ownerId?: unknown; createdAt?: unknown };
@@ -111,5 +137,5 @@ export async function getSessionLockSnapshot(
 }
 
 export async function closeSessionLockRedis(): Promise<void> {
-  await redis.quit();
+  // Pool is shared, closed via closeAllRedisPools in index.ts shutdown
 }
