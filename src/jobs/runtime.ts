@@ -117,7 +117,7 @@ interface GroupControlPayload {
   groupJid: string;
   operation: "approve" | "reject" | "participant";
   participants: string[];
-  participantAction?: "promote" | "demote" | "remove" | "block" | "demote-remove";
+  participantAction?: "promote" | "demote" | "remove" | "block" | "demote-remove" | "remove-block" | "demote-remove-block";
 }
 
 type JoinFailureClass =
@@ -832,13 +832,14 @@ export function startWorkerRuntime(): JobOrchestrator {
           });
         }
       }
-    } else if (participantAction === "demote-remove") {
+    } else if (participantAction === "demote-remove" || participantAction === "demote-remove-block") {
       for (const participant of participants) {
         await context.waitIfPaused();
         if (context.isCancellationRequested()) break;
         try {
           await updateGroupParticipantRole(context.job.workspaceId, sessionId, groupJid, participant, "demote");
           await updateGroupParticipantRole(context.job.workspaceId, sessionId, groupJid, participant, "remove");
+          if (participantAction === "demote-remove-block") await updateParticipantBlockStatus(context.job.workspaceId, sessionId, participant, true);
           completed += 1;
         } catch (error) {
           failed += 1;
@@ -858,17 +859,13 @@ export function startWorkerRuntime(): JobOrchestrator {
           lastResult: `${completed + failed}/${participants.length} administrator target(s) processed sequentially.`,
         });
       }
-    } else if (participantAction === "block") {
+    } else if (participantAction === "block" || participantAction === "remove-block") {
       for (const participant of participants) {
         await context.waitIfPaused();
         if (context.isCancellationRequested()) break;
         try {
-          await updateParticipantBlockStatus(
-            context.job.workspaceId,
-            sessionId,
-            participant,
-            true,
-          );
+          if (participantAction === "remove-block") await updateGroupParticipantRole(context.job.workspaceId, sessionId, groupJid, participant, "remove");
+          await updateParticipantBlockStatus(context.job.workspaceId, sessionId, participant, true);
           completed += 1;
         } catch (error) {
           failed += 1;

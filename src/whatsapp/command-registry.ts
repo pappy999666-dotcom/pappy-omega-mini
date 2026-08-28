@@ -186,7 +186,7 @@ export interface CommandContext {
     groupJid: string;
     operation: "approve" | "reject" | "participant";
     participants: string[];
-    participantAction?: "promote" | "demote" | "remove" | "block" | "demote-remove";
+    participantAction?: "promote" | "demote" | "remove" | "block" | "demote-remove" | "remove-block" | "demote-remove-block";
   }) => Promise<string | EnqueueGroupControlResult>;
   sendCurrentGroupStatus?: (input: {
     text: string;
@@ -357,7 +357,7 @@ function memberPreviewLabel(participant: { phoneNumber?: string; id: string; jid
 async function memberConfirmationReply(
   ctx: CommandContext,
   groupJid: string,
-  participantAction: "remove" | "demote" | "promote" | "block" | "demote-remove",
+  participantAction: "remove" | "demote" | "promote" | "block" | "demote-remove" | "remove-block" | "demote-remove-block",
   participants: Array<{ id: string; phoneNumber?: string; jid?: string }>,
   selectionLabel: string,
 ): Promise<WhatsAppCommandReply> {
@@ -449,7 +449,7 @@ async function eligibleMemberTargets(ctx: CommandContext) {
 async function queueMemberOperation(
   ctx: CommandContext,
   groupJid: string,
-  participantAction: "remove" | "demote" | "promote" | "block" | "demote-remove",
+  participantAction: "remove" | "demote" | "promote" | "block" | "demote-remove" | "remove-block" | "demote-remove-block",
   participants: string[],
 ): Promise<string | WhatsAppCommandReply> {
   if (!ctx.enqueueGroupControlJob)
@@ -2236,7 +2236,7 @@ export async function handleGroupControlInteraction(
       return Boolean(phone && currentPhones.has(phone));
     });
     if (!stillMembers.length) return "No confirmed verified-phone target remains in this group; the action was not queued.";
-    if (pending.quotedMessageKey && ["remove", "block", "demote-remove"].includes(pending.participantAction ?? ""))
+    if (pending.quotedMessageKey && ["remove", "block", "demote-remove", "remove-block", "demote-remove-block"].includes(pending.participantAction ?? ""))
       await Promise.resolve(deleteWhatsAppMessage(ctx.workspaceId, ctx.sessionId, pending.groupJid, { ...pending.quotedMessageKey, remoteJid: pending.groupJid })).catch(() => undefined);
     return queueMemberOperation(ctx, pending.groupJid, pending.participantAction ?? "remove", stillMembers);
   }

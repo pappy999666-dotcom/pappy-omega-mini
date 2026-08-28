@@ -70,7 +70,7 @@ function moderationReply(ctx: CommandContext, action: "ban" | "unban" | "mute" |
   return { ...preview, nativeTable: pending.table, nativeFlow: pending.table.buttons };
 }
 
-function targetReply(ctx: CommandContext, action: "remove" | "promote" | "demote" | "block" | "demote-remove", target: Target, groupJid: string): WhatsAppCommandReply {
+function targetReply(ctx: CommandContext, action: "remove" | "promote" | "demote" | "block" | "demote-remove" | "remove-block" | "demote-remove-block", target: Target, groupJid: string): WhatsAppCommandReply {
   const pending = registerGroupControlConfirmation({
     workspaceId: ctx.workspaceId,
     sessionId: ctx.sessionId,
@@ -103,15 +103,15 @@ function targetReply(ctx: CommandContext, action: "remove" | "promote" | "demote
   };
 }
 
-export async function moderateParticipant(ctx: CommandContext, action: "remove" | "promote" | "demote" | "block" | "demote-remove"): Promise<string | WhatsAppCommandReply> {
+export async function moderateParticipant(ctx: CommandContext, action: "remove" | "promote" | "demote" | "block" | "demote-remove" | "remove-block" | "demote-remove-block"): Promise<string | WhatsAppCommandReply> {
   const resolved = await targetOf(ctx, action);
   if ("error" in resolved) return resolved.error;
   const { groupJid, target } = resolved;
-  if (["remove", "block"].includes(action) && target.isAdmin) return "That verified member is an administrator and is protected. Use .dnkick only after a deliberate admin-removal review.";
-  if (action === "demote-remove" && !target.isAdmin) return "That verified member is not an administrator, so dnkick was not offered.";
+  if (["remove", "remove-block", "block"].includes(action) && target.isAdmin) return "That verified member is an administrator and is protected. Use .dnkick only after a deliberate admin-removal review.";
+  if ((action === "demote-remove" || action === "demote-remove-block") && !target.isAdmin) return "That verified member is not an administrator, so dnkick was not offered.";
   if (["promote", "demote"].includes(action) && action === "demote" && !target.isAdmin) return "That verified member is not an administrator, so demote was not offered.";
   if (["promote"].includes(action) && target.isAdmin) return "That verified member is already an administrator.";
-  return targetReply(ctx, action, target, groupJid);
+  return targetReply(ctx, action === "remove" ? "remove-block" : action === "demote-remove" ? "demote-remove-block" : action, target, groupJid);
 }
 
 export async function banMember(ctx: CommandContext): Promise<string | WhatsAppCommandReply> {

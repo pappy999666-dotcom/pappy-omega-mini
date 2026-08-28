@@ -97,7 +97,7 @@ describe("WhatsApp remaining group moderation", () => {
     expect((preview as WhatsAppCommandReply).mentions).toEqual(["2348022222222@s.whatsapp.net"]);
     expect(ctx.enqueueGroupControlJob).not.toHaveBeenCalled();
     await confirmPreview(preview, ctx);
-    expect(ctx.enqueueGroupControlJob).toHaveBeenCalledWith({ groupJid, operation: "participant", participantAction: "remove", participants: ["2348022222222@s.whatsapp.net"] });
+    expect(ctx.enqueueGroupControlJob).toHaveBeenCalledWith({ groupJid, operation: "participant", participantAction: "remove-block", participants: ["2348022222222@s.whatsapp.net"] });
     expect(mockedSnapshot).toHaveBeenCalledWith(ctx.workspaceId, ctx.sessionId, groupJid, { fresh: true });
   });
 
@@ -115,12 +115,12 @@ describe("WhatsApp remaining group moderation", () => {
     expect(ctx.enqueueGroupControlJob).toHaveBeenCalledWith({ groupJid, operation: "participant", participantAction: "remove", participants: ["2348022222222@s.whatsapp.net", "447700000003@s.whatsapp.net"] });
   });
 
-  it("maps dnkick to a real demote-then-remove durable action", async () => {
+  it("maps dnkick to a real demote-then-remove-then-block durable action", async () => {
     const ctx = context();
     const preview = await executeCommand(createCommandRegistry(), "dnkick 2348099999999", ctx);
     expect((preview as WhatsAppCommandReply).mentions).toEqual(["2348099999999@s.whatsapp.net"]);
     await confirmPreview(preview, ctx);
-    expect(ctx.enqueueGroupControlJob).toHaveBeenCalledWith({ groupJid, operation: "participant", participantAction: "demote-remove", participants: ["2348099999999@s.whatsapp.net"] });
+    expect(ctx.enqueueGroupControlJob).toHaveBeenCalledWith({ groupJid, operation: "participant", participantAction: "demote-remove-block", participants: ["2348099999999@s.whatsapp.net"] });
   });
 
   it("persists local bans by WhatsApp scope and masks banlist output", async () => {

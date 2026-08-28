@@ -451,7 +451,11 @@ export async function runAntiParticipantEvent(input: import("./types.js").AntiPa
     }
     if (plan.demote) await transport.updateGroupParticipantBatch(input.workspaceId, input.sessionId, input.groupJid, [input.author], "demote", false);
     if (plan.kick) await transport.updateGroupParticipantBatch(input.workspaceId, input.sessionId, input.groupJid, [input.author], "remove", false);
-    if (plan.ban) await transport.updateParticipantBlockStatus(input.workspaceId, input.sessionId, input.author, true).catch(() => undefined);
+    if (plan.ban || securityAction === "kick") {
+      try {
+        if (typeof transport.updateParticipantBlockStatus === "function") await transport.updateParticipantBlockStatus(input.workspaceId, input.sessionId, input.author, true);
+      } catch { /* blocking is best-effort after the kick; the enforcement result remains handled */ }
+    }
     if (!config.silentActionMessages) {
       const response = buildAntiSecurityResponse({
         key,

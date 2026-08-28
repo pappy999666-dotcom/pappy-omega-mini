@@ -374,7 +374,7 @@ export async function routeWhatsAppText(
             groupJid: string;
             operation: "approve" | "reject" | "participant";
             participants: string[];
-            participantAction?: "promote" | "demote" | "remove" | "block" | "demote-remove";
+            participantAction?: "promote" | "demote" | "remove" | "block" | "demote-remove" | "remove-block" | "demote-remove-block";
           }) => {
             const payload = {
               groupJid,

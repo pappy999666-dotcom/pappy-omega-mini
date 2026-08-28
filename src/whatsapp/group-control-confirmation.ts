@@ -22,7 +22,7 @@ export interface PendingGroupControl {
   groupJid: string;
   senderJid: string;
   operation: PendingGroupControlOperation;
-  participantAction?: "promote" | "demote" | "remove" | "block" | "demote-remove";
+  participantAction?: "promote" | "demote" | "remove" | "block" | "demote-remove" | "remove-block" | "demote-remove-block";
   moderationAction?: "ban" | "unban" | "mute" | "unmute" | "deleteall" | "warn-kick";
   participants: string[];
   quotedMessageKey?: Record<string, unknown>;

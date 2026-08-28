@@ -11,6 +11,7 @@ const antiMocks = vi.hoisted(() => ({
   deleteMessage: vi.fn(),
   sendText: vi.fn(),
   batch: vi.fn(),
+  block: vi.fn(),
 }));
 
 vi.mock("../src/whatsapp/transport-adapter.js", () => ({
@@ -18,6 +19,7 @@ vi.mock("../src/whatsapp/transport-adapter.js", () => ({
   deleteWhatsAppMessage: antiMocks.deleteMessage,
   sendGroupText: antiMocks.sendText,
   updateGroupParticipantBatch: antiMocks.batch,
+  updateParticipantBlockStatus: antiMocks.block,
   listGroups: vi.fn(),
   sendGroupMentions: vi.fn(),
   sendGroupStatus: vi.fn(),
@@ -260,6 +262,7 @@ describe("Omega-V1 Anti System parity surface", () => {
     expect(handled).toBe(true);
     expect(mockedBatch).toHaveBeenNthCalledWith(1, ctx.workspaceId, ctx.sessionId, ctx.chatJid, ["2348099999999@s.whatsapp.net"], "promote", false);
     expect(mockedBatch).toHaveBeenNthCalledWith(2, ctx.workspaceId, ctx.sessionId, ctx.chatJid, ["2348088888888@s.whatsapp.net"], "remove", false);
+    expect(antiMocks.block).toHaveBeenCalledWith(ctx.workspaceId, ctx.sessionId, "2348088888888@s.whatsapp.net", true);
   });
 
   it("escalates warn action to kick at the configured threshold", async () => {
