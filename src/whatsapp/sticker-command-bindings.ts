@@ -1,3 +1,10 @@
+import {
+  deleteStickerCommandBinding,
+  loadStickerCommandBindings,
+  persistStickerCommandBinding,
+  type StickerCommandBindingRecord,
+} from "../persistence/sticker-bindings.js";
+
 export interface StickerCommandBinding {
   fingerprint: string;
   command: string;
@@ -44,6 +51,20 @@ export function stickerBindingCommandList(): string[] {
   return [...BINDABLE_COMMANDS].sort();
 }
 
+export async function hydrateStickerCommandBindings(): Promise<void> {
+  try {
+    const records = await loadStickerCommandBindings();
+    for (const record of records) bindings.set(scopeKey(record.workspaceId, record.sessionId), {
+      fingerprint: record.fingerprint,
+      command: record.command,
+      payload: record.payload,
+      createdAt: record.createdAt,
+    });
+  } catch (error) {
+    console.warn("[sticker-bindings] durable hydration deferred", error instanceof Error ? error.message : String(error));
+  }
+}
+
 export function getStickerCommandBinding(
   workspaceId: string,
   sessionId: string,
@@ -70,6 +91,9 @@ export function setStickerCommandBinding(input: {
     createdAt: Date.now(),
   };
   bindings.set(scopeKey(input.workspaceId, input.sessionId), binding);
+  if (process.env.VITEST !== "true" && process.env.NODE_ENV !== "test") {
+    void persistStickerCommandBinding({ ...binding, workspaceId: input.workspaceId, sessionId: input.sessionId }).catch((error) => console.warn("[sticker-bindings] durable write deferred", error instanceof Error ? error.message : String(error)));
+  }
   return binding;
 }
 
@@ -77,7 +101,9 @@ export function clearStickerCommandBinding(
   workspaceId: string,
   sessionId: string,
 ): boolean {
-  return bindings.delete(scopeKey(workspaceId, sessionId));
+  const deleted = bindings.delete(scopeKey(workspaceId, sessionId));
+  if (deleted && process.env.VITEST !== "true" && process.env.NODE_ENV !== "test") void deleteStickerCommandBinding(workspaceId, sessionId).catch((error) => console.warn("[sticker-bindings] durable delete deferred", error instanceof Error ? error.message : String(error)));
+  return deleted;
 }
 
 export function clearAllStickerCommandBindingsForTests(): void {

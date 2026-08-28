@@ -24,12 +24,20 @@ export interface SessionJoinSettings {
   mode: "auto" | "immediate" | "request";
 }
 
+export interface WorkspaceStickerBinding {
+  fingerprint: string;
+  command: string;
+  payload: string;
+  createdAt: number;
+}
+
 export interface Workspace {
   workspaceId: string;
   ownerTelegramUserId: string;
   globalSudoList: string[];
   /** WhatsApp identities authorized across every session in this owner scope. */
   omniSudoList: string[];
+  stickerCommandBindings?: Record<string, WorkspaceStickerBinding>;
   /** Existing workspaces default to owner-VPS placement for zero-regression rollout. */
   workloadMode?: "ON" | "OFF";
   createdAt: number;

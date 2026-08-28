@@ -41,6 +41,7 @@ import type { JobOrchestrator } from "./jobs/job-orchestrator.js";
 import { DurableScheduler } from "./jobs/scheduler.js";
 import { AutoPromoteScheduler } from "./autopromote/service.js";
 import { hydrateMenuMedia } from "./media/menu-media-store.js";
+import { hydrateStickerCommandBindings } from "./whatsapp/sticker-command-bindings.js";
 import { closeValidatorSnapshot } from "./links/validator-snapshot.js";
 import { closeLinkCollector } from "./links/link-collector.js";
 import { closeBroadcastProgress } from "./workload/broadcast-progress.js";
@@ -110,6 +111,7 @@ async function main(): Promise<void> {
   await ensureDurableValidatorIndexes();
   await hydrateSessionRegistry();
   await hydrateMenuMedia();
+  await hydrateStickerCommandBindings();
   await hydrateControlPlane();
   let bot: ReturnType<typeof createTelegramBot> | undefined;
   if (!isWorkerProcess) {
