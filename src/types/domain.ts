@@ -27,10 +27,12 @@ export interface SessionJoinSettings {
 export interface Workspace {
   workspaceId: string;
   ownerTelegramUserId: string;
-  /** Sudo identities inherited by every session owned by this workspace user. */
+  /** Existing WhatsApp global sudo identities; retained for WhatsApp authorization. */
   globalSudoList: string[];
-  /** Owner-level identities authorized across all sessions in the owner scope. */
-  omniSudoList: string[];
+  /** Telegram users inherited by every session owned by this workspace user. */
+  globalTelegramSudoIds: string[];
+  /** Telegram users authorized across all sessions in the owner scope. */
+  omniTelegramSudoIds: string[];
   /** Existing workspaces default to owner-VPS placement for zero-regression rollout. */
   workloadMode?: "ON" | "OFF";
   createdAt: number;

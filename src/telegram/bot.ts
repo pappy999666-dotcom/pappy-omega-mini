@@ -16,11 +16,9 @@ import {
   setUserStatusLocal,
   getWorkspaceDefaults,
   getWorkspaceOwnerTelegramUserId,
-  getWorkspaceSudo,
-  getWorkspaceOmniSudo,
+  getWorkspaceTelegramSudo,
   updateWorkspaceDefaults,
-  updateWorkspaceSudo,
-  updateWorkspaceOmniSudo,
+  updateWorkspaceTelegramSudo,
   isActiveWhatsAppSession,
 } from "../core/session-registry.js";
 import {
@@ -1006,6 +1004,23 @@ export function createTelegramBot(): Telegraf<Context> {
       reply_markup: dashboardKeyboard(isAdmin(ctx)),
     });
   });
+  for (const scope of ["global", "omni"] as const) {
+    bot.command(`${scope}sudo`, async (ctx) => {
+      if (!ctx.from || !ownerTelegramIds.has(String(ctx.from.id))) return requireAdmin(ctx);
+      const user = resolveTelegramUser(ctx);
+      const args = ctx.message.text.trim().split(/\s+/).slice(1).filter(Boolean);
+      const action = args[0]?.toLowerCase() ?? "list";
+      if (action === "list") {
+        const ids = getWorkspaceTelegramSudo(user.workspaceId, scope);
+        return ctx.reply(pageText(`${scope === "global" ? "Global" : "Omni"} Telegram Sudo`, infoResponse("Configured IDs", ids.length ? ids.map((id) => `<code>${escapeHtml(id)}</code>`).join("\n") : "No Telegram sudo IDs configured.")), { parse_mode: "HTML" });
+      }
+      if (action !== "add" && action !== "remove") return ctx.reply(`Usage: /${scope}sudo list | add <telegram-user-id> | remove <telegram-user-id>`);
+      const id = (args[1] ?? "").replace(/\D/g, "");
+      if (!id) return ctx.reply("A valid Telegram numeric user ID is required.");
+      updateWorkspaceTelegramSudo(user.workspaceId, scope, action, id);
+      return ctx.reply(`${scope === "global" ? "Global" : "Omni"} Telegram sudo ${action === "add" ? "added" : "removed"}: ${id}`);
+    });
+  }
   bot.command("pair", async (ctx) =>
     startPairing(ctx, ctx.message.text.split(/\s+/).slice(1).join(" ").trim()),
   );
@@ -1906,9 +1921,9 @@ export function createTelegramBot(): Telegraf<Context> {
       const current = ownedSession(ctx, sessionSudo.sessionId);
       if (!current || !identity) return;
       if (sessionSudo.scope === "global") {
-        updateWorkspaceSudo(sessionSudo.workspaceId, sessionSudo.action, identity);
+        updateWorkspaceTelegramSudo(sessionSudo.workspaceId, sessionSudo.scope, sessionSudo.action, identity);
       } else if (sessionSudo.scope === "omni") {
-        updateWorkspaceOmniSudo(sessionSudo.workspaceId, sessionSudo.action, identity);
+        updateWorkspaceTelegramSudo(sessionSudo.workspaceId, sessionSudo.scope, sessionSudo.action, identity);
       } else {
         const next =
           sessionSudo.action === "add"
@@ -3974,7 +3989,7 @@ export function createTelegramBot(): Telegraf<Context> {
           throw new Error(
             "This WhatsApp identity is no longer an administrator in the group.",
           );
-        const selfDigits = (session.phoneNumber ?? "").replace(/\\D/g, "");
+        const selfDigits = (session.phoneNumber ?? "").replace(/\D/g, "");
         const targets = snapshot.participants
           .filter((participant) => {
             const participantDigits = [
@@ -3984,7 +3999,7 @@ export function createTelegramBot(): Telegraf<Context> {
             ]
               .filter(Boolean)
               .join(" ")
-              .replace(/\\D/g, "");
+              .replace(/\D/g, "");
             const isSelf =
               selfDigits.length >= 7 && participantDigits.includes(selfDigits);
             if (ctx.match[2] === "demote")
@@ -4983,9 +4998,7 @@ export function createTelegramBot(): Telegraf<Context> {
     if (!session) return deny(ctx);
     const scope = (ctx.match[2] ?? "global") as "global" | "omni";
     const action = ctx.match[3] ?? "list";
-    const identities = scope === "global"
-      ? getWorkspaceSudo(session.workspaceId)
-      : getWorkspaceOmniSudo(session.workspaceId);
+    const identities = getWorkspaceTelegramSudo(session.workspaceId, scope);
     if (action === "list") {
       return edit(
         ctx,
@@ -5012,7 +5025,7 @@ export function createTelegramBot(): Telegraf<Context> {
     });
     return edit(
       ctx,
-      pageText(`${scope === "global" ? "Global" : "Omni"} · Sudo`, infoResponse(action === "add" ? "Add Sudo Identity" : "Remove Sudo Identity", "Send a verified WhatsApp phone identity now.")),
+      pageText(`${scope === "global" ? "Global" : "Omni"} · Sudo`, infoResponse(action === "add" ? "Add Sudo Identity" : "Remove Sudo Identity", "Send a Telegram user ID now, for example <code>8831887192</code>.")),
       keyboard([[btn("Cancel", `session:${session.sessionId}:sudo:${scope}:list`)], [btn("‹ Access", `session:${session.sessionId}:section:access`)] ]),
     );
   });
@@ -5066,7 +5079,7 @@ export function createTelegramBot(): Telegraf<Context> {
         `${session.sessionName} · Sudo`,
         infoResponse(
           action === "add" ? "Add Sudo Identity" : "Remove Sudo Identity",
-          "Send a WhatsApp identity/JID now, for example <code>2348012345678@s.whatsapp.net</code>.",
+          "Send a Telegram user ID now, for example <code>8831887192</code>.",
         ),
       ),
       keyboard([
@@ -10674,7 +10687,15 @@ async function refreshSessionRegistryForUi(): Promise<void> {
 }
 
 function isAdmin(ctx: Context): boolean {
-  return Boolean(ctx.from && ownerTelegramIds.has(String(ctx.from.id)));
+  if (!ctx.from) return false;
+  const id = String(ctx.from.id);
+  if (ownerTelegramIds.has(id)) return true;
+  try {
+    const user = resolveTelegramUser(ctx);
+    return getWorkspaceTelegramSudo(user.workspaceId, "global").includes(id) || getWorkspaceTelegramSudo(user.workspaceId, "omni").includes(id);
+  } catch {
+    return false;
+  }
 }
 
 function requireAdmin(ctx: Context): boolean {

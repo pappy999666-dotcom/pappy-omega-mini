@@ -51,7 +51,8 @@ export function resolveUser(
     workspaceId: randomUUID(),
     ownerTelegramUserId: telegramUserId,
     globalSudoList: [],
-    omniSudoList: [],
+    globalTelegramSudoIds: [],
+    omniTelegramSudoIds: [],
     workloadMode: "ON",
     createdAt: now,
   };
@@ -297,9 +298,10 @@ export function getWorkspaceSudo(workspaceId: string): string[] {
   return workspace ? [...(workspace.globalSudoList ?? [])] : [];
 }
 
-export function getWorkspaceOmniSudo(workspaceId: string): string[] {
+export function getWorkspaceTelegramSudo(workspaceId: string, scope: "global" | "omni"): string[] {
   const workspace = workspaces.get(workspaceId);
-  return workspace ? [...(workspace.omniSudoList ?? [])] : [];
+  if (!workspace) return [];
+  return [...(scope === "global" ? workspace.globalTelegramSudoIds ?? [] : workspace.omniTelegramSudoIds ?? [])];
 }
 
 export function updateWorkspaceSudo(
@@ -322,24 +324,22 @@ export function updateWorkspaceSudo(
   return [...globalSudoList];
 }
 
-export function updateWorkspaceOmniSudo(
+export function updateWorkspaceTelegramSudo(
   workspaceId: string,
+  scope: "global" | "omni",
   action: "add" | "remove",
-  identity: string,
+  telegramUserId: string,
 ): string[] {
   const workspace = workspaces.get(workspaceId);
   if (!workspace) throw new Error("Workspace not found.");
-  const normalized = identity.replace(/[^0-9A-Za-z:_.@-]/g, "");
-  if (!normalized) throw new Error("Invalid WhatsApp identity.");
-  const current = workspace.omniSudoList ?? [];
-  const omniSudoList =
-    action === "add"
-      ? [...new Set([...current, normalized])]
-      : current.filter((item) => item !== normalized);
-  const next = { ...workspace, omniSudoList };
+  const normalized = telegramUserId.replace(/\D/g, "");
+  if (!normalized) throw new Error("Invalid Telegram user ID.");
+  const current = scope === "global" ? workspace.globalTelegramSudoIds ?? [] : workspace.omniTelegramSudoIds ?? [];
+  const values = action === "add" ? [...new Set([...current, normalized])] : current.filter((item) => item !== normalized);
+  const next = scope === "global" ? { ...workspace, globalTelegramSudoIds: values } : { ...workspace, omniTelegramSudoIds: values };
   workspaces.set(workspaceId, next);
   void persistWorkspace(next).catch(() => undefined);
-  return [...omniSudoList];
+  return [...values];
 }
 
 export function getWorkspaceDefaults(workspaceId: string): WorkspaceSettings {
@@ -407,7 +407,8 @@ export async function hydrateSessionRegistry(): Promise<void> {
     workspaces.set(workspace.workspaceId, {
       ...workspace,
       globalSudoList: workspace.globalSudoList ?? [],
-      omniSudoList: workspace.omniSudoList ?? [],
+      globalTelegramSudoIds: workspace.globalTelegramSudoIds ?? [],
+      omniTelegramSudoIds: workspace.omniTelegramSudoIds ?? [],
       workloadMode: workspace.workloadMode ?? "ON",
     });
   for (const session of snapshot.sessions)
