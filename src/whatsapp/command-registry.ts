@@ -5,12 +5,10 @@ import {
   getSessionJoinSettings,
   getWorkspaceDefaults,
   getWorkspaceSudo,
-  getWorkspaceOmniSudo,
   updateSession,
   updateSessionJoinSettings,
   updateWorkspaceDefaults,
   updateWorkspaceSudo,
-  updateWorkspaceOmniSudo,
 } from "../core/session-registry.js";
 import {
   buildSessionMenu,
@@ -777,11 +775,10 @@ function buildSudoCompleteResponse(action: "add" | "remove", identityJid: string
 }
 
 async function runSudoCommand(ctx: CommandContext): Promise<string | WhatsAppCommandReply> {
-  const requestedScope = ctx.args[0]?.toLowerCase();
-  const scope = requestedScope === "global" || requestedScope === "omni" ? requestedScope : "session";
-  const offset = scope === "session" ? 0 : 1;
+  const global = ctx.args[0]?.toLowerCase() === "global";
+  const offset = global ? 1 : 0;
   const requestedAction = ctx.args[offset]?.toLowerCase();
-  if (scope === "global" && requestedAction === "list") {
+  if (global && requestedAction === "list") {
     const identities = getWorkspaceSudo(ctx.workspaceId)
       .map((identity) => firstVerifiedPhone(identity))
       .filter((identity): identity is string => Boolean(identity));
@@ -789,15 +786,7 @@ async function runSudoCommand(ctx: CommandContext): Promise<string | WhatsAppCom
       ? `Global sudo phone identities:\n${identities.map((identity) => `+${identity}`).join("\n")}`
       : "No verified global sudo phone identities configured.";
   }
-  if (scope === "omni" && requestedAction === "list") {
-    const identities = getWorkspaceOmniSudo(ctx.workspaceId)
-      .map((identity) => firstVerifiedPhone(identity))
-      .filter((identity): identity is string => Boolean(identity));
-    return identities.length
-      ? `Omni sudo phone identities:\n${identities.map((identity) => `+${identity}`).join("\n")}`
-      : "No verified omni sudo phone identities configured.";
-  }
-  if (scope === "session" && requestedAction === "list") {
+  if (!global && requestedAction === "list") {
     const identities = session(ctx).sudoList
       .map((identity) => firstVerifiedPhone(identity))
       .filter((identity): identity is string => Boolean(identity));
@@ -811,14 +800,10 @@ async function runSudoCommand(ctx: CommandContext): Promise<string | WhatsAppCom
   const identityJid = verifiedTargetJid(targetArgs, ctx.mentionedJids, ctx.quotedSenderJid);
   const identityDigits = firstVerifiedPhone(identityJid);
   if (!identityJid || !identityDigits || !["add", "remove"].includes(action))
-    return commandUsageCard({ title: ctx.invokedName === "rmsudo" ? "RMsudo Command" : "Setsudo Command", command: ctx.invokedName === "rmsudo" ? ".rmsudo" : ".setsudo", commandSyntax: ctx.invokedName === "rmsudo" ? ".rmsudo [session|global|omni] [add|remove] <target>" : ".setsudo [session|global|omni] [add|remove] <target>", acceptedTargets: ["Tag / Mention · Real WhatsApp mention", "Reply · Reply to a verified phone identity", "Phone · Explicit international number for global scope"], note: ctx.invokedName === "rmsudo" ? "Removes the verified target; no add/remove keyword is required." : "Adds the verified target; no add/remove keyword is required. LID-only identities are not accepted." });
-  if (scope === "global") {
+    return commandUsageCard({ title: ctx.invokedName === "rmsudo" ? "RMsudo Command" : "Setsudo Command", command: ctx.invokedName === "rmsudo" ? ".rmsudo" : ".setsudo", commandSyntax: ctx.invokedName === "rmsudo" ? ".rmsudo [global] <target>" : ".setsudo [global] <target>", acceptedTargets: ["Tag / Mention · Real WhatsApp mention", "Reply · Reply to a verified phone identity", "Phone · Explicit international number for global scope"], note: ctx.invokedName === "rmsudo" ? "Removes the verified target; no add/remove keyword is required." : "Adds the verified target; no add/remove keyword is required. LID-only identities are not accepted." });
+  if (global) {
     updateWorkspaceSudo(ctx.workspaceId, action, identityJid);
     return buildSudoCompleteResponse(action, identityJid, "Global");
-  }
-  if (scope === "omni") {
-    updateWorkspaceOmniSudo(ctx.workspaceId, action, identityJid);
-    return buildSudoCompleteResponse(action, identityJid, "Omni");
   }
   const current = session(ctx).sudoList;
   const next = action === "add"

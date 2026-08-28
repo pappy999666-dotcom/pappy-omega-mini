@@ -16,6 +16,10 @@ import {
   setUserStatusLocal,
   getWorkspaceDefaults,
   getWorkspaceOwnerTelegramUserId,
+  getWorkspaceSudo,
+  getWorkspaceOmniSudo,
+  updateWorkspaceSudo,
+  updateWorkspaceOmniSudo,
   updateWorkspaceDefaults,
   isActiveWhatsAppSession,
 } from "../core/session-registry.js";
@@ -1001,6 +1005,26 @@ export function createTelegramBot(): Telegraf<Context> {
       parse_mode: "HTML",
       reply_markup: dashboardKeyboard(isAdmin(ctx)),
     });
+  });
+  bot.command("setsudo", async (ctx) => {
+    if (!ctx.from || !ownerTelegramIds.has(String(ctx.from.id))) return deny(ctx);
+    const user = resolveTelegramUser(ctx);
+    const args = ctx.message.text.trim().split(/\s+/).slice(1).filter(Boolean);
+    const scope = (args[0] ?? "").toLowerCase();
+    const action = (args[scope === "session" ? 2 : 1] ?? "").toLowerCase();
+    const rawTarget = args[scope === "session" ? 3 : 2] ?? "";
+    if (!["session", "global", "omni"].includes(scope) || !["add", "remove"].includes(action)) return ctx.reply("Usage: /setsudo session <session-id> add|remove <whatsapp-number> | /setsudo global|omni add|remove <whatsapp-number>");
+    const digits = rawTarget.replace(/\D/g, "");
+    if (digits.length < 7 || digits.length > 15) return ctx.reply("Provide a verified WhatsApp number in international format.");
+    const identity = `${digits}@s.whatsapp.net`;
+    if (scope === "session") {
+      const session = ownedSession(ctx, args[1] ?? "");
+      if (!session) return ctx.reply("That session is not owned by this Telegram user.");
+      const next = action === "add" ? [...new Set([...session.sudoList, identity])] : session.sudoList.filter((item) => item !== identity && !item.startsWith(`${digits}:`));
+      updateSession(session.workspaceId, session.sessionId, { sudoList: next });
+    } else if (scope === "global") updateWorkspaceSudo(user.workspaceId, action as "add" | "remove", identity);
+    else updateWorkspaceOmniSudo(user.workspaceId, action as "add" | "remove", identity);
+    return ctx.reply(`${scope.toUpperCase()} WhatsApp sudo ${action === "add" ? "added" : "removed"}: ${digits}`);
   });
   bot.command("pair", async (ctx) =>
     startPairing(ctx, ctx.message.text.split(/\s+/).slice(1).join(" ").trim()),
