@@ -1508,6 +1508,30 @@ export async function getAutoPromoteRunByOccurrence(
   );
 }
 
+/**
+ * Projection-only lookup of the occurrence ids that already exist for a set of
+ * configs. The scheduler previously re-listed every full run document per
+ * config on every tick; this returns just the ids in one batched query.
+ */
+export async function listAutoPromoteOccurrenceIds(
+  configIds: string[],
+): Promise<Set<string>> {
+  const ids = new Set<string>();
+  if (!configIds.length) return ids;
+  await connectMongo();
+  const batchSize = 100;
+  for (let index = 0; index < configIds.length; index += batchSize) {
+    const batch = configIds.slice(index, index + batchSize);
+    const rows = await autoPromoteRunModel()
+      .find({ configId: { $in: batch } }, { occurrenceId: 1, _id: 0 })
+      .lean<Array<{ occurrenceId?: string }>>()
+      .exec();
+    for (const row of rows)
+      if (row?.occurrenceId) ids.add(row.occurrenceId);
+  }
+  return ids;
+}
+
 export async function listAutoPromoteRuns(
   input: {
     ownerTelegramUserId?: string;

@@ -6,6 +6,7 @@ import {
   getAutoPromoteConfig,
   getAutoPromoteRun,
   listAutoPromoteConfigs,
+  listAutoPromoteOccurrenceIds,
   listAutoPromoteRuns,
   listRecoverableAutoPromoteRuns,
   saveAutoPromoteConfig,
@@ -15,6 +16,7 @@ import {
 } from "../persistence/mongo.js";
 import { getWorkspaceOwnerTelegramUserId, isActiveWhatsAppSession, listAllSessions, refreshSessionRegistry } from "../core/session-registry.js";
 import type { JobOrchestrator } from "../jobs/job-orchestrator.js";
+import { getCpuWorkerPool } from "../core/cpu-worker-pool.js";
 import {
   DEFAULT_AUTOPROMOTE_SLOT_TIMES,
   DEFAULT_AUTOPROMOTE_TIMEZONE,
@@ -205,39 +207,132 @@ export async function resumeAutoPromoteConfig(configId: string): Promise<void> {
   await setAutoPromoteConfigState(configId, "SCHEDULED", true);
 }
 
+const AUTOPROMOTE_CREATION_LOOKAHEAD_MS = 24 * 60 * 60_000;
+// Below this estimated occurrence-candidate count, the pure computation runs
+// inline on the main thread (sub-millisecond after formatter memoization);
+// spawning worker threads for trivial work would cost more than it saves.
+const AUTOPROMOTE_INLINE_WORK_THRESHOLD = 5_000;
+
+function estimateAutopromoteWork(
+  configs: AutoPromoteConfig[],
+  targetSessionIdsByConfig: Record<string, string[]>,
+): number {
+  let estimate = 0;
+  for (const config of configs) {
+    const sessions = targetSessionIdsByConfig[config.id]?.length ?? 0;
+    if (!sessions) continue;
+    estimate += sessions * config.days * slotsForTimesPerDay(config.timesPerDay).length;
+  }
+  return estimate;
+}
+
+function workerInputFor(configs: AutoPromoteConfig[], existingOccurrenceIds: string[], targetSessionIdsByConfig: Record<string, string[]>, now: number, horizon: number) {
+  return {
+    configs: configs.map((c) => ({
+      id: c.id,
+      endDate: c.endDate,
+      slotTimes: c.slotTimes,
+      startDate: c.startDate,
+      days: c.days,
+      timesPerDay: c.timesPerDay,
+      timezone: c.timezone,
+      scope: c.scope,
+      sessionId: c.sessionId,
+      targetSessionIds: c.targetSessionIds,
+      ownerTelegramUserId: c.ownerTelegramUserId,
+      ownerWorkspaceId: c.ownerWorkspaceId,
+    })),
+    existingOccurrenceIds,
+    targetSessionIdsByConfig,
+    now,
+    horizon,
+  };
+}
+
+type ComputeInput = import("../core/workers/autopromote-compute.js").AutopromoteComputeInput;
+type ComputeResult = import("../core/workers/autopromote-compute.js").AutopromoteComputeResult;
+
+// The module is pure (no side effects) and tiny; imported statically so the
+// inline path has identical semantics to the worker path.
+import { computeAutopromoteOccurrences as computeAutopromoteOccurrencesInline } from "../core/workers/autopromote-compute.js";
+
 export async function ensureAutoPromoteOccurrences(
   now = Date.now(),
 ): Promise<number> {
   const configs = await listAutoPromoteConfigs({ enabled: true, limit: 500 });
-  let created = 0;
+  if (!configs.length) return 0;
+  // One projection-only query for all configs replaces the per-config full
+  // run listing that previously scanned thousands of documents every tick.
+  const existingOccurrenceIdList = [
+    ...(await listAutoPromoteOccurrenceIds(configs.map((config) => config.id))),
+  ];
+  // Resolve target sessions on the main thread (needs registry access).
+  const targetSessionIdsByConfig: Record<string, string[]> = {};
   for (const config of configs) {
-    const sessions = resolveTargetSessionIds(config);
-    if (!sessions.length) continue;
-    const existingRuns = await listAutoPromoteRuns({ configId: config.id, limit: 5000 }).catch(() => []);
-    const existingOccurrences = new Set(existingRuns.map((run) => run.occurrenceId));
-    for (let day = 0; day < config.days; day += 1) {
-      const date = addDays(config.startDate, day);
-      const slots = slotsForTimesPerDay(config.timesPerDay);
-      for (const slot of slots) {
-        const scheduledAt = zonedTimeToUtc(date, config.slotTimes[slot], config.timezone);
-        for (const sessionId of sessions) {
-          const id = occurrenceId(config.id, date, slot, sessionId);
-          if (existingOccurrences.has(id)) continue;
-          const result = await claimAutoPromoteOccurrence(
-            id,
-            newRun(config, sessionId, { id, scheduledAt }),
-          );
-          existingOccurrences.add(id);
-          if (result?.createdAt && result.createdAt === result.updatedAt) created += 1;
-        }
+    targetSessionIdsByConfig[config.id] = resolveTargetSessionIds(config);
+  }
+  const horizon = now + AUTOPROMOTE_CREATION_LOOKAHEAD_MS;
+
+  // CPU-bound date/occurrence expansion runs on worker threads only when the
+  // workload is large enough to amortize thread hand-off; small workloads stay
+  // inline so the pool adds zero cost when idle. Large workloads are split by
+  // config weight across all available workers so the process can genuinely
+  // use multiple cores (main thread + pool) instead of one.
+  const estimate = estimateAutopromoteWork(configs, targetSessionIdsByConfig);
+  let computed: ComputeResult;
+  if (estimate <= AUTOPROMOTE_INLINE_WORK_THRESHOLD) {
+    computed = computeAutopromoteOccurrencesInline(workerInputFor(configs, [...existingOccurrenceIdList], targetSessionIdsByConfig, now, horizon));
+  } else {
+    const pool = getCpuWorkerPool();
+    const chunkCount = Math.min(pool.maxWorkers, Math.max(2, Math.ceil(estimate / 10_000)));
+    const weight = Math.max(1, Math.ceil(configs.length / chunkCount));
+    const chunks: AutoPromoteConfig[][] = [];
+    for (let index = 0; index < configs.length; index += weight) chunks.push(configs.slice(index, index + weight));
+    const chunkResults = await Promise.all(chunks.map(async (chunk) => {
+      const chunkIds = new Set(chunk.map((config) => config.id));
+      const chunkExisting = existingOccurrenceIdList.filter((occurrenceId) =>
+      {
+        const separator = occurrenceId.indexOf(":");
+        return separator > 0 && chunkIds.has(occurrenceId.slice(0, separator));
+      },
+      );
+      try {
+        return await pool.run<ComputeInput, ComputeResult>(
+          "autopromote:compute",
+          workerInputFor(chunk, chunkExisting, targetSessionIdsByConfig, now, horizon),
+        );
+      } catch (error) {
+        // Pool unavailable/overloaded: degrade to inline rather than skip a
+        // scheduling tick. Failures here must never stall the scheduler.
+        console.warn(
+          `[pappy-omega-mini] CPU worker path unavailable; computing autopromote occurrences inline: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return computeAutopromoteOccurrencesInline(workerInputFor(chunk, chunkExisting, targetSessionIdsByConfig, now, horizon));
       }
-    }
-    if (now > zonedTimeToUtc(config.endDate, config.slotTimes.lateNight, config.timezone)) {
-      await disableAutoPromoteConfig(config.id);
-    }
+    }));
+    computed = {
+      occurrencesToCreate: chunkResults.flatMap((result) => result.occurrencesToCreate),
+      configIdsToEnd: [...new Set(chunkResults.flatMap((result) => result.configIdsToEnd))],
+    };
+  }
+
+  // Apply the computed results (I/O on main thread).
+  let created = 0;
+  for (const configId of computed.configIdsToEnd) {
+    await disableAutoPromoteConfig(configId).catch(() => undefined);
+  }
+  for (const occurrence of computed.occurrencesToCreate) {
+    const config = configs.find((c) => c.id === occurrence.configId);
+    if (!config) continue;
+    const result = await claimAutoPromoteOccurrence(
+      occurrence.id,
+      newRun(config, occurrence.sessionId, { id: occurrence.id, scheduledAt: occurrence.scheduledAt }),
+    );
+    if (result?.createdAt && result.createdAt === result.updatedAt) created += 1;
   }
   return created;
 }
+
 
 export async function dispatchAutoPromoteDueRuns(
   orchestrator: JobOrchestrator,

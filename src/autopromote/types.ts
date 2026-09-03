@@ -139,6 +139,30 @@ export function validateAutoPromoteInput(input: {
     throw new Error("All Status X posts per group must be between 1 and 10.");
 }
 
+const timeZoneFormatterCache = new Map<string, Intl.DateTimeFormat>();
+const MAX_CACHED_TIMEZONE_FORMATTERS = 32;
+
+function formatterFor(timezone: string): Intl.DateTimeFormat {
+  const cached = timeZoneFormatterCache.get(timezone);
+  if (cached) return cached;
+  if (timeZoneFormatterCache.size >= MAX_CACHED_TIMEZONE_FORMATTERS) {
+    const oldest = timeZoneFormatterCache.keys().next().value;
+    if (oldest !== undefined) timeZoneFormatterCache.delete(oldest);
+  }
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  timeZoneFormatterCache.set(timezone, formatter);
+  return formatter;
+}
+
 export function zonedTimeToUtc(
   date: string,
   time: string,
@@ -154,19 +178,10 @@ export function zonedTimeToUtc(
   if (![year, month, day, hour, minute].every(Number.isFinite))
     throw new Error("Invalid Auto Promote schedule date or time.");
   const guess = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
   const parts = Object.fromEntries(
-    formatter.formatToParts(new Date(guess)).map((part) => [part.type, part.value]),
+    formatterFor(timezone).formatToParts(new Date(guess)).map((part) => [part.type, part.value]),
   );
+
   const localAsUtc = Date.UTC(
     Number(parts.year),
     Number(parts.month) - 1,

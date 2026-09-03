@@ -31,12 +31,30 @@ export interface SessionLifecycleState {
   lastCommandProcessedAt?: number;
   lastOutboundMessageAt?: number;
   lastError?: string;
+  // Consecutive transport-failure circuit breaker. Terminal/logout codes
+  // (401, 403) that repeat without a successful open indicate a permanently
+  // unusable session (banned/revoked). After the threshold we stop
+  // reconnecting rather than burning CPU and auth-store I/O forever.
+  consecutiveTerminalFailures: number;
+  circuitOpen: boolean;
+  circuitOpenReason?: string | undefined;
+  lastCircuitOpenAt?: number | undefined;
 }
 
 const states = new Map<string, SessionLifecycleState>();
 const starts = new Map<string, Promise<void>>();
 const RECONNECT_DEGRADED_AFTER_ATTEMPTS = 6;
 const RECONNECT_LONG_BACKOFF_MS = 5 * 60_000;
+// A session that fails with a terminal code this many times in a row is
+// considered permanently unusable. This stops the CPU-wasting reconnect loop
+// for banned/revoked WhatsApp accounts while preserving recovery for
+// transient transport errors (408, 428, 500).
+const CIRCUIT_BREAKER_THRESHOLD = 4;
+// Auth-class codes that, when repeated without a successful open, indicate a
+// permanent condition (banned/revoked/device-mismatch) rather than a
+// transient transport blip. Transient codes (408/411/428/500/503/515) must
+// never open the circuit; they keep their own backoff paths.
+const TERMINAL_BREAKER_CODES = new Set<number>([401, 403, 405]);
 
 export function lifecycleKey(workspaceId: string, sessionId: string): string {
   return `${workspaceId}:${sessionId}`;
@@ -55,6 +73,8 @@ export function getLifecycleState(key: string): SessionLifecycleState {
     socketGeneration: 0,
     status: "CREATING",
     lastTransitionAt: Date.now(),
+    consecutiveTerminalFailures: 0,
+    circuitOpen: false,
   };
   states.set(key, created);
   return created;
@@ -130,6 +150,12 @@ export function markConnected(key: string): void {
 export function markStableConnected(key: string): void {
   const state = getLifecycleState(key);
   state.reconnectAttempt = 0;
+  // A successful stable open means the session recovered; clear any
+  // terminal-failure circuit breaker so a later ban can re-open it.
+  state.consecutiveTerminalFailures = 0;
+  state.circuitOpen = false;
+  state.circuitOpenReason = undefined;
+  state.lastCircuitOpenAt = undefined;
 }
 
 export function markStopping(key: string): void {
@@ -148,6 +174,54 @@ export function markClosed(key: string): void {
   if (!state.stopping) setLifecycleStatus(key, "RECONNECTING");
   if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
   state.heartbeatTimer = undefined;
+}
+
+export function openCircuit(input: {
+  key: string;
+  code: number;
+  reason: string;
+}): boolean {
+  const state = getLifecycleState(input.key);
+  if (state.circuitOpen) return false;
+  state.circuitOpen = true;
+  state.circuitOpenReason = input.reason;
+  state.lastCircuitOpenAt = Date.now();
+  setLifecycleStatus(input.key, "BANNED_OR_RESTRICTED");
+  return true;
+}
+
+export function isCircuitOpen(key: string): boolean {
+  return getLifecycleState(key).circuitOpen;
+}
+
+export function recordTerminalFailure(key: string, code: number): boolean {
+  if (!TERMINAL_BREAKER_CODES.has(code)) return false;
+  const state = getLifecycleState(key);
+  state.consecutiveTerminalFailures += 1;
+  if (state.consecutiveTerminalFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+    openCircuit({
+      key,
+      code,
+      reason: `terminal code ${code} repeated ${state.consecutiveTerminalFailures} times; session presumed banned/revoked`,
+    });
+    return true;
+  }
+  return false;
+}
+
+export function getCircuitStats(key: string): {
+  open: boolean;
+  consecutiveTerminals: number;
+  reason?: string | undefined;
+  openedAt?: number | undefined;
+} {
+  const state = getLifecycleState(key);
+  return {
+    open: state.circuitOpen,
+    consecutiveTerminals: state.consecutiveTerminalFailures,
+    reason: state.circuitOpenReason,
+    openedAt: state.lastCircuitOpenAt,
+  };
 }
 
 export function scheduleReconnect(input: {

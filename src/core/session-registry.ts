@@ -415,7 +415,7 @@ export async function hydrateSessionRegistry(): Promise<void> {
 
 let registryRefreshPromise: Promise<void> | undefined;
 let lastRegistryRefreshAt = 0;
-const REGISTRY_REFRESH_MIN_INTERVAL_MS = 10_000;
+const REGISTRY_REFRESH_MIN_INTERVAL_MS = 30_000;
 
 /** Merge database-created sessions into the running registry for picker views and schedulers. */
 export async function refreshSessionRegistry(): Promise<void> {

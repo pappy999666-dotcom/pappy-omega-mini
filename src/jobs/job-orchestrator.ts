@@ -26,6 +26,19 @@ const PANEL_BROADCAST_QUEUE_NAME = "pappy-omega-mini-panel-broadcasts";
 const VALIDATOR_QUEUE_NAME = "pappy-omega-mini-validator";
 const STORE_PREFIX = "pappy-omega-mini:job:";
 const CODE_PREFIX = "pappy-omega-mini:job-code:";
+// Deliberately outside the `pappy-omega-mini:job:*` keyspace so SCAN-based
+// listAll() never sees it as a record.
+const ACTIVE_INDEX_KEY = "pappy-omega-mini:job-active-index";
+const TERMINAL_RECORD_TTL_SECONDS = 24 * 60 * 60;
+// Records the reaper/recovery never need to revisit.
+const SETTLED_STATES = new Set<string>(["COMPLETED", "CANCELLED", "EXPIRED"]);
+const TERMINAL_STATES = new Set<string>([
+  "COMPLETED",
+  "PARTIAL",
+  "FAILED",
+  "CANCELLED",
+  "EXPIRED",
+]);
 const STALE_ACTIVE_JOB_GRACE_MS = 60_000;
 const WORKER_LOCK_DURATION_MS = 30 * 60_000;
 const WORKER_LOCK_RENEW_MS = 10_000;
@@ -51,10 +64,19 @@ export class RedisJobStore {
   }
 
   async set(record: JobRecord): Promise<void> {
-    await this.redis.set(
-      `${STORE_PREFIX}${record.jobId}`,
-      JSON.stringify(record),
-    );
+    const key = `${STORE_PREFIX}${record.jobId}`;
+    const serialized = JSON.stringify(record);
+    if (TERMINAL_STATES.has(record.state)) {
+      // Terminal records are retention-bounded so the job keyspace cannot grow
+      // forever; the panel only lists recent activity anyway.
+      await this.redis.set(key, serialized, "EX", TERMINAL_RECORD_TTL_SECONDS);
+      await this.redis.srem(ACTIVE_INDEX_KEY, record.jobId);
+    } else {
+      await this.redis.set(key, serialized);
+      if (!SETTLED_STATES.has(record.state))
+        await this.redis.sadd(ACTIVE_INDEX_KEY, record.jobId);
+      else await this.redis.srem(ACTIVE_INDEX_KEY, record.jobId);
+    }
   }
 
   async listAll(): Promise<JobRecord[]> {
@@ -84,6 +106,52 @@ export class RedisJobStore {
     ).filter((record): record is JobRecord => Boolean(record));
   }
 
+  /**
+   * Records that recovery/reaping may still act on. Backed by a Redis SET of
+   * non-settled job ids so the 30-second reaper no longer scans the entire job
+   * keyspace. Falls back to one full rebuild when the index is missing.
+   */
+  async listReapCandidates(): Promise<JobRecord[]> {
+    const members = await this.redis.smembers(ACTIVE_INDEX_KEY);
+    if (!members.length) {
+      const rebuilt = await this.listAll();
+      const activeIds = rebuilt
+        .filter((record) => !SETTLED_STATES.has(record.state))
+        .map((record) => record.jobId);
+      for (let index = 0; index < activeIds.length; index += 500)
+        await this.redis.sadd(ACTIVE_INDEX_KEY, ...activeIds.slice(index, index + 500));
+      return rebuilt.filter((record) => !SETTLED_STATES.has(record.state));
+    }
+    const records: JobRecord[] = [];
+    const staleMembers: string[] = [];
+    for (let index = 0; index < members.length; index += 500) {
+      const batch = members.slice(index, index + 500);
+      const values = await this.redis.mget(
+        ...batch.map((jobId) => `${STORE_PREFIX}${jobId}`),
+      );
+      batch.forEach((jobId, offset) => {
+        const value = values[offset];
+        if (!value) {
+          staleMembers.push(jobId);
+          return;
+        }
+        try {
+          const record = JSON.parse(value) as JobRecord;
+          if (SETTLED_STATES.has(record.state)) {
+            staleMembers.push(jobId);
+            return;
+          }
+          records.push(record);
+        } catch {
+          staleMembers.push(jobId);
+        }
+      });
+    }
+    for (let index = 0; index < staleMembers.length; index += 500)
+      await this.redis.srem(ACTIVE_INDEX_KEY, ...staleMembers.slice(index, index + 500));
+    return records;
+  }
+
   async list(limit = 100): Promise<JobRecord[]> {
     const records = await this.listAll();
     return records.sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
@@ -91,6 +159,7 @@ export class RedisJobStore {
 
   async delete(jobId: string): Promise<void> {
     await this.redis.del(`${STORE_PREFIX}${jobId}`);
+    await this.redis.srem(ACTIVE_INDEX_KEY, jobId);
   }
 
   async clearError(jobId: string): Promise<boolean> {
@@ -286,7 +355,7 @@ export class JobOrchestrator {
         .filter((jobId) => jobId.includes(":"))
         .map((jobId) => jobId.split(":", 1)[0]),
     );
-    for (const record of await this.store.listAll()) {
+    for (const record of await this.store.listReapCandidates()) {
       if (!this.ownsRecord(record)) continue;
       if (!["QUEUED", "RUNNING", "RETRYING", "FAILED"].includes(record.state)) continue;
       if (record.cancellationRequested) continue;
@@ -834,7 +903,7 @@ export class JobOrchestrator {
           .filter((jobId) => jobId.includes(":"))
           .map((jobId) => jobId.split(":", 1)[0]),
       );
-      for (const originalRecord of await this.store.listAll()) {
+      for (const originalRecord of await this.store.listReapCandidates()) {
         if (!this.ownsRecord(originalRecord)) continue;
         const record = await this.compactLegacyPanelBroadcast(originalRecord).catch(() => undefined) ?? originalRecord;
         const reconciled = await this.reconcileWorkerLocalBroadcast(record).catch(() => undefined);

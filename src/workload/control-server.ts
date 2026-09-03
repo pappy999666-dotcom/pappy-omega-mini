@@ -38,6 +38,8 @@ import {
   type PreviewSocket,
 } from "../whatsapp/baileys-native-preview.js";
 
+const STARTED_AT = Date.now();
+
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_INBOUND_MEDIA_BYTES = 5 * 1024 * 1024;
 
@@ -155,6 +157,21 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
   const path = new URL(request.url ?? "/", "http://localhost").pathname;
   try {
     if (method === "GET" && path === "/workload/health") {
+      // Respond immediately without collecting snapshots: the event loop can
+      // be blocked by Baileys protocol work, and a health check that waits for
+      // the loop to drain is useless. Runtime health is sampled on a 5s timer
+      // in runtime-health.ts and surfaced by the workload panel on demand.
+      json(response, 200, {
+        ok: true,
+        ...workloadControlSummary(),
+        uptimeMs: Date.now() - STARTED_AT,
+        sampledAt: getRuntimeHealthSnapshot().sampledAt,
+      });
+      return;
+    }
+    if (method === "GET" && path === "/workload/health/detailed") {
+      // Detailed snapshot for admin/debug use; may loop-drain under load.
+      const { getCpuWorkerPoolStats } = await import("../core/cpu-worker-pool.js");
       json(response, 200, {
         ok: true,
         ...workloadControlSummary(),
@@ -162,6 +179,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         capacity: getRuntimeCapacitySnapshot(),
         inbound: inboundAdmissionSnapshot(),
         outbound: outboundAdmissionSnapshot(),
+        cpuWorkers: getCpuWorkerPoolStats(),
       });
       return;
     }
@@ -641,7 +659,10 @@ let server: Server | undefined;
 let healthTimer: NodeJS.Timeout | undefined;
 const activeControlSockets = new Set<import("node:net").Socket>();
 
-export async function startWorkloadControlServer(): Promise<void> {
+export async function startWorkloadControlServer(
+  port: number = env.WORKLOAD_CONTROL_PORT,
+  host: string = env.WORKLOAD_CONTROL_BIND,
+): Promise<void> {
   if (!env.WORKLOAD_CONTROL_ENABLED || server) return;
   server = createServer((request, response) => {
     void handle(request, response);
@@ -652,7 +673,7 @@ export async function startWorkloadControlServer(): Promise<void> {
   });
   await new Promise<void>((resolve, reject) => {
     server?.once("error", reject);
-    server?.listen(env.WORKLOAD_CONTROL_PORT, env.WORKLOAD_CONTROL_BIND, () => resolve());
+    server?.listen(port, host, () => resolve());
   });
   healthTimer = setInterval(() => {
     void markUnreachableWorkloadWorkers(env.WORKLOAD_HEARTBEAT_TIMEOUT_MS).catch((error) =>
@@ -660,7 +681,7 @@ export async function startWorkloadControlServer(): Promise<void> {
     );
   }, Math.max(15_000, Math.floor(env.WORKLOAD_HEARTBEAT_TIMEOUT_MS / 2)));
   healthTimer.unref?.();
-  console.log(`[pappy-omega-mini] workload control listening on ${env.WORKLOAD_CONTROL_BIND}:${env.WORKLOAD_CONTROL_PORT}`);
+  console.log(`[pappy-omega-mini] workload control listening on ${host}:${port}`);
 }
 
 export async function stopWorkloadControlServer(): Promise<void> {

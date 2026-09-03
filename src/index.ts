@@ -252,6 +252,12 @@ async function main(): Promise<void> {
       timer.unref?.();
       return result;
     });
+    // The panel control server must run in-process: its routes resolve
+    // authoritative session/job state through registries and handlers that
+    // only exist on the main thread. Worker threads cannot share that state,
+    // so a worker-hosted server would serve inconsistent data. Panel
+    // responsiveness is instead guaranteed by the lightweight /workload/health
+    // route (no snapshot collection) and bounded background queues.
     await startWorkloadControlServer();
   }
   if (!isWorkerProcess) {
@@ -345,7 +351,9 @@ async function main(): Promise<void> {
         );
       }
     };
-    await closeSafely("workload control", stopWorkloadControlServer);
+    await closeSafely("workload control", async () => {
+      await stopWorkloadControlServer();
+    });
     await closeSafely("scheduler", async () => scheduler?.close());
     await closeSafely("auto-promote scheduler", async () => autoPromoteScheduler?.close());
     await closeSafely("WhatsApp sessions", shutdownWhatsAppSessions);
@@ -359,6 +367,10 @@ async function main(): Promise<void> {
     await closeSafely("session lock", closeSessionLockRedis);
     await closeSafely("remote bridge", stopRemoteBridgeResponder);
     await closeSafely("redis pools", closeAllRedisPools);
+    await closeSafely("cpu workers", async () => {
+      const { shutdownCpuWorkerPool } = await import("./core/cpu-worker-pool.js");
+      await shutdownCpuWorkerPool();
+    });
     stopRuntimeHealthMonitor();
     console.log("[pappy-omega-mini] transports closed; shutdown complete.");
     // A few library-owned handles (for example duplicated Redis clients) can

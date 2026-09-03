@@ -52,7 +52,9 @@ import {
 } from "../workload/service.js";
 import {
   clearLifecycle,
+  getCircuitStats,
   getLifecycleState,
+  isCircuitOpen,
   noteCommandProcessed,
   noteError,
   noteMessageReceived,
@@ -64,6 +66,8 @@ import {
   markStableConnected,
   markOpening,
   markStopping,
+  openCircuit,
+  recordTerminalFailure,
   scheduleReconnect,
   setStart,
   startHeartbeat,
@@ -541,6 +545,18 @@ export async function wrapSignalKeyStoreWithCache(
   return makeCacheableSignalKeyStore(store, logger);
 }
 
+const PER_MESSAGE_BAILEYS_NOISE_PATTERN =
+  /no session found to decrypt message|failed to decrypt message|transaction failed, rolling back|url generation failed/i;
+
+/**
+ * Log entries that repeat for every individual undecryptable group message.
+ * They are lifecycle-safe (the session manager intentionally does not reset a
+ * socket over them), so they are summarized instead of replayed per message.
+ */
+function isPerMessageBaileysNoise(rendered: string): boolean {
+  return PER_MESSAGE_BAILEYS_NOISE_PATTERN.test(rendered);
+}
+
 function isBaileysDirectCryptoLog(input: unknown): boolean {
   const text = Array.isArray(input)
     ? input.map((value) => value instanceof Error ? `${value.name} ${value.message}` : String(value)).join(" ")
@@ -611,6 +627,11 @@ function clearSessionBaileysCaches(sessionKey: string): void {
   messageCaches.delete(sessionKey);
   cryptoFailureGuards.delete(sessionKey);
   cryptoRecoveryCircuits.delete(sessionKey);
+  // Per-session runtime maps must be cleared when a session is destroyed,
+  // otherwise deleted sessions leak memory indefinitely through these maps.
+  lastInboundSessionPersistAt.delete(sessionKey);
+  pairingNotifications.delete(sessionKey);
+  pendingWhatsAppPairingNotice.delete(sessionKey);
 }
 
 async function openWhatsAppSession(
@@ -657,6 +678,8 @@ async function openWhatsAppSession(
   let smaxInvalidWindowStartedAt = 0;
   let smaxInvalidCount = 0;
   let lastSmaxInvalidLogAt = 0;
+  let suppressedNoiseCount = 0;
+  let lastNoiseSummaryAt = 0;
   // Keep this guard keyed by lifecycle/session, not by socket generation. A
   // reconnect must not reset the cooldown and recreate a recovery storm.
   const cryptoFailureGuard = cryptoFailureGuardFor(key);
@@ -765,6 +788,23 @@ async function openWhatsAppSession(
             console.warn(
               `[pappy-omega-mini] suppressed Baileys smax-invalid stanza rejection session=${sessionId} count=${smaxInvalidCount}; socket recovery was not triggered`,
             );
+          }
+          return;
+        }
+        if (isPerMessageBaileysNoise(rendered)) {
+          // Per-message decrypt failures and transaction rollbacks for stale
+          // sender sessions are expected on busy group traffic. The lifecycle
+          // deliberately does NOT reconnect for them, so replaying every entry
+          // to stdout/journald is pure overhead. Keep a one-line-per-minute
+          // summary instead; genuine crypto storms still reach the guard above.
+          suppressedNoiseCount += 1;
+          const now = Date.now();
+          if (now - lastNoiseSummaryAt >= 60_000) {
+            lastNoiseSummaryAt = now;
+            console.warn(
+              `[pappy-omega-mini] suppressed ${suppressedNoiseCount} per-message Baileys decrypt/transaction log entries session=${sessionId} in the last minute`,
+            );
+            suppressedNoiseCount = 0;
           }
           return;
         }
@@ -1499,12 +1539,26 @@ async function openWhatsAppSession(
       const ownedLock = sessionLocks.get(key);
       sessionLocks.delete(key);
       void ownedLock?.release();
+      // Clear Baileys caches on disconnect so repeated reconnects (e.g. 403
+      // loops) do not accumulate retry/message caches and runtime maps.
+      clearSessionBaileysCaches(key);
+      // Circuit breaker: repeated auth-class codes (401/403/405) without a
+      // successful open indicate a permanently unusable session. This must
+      // NOT be gated on `terminal`: 403/405 are classified non-terminal
+      // (credentials preserved), so gating on `terminal` would never trip
+      // the breaker and banned sessions would reconnect forever. The
+      // function itself filters to breaker codes; explicit-logouts and 401
+      // already skip reconnecting through the `terminal`/LOGGED_OUT paths.
+      if (code !== undefined) {
+        recordTerminalFailure(key, code);
+      }
       try {
         getSession(workspaceId, sessionId);
       } catch {
         // Purge Session may have removed the registry record while the socket closed.
         return;
       }
+      const circuitOpenNow = isCircuitOpen(key);
       const authHealth = terminal ? "INVALID" : "DEGRADED";
       updateSession(workspaceId, sessionId, {
         status: cryptoRecoveryPaused ? "DEGRADED" : classification.status,
@@ -1531,8 +1585,20 @@ async function openWhatsAppSession(
           });
       }
       if (!terminal && classification.status !== "LOGGED_OUT" && !getLifecycleState(key).stopping) {
-        const cryptoCooldownMs = cryptoFailureGuard.cooldownRemainingMs();
-        if (cryptoCooldownMs > 0) {
+        if (circuitOpenNow) {
+          // Circuit breaker is open: do not reconnect. The session is
+          // permanently unusable until the owner re-pairs it.
+          console.warn(
+            `[pappy-omega-mini] circuit breaker open session=${sessionId}; no reconnect scheduled`,
+          );
+          updateSession(workspaceId, sessionId, {
+            status: "BANNED",
+            authHealth: "INVALID",
+            disconnectReason: getLifecycleState(key).circuitOpenReason,
+          });
+        } else {
+          const cryptoCooldownMs = cryptoFailureGuard.cooldownRemainingMs();
+          if (cryptoCooldownMs > 0) {
           // A recovery-triggered close must not reconnect straight into the
           // same Signal failure storm. Keep only this session paused; other
           // sessions and the Telegram control plane remain available.
@@ -1555,6 +1621,7 @@ async function openWhatsAppSession(
             run: () => void startWhatsAppSession(workspaceId, sessionId),
           });
         }
+      }
       }
     },
   );
@@ -1792,8 +1859,6 @@ export async function stopWhatsAppSession(
   markStopping(key);
   // This is an explicit owner/control-plane stop. Reconnects do not reach this
   // path, so the session-keyed crypto cooldown survives normal recovery.
-  cryptoFailureGuards.delete(key);
-  cryptoRecoveryCircuits.delete(key);
   const runtime = runtimes.get(key);
   if (runtime) {
     runtime.stop();
@@ -1803,6 +1868,9 @@ export async function stopWhatsAppSession(
   const ownedLock = sessionLocks.get(key);
   sessionLocks.delete(key);
   void ownedLock?.release();
+  // Clear per-session caches on stop so a stopped-but-not-purged session does
+  // not retain Baileys retry/message caches and runtime maps in memory.
+  clearSessionBaileysCaches(key);
   updateSession(workspaceId, sessionId, {
     status: "DEGRADED",
     disconnectReason: "stopped by owner",

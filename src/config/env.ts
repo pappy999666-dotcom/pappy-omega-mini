@@ -75,6 +75,18 @@ const envSchema = z.object({
   CIRCUIT_BREAKER_RESET_MS: z.coerce.number().int().positive().max(60_000).default(10_000),
   /** Max entries in inbound dedupe map before forced cleanup */
   DEDUPE_MAP_MAX_SIZE: z.coerce.number().int().positive().max(10_000).default(2_000),
+  /**
+   * Max CPU worker threads for pure-compute offload. Defaults to
+   * availableParallelism() - 1 (leaves one core for the main event loop).
+   * Set lower on single-core Pterodactyl allocations to avoid cgroup
+   * throttling; set higher on multi-core boxes for faster batch work.
+   */
+  CPU_WORKER_COUNT: z.coerce.number().int().min(0).max(32).optional(),
+  /**
+   * When true, the panel control HTTP server runs on its own worker thread
+   * so API responses stay fast even when the main event loop is saturated
+   * with Baileys/crypto work. Recommended for production.
+   */
 });
 
 export const env = envSchema.parse(process.env);

@@ -19,7 +19,7 @@ function scheduleCleanup(): void {
     cleanupTimer = undefined;
     const now = Date.now();
     reconnectQueue = reconnectQueue.filter((task) => now - task.enqueuedAt < STALE_TASK_MS);
-    scheduleCleanup();
+    if (reconnectQueue.length) scheduleCleanup();
   }, 30_000);
   cleanupTimer.unref?.();
 }
@@ -54,11 +54,24 @@ async function processQueue(): Promise<void> {
       if (!task) break;
       activeReconnects++;
       try {
-        task.run();
-      } catch {
-        // Task errors are handled by the caller's reconnect logic
-      } finally {
+        const result = task.run() as unknown;
+        if (
+          result &&
+          typeof (result as PromiseLike<unknown>).then === "function"
+        ) {
+          // Reconnect tasks are async; the slot must stay occupied until the
+          // attempt settles, otherwise MAX_CONCURRENT_RECONNECTS is not real.
+          void Promise.resolve(result)
+            .catch(() => undefined)
+            .finally(() => {
+              activeReconnects = Math.max(0, activeReconnects - 1);
+              void processQueue();
+            });
+          continue;
+        }
         activeReconnects--;
+      } catch {
+        activeReconnects = Math.max(0, activeReconnects - 1);
       }
     }
   } finally {
