@@ -113,7 +113,7 @@ describe("V2 hardening", () => {
       code: 503,
       label: "service-unavailable",
       terminal: false,
-      status: "DEGRADED",
+      status: "RECONNECTING",
     });
     expect(classifyDisconnect(new Error("unknown"))).toMatchObject({
       label: "unknown-transport",
@@ -244,9 +244,21 @@ describe("V2 hardening", () => {
     expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, frozen.sessionId))).toBe(false);
     expect(isPersistedWhatsAppSessionRecoverable(getSession(workspaceId, ambiguous401.sessionId))).toBe(true);
     expect(isExplicitlyLoggedOutSession(getSession(workspaceId, ambiguous401.sessionId))).toBe(false);
-    expect(isSessionVisibleInTelegram(getSession(workspaceId, ambiguous401.sessionId))).toBe(true);
+    // A LOGGED_OUT session is not a usable session: the runtime auto-purges
+    // local records and the Telegram list never shows logged-out sessions.
+    expect(isSessionVisibleInTelegram(getSession(workspaceId, ambiguous401.sessionId))).toBe(false);
     expect(isExplicitlyLoggedOutSession(getSession(workspaceId, loggedOut.sessionId))).toBe(true);
     expect(isSessionVisibleInTelegram(getSession(workspaceId, loggedOut.sessionId))).toBe(false);
+
+    // Pairing wizard stubs never appear in the Telegram session list, with or
+    // without a phone number, until pairing actually completes.
+    const pairingStub = createSession({ workspaceId, sessionName: "wizard-stub" });
+    expect(isSessionVisibleInTelegram(getSession(workspaceId, pairingStub.sessionId))).toBe(false);
+    updateSession(workspaceId, pairingStub.sessionId, {
+      status: "PAIRING",
+      phoneNumber: "2348012345678",
+    });
+    expect(isSessionVisibleInTelegram(getSession(workspaceId, pairingStub.sessionId))).toBe(false);
   });
 
   it("selects only healthy owned sessions and honors a safe preference", () => {

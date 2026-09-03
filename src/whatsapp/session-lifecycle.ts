@@ -248,15 +248,13 @@ export function scheduleReconnect(input: {
     : exponentialBase;
   const jitter = Math.floor(Math.random() * Math.max(250, base * 0.2));
   const delay = base + jitter;
-  const visibleStatus = state.reconnectAttempt >= RECONNECT_DEGRADED_AFTER_ATTEMPTS
-    ? "DEGRADED"
-    : "RECONNECTING";
+  // A session that is automatically retrying is RECONNECTING, not DEGRADED.
+  // DEGRADED is reserved for genuine auth-class problems that cannot self-heal.
+  const visibleStatus = "RECONNECTING";
   setLifecycleStatus(input.key, visibleStatus);
   updateSession(input.workspaceId, input.sessionId, {
     status: visibleStatus,
-    disconnectReason: visibleStatus === "DEGRADED"
-      ? `reconnect backoff active; next recovery attempt in ${delay}ms`
-      : `reconnect scheduled in ${delay}ms`,
+    disconnectReason: `reconnecting automatically; next attempt in ${Math.max(1, Math.round(delay / 1000))}s`,
   });
   const runWithCoordination = () => {
     removeSessionReconnect(input.key);

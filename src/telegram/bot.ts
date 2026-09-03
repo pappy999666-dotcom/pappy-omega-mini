@@ -107,6 +107,7 @@ import {
   requestWhatsAppPairingCode,
   restartWhatsAppSession,
   setPairingNotifier,
+  setSessionLifecycleNotifier,
 } from "../whatsapp/session-manager.js";
 import {
   createWhatsAppGroup,
@@ -782,9 +783,21 @@ export function createTelegramBot(): Telegraf<Context> {
   void registerTelegramCommandSuggestions(bot);
   installModeratorCommands(bot);
   installModeratorProtection(bot);
-  setPairingNotifier(async (chatId, message) => {
+  setPairingNotifier(async (chatId, message, replyMarkup) => {
     await bot.telegram.sendMessage(
       chatId,
+      `✦ <b>PAPPY OMEGA MINI</b>\n──────────────────────────────\n\n${message}`,
+      {
+        parse_mode: "HTML",
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      },
+    );
+  });
+  setSessionLifecycleNotifier(async (workspaceId, message) => {
+    const ownerId = getWorkspaceOwnerTelegramUserId(workspaceId);
+    if (!ownerId) return;
+    await bot.telegram.sendMessage(
+      ownerId,
       `✦ <b>PAPPY OMEGA MINI</b>\n──────────────────────────────\n\n${message}`,
       { parse_mode: "HTML" },
     );
@@ -8960,11 +8973,11 @@ async function sendSessions(ctx: Context, page: number): Promise<void> {
     sessions.length
       ? infoResponse(
           "Session Registry",
-          "Select one of your isolated sessions. The per-session Bridge and Join Manager never operate outside the selected session.",
+          "Only paired, working sessions are listed here. Select one to open its per-session menu — Bridge, Join Manager, and every other feature never operate outside the selected session.",
         )
       : infoResponse(
           "No Sessions Yet",
-          "Start pairing to create your first isolated WhatsApp session.",
+          "Tap ➕ New Session below to link your first WhatsApp number. Takes about a minute.",
         ),
   );
   await sendOrEdit(
@@ -10706,8 +10719,27 @@ function globalBridgeSessions(ctx: Context) {
     : activeWorkspaceSessions(resolveTelegramUser(ctx).workspaceId);
 }
 
+/**
+ * UI paths must never wait on a database hydration round-trip. The in-memory
+ * registry is always readable instantly; a stale refresh runs in the
+ * background so the NEXT view picks up panel/API-created records. Only the
+ * first refresh after boot is awaited (cold-start correctness).
+ */
+let registryHydratedOnce = false;
 async function refreshSessionRegistryForUi(): Promise<void> {
-  await refreshSessionRegistry().catch((error) => {
+  const pending = refreshSessionRegistry().then(() => {
+    registryHydratedOnce = true;
+  });
+  if (!registryHydratedOnce) {
+    await pending.catch((error) => {
+      console.error(
+        "[pappy-omega-mini] live session registry refresh failed:",
+        error instanceof Error ? error.message : String(error),
+      );
+    });
+    return;
+  }
+  void pending.catch((error) => {
     console.error(
       "[pappy-omega-mini] live session registry refresh failed:",
       error instanceof Error ? error.message : String(error),

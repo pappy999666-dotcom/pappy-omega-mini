@@ -108,13 +108,48 @@ const runtimes = new Map<string, RuntimeSession>();
 const lastInboundSessionPersistAt = new Map<string, number>();
 const sessionLocks = new Map<string, SessionLock>();
 const pairingNotifications = new Map<string, number>();
+/** Inline keyboard markup shape attached to pairing/lifecycle notifications. */
+export interface PairingNotificationMarkup {
+  inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+}
 let pairingNotifier:
-  ((chatId: number, message: string) => Promise<void>) | undefined;
+  | ((
+      chatId: number,
+      message: string,
+      replyMarkup?: PairingNotificationMarkup,
+    ) => Promise<void>)
+  | undefined;
 const pendingWhatsAppPairingNotice = new Set<string>();
 export function setPairingNotifier(
-  notifier: (chatId: number, message: string) => Promise<void>,
+  notifier: (
+    chatId: number,
+    message: string,
+    replyMarkup?: PairingNotificationMarkup,
+  ) => Promise<void>,
 ): void {
   pairingNotifier = notifier;
+}
+
+let sessionLifecycleNotifier:
+  | ((workspaceId: string, message: string) => Promise<void>)
+  | undefined;
+export function setSessionLifecycleNotifier(
+  notifier: (workspaceId: string, message: string) => Promise<void>,
+): void {
+  sessionLifecycleNotifier = notifier;
+}
+
+/**
+ * Fire-and-forget lifecycle alert to the workspace owner (session auto-removed
+ * because WhatsApp logged it out or banned it). Never blocks the close path.
+ */
+export function notifyWorkspaceLifecycle(
+  workspaceId: string,
+  message: string,
+): void {
+  const notifier = sessionLifecycleNotifier;
+  if (!notifier) return;
+  void notifier(workspaceId, message).catch(() => undefined);
 }
 export interface DisconnectClassification {
   code?: number;
@@ -196,19 +231,19 @@ export function classifyDisconnect(error: unknown): DisconnectClassification {
     408: {
       label: "connection-closed",
       terminal: false,
-      status: "DEGRADED",
+      status: "RECONNECTING",
       recovery: "The worker will retry with backoff.",
     },
     411: {
       label: "connection-lost",
       terminal: false,
-      status: "DEGRADED",
+      status: "RECONNECTING",
       recovery: "The worker will retry with backoff.",
     },
     428: {
       label: "timed-out",
       terminal: false,
-      status: "DEGRADED",
+      status: "RECONNECTING",
       recovery: "The worker will retry with backoff.",
     },
     440: {
@@ -228,7 +263,7 @@ export function classifyDisconnect(error: unknown): DisconnectClassification {
     503: {
       label: "service-unavailable",
       terminal: false,
-      status: "DEGRADED",
+      status: "RECONNECTING",
       recovery: "WhatsApp is temporarily unavailable; the worker will retry.",
     },
     515: {
@@ -252,7 +287,7 @@ export function classifyDisconnect(error: unknown): DisconnectClassification {
   const fallback = {
     label: "unknown-transport",
     terminal: false,
-    status: "DEGRADED" as const,
+    status: "RECONNECTING" as const,
     recovery:
       "The worker will retry with backoff; inspect the diagnostic reason if it persists.",
   };
@@ -1531,9 +1566,50 @@ async function openWhatsAppSession(
             }
             if (chatId && pairingNotifier) {
               pairingNotifications.delete(key);
+              const connectedSession = (() => {
+                try {
+                  return getSession(workspaceId, sessionId);
+                } catch {
+                  return undefined;
+                }
+              })();
+              const displayName =
+                connectedSession?.sessionName ?? sessionId.slice(0, 12);
+              const phoneNumber = connectedSession?.phoneNumber;
               void pairingNotifier(
                 chatId,
-                `🟢 <b>WhatsApp Session Connected</b>\n\n<blockquote><b>Session:</b> <code>${sessionId.slice(0, 12)}</code>\n<b>Status:</b> ACTIVE · VALID\n<b>Transport:</b> Baileys multi-device\n<b>Action:</b> Ready to receive commands</blockquote>\n\nOpen <b>Workload</b> or <b>Sessions</b> to manage this connection.`,
+                [
+                  "🟢 <b>WhatsApp Connected</b>",
+                  "",
+                  `<blockquote>Session <b>${displayName}</b>${phoneNumber ? ` · <code>${phoneNumber}</code>` : ""} is linked and live.</blockquote>`,
+                  "",
+                  "<b>What is active now:</b>",
+                  "• Commands — send <code>menu</code> in any chat with this number",
+                  "• Auto-reply, anti-system, and scheduled jobs for this session",
+                  "• Per-session Bridge and Join Manager from its session menu",
+                  "",
+                  "Manage everything for this number from its session menu:",
+                ].join("\n"),
+                {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: `⚙️ Manage ${displayName}`,
+                        callback_data: `session:${sessionId}:menu`,
+                      },
+                    ],
+                    [
+                      {
+                        text: "📋 All Sessions",
+                        callback_data: "sessions:list:0",
+                      },
+                      {
+                        text: "🧩 Workload",
+                        callback_data: "workload:menu",
+                      },
+                    ],
+                  ],
+                },
               ).catch(() => undefined);
             }
           }, STABLE_OPEN_WINDOW_MS);
@@ -1590,11 +1666,44 @@ async function openWhatsAppSession(
           ? "crypto recovery paused after repeated failures; explicit reconnect required"
           : `transport:${code ?? "unknown"} · ${classification.label}. ${classification.recovery}`,
       });
-      if (terminal) {
+      const circuitActive = circuitOpenNow || isCircuitOpen(key);
+      if (terminal || classification.status === "LOGGED_OUT" || circuitActive) {
+        // Logged out, banned, or revoked: the session is permanently unusable.
+        // Delete everything immediately — credentials, auth store, runtime
+        // state, jobs, and traces — and tell the owner. No lingering record,
+        // no stale background work, no reconnect attempts.
+        const sessionSnapshot = (() => {
+          try {
+            return getSession(workspaceId, sessionId);
+          } catch {
+            return undefined;
+          }
+        })();
+        const displayName =
+          sessionSnapshot?.sessionName ?? sessionId.slice(0, 12);
+        const reasonText = terminal
+          ? "WhatsApp confirmed this session was <b>logged out</b> (device removed or auth revoked)."
+          : circuitActive
+            ? "WhatsApp <b>repeatedly rejected</b> this session, so it is treated as banned or revoked."
+            : "WhatsApp <b>rejected the credentials</b> for this session (401).";
+        notifyWorkspaceLifecycle(
+          workspaceId,
+          [
+            "🔴 <b>Session Removed</b>",
+            "",
+            `<blockquote>Session <b>${displayName}</b> has been deleted.</blockquote>`,
+            "",
+            reasonText,
+            "",
+            "All credentials, session data, jobs, and traces were <b>deleted immediately</b> — nothing stale is left running.",
+            "",
+            "Pair a replacement any time: <b>Sessions → ➕ New Session</b>.",
+          ].join("\n"),
+        );
         void purgeWhatsAppSession(workspaceId, sessionId)
           .then((purged) => {
             console.warn(
-              `[pappy-omega-mini] terminal session purged session=${sessionId} jobs=${purged.jobs} links=${purged.links} traces=${purged.traces}`,
+              `[pappy-omega-mini] terminal session purged session=${sessionId} reason=${classification.label} jobs=${purged.jobs} links=${purged.links} traces=${purged.traces}`,
             );
           })
           .catch((error) => {
@@ -1606,8 +1715,9 @@ async function openWhatsAppSession(
       }
       if (!terminal && classification.status !== "LOGGED_OUT" && !getLifecycleState(key).stopping) {
         if (circuitOpenNow) {
-          // Circuit breaker is open: do not reconnect. The session is
-          // permanently unusable until the owner re-pairs it.
+          // Circuit breaker is open: do not reconnect. The purge above removes
+          // the record; if the purge fails, this BANNED record remains as the
+          // honest persisted state instead of a session that looks alive.
           console.warn(
             `[pappy-omega-mini] circuit breaker open session=${sessionId}; no reconnect scheduled`,
           );

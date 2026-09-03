@@ -1303,16 +1303,6 @@ export function sessionPairingCardText(session: WhatsAppSession, phone: string, 
   ].join("\n");
 }
 
-export function pairingSuccessText(session: WhatsAppSession): string {
-  return [
-    "<b>✅ Session linked successfully!</b>",
-    "",
-    `<blockquote>Session <b>${escapeHtml(session.sessionName)}</b> is now connected and ready to use.</blockquote>`,
-    "",
-    "You can now manage it from the sessions menu — send messages, configure auto-reply, and more.",
-  ].join("\n");
-}
-
 export function pairingHelpCardText(): string {
   return [
     "<b>🔗 Quick Pairing Reference</b>",
@@ -1372,9 +1362,13 @@ function statusIcon(status: WhatsAppSession["status"]): string {
     ? "🟢"
     : status === "PAIRING"
       ? "🟡"
-      : status === "ERROR"
-        ? "🔴"
-        : "⚪";
+      : status === "RECONNECTING"
+        ? "🔄"
+        : status === "DEGRADED"
+          ? "🟠"
+          : status === "ERROR"
+            ? "🔴"
+            : "⚪";
 }
 
 function escapeHtml(value: string): string {

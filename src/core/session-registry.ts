@@ -219,6 +219,16 @@ export function isExplicitlyLoggedOutSession(
 
 export function isSessionVisibleInTelegram(session: WhatsAppSession): boolean {
   if (session.status === "BANNED" || isExplicitlyLoggedOutSession(session)) return false;
+  // Pairing wizard stubs: a session created by the wizard before a number was
+  // successfully linked is internal state, not a usable session. Never show
+  // half-created entries — users only see sessions that actually paired.
+  if (session.status === "PAIRING") return false;
+  if (!session.phoneNumber && !session.connectedAt) return false;
+  if (session.status === "ERROR" && !session.connectedAt) return false;
+  // A live LOGGED_OUT record (non-explicit 401 pause) is not a usable session;
+  // the local runtime purges these automatically. Remote-hosted records that
+  // still report LOGGED_OUT are also hidden until re-paired.
+  if (session.status === "LOGGED_OUT") return false;
   return !(
     Boolean(session.workloadWorkerId) &&
     session.status === "DEGRADED" &&

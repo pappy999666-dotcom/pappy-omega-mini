@@ -115,10 +115,10 @@ describe("Telegram UI authorization", () => {
     expect(anti).toContain("Disabled [ off ]");
     expect(anti).toContain("How to use:");
     expect(anti).toContain(".antilink warn 3");
-    expect(pairingHelpCardText()).toContain("PAIRING HELP");
+    expect(pairingHelpCardText()).toContain("Quick Pairing Reference");
     expect(pairingHelpCardText()).toContain("/pair &lt;label&gt; &lt;number&gt;");
     const pairing = sessionPairingCardText({ ...session, sessionName: "pappy" }, "2348012345678", "PAPPYBOT");
-    expect(pairing).toContain("SESSION PAIRING");
+    expect(pairing).toContain("Step ③ — Enter this code in WhatsApp");
     expect(pairing).toContain("PAPPYBOT");
     expect(sessionStatusCardText({ ...session, sessionName: "Pappy", connectedAt: 1692834236000 })).toContain("SESSION STATUS");
     const job = memberBatchJobCardText({ action: "promote", selected: 1, jobId: "64164CFD" });
