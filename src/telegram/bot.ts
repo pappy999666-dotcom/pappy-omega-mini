@@ -234,6 +234,10 @@ import {
   adminWorkloadWorkerKeyboard,
   antiConfigCardText,
   pairingHelpCardText,
+  pairingPrimerText,
+  pairingLabelStepText,
+  pairingPhoneStepText,
+  pairingPhoneErrorText,
   sessionPairingCardText,
   sessionStatusCardText,
   memberBatchJobCardText,
@@ -3210,7 +3214,12 @@ export function createTelegramBot(): Telegraf<Context> {
 
   bot.action("session:new", async (ctx) => {
     await ctx.answerCbQuery();
-    await beginPairingWizard(ctx);
+    await beginPairingWizard(ctx, false, true);
+  });
+
+  bot.action("session:new:begin", async (ctx) => {
+    await ctx.answerCbQuery();
+    await beginPairingWizard(ctx, false, false);
   });
   bot.action(/^pair:workload:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -3286,13 +3295,7 @@ export function createTelegramBot(): Telegraf<Context> {
     });
     await edit(
       ctx,
-      pageText(
-        "Phone Number",
-        infoResponse(
-          "Pairing Input",
-          `Send the full WhatsApp number for <b>${escapeHtml(session.sessionName)}</b> in international format, for example <code>2348012345678</code>.`,
-        ),
-      ),
+      pairingPhoneStepText(session.sessionName),
       keyboard([[btn(ui.back, `session:${session.sessionId}:menu`)]]),
     );
   });
@@ -8725,14 +8728,8 @@ async function startPairing(
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,47}$/.test(normalizedName)) {
     await sendOrEdit(
       ctx,
-      pageText(
-        "Pairing Request",
-        dangerResponse(
-          "Invalid Session Label",
-          "Use 2–48 letters, numbers, hyphens, or underscores, beginning with a letter or number.",
-        ),
-      ),
-      keyboard([[btn(ui.back, "menu:main")]]),
+      pairingLabelStepText(requestedName),
+      keyboard([[btn(ui.close, "menu:main", "danger")]]),
     );
     return;
   }
@@ -8775,7 +8772,7 @@ async function startPairing(
   });
   await sendOrEdit(
     ctx,
-      `${pairingHelpCardText()}\n\n<b>Next:</b> Send the full WhatsApp number in country-code format, for example <code>2348012345678</code>.\n<b>Session:</b> ${escapeHtml(session.sessionName)}` ,
+      pairingPhoneStepText(session.sessionName),
     keyboard([[btn(ui.close, "menu:main", "danger")]]),
   );
 }
@@ -8783,9 +8780,23 @@ async function startPairing(
 async function beginPairingWizard(
   ctx: Context,
   workloadSelected = false,
+  showPrimer = false,
 ): Promise<void> {
   const user = resolveTelegramUser(ctx);
   beginExclusiveInput(String(ctx.from?.id ?? ""));
+
+  if (showPrimer) {
+    await sendOrEdit(
+      ctx,
+      pairingPrimerText(),
+      keyboard([
+        [btn("🔗 Start Pairing", "session:new:begin", "success")],
+        [btn(ui.back, "menu:main")],
+      ]),
+    );
+    return;
+  }
+
   if (!workloadSelected) {
     const workloadMode = await getWorkloadMode(user.workspaceId);
     const workers = await listAccessibleWorkspaceWorkloadWorkers(
@@ -8845,7 +8856,7 @@ async function beginPairingWizard(
   });
   await sendOrEdit(
     ctx,
-      `${pairingHelpCardText()}\n\n<b>Step 1 of 2:</b> Send a short label such as <code>main</code>, <code>business</code>, or <code>support-1</code>. You will then enter the WhatsApp number.`,
+      pairingLabelStepText(),
     keyboard([[btn(ui.close, "menu:main", "danger")]]),
   );
 }
@@ -8873,17 +8884,17 @@ async function handlePairingText(
     await beginPairingWizard(ctx);
     return;
   }
+  const workspaceId = resolveTelegramUser(ctx).workspaceId;
+  const session = getSession(workspaceId, sessionId);
   const normalizedPhone = text.replace(/[^0-9]/g, "");
   if (!/^[1-9][0-9]{6,14}$/.test(normalizedPhone)) {
     await sendOrEdit(
       ctx,
-      `${pairingHelpCardText()}\n\n» <b>Error:</b> Send digits only in international country-code format, for example <code>2348012345678</code>.`,
+      pairingPhoneErrorText(session?.sessionName ?? "unknown", text),
       keyboard([[btn(ui.close, "menu:main", "danger")]]),
     );
     return;
   }
-  const workspaceId = resolveTelegramUser(ctx).workspaceId;
-  const session = getSession(workspaceId, sessionId);
   try {
     updateSession(workspaceId, sessionId, {
       phoneNumber: normalizedPhone,

@@ -579,6 +579,26 @@ function installBaileysDirectCryptoLogFilter(): void {
 }
 installBaileysDirectCryptoLogFilter();
 
+// libsignal (used internally by @crysnovax/baileys) dumps the full Signal
+// session state — including private keys — to console.info on every session
+// close. That feedback loop is what turns stale sender-key state into CPU and
+// log storms. Suppress the per-message dump; genuine crypto storms still reach
+// the guard above.
+let libsignalSessionDumpFilterInstalled = false;
+function installLibsignalSessionDumpFilter(): void {
+  if (libsignalSessionDumpFilterInstalled) return;
+  libsignalSessionDumpFilterInstalled = true;
+  const originalInfo = console.info.bind(console);
+  console.info = (...args: unknown[]) => {
+    if (
+      typeof args[0] === "string" &&
+      args[0].startsWith("Closing session")
+    ) return;
+    originalInfo(...args);
+  };
+}
+installLibsignalSessionDumpFilter();
+
 const retryCounterCaches = new Map<string, BaileysRetryCounterCache>();
 const messageCaches = new Map<string, BoundedTtlCache<Record<string, unknown>>>();
 const cryptoFailureGuards = new Map<string, SessionCryptoFailureGuard>();

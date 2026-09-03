@@ -1192,31 +1192,137 @@ export function antiConfigCardText(input: {
   ].join("\n");
 }
 
-export function pairingHelpCardText(): string {
+export function pairingPrimerText(): string {
   return [
-    "⌬ ⤷ <b>PAIRING HELP</b> ⚙︎",
+    "<b>🔗 Link a WhatsApp account to your bot</b>",
     "",
-    "─────────────",
-    "<b>⎔ Command</b> · ⇆ <code>/pair &lt;label&gt; &lt;number&gt;</code>",
-    "─────────────",
-    "» <b>Example:</b> <code>/pair support 2348012345678</code>",
-    "» <b>Note:</b> Use full international format without the + symbol.",
+    "<blockquote><b>What this does:</b> Connects one WhatsApp number to PAPPY OMEGA MINI so it can send and receive messages for you — like adding a new WhatsApp Web session.</blockquote>",
+    "",
+    "<b>Before you start, make sure you have:</b>",
+    "① The <b>phone number</b> of the WhatsApp account you want to link",
+    "② That phone <b>near you</b> — you will need to read a code from WhatsApp on it",
+    "③ The number in <b>international format</b> (e.g. <code>2348012345678</code> — country code + number, no + or spaces)",
+    "",
+    "<b>How long it takes:</b> ~1 minute",
+    "",
+    "<b>What happens:</b>",
+    "➤ You pick where the bot runs (your server or a panel)",
+    "➤ You give the session a name (e.g. <code>main</code>, <code>business</code>)",
+    "➤ You enter the phone number",
+    "➤ You get a pairing code and enter it in WhatsApp",
+    "➤ Done — the bot comes online",
+    "",
+    "<b>Important:</b>",
+    "• Each WhatsApp number can only be linked to <b>one bot at a time</b>",
+    "• The pairing code <b>expires after 60 seconds</b> — if it expires, just restart from this step",
+    "• If the number is already linked somewhere else, <b>unlink it first</b> from WhatsApp → Linked Devices",
+  ].join("\n");
+}
+
+export function pairingLabelStepText(sessionNameAttempt?: string): string {
+  return [
+    "<b>Step ① — Name your session</b>",
+    "",
+    "<blockquote>Give this WhatsApp link a short label so you can tell it apart from your other sessions. You can rename it later.</blockquote>",
+    "",
+    "<b>Good examples:</b>",
+    "• <code>main</code> — your primary account",
+    "• <code>business</code> — a work account",
+    "• <code>support-1</code> — first support line",
+    "",
+    "<b>Rules:</b> 2–48 characters, letters, numbers, hyphens, underscores. Must start with a letter or number.",
+    "",
+    (sessionNameAttempt
+      ? `❌ <b>${escapeHtml(sessionNameAttempt)}</b> is not a valid label. Try again:`
+      : "👇 <b>Send a label now:</b>"),
+  ].join("\n");
+}
+
+export function pairingPhoneStepText(sessionName: string): string {
+  return [
+    "<b>Step ② — Enter the WhatsApp number</b>",
+    "",
+    `<blockquote>This is the phone number for the account you want to link to session <b>${escapeHtml(sessionName)}</b>.</blockquote>`,
+    "",
+    "<b>Format:</b> Country code + number, <b>no + sign, no spaces, no dashes</b>.",
+    "",
+    "<b>Examples by country:</b>",
+    "• 🇳🇬 Nigeria: <code>2348012345678</code>",
+    "• 🇺🇸 USA: <code>12125551234</code>",
+    "• 🇬🇧 UK: <code>447911123456</code>",
+    "• 🇮🇳 India: <code>919876543210</code>",
+    "• 🇰🇪 Kenya: <code>254712345678</code>",
+    "",
+    "👇 <b>Send the number now:</b>",
+  ].join("\n");
+}
+
+export function pairingPhoneErrorText(sessionName: string, badInput: string): string {
+  return [
+    "<b>Step ② — Enter the WhatsApp number</b>",
+    "",
+    `<blockquote>Session: <b>${escapeHtml(sessionName)}</b></blockquote>`,
+    "",
+    `❌ <b>${escapeHtml(badInput)}</b> is not a valid phone number.`,
+    "",
+    "<b>What to do:</b>",
+    "• Use digits only — no +, spaces, or dashes",
+    "• Include your country code",
+    "• Must be 7–15 digits total",
+    "",
+    "<b>Example:</b> <code>2348012345678</code>",
+    "",
+    "👇 <b>Try again — send a valid number:</b>",
   ].join("\n");
 }
 
 export function sessionPairingCardText(session: WhatsAppSession, phone: string, code: string): string {
   return [
-    "ㅤ   ⚫︎  <b>𝗣𝗔𝗣𝗣𝗬 𝗢𝗠𝗘𝗚𝗔 𝗠𝗜𝗡𝗜</b>  ⚫︎",
+    "<b>Step ③ — Enter this code in WhatsApp</b>",
     "",
-    "˗ˏˋ 🗝 ˎˊ˗  <b>SESSION PAIRING</b>  ✦",
-    "─────────────",
-    `<b>⎔ Session</b> · ⇆ ${escapeHtml(session.sessionName)}`,
-    `<b>⎔ Phone</b>   · ⇆ ${escapeHtml(phone)}`,
-    `<b>⎔ Code</b>    · ⇆ <code>${escapeHtml(code)}</code>`,
-    "─────────────",
-    `» <b>Instructions:</b> Open WhatsApp → Linked Devices → Link a Device → Link with phone number, then enter code <b>${escapeHtml(code)}</b>.`,
+    "<blockquote>Almost done! You now have a 6-digit code to link your account.</blockquote>",
     "",
-    "ℹ️ <i>Session chained to workspace and source Telegram owner.</i>",
+    "┌─────────────────────",
+    `│ <b>Session:</b> ${escapeHtml(session.sessionName)}`,
+    `│ <b>Number:</b> ${escapeHtml(phone)}`,
+    `│ <b>Code:</b> <code>${escapeHtml(code)}</code>`,
+    "└─────────────────────",
+    "",
+    "<b>Now do these steps on your phone:</b>",
+    "",
+    `① Open <b>WhatsApp</b> on the phone with number <code>${escapeHtml(phone)}</code>`,
+    "② Tap <b>⋮ Menu</b> (top right) → <b>Linked devices</b>",
+    "③ Tap <b>Link a device</b>",
+    "④ Tap <b>Link with phone number</b> (at the bottom)",
+    `⑤ Enter this code: <code>${escapeHtml(code)}</code>`,
+    "⑥ Wait for <b>Linked</b> confirmation",
+    "",
+    "⏱ <b>Code expires in 60 seconds.</b> If it expires, go back to sessions and tap <b>Retry</b>.",
+    "",
+    "ℹ️ <i>This session belongs to your workspace and is only controlled by you.</i>",
+  ].join("\n");
+}
+
+export function pairingSuccessText(session: WhatsAppSession): string {
+  return [
+    "<b>✅ Session linked successfully!</b>",
+    "",
+    `<blockquote>Session <b>${escapeHtml(session.sessionName)}</b> is now connected and ready to use.</blockquote>`,
+    "",
+    "You can now manage it from the sessions menu — send messages, configure auto-reply, and more.",
+  ].join("\n");
+}
+
+export function pairingHelpCardText(): string {
+  return [
+    "<b>🔗 Quick Pairing Reference</b>",
+    "",
+    "<blockquote>You can also pair directly with a command if you prefer.</blockquote>",
+    "",
+    "<b>Command:</b> <code>/pair &lt;label&gt; &lt;number&gt;</code>",
+    "<b>Example:</b> <code>/pair main 2348012345678</code>",
+    "",
+    "<b>Note:</b> Number must be in international format without the + sign.",
   ].join("\n");
 }
 
