@@ -115,7 +115,7 @@ function identityMatches(left: string, right: string): boolean {
 
 const SELF_EXECUTABLE_COMMANDS = new Set([
   "ping", "health", "profile", "help", "menu", "menulist",
-  "gstatus", "gstatusd", "dgstatus", "gstatusx", "togstatus", "togstatusx", "tag", "stag", "pstatus", "setcmd", "flushcmd",
+  "gstatus", "gstatusd", "dgstatus", "gstatusx", "togstatus", "togstatusx", "allstatus", "dallstatus", "allstatusd", "allstatusx", "allchat", "allchatx", "tag", "stag", "pstatus", "setcmd", "flushcmd",
   "play", "music", "audio", "video", "lyrics", "lyric", "mp3", "toaudio", "extractaudio", "a2v", "audiotovideo", "mediaaudio", "tg", "tgsticker", "telegramsticker",
 ]);
 
@@ -192,7 +192,7 @@ export async function routeWhatsAppText(
     return null;
   const prefix = session.prefix;
   const selfAuthoredText = message.fromMe === true && !interactionValue && !stickerTrigger && isSelfExecutableWhatsAppCommand(textCommandInput, prefix);
-  const ownerAuthorizedText = !interactionValue && !menuAction && !viewAction && !stickerTrigger && isOwnerFor(message, session);
+  const ownerAuthorizedText = !interactionValue && !menuAction && !viewAction && !stickerTrigger && isSelfExecutableWhatsAppCommand(textCommandInput, prefix) && isOwnerFor(message, session);
   // Telegram Bridge and a message authored by this authenticated WhatsApp
   // identity are already trusted control-plane inputs. Native button clicks
   // remain separately sender-authorized below. The owner-authorized text path
