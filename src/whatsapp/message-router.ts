@@ -192,19 +192,22 @@ export async function routeWhatsAppText(
     return null;
   const prefix = session.prefix;
   const selfAuthoredText = message.fromMe === true && !interactionValue && !stickerTrigger && isSelfExecutableWhatsAppCommand(textCommandInput, prefix);
+  const ownerAuthorizedText = !interactionValue && !menuAction && !viewAction && !stickerTrigger && isOwnerFor(message, session);
   // Telegram Bridge and a message authored by this authenticated WhatsApp
   // identity are already trusted control-plane inputs. Native button clicks
-  // remain separately sender-authorized below.
+  // remain separately sender-authorized below. The owner-authorized text path
+  // also covers commands typed after a bridge prompt, which intentionally
+  // presents bare command names such as `allstatus` without the session prefix.
   if (stickerTrigger && !isOwnerFor(message, session)) return null;
   if (stickerTrigger && !acceptStickerTrigger(message)) return null;
-  if (!interactionValue && !menuAction && !viewAction && !stickerTrigger && !message.bridgeAuthorized && !selfAuthoredText && prefix && !trimmed.startsWith(prefix)) return null;
+  if (!interactionValue && !menuAction && !viewAction && !stickerTrigger && !message.bridgeAuthorized && !selfAuthoredText && !ownerAuthorizedText && prefix && !trimmed.startsWith(prefix)) return null;
   const raw = stickerTrigger
     ? stickerCommandInput as string
     : menuAction?.command || menuAction?.view || viewAction?.view
     ? trimmed
     : interactionValue
     ? trimmed
-    : message.bridgeAuthorized || selfAuthoredText
+    : message.bridgeAuthorized || selfAuthoredText || ownerAuthorizedText
     ? prefix && trimmed.startsWith(prefix)
       ? trimmed.slice(prefix.length)
       : trimmed.startsWith(".")

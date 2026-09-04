@@ -240,7 +240,7 @@ describe("WhatsApp command privacy", () => {
     expect(result).toContain("ACTIVE");
   });
 
-  it("dispatches bare bridge commands independently of the session prefix", async () => {
+  it("dispatches bare bridge commands independently of the session prefix for authorized owners", async () => {
     const user = resolveUser(`wa-bridge-prefix-${Date.now()}-${Math.random()}`);
     const session = createSession({
       workspaceId: user.workspaceId,
@@ -263,6 +263,12 @@ describe("WhatsApp command privacy", () => {
       workspaceId: user.workspaceId,
       sessionId: session.sessionId,
       senderJid: "2348012345678@s.whatsapp.net",
+      text: "ping",
+    })).resolves.toContain("ACTIVE");
+    await expect(routeWhatsAppText({
+      workspaceId: user.workspaceId,
+      sessionId: session.sessionId,
+      senderJid: "2348099999999@s.whatsapp.net",
       text: "ping",
     })).resolves.toBeNull();
   });
