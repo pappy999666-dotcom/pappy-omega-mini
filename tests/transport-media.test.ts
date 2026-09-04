@@ -235,17 +235,20 @@ describe("styled group status transport", () => {
     expect(typeof options?.font).toBe("number");
   });
 
-  it("sends a cold link quickly when metadata and preview providers stall", async () => {
+  it("waits for a cold link preview before sending the first styled status", async () => {
     mocks.send.mockClear();
     mocks.groupMetadata.mockImplementationOnce(() => new Promise(() => {}));
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn(async () => new Promise<Response>(() => {})) as typeof fetch;
+    globalThis.fetch = vi.fn(async () => new Response(
+      '<html><head><meta property="og:title" content="Cold status preview"><meta property="og:description" content="Resolved before send"></head></html>',
+      { status: 200, headers: { "content-type": "text/html" } },
+    )) as typeof fetch;
     try {
       const startedAt = Date.now();
       await sendGroupColorStatus("workspace", "session", "120363000000000001@g.us", {
         text: "https://example.com/cold-designed-status",
       });
-      expect(Date.now() - startedAt).toBeLessThan(2_200);
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(750);
       expect(mocks.send).toHaveBeenCalledOnce();
       const [, content, options] = mocks.send.mock.calls[0] as unknown as [
         string,
@@ -254,6 +257,10 @@ describe("styled group status transport", () => {
       ];
       expect(content.groupStatus).toBe(true);
       expect(content.text).toContain("https://example.com/cold-designed-status");
+      expect(content.linkPreview).toMatchObject({
+        title: "Cold status preview",
+        description: "Resolved before send",
+      });
       expect(options.backgroundColor).toMatch(/^#[0-9A-F]{6}$/);
     } finally {
       globalThis.fetch = originalFetch;
