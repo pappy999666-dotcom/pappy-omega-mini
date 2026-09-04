@@ -1718,7 +1718,7 @@ export function startWorkerRuntime(): JobOrchestrator {
           target: "group-status",
           socket: getWhatsAppSocket(context.job.workspaceId, sessionId),
           cacheScope: `${context.job.workspaceId}:${sessionId}:${context.job.jobId}`,
-        }, 1_200);
+        });
         preparedStatusContent = { ...prepared, groupStatus: true };
         if (prepared.linkPreview && typeof prepared.linkPreview === "object")
           preparedStatusPreview = prepared.linkPreview as Record<string, unknown>;
