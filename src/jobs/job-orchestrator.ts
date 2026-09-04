@@ -258,7 +258,11 @@ export class JobOrchestrator {
       async (job) => this.process(job),
       {
         ...workerOptions,
-        concurrency: Math.max(1, Math.min(env.BROADCAST_CONCURRENCY, 8)),
+        // Broadcast jobs spend nearly all their time in per-group delay
+        // timers and network waits, so a high concurrency is cheap. The cap
+        // must cover every session broadcasting simultaneously; a low cap
+        // makes later sessions queue behind earlier ones.
+        concurrency: Math.max(1, Math.min(env.BROADCAST_CONCURRENCY, 64)),
       },
     );
     this.panelBroadcastWorker = new Worker<JobRecord>(
@@ -266,7 +270,7 @@ export class JobOrchestrator {
       async (job) => this.process(job),
       {
         ...workerOptions,
-        concurrency: Math.max(1, Math.min(env.BROADCAST_CONCURRENCY, 8)),
+        concurrency: Math.max(1, Math.min(env.BROADCAST_CONCURRENCY, 64)),
       },
     );
     this.validatorWorker = new Worker<JobRecord>(
