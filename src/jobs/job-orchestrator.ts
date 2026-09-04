@@ -313,6 +313,23 @@ export class JobOrchestrator {
     return this.ownsSession(record.sessionId);
   }
 
+  /**
+   * True when at least one recovery child (`<jobId>:recovery:*` /
+   * `<jobId>:inceptor:*` / `<jobId>:startup:*`) is still live in any queue.
+   * Both the reaper and the Inceptor must consult this before re-adding a
+   * record — otherwise the two recovery systems race and spawn duplicate
+   * children that fight over the same session operation lock and crawl.
+   */
+  private async hasLiveRecoveryChild(record: JobRecord): Promise<boolean> {
+    for (const queue of this.allQueues()) {
+      const jobs = await queue.getJobs(["active", "waiting", "delayed"], 0, 500, false);
+      for (const job of jobs) {
+        if (String(job.id).startsWith(`${record.jobId}:`)) return true;
+      }
+    }
+    return false;
+  }
+
   private queueForKind(kind: JobKind): Queue<JobRecord> {
     if (isBroadcastKind(kind)) return this.broadcastQueue;
     if (kind === "link-validation") return this.validatorQueue;
@@ -379,6 +396,7 @@ export class JobOrchestrator {
       });
       if (!shouldRecover) continue;
       if (recoveryParents.has(record.jobId)) continue;
+      if (await this.hasLiveRecoveryChild(record)) continue;
       const claimKey = `pappy-omega-mini:recovery:${record.jobId}`;
       const claimed = await this.redis.set(claimKey, "1", "EX", 120, "NX");
       if (claimed !== "OK") continue;
@@ -509,6 +527,7 @@ export class JobOrchestrator {
     const now = Date.now();
     const heartbeatAge = now - (record.heartbeatAt ?? record.startedAt ?? record.createdAt);
     if (heartbeatAge < STALE_ACTIVE_JOB_GRACE_MS) return "ignored";
+    if (await this.hasLiveRecoveryChild(record)) return "ignored";
     const claimKey = `pappy-omega-mini:recovery:${record.jobId}`;
     const claimed = await this.redis.set(claimKey, "1", "EX", 120, "NX");
     if (claimed !== "OK") return "ignored";
@@ -918,6 +937,7 @@ export class JobOrchestrator {
         if (!["RUNNING", "RETRYING"].includes(record.state) && !retryableFailed)
           continue;
         if (recoveryParents.has(record.jobId)) continue;
+        if (await this.hasLiveRecoveryChild(record)) continue;
         if (!retryableFailed &&
           (record.heartbeatAt ?? record.startedAt ?? record.createdAt) > cutoff
         )
