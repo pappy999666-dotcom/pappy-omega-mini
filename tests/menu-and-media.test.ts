@@ -630,7 +630,7 @@ describe("WhatsApp command registry", () => {
       sessionId: session.sessionId,
       senderJid: "2348012345678@s.whatsapp.net",
       text: "ping",
-    })).resolves.toBeNull();
+    })).resolves.toContain("ACTIVE");
   });
 
   it("routes Full Menu and category clicks as view interactions", async () => {
