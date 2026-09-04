@@ -383,15 +383,33 @@ async function main(): Promise<void> {
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
 }
 
+// A purge that fails (for example EACCES on a foreign-owned directory) must
+// not be retried on every cleanup tick — that turns one bad record into a
+// permanent log/retry storm. Skip sessionIds that failed a purge recently.
+const purgeFailureCooldownAt = new Map<string, number>();
+const PURGE_FAILURE_COOLDOWN_MS = 30 * 60 * 1000;
+
+function isPurgeCoolingDown(sessionId: string): boolean {
+  const at = purgeFailureCooldownAt.get(sessionId);
+  if (at === undefined) return false;
+  if (Date.now() - at >= PURGE_FAILURE_COOLDOWN_MS) {
+    purgeFailureCooldownAt.delete(sessionId);
+    return false;
+  }
+  return true;
+}
+
 async function cleanupLoggedOutSessions(): Promise<void> {
   const terminal = listAllSessions().filter(
     (session) =>
       (isWorkerProcess ? workerSessionIds.has(session.sessionId) : !excludedSessionIds.has(session.sessionId)) &&
-      isExplicitlyLoggedOutSession(session),
+      isExplicitlyLoggedOutSession(session) &&
+      !isPurgeCoolingDown(session.sessionId),
   );
   for (const session of terminal) {
     await purgeWhatsAppSession(session.workspaceId, session.sessionId).catch(
       (error) => {
+        purgeFailureCooldownAt.set(session.sessionId, Date.now());
         console.error(
           `[pappy-omega-mini] logged-out session purge failed session=${session.sessionId}:`,
           error instanceof Error ? error.message : String(error),
@@ -422,6 +440,7 @@ async function cleanupExpiredPairingSessions(): Promise<void> {
   );
   let purged = 0;
   for (const session of candidates) {
+    if (isPurgeCoolingDown(session.sessionId)) continue;
     const hasAuth = await hasPersistedWhatsAppAuth(
       session.workspaceId,
       session.sessionId,
@@ -429,6 +448,7 @@ async function cleanupExpiredPairingSessions(): Promise<void> {
     if (hasAuth) continue;
     await purgeWhatsAppSession(session.workspaceId, session.sessionId).catch(
       (error) => {
+        purgeFailureCooldownAt.set(session.sessionId, Date.now());
         console.error(
           `[pappy-omega-mini] expired pairing purge failed session=${session.sessionId}:`,
           error instanceof Error ? error.message : String(error),

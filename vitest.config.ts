@@ -5,6 +5,7 @@ import { configDefaults, defineConfig } from "vitest/config";
 // duplicates and hides real failures in noise.
 export default defineConfig({
   test: {
+    setupFiles: ["./tests/test-env.setup.ts"],
     exclude: [
       ...configDefaults.exclude,
       "**/.dist.previous*/**",

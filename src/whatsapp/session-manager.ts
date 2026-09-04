@@ -1764,6 +1764,9 @@ async function openWhatsAppSession(
   });
 }
 
+const authUnreadableWarnAt = new Map<string, number>();
+const AUTH_UNREADABLE_WARN_COOLDOWN_MS = 10 * 60 * 1000;
+
 export async function hasPersistedWhatsAppAuth(
   workspaceId: string,
   sessionId: string,
@@ -1793,10 +1796,25 @@ export async function hasPersistedWhatsAppAuth(
       Object.keys(credentials ?? {}).length > 0
     );
   } catch (error) {
-    console.warn(
-      `[pappy-omega-mini] persisted WhatsApp auth unreadable session=${sessionId}:`,
-      error instanceof Error ? error.message : String(error),
-    );
+    // Boot-time recovery probes every owned session once; hundreds of stale
+    // or unreadable records would otherwise flood the journal with identical
+    // warnings (and burn CPU) on every start. Warn once per session per
+    // cooldown window instead.
+    const warnKey = `${workspaceId}/${sessionId}`;
+    const now = Date.now();
+    const lastWarnedAt = authUnreadableWarnAt.get(warnKey) ?? 0;
+    if (now - lastWarnedAt >= AUTH_UNREADABLE_WARN_COOLDOWN_MS) {
+      authUnreadableWarnAt.set(warnKey, now);
+      if (authUnreadableWarnAt.size > 4096) {
+        for (const [key, at] of authUnreadableWarnAt)
+          if (now - at >= AUTH_UNREADABLE_WARN_COOLDOWN_MS)
+            authUnreadableWarnAt.delete(key);
+      }
+      console.warn(
+        `[pappy-omega-mini] persisted WhatsApp auth unreadable session=${sessionId}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     return false;
   }
 }
