@@ -74,7 +74,6 @@ function rememberGroupMessage(
 }
 
 const GROUP_STATUS_METADATA_BUDGET_MS = 750;
-const GROUP_STATUS_PREVIEW_BUDGET_MS = 1_000;
 
 async function resolveWithinBudget<T>(
   operation: Promise<T>,
@@ -1413,7 +1412,9 @@ export async function sendGroupStatus(
   }
   if (payload.media) {
     const mediaContent = messagePayload(text, payload.media);
-    const preparedMedia = await prepareCanonicalPreviewContentWithBudget({
+    // A cold status preview must resolve before sending. If the budget helper
+    // falls back, WhatsApp may never unfurl the first URL in this group.
+    const preparedMedia = await prepareCanonicalPreviewContent({
       text,
       content: mediaContent,
       target: "group-status",
@@ -1439,7 +1440,9 @@ export async function sendGroupStatus(
     ...statusPayload,
     groupStatus: true,
   };
-  const prepared = await prepareCanonicalPreviewContentWithBudget({
+  // Do not send a timed-out fallback for status URLs: later posts succeeding
+  // after the cache warms is the first-post preview bug this path prevents.
+  const prepared = await prepareCanonicalPreviewContent({
     text,
     content,
     target: "group-status",
@@ -1514,13 +1517,13 @@ export async function sendGroupColorStatus(
     : { text: detectorText };
   const sourcePrepared = payload.preparedPreview
     ? { linkPreview: payload.preparedPreview }
-    : await prepareCanonicalPreviewContentWithBudget({
+    : await prepareCanonicalPreviewContent({
         text: detectorText,
         content: sourceContent,
         target: "group-status",
         socket,
-        cacheScope: `${workspaceId}:${sessionId}`,
-      }, GROUP_STATUS_PREVIEW_BUDGET_MS);
+        cacheScope: `${workspaceId}:${sessionId}:${jid}`,
+      });
   const sourcePreview = sourcePrepared.linkPreview as Record<string, unknown> | undefined;
   const previewTitle = typeof sourcePreview?.title === "string" ? sourcePreview.title.trim() : "";
   const design = createGroupStatusDesign({
