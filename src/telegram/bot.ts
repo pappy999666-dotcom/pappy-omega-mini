@@ -648,6 +648,19 @@ async function withTelegramTimeout<T>(
     promise.then(resolve, reject).finally(() => clearTimeout(timer));
   });
 }
+
+const BRIDGE_COMMAND_TIMEOUT_MS = 15_000;
+
+async function routeBridgeCommand(
+  input: Parameters<typeof routeWhatsAppText>[0],
+): Promise<Awaited<ReturnType<typeof routeWhatsAppText>>> {
+  return withTelegramTimeout(
+    routeWhatsAppText(input),
+    BRIDGE_COMMAND_TIMEOUT_MS,
+    "Bridge command timed out before the WhatsApp session responded.",
+  );
+}
+
 function clearPendingInputs(userId: string): void {
   pendingMedia.delete(userId);
   pendingAdminInput.delete(userId);
@@ -2247,11 +2260,10 @@ export function createTelegramBot(): Telegraf<Context> {
         sessionName: string;
         ok: boolean;
         output: string;
-      }> = [];
-      for (const session of targets) {
+      }> = await Promise.all(targets.map(async (session) => {
         try {
           const command = normalizeBridgeCommand(input, session.prefix);
-          const routed = await routeWhatsAppText({
+          const routed = await routeBridgeCommand({
             workspaceId: session.workspaceId,
             sessionId: session.sessionId,
             senderJid: session.phoneNumber ?? "admin-global-bridge",
@@ -2261,7 +2273,7 @@ export function createTelegramBot(): Telegraf<Context> {
             bridgeAuthorized: true,
           });
           const accepted = routed !== null;
-          results.push({
+          return {
             sessionName: session.sessionName,
             ok: accepted,
             output: accepted
@@ -2271,15 +2283,15 @@ export function createTelegramBot(): Telegraf<Context> {
                   routed?.caption ??
                   "Command completed without text output.")
               : "No recognized command was dispatched to this session.",
-          });
+          };
         } catch (error) {
-          results.push({
+          return {
             sessionName: session.sessionName,
             ok: false,
             output: error instanceof Error ? error.message : String(error),
-          });
+          };
         }
-      }
+      }));
       await ctx.telegram
         .editMessageText(
           adminGlobalBridge.chatId,
@@ -2337,7 +2349,7 @@ export function createTelegramBot(): Telegraf<Context> {
       );
       const command = normalizeBridgeCommand(input, session.prefix);
       try {
-        const result = await routeWhatsAppText({
+        const result = await routeBridgeCommand({
           workspaceId: session.workspaceId,
           sessionId: session.sessionId,
           senderJid: session.phoneNumber ?? "admin-bridge",
@@ -2457,7 +2469,7 @@ export function createTelegramBot(): Telegraf<Context> {
       }
       const command = normalizeBridgeCommand(input, session.prefix);
       try {
-        const result = await routeWhatsAppText({
+        const result = await routeBridgeCommand({
           workspaceId: session.workspaceId,
           sessionId: session.sessionId,
           senderJid: session.phoneNumber ?? "telegram-bridge",
@@ -2760,7 +2772,7 @@ export function createTelegramBot(): Telegraf<Context> {
             ctx.message.text,
             session.prefix,
           );
-          const routed = await routeWhatsAppText({
+          const routed = await routeBridgeCommand({
             workspaceId: session.workspaceId,
             sessionId: session.sessionId,
             senderJid: session.phoneNumber ?? "telegram-bridge",
