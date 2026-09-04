@@ -716,7 +716,6 @@ async function registerTelegramCommandSuggestions(
   ];
   const groupCommands = [
     { command: "help", description: "Show available commands" },
-    { command: "menu", description: "Open the main menu" },
   ];
   try {
     await bot.telegram.setMyCommands(privateCommands, {
@@ -757,10 +756,6 @@ export function createTelegramBot(): Telegraf<Context> {
         typeof message.text === "string" &&
         message.text.trim().startsWith("/"),
       );
-      if (isNewCommand) {
-        clearPendingInputs(userId);
-        passiveIntakeSuspended.delete(userId);
-      }
       if (ctx.callbackQuery) {
         const rawCallbackData =
           "data" in ctx.callbackQuery
@@ -769,13 +764,14 @@ export function createTelegramBot(): Telegraf<Context> {
         const callbackData = expandGroupCallbackData(rawCallbackData) ?? rawCallbackData;
         if (callbackData !== rawCallbackData && "data" in ctx.callbackQuery)
           ctx.callbackQuery.data = callbackData;
-        if (
-          !isAutoPromoteWizardContinuation(callbackData) &&
-          !callbackData.includes(":group:moderation:members:country:confirm")
-        ) {
+        if (!isInputFlowContinuation(callbackData)) {
           clearPendingInputs(userId);
           passiveIntakeSuspended.delete(userId);
         }
+      }
+      if (isNewCommand) {
+        clearPendingInputs(userId);
+        passiveIntakeSuspended.delete(userId);
       }
     }
     await next();
@@ -1018,10 +1014,11 @@ export function createTelegramBot(): Telegraf<Context> {
   bot.command("help", async (ctx) =>
     ctx.reply(helpText(), {
       parse_mode: "HTML",
-      reply_markup: keyboard([[btn(ui.back, "menu:main")]]),
+      reply_markup: helpKeyboard(),
     }),
   );
   bot.command("menu", async (ctx) => {
+    if (!requirePrivateChat(ctx)) return;
     resolveTelegramUser(ctx);
     await ctx.reply(dashboardText(isAdmin(ctx)), {
       parse_mode: "HTML",
@@ -1029,6 +1026,7 @@ export function createTelegramBot(): Telegraf<Context> {
     });
   });
   bot.command("setsudo", async (ctx) => {
+    if (!requirePrivateChat(ctx)) return;
     if (!ctx.from || !ownerTelegramIds.has(String(ctx.from.id))) return deny(ctx);
     const user = resolveTelegramUser(ctx);
     const args = ctx.message.text.trim().split(/\s+/).slice(1).filter(Boolean);
@@ -1048,15 +1046,24 @@ export function createTelegramBot(): Telegraf<Context> {
     else updateWorkspaceOmniSudo(user.workspaceId, action as "add" | "remove", identity);
     return ctx.reply(`${scope.toUpperCase()} WhatsApp sudo ${action === "add" ? "added" : "removed"}: ${digits}`);
   });
-  bot.command("pair", async (ctx) =>
-    startPairing(ctx, ctx.message.text.split(/\s+/).slice(1).join(" ").trim()),
-  );
-  bot.command("sessions", async (ctx) => sendSessions(ctx, 0));
+  bot.command("pair", async (ctx) => {
+    if (!requirePrivateChat(ctx)) return;
+    await startPairing(
+      ctx,
+      ctx.message.text.split(/\s+/).slice(1).join(" ").trim(),
+    );
+  });
+  bot.command("sessions", async (ctx) => {
+    if (!requirePrivateChat(ctx)) return;
+    await sendSessions(ctx, 0);
+  });
   bot.command("adminmedia", async (ctx) => {
+    if (!requirePrivateChat(ctx)) return;
     if (!requireAdmin(ctx)) return;
     await sendAdminMedia(ctx);
   });
   bot.command("autopromote", async (ctx) => {
+    if (!requirePrivateChat(ctx)) return;
     const user = resolveTelegramUser(ctx);
     const userId = String(ctx.from?.id ?? "");
     beginExclusiveInput(userId);
@@ -1985,13 +1992,13 @@ export function createTelegramBot(): Telegraf<Context> {
     }
     const profilePicture = pendingProfilePicture.get(userId);
     if (profilePicture && !ctx.message.text.startsWith("/")) {
-      pendingProfilePicture.delete(userId);
       try {
         await updateProfilePicture(
           profilePicture.workspaceId,
           profilePicture.sessionId,
           ctx.message.text.trim(),
         );
+        pendingProfilePicture.delete(userId);
         await ctx.reply(
           pageText(
             "Profile Picture",
@@ -2000,7 +2007,10 @@ export function createTelegramBot(): Telegraf<Context> {
               "The WhatsApp profile picture was changed.",
             ),
           ),
-          { parse_mode: "HTML" },
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([[btn(ui.back, "menu:main")]]),
+          },
         );
       } catch (error) {
         await ctx.reply(
@@ -2008,9 +2018,9 @@ export function createTelegramBot(): Telegraf<Context> {
             "Profile Picture",
             dangerResponse(
               "Update Failed",
-              escapeHtml(
+              `${escapeHtml(
                 error instanceof Error ? error.message : String(error),
-              ),
+              )}\n\nSend the picture URL again to retry.`,
             ),
           ),
           { parse_mode: "HTML" },
@@ -2102,8 +2112,8 @@ export function createTelegramBot(): Telegraf<Context> {
         return;
       }
       if (groupCreate.stage !== "profile") return;
-      pendingGroupCreate.delete(userId);
       const description = groupCreate.description ?? "";
+      let createdJid: string | undefined;
       try {
         const jid = await createWhatsAppGroup(
           groupCreate.workspaceId,
@@ -2111,6 +2121,8 @@ export function createTelegramBot(): Telegraf<Context> {
           groupCreate.subject ?? "",
           groupCreate.participants ?? [],
         );
+        pendingGroupCreate.delete(userId);
+        createdJid = jid;
         if (description)
           await updateGroupDescription(
             groupCreate.workspaceId,
@@ -2140,20 +2152,29 @@ export function createTelegramBot(): Telegraf<Context> {
               `<b>${escapeHtml(groupCreate.subject ?? "")}</b>\n<code>${escapeHtml(jid)}</code>${description ? `\nDescription initialized.` : ""}${invite ? `\nInvite: <code>https://chat.whatsapp.com/${escapeHtml(invite)}</code>` : ""}\n\nThe group was created and initialized through the live WhatsApp transport.`,
             ),
           ),
-          { parse_mode: "HTML" },
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([[btn(ui.back, "menu:main")]]),
+          },
         );
       } catch (error) {
+        const reason = escapeHtml(
+          error instanceof Error ? error.message : String(error),
+        );
         await ctx.reply(
           pageText(
             "Create Group",
             dangerResponse(
               "Creation Failed",
-              escapeHtml(
-                error instanceof Error ? error.message : String(error),
-              ),
+              createdJid
+                ? `${reason}\n\nThe group <code>${escapeHtml(createdJid)}</code> was created before the failure. Open Groups to finish its setup.`
+                : `${reason}\n\nSend <code>skip</code> again to retry, or send <code>cancel</code> to abort.`,
             ),
           ),
-          { parse_mode: "HTML" },
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([[btn(ui.back, "menu:main")]]),
+          },
         );
       }
       return;
@@ -2960,7 +2981,7 @@ export function createTelegramBot(): Telegraf<Context> {
     }
     const groupCreate = pendingGroupCreate.get(userId);
     if (groupCreate?.stage === "profile") {
-      pendingGroupCreate.delete(userId);
+      let createdJid: string | undefined;
       try {
         const photo = ctx.message.photo.at(-1);
         if (!photo) throw new Error("Telegram did not provide the uploaded group picture.");
@@ -2974,6 +2995,8 @@ export function createTelegramBot(): Telegraf<Context> {
           groupCreate.subject ?? "",
           groupCreate.participants ?? [],
         );
+        pendingGroupCreate.delete(userId);
+        createdJid = jid;
         if (groupCreate.description)
           await updateGroupDescription(
             groupCreate.workspaceId,
@@ -3002,25 +3025,35 @@ export function createTelegramBot(): Telegraf<Context> {
               `<b>${escapeHtml(groupCreate.subject ?? "")}</b>\n<code>${escapeHtml(jid)}</code>${groupCreate.description ? "\nDescription initialized." : ""}\nProfile picture applied without bot-side cropping.\nInvite: <code>https://chat.whatsapp.com/${escapeHtml(invite)}</code>\n\nThe group was created and initialized through the live WhatsApp transport.`,
             ),
           ),
-          { parse_mode: "HTML" },
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([[btn(ui.back, "menu:main")]]),
+          },
         );
       } catch (error) {
+        const reason = escapeHtml(
+          error instanceof Error ? error.message : String(error),
+        );
         await ctx.reply(
           pageText(
             "Create Group",
             dangerResponse(
               "Creation Failed",
-              escapeHtml(error instanceof Error ? error.message : String(error)),
+              createdJid
+                ? `${reason}\n\nThe group <code>${escapeHtml(createdJid)}</code> was created before the failure. Open Groups to finish its setup.`
+                : `${reason}\n\nSend the group picture again to retry, or send <code>skip</code> to create the group without a picture.`,
             ),
           ),
-          { parse_mode: "HTML" },
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([[btn(ui.back, "menu:main")]]),
+          },
         );
       }
       return;
     }
     const profilePicture = pendingProfilePicture.get(userId);
     if (profilePicture) {
-      pendingProfilePicture.delete(userId);
       try {
         const photo = ctx.message.photo.at(-1);
         if (!photo)
@@ -3036,6 +3069,7 @@ export function createTelegramBot(): Telegraf<Context> {
           profilePicture.sessionId,
           Buffer.from(await response.arrayBuffer()),
         );
+        pendingProfilePicture.delete(userId);
         return ctx.reply(
           pageText(
             "Profile Picture",
@@ -3044,7 +3078,10 @@ export function createTelegramBot(): Telegraf<Context> {
               "The uploaded image is now the WhatsApp profile picture.",
             ),
           ),
-          { parse_mode: "HTML" },
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([[btn(ui.back, "menu:main")]]),
+          },
         );
       } catch (error) {
         return ctx.reply(
@@ -3052,9 +3089,9 @@ export function createTelegramBot(): Telegraf<Context> {
             "Profile Picture",
             dangerResponse(
               "Update Failed",
-              escapeHtml(
+              `${escapeHtml(
                 error instanceof Error ? error.message : String(error),
-              ),
+              )}\n\nSend the image again to retry.`,
             ),
           ),
           { parse_mode: "HTML" },
@@ -3063,8 +3100,8 @@ export function createTelegramBot(): Telegraf<Context> {
     }
     if (!requireAdmin(ctx)) return;
     const kind = pendingMedia.get(userId);
-    if (kind !== "image")
-      return ctx.reply("Open Admin Panel → Media → Add Image first.");
+    // No media workflow open — ignore the photo silently.
+    if (kind !== "image") return;
     const photo = ctx.message.photo.at(-1);
     if (!photo) return;
     const file = await ctx.telegram.getFileLink(photo.file_id);
@@ -3126,8 +3163,8 @@ export function createTelegramBot(): Telegraf<Context> {
     }
     if (!requireAdmin(ctx)) return;
     const kind = pendingMedia.get(String(ctx.from.id));
-    if (kind !== "video")
-      return ctx.reply("Open Admin Panel → Media → Add Video first.");
+    // No media workflow open — ignore the video silently.
+    if (kind !== "video") return;
     const file = await ctx.telegram.getFileLink(ctx.message.video.file_id);
     const response = await fetch(file.href);
     const workspaceId = resolveTelegramUser(ctx).workspaceId;
@@ -3187,9 +3224,7 @@ export function createTelegramBot(): Telegraf<Context> {
       );
       return;
     }
-    await ctx.reply(
-      "Audio is accepted by Auto Promote only while its payload step is open.",
-    );
+    // No audio workflow open — ignore silently.
   });
 
   bot.action("menu:main", async (ctx) => {
@@ -10758,6 +10793,33 @@ function requireAdmin(ctx: Context): boolean {
   } else {
     void ctx.reply("Owner-only operation.").catch(() => undefined);
   }
+  return false;
+}
+
+/**
+ * Callback buttons that consume (finish or cancel) an open text/media input
+ * flow. The generic callback middleware must not wipe pending input state
+ * before these handlers run — otherwise every confirmation dialog dies with
+ * "Confirmation Expired" or silently falls back to a dashboard.
+ */
+export function isInputFlowContinuation(callbackData: string): boolean {
+  return (
+    isAutoPromoteWizardContinuation(callbackData) ||
+    callbackData.endsWith(":group:moderation:members:country:confirm") ||
+    /^session:[^:]+:group:moderation:approval:confirm:\d+$/.test(callbackData) ||
+    callbackData.endsWith(":group:leave:confirm") ||
+    callbackData === "admin:broadcast:confirm" ||
+    callbackData === "admin:broadcast:cancel"
+  );
+}
+
+function requirePrivateChat(ctx: Context): boolean {
+  if (ctx.chat?.type === "private") return true;
+  void ctx
+    .reply(
+      "This control panel works in a private chat only. Open a direct conversation with the bot and send the command there.",
+    )
+    .catch(() => undefined);
   return false;
 }
 
