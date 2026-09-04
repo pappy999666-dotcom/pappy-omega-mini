@@ -1093,6 +1093,25 @@ export function createTelegramBot(): Telegraf<Context> {
       // consuming a later unrelated message.
       clearPendingInputs(userId);
       passiveIntakeSuspended.delete(userId);
+      // Known commands never reach this handler (Telegraf matched them
+      // above), so anything arriving here is an unknown command. Give a
+      // short, actionable hint instead of silence — private chats only so
+      // groups are never spammed.
+      if (ctx.chat?.type === "private") {
+        await ctx.reply(
+          pageText(
+            "Unknown Command",
+            infoResponse(
+              "Not a recognized control",
+              `<code>${escapeHtml(text.split(/\s+/)[0] ?? text)}</code> is not a command this bot handles. Send /help for the full categorized map of controls, or /menu to reopen your dashboard.`,
+            ),
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: keyboard([[btn(ui.back, "menu:main")]]),
+          },
+        );
+      }
       return;
     }
     const autoPromote = pendingAutoPromote.get(userId);

@@ -468,13 +468,26 @@ async function startRecoverableSessions(
           );
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        updateSession(session.workspaceId, session.sessionId, {
-          status: "ERROR",
-          authHealth: "DEGRADED",
-          lastError: `startup recovery: ${reason}`.slice(0, 500),
-          disconnectReason:
-            "Startup recovery failed; auth was preserved and retry remains available.",
-        });
+        try {
+          updateSession(session.workspaceId, session.sessionId, {
+            status: "ERROR",
+            authHealth: "DEGRADED",
+            lastError: `startup recovery: ${reason}`.slice(0, 500),
+            disconnectReason:
+              "Startup recovery failed; auth was preserved and retry remains available.",
+          });
+        } catch (updateError) {
+          // The session may have been purged while recovery was running (a
+          // 401 LOGGED_OUT close triggers a full purge). A status update must
+          // never abort the recovery loop or reject main() — remaining
+          // sessions still need their recovery pass.
+          console.info(
+            `[pappy-omega-mini] startup recovery status update skipped session=${session.sessionId}:`,
+            updateError instanceof Error
+              ? updateError.message
+              : String(updateError),
+          );
+        }
         console.error(
           `[pappy-omega-mini] startup recovery failed session=${session.sessionId}:`,
           reason,
