@@ -381,6 +381,60 @@ async function main(): Promise<void> {
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  startMemoryWatchdog(() => void shutdown("memory-watchdog"));
+}
+
+// --- Memory watchdog ---------------------------------------------------------
+// Baileys per-session state grows with group traffic (very busy promo groups
+// x many sessions) and is not fully reclaimable at runtime. Left alone the
+// process eventually dies with a V8 heap OOM (SIGABRT/core dump) and stays
+// unresponsive until the restart + WhatsApp recovery cycle completes. Sample
+// RSS instead and request a controlled shutdown once the high watermark is
+// held for two consecutive samples, so systemd restarts us cleanly.
+let memoryWatchdogTimer: NodeJS.Timeout | undefined;
+
+function startMemoryWatchdog(onBreach: () => void): void {
+  if (env.MEMORY_WATCHDOG_MAX_RSS_MB <= 0) {
+    console.log("[pappy-omega-mini] Memory watchdog disabled (MEMORY_WATCHDOG_MAX_RSS_MB=0).");
+    return;
+  }
+  const maxRssBytes = env.MEMORY_WATCHDOG_MAX_RSS_MB * 1024 * 1024;
+  let breaches = 0;
+  memoryWatchdogTimer = setInterval(() => {
+    let rss: number;
+    try {
+      rss = process.memoryUsage().rss;
+    } catch {
+      return;
+    }
+    if (rss <= maxRssBytes) {
+      if (breaches > 0) {
+        console.log(
+          `[pappy-omega-mini] Memory watchdog: RSS back under threshold at ${Math.round(rss / (1024 * 1024))}MB.`,
+        );
+      }
+      breaches = 0;
+      return;
+    }
+    breaches += 1;
+    const rssMb = Math.round(rss / (1024 * 1024));
+    if (breaches >= 2) {
+      console.error(
+        `[pappy-omega-mini] Memory watchdog: RSS ${rssMb}MB held above ${env.MEMORY_WATCHDOG_MAX_RSS_MB}MB for ${breaches} consecutive checks; performing controlled shutdown so systemd restarts the process.`,
+      );
+      if (memoryWatchdogTimer) clearInterval(memoryWatchdogTimer);
+      memoryWatchdogTimer = undefined;
+      onBreach();
+      return;
+    }
+    console.warn(
+      `[pappy-omega-mini] Memory watchdog: RSS ${rssMb}MB over ${env.MEMORY_WATCHDOG_MAX_RSS_MB}MB threshold (check 1/2).`,
+    );
+  }, env.MEMORY_WATCHDOG_INTERVAL_MS);
+  memoryWatchdogTimer.unref();
+  console.log(
+    `[pappy-omega-mini] Memory watchdog armed: controlled restart when RSS > ${env.MEMORY_WATCHDOG_MAX_RSS_MB}MB, sampled every ${Math.round(env.MEMORY_WATCHDOG_INTERVAL_MS / 1000)}s.`,
+  );
 }
 
 // A purge that fails (for example EACCES on a foreign-owned directory) must

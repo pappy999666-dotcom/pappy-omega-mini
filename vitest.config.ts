@@ -10,6 +10,8 @@ export default defineConfig({
       ...configDefaults.exclude,
       "**/.dist.previous*/**",
       "**/.dist-backup*/**",
+      "**/.dist.pre*/**",
+      "**/.dist*/**",
       "**/.deploy*/**",
       "**/.rollback*/**",
       "**/dist.prev/**",

@@ -83,6 +83,23 @@ const envSchema = z.object({
    */
   CPU_WORKER_COUNT: z.coerce.number().int().min(0).max(32).optional(),
   /**
+   * RSS threshold (MB) at which the memory watchdog performs a controlled
+   * shutdown so systemd restarts the process. Baileys per-session state
+   * (signal sender-key records, prekey caches, LID maps) grows with group
+   * traffic and is not fully reclaimable; left alone the process eventually
+   * aborts with a V8 heap OOM (SIGABRT/core dump) and stays unresponsive
+   * until recovery finishes. A controlled bounce is a ~40s blip instead.
+   * Set 0 to disable the watchdog.
+   */
+  MEMORY_WATCHDOG_MAX_RSS_MB: z.coerce.number().int().min(0).max(16384).default(1400),
+  /** How often the memory watchdog samples process RSS (ms). */
+  MEMORY_WATCHDOG_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(10_000)
+    .max(600_000)
+    .default(60_000),
+  /**
    * When true, the panel control HTTP server runs on its own worker thread
    * so API responses stay fast even when the main event loop is saturated
    * with Baileys/crypto work. Recommended for production.
