@@ -91,7 +91,7 @@ const envSchema = z.object({
    * until recovery finishes. A controlled bounce is a ~40s blip instead.
    * Set 0 to disable the watchdog.
    */
-  MEMORY_WATCHDOG_MAX_RSS_MB: z.coerce.number().int().min(0).max(16384).default(1400),
+  MEMORY_WATCHDOG_MAX_RSS_MB: z.coerce.number().int().min(0).max(16384).default(1800),
   /** How often the memory watchdog samples process RSS (ms). */
   MEMORY_WATCHDOG_INTERVAL_MS: z.coerce
     .number()

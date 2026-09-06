@@ -399,6 +399,12 @@ function startMemoryWatchdog(onBreach: () => void): void {
     return;
   }
   const maxRssBytes = env.MEMORY_WATCHDOG_MAX_RSS_MB * 1024 * 1024;
+  // Three consecutive sustained breaches (3 minutes at the default interval)
+  // are required before bouncing. Broadcast dispatch to a thousand+ groups
+  // briefly drives RSS past any static threshold while V8 has not yet had a
+  // chance to reclaim; bouncing on the first spike would interrupt healthy
+  // work. Sustained growth is what precedes a heap OOM.
+  const requiredBreaches = 3;
   let breaches = 0;
   memoryWatchdogTimer = setInterval(() => {
     let rss: number;
@@ -418,7 +424,7 @@ function startMemoryWatchdog(onBreach: () => void): void {
     }
     breaches += 1;
     const rssMb = Math.round(rss / (1024 * 1024));
-    if (breaches >= 2) {
+    if (breaches >= requiredBreaches) {
       console.error(
         `[pappy-omega-mini] Memory watchdog: RSS ${rssMb}MB held above ${env.MEMORY_WATCHDOG_MAX_RSS_MB}MB for ${breaches} consecutive checks; performing controlled shutdown so systemd restarts the process.`,
       );
@@ -428,7 +434,7 @@ function startMemoryWatchdog(onBreach: () => void): void {
       return;
     }
     console.warn(
-      `[pappy-omega-mini] Memory watchdog: RSS ${rssMb}MB over ${env.MEMORY_WATCHDOG_MAX_RSS_MB}MB threshold (check 1/2).`,
+      `[pappy-omega-mini] Memory watchdog: RSS ${rssMb}MB over ${env.MEMORY_WATCHDOG_MAX_RSS_MB}MB threshold (check ${breaches}/${requiredBreaches}).`,
     );
   }, env.MEMORY_WATCHDOG_INTERVAL_MS);
   memoryWatchdogTimer.unref();
