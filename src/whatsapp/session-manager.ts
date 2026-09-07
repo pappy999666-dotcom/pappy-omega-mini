@@ -5,7 +5,7 @@ import makeWASocket, {
   makeCacheManagerAuthState,
   type CacheManagerStore,
   type WASocket,
-} from "@crysnovax/baileys";
+} from "plogme";
 import pino from "pino";
 import { env } from "../config/env.js";
 import type { WhatsAppSession } from "../types/domain.js";
@@ -26,6 +26,11 @@ import {
   writeEncryptedJson,
 } from "../core/encrypted-store.js";
 import { isSelfExecutableWhatsAppCommand, routeWhatsAppText, type WhatsAppReply } from "./message-router.js";
+import {
+  renderDigitalConfirmCardForToken,
+  renderDigitalConfirmReply,
+} from "./digital-confirm.js";
+import { getWorkspaceResponseType } from "../core/workspace-settings.js";
 import { runAntiChecks, runAntiParticipantEvent } from "./anti-system/engine.js";
 import { collectLinks, extractWhatsAppGroupInviteUrls } from "../links/link-collector.js";
 import { prepareCanonicalPreviewContent } from "./baileys-native-preview.js";
@@ -527,6 +532,27 @@ function messageCacheKey(key: MessageCacheKey): string | undefined {
   return `${key.remoteJid}\u0000${key.participant ?? ""}\u0000${key.id}`;
 }
 
+// JIDs the bot never routes to. Returning true asks the engine to skip them
+// entirely, reducing per-message work on accounts that see newsletter and
+// broadcast-list traffic. `status@broadcast` is kept: status updates may be
+// surfaced by session features.
+function ignoreNonRoutableJid(jid: string): boolean {
+  if (typeof jid !== "string" || !jid) return true;
+  if (jid.endsWith("@newsletter")) return true;
+  if (jid.endsWith("@broadcast") && jid !== "status@broadcast") return true;
+  return false;
+}
+
+// History-sync types (WAProto.HistorySync.HistorySyncType): 4 = PUSH_NAME,
+// 5 = NON_BLOCKING_DATA. In "nonblocking" mode everything else (initial
+// bootstrap, full/recent history, on-demand) is dropped before it reaches the
+// app, so reconnects stop replaying large chat/message snapshots the app
+// never stores. The app keeps its own bounded caches for quoted lookups.
+function keepOnlyLightweightHistorySync(input: { syncType?: number }): boolean {
+  const syncType = input?.syncType;
+  return syncType === 4 || syncType === 5;
+}
+
 export const BAILEYS_SESSION_SOCKET_OPTIONS = Object.freeze({
   // Crysnova Baileys 2.7.12 can instantiate a MessageRetryManager whose
   // receive-side code calls saveBaseKey/hasSameBaseKey/deleteBaseKey, while
@@ -539,11 +565,6 @@ export const BAILEYS_SESSION_SOCKET_OPTIONS = Object.freeze({
   connectTimeoutMs: 20_000,
   keepAliveIntervalMs: 15_000,
   defaultQueryTimeoutMs: 60_000,
-  // Failed decryptions are already bounded by the per-session guard. Do not
-  // ask WhatsApp for repeated retries for the same unreadable payload; that
-  // feedback loop is what turns stale Signal state into CPU/log storms.
-  retryRequestDelayMs: 0,
-  maxMsgRetryCount: 0,
   // The application lifecycle supervisor owns reconnects and preserves auth.
   // Baileys' internal recreation path can delete a sender session while a
   // message storm is active and is intentionally disabled.
@@ -552,6 +573,129 @@ export const BAILEYS_SESSION_SOCKET_OPTIONS = Object.freeze({
 
 export function isLiveWhatsAppUpsert(type?: string): boolean {
   return type === undefined || type === "notify";
+}
+
+/**
+ * Maximum address-book entries retained per session. WhatsApp contact lists
+ * are bounded and small; the guard only protects against pathological syncs.
+ */
+const SESSION_STORE_MAX_CONTACTS = 20_000;
+
+interface SessionStoreContact {
+  id: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Drop-in replacement for the fork's `makeInMemoryStore`. The fork store
+ * retains every inbound message per chat for the life of the process, which is
+ * the dominant memory consumer on busy multi-group accounts (it repopulates
+ * after every reconnect and grows until the memory watchdog restarts the
+ * process). This build keeps only what the application actually reads
+ * (address-book contacts for name resolution) and never retains messages,
+ * chats, presences, or group metadata. Engine calls that touch those areas get
+ * safe empty answers; retries/quoted lookups are already served by the
+ * per-session bounded `messageCache` and the custom `getMessage`.
+ */
+function createBoundedSessionStore(): {
+  chats: Map<string, unknown>;
+  contacts: Map<string, SessionStoreContact>;
+  messages: Record<string, unknown>;
+  groupMetadata: Record<string, unknown>;
+  presences: Record<string, unknown>;
+  state: Record<string, unknown>;
+  bind: (events: RuntimeEvents) => void;
+  loadMessages: () => Promise<unknown[]>;
+  loadMessage: () => Promise<undefined>;
+  mostRecentMessage: () => Promise<undefined>;
+  fetchImageUrl: (jid: string, sock: unknown) => Promise<unknown>;
+  fetchGroupMetadata: (jid: string, sock: unknown) => Promise<unknown>;
+  fetchMessageReceipts: () => Promise<unknown[]>;
+  getLabels: () => unknown;
+  getChatLabels: () => unknown[];
+  getMessageLabels: () => unknown[];
+} {
+  const chats = new Map<string, unknown>();
+  const contacts = new Map<string, SessionStoreContact>();
+  const messages: Record<string, unknown> = {};
+  const groupMetadata: Record<string, unknown> = {};
+  const presences: Record<string, unknown> = {};
+  const state: Record<string, unknown> = { connection: "close" };
+
+  const upsertContacts = (updates: Array<Record<string, unknown>>): void => {
+    for (const raw of updates ?? []) {
+      const contact = raw as SessionStoreContact;
+      if (!contact || typeof contact.id !== "string" || !contact.id) continue;
+      if (!contacts.has(contact.id) && contacts.size >= SESSION_STORE_MAX_CONTACTS) {
+        const oldestKey = contacts.keys().next().value;
+        if (oldestKey !== undefined) contacts.delete(oldestKey as string);
+      }
+      const existing = contacts.get(contact.id) ?? {};
+      contacts.set(contact.id, { ...existing, ...contact });
+    }
+  };
+
+  const bind = (events: RuntimeEvents): void => {
+    const emitter = events as unknown as {
+      on: (event: string, listener: (...args: unknown[]) => void) => void;
+    };
+    emitter.on("connection.update", (update) => {
+      if (update && typeof update === "object")
+        Object.assign(state, update as Record<string, unknown>);
+    });
+    emitter.on("contacts.upsert", (payload) => {
+      const candidate = payload as
+        | { contacts?: Array<Record<string, unknown>> }
+        | Array<Record<string, unknown>>;
+      const list = Array.isArray(candidate)
+        ? candidate
+        : candidate?.contacts;
+      if (Array.isArray(list)) upsertContacts(list);
+    });
+    emitter.on("messaging-history.set", (payload) => {
+      const candidate = payload as { contacts?: Array<Record<string, unknown>> };
+      if (Array.isArray(candidate?.contacts)) upsertContacts(candidate.contacts);
+    });
+    // messages/chats/presences/groupMetadata are intentionally not retained.
+  };
+
+  const fetchImageUrl = async (jid: string, sock: unknown): Promise<unknown> => {
+    try {
+      const candidate = sock as { profilePictureUrl?: (jidValue: string) => Promise<unknown> };
+      if (typeof candidate?.profilePictureUrl !== "function") return undefined;
+      return await candidate.profilePictureUrl(jid);
+    } catch {
+      return undefined;
+    }
+  };
+  const fetchGroupMetadata = async (jid: string, sock: unknown): Promise<unknown> => {
+    try {
+      const candidate = sock as { groupMetadata?: (jidValue: string) => Promise<unknown> };
+      if (typeof candidate?.groupMetadata !== "function") return undefined;
+      return await candidate.groupMetadata(jid);
+    } catch {
+      return undefined;
+    }
+  };
+
+  return {
+    chats,
+    contacts,
+    messages,
+    groupMetadata,
+    presences,
+    state,
+    bind,
+    loadMessages: async () => [],
+    loadMessage: async () => undefined,
+    mostRecentMessage: async () => undefined,
+    fetchImageUrl,
+    fetchGroupMetadata,
+    fetchMessageReceipts: async () => [],
+    getLabels: () => undefined,
+    getChatLabels: () => [],
+    getMessageLabels: () => [],
+  };
 }
 
 export async function wrapSignalKeyStoreWithCache(
@@ -566,7 +710,7 @@ export async function wrapSignalKeyStoreWithCache(
   clear?: () => Promise<void>;
 }> {
   const { makeCacheableSignalKeyStore } = (await import(
-    "@crysnovax/baileys/lib/Utils/auth-utils.js"
+    "plogme/lib/Utils/auth-utils.js"
   )) as unknown as {
     makeCacheableSignalKeyStore: (
       durableStore: typeof store,
@@ -614,7 +758,7 @@ function installBaileysDirectCryptoLogFilter(): void {
 }
 installBaileysDirectCryptoLogFilter();
 
-// libsignal (used internally by @crysnovax/baileys) dumps the full Signal
+// libsignal (used internally by plogme) dumps the full Signal
 // session state — including private keys — to console.info on every session
 // close. That feedback loop is what turns stale sender-key state into CPU and
 // log storms. Suppress the per-message dump; genuine crypto storms still reach
@@ -914,21 +1058,29 @@ async function openWhatsAppSession(
       if (groupMetadataInflight.get(jid) === request) groupMetadataInflight.delete(jid);
     }
   };
-  const { makeInMemoryStore } = (await import("@crysnovax/baileys")) as unknown as {
-    makeInMemoryStore: (config?: Record<string, unknown>) => {
-      contacts?: Record<string, unknown>;
-      bind: (events: RuntimeEvents) => void;
-    };
-  };
-  const contactStore = makeInMemoryStore({ logger });
+  const contactStore = createBoundedSessionStore();
   socket = makeWASocket({
     auth: state,
     logger,
-    generateHighQualityLinkPreview: true,
     store: contactStore,
     // Keep bot sessions quiet and prevent initial history floods. These values
     // match the installed fork defaults unless explicitly chosen otherwise.
     ...BAILEYS_SESSION_SOCKET_OPTIONS,
+    // Env-driven engine tuning (audit 2026-09-06). Retries were previously 0
+    // to stop a stale-Signal retry storm; a bounded budget is safe now that
+    // the per-session crypto guard bounds that feedback loop.
+    maxMsgRetryCount: env.BAILEYS_MAX_MSG_RETRY_COUNT,
+    retryRequestDelayMs: env.BAILEYS_RETRY_REQUEST_DELAY_MS,
+    // Initial contacts/chats queries are redundant with the app's on-demand
+    // inventories and inflate reconnect cost.
+    fireInitQueries: env.BAILEYS_FIRE_INIT_QUERIES,
+    // The app supplies its own cached native link previews; engine-side
+    // high-quality preview generation is duplicate fetch/thumbnail work.
+    generateHighQualityLinkPreview: env.BAILEYS_HIGH_QUALITY_LINK_PREVIEW,
+    // Drop newsletter/broadcast-list traffic before processing.
+    ...(env.BAILEYS_IGNORE_EXTRA_JIDS ? { shouldIgnoreJid: ignoreNonRoutableJid } : {}),
+    // In nonblocking mode only PUSH_NAME / NON_BLOCKING_DATA history is kept.
+    ...(env.BAILEYS_HISTORY_MODE === "nonblocking" ? { shouldSyncHistoryMessage: keepOnlyLightweightHistorySync } : {}),
     msgRetryCounterCache: retryCounterCache,
     getMessage,
     cachedGroupMetadata,
@@ -985,7 +1137,16 @@ async function openWhatsAppSession(
       const richMenuSender = (socket as unknown as { richMenu?: (target: string, value: Record<string, unknown>) => Promise<unknown> }).richMenu;
       const mentions = Array.isArray(content?.mentions) ? content.mentions.filter((value: unknown): value is string => typeof value === "string") : [];
       let sendResult: unknown;
-      if (richMenu && typeof richMenuSender === "function") {
+      if (typeof content?.htmlBubble === "string") {
+        // Digital OS HTML-primitive bubble — same FOAHtmlPrimitiveDemoDONOTUSE
+        // rich response the slot machine uses (botForwardedMessage).
+        const htmlSender = (socket as unknown as {
+          sendHtmlMessage?: (target: string, payload: { html: string; trustedSources?: string[] }) => Promise<unknown>;
+        }).sendHtmlMessage;
+        if (typeof htmlSender !== "function")
+          throw new Error("This engine build does not support HTML bubbles.");
+        sendResult = await htmlSender(jid, { html: content.htmlBubble });
+      } else if (richMenu && typeof richMenuSender === "function") {
         sendResult = await richMenuSender(jid, richMenu);
       } else if (richResponse) {
         const { nativeTable: _nativeTable, richMenu: _richMenu, richResponse: _richResponse, ...safeContent } = content ?? {};
@@ -1331,42 +1492,115 @@ async function openWhatsAppSession(
             }
             const mediaReply = reply as WhatsAppReply;
             const deliverObjectReply = async (): Promise<void> => {
-              const content = mediaReply.media
-                ? mediaReply.media.kind === "sticker"
-                  ? {
-                      sticker: mediaReply.media.bytes,
-                      mimetype: "image/webp",
-                    }
-                  : {
-                      [mediaReply.media.kind]: mediaReply.media.bytes,
-                      ...(mediaReply.media.kind !== "audio" && (mediaReply.caption ?? "") ? { caption: mediaReply.caption } : {}),
-                      ...(mediaReply.media.mimeType ? { mimetype: mediaReply.media.mimeType } : {}),
-                      ...(mediaReply.media.kind === "video" || mediaReply.media.kind === "document" ? { fileName: mediaReply.media.fileName } : {}),
-                      ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
-                      ...(mediaReply.nativeTable ? { nativeTable: mediaReply.nativeTable } : {}),
-                      ...(mediaReply.richMenu ? { richMenu: mediaReply.richMenu } : {}),
-                      ...(mediaReply.mentions?.length ? { mentions: mediaReply.mentions } : {}),
-                    }
-                : {
-                    ...(mediaReply.text ? { text: mediaReply.text } : {}),
-                    ...(mediaReply.nativeFlow ? { nativeFlow: mediaReply.nativeFlow } : {}),
-                    ...(mediaReply.nativeTable ? { nativeTable: mediaReply.nativeTable } : {}),
-                    ...(mediaReply.richMenu ? { richMenu: mediaReply.richMenu } : {}),
-                    ...(mediaReply.mentions?.length ? { mentions: mediaReply.mentions } : {}),
-                  };
+              const responseType = getWorkspaceResponseType(workspaceId);
+              const sessionDigits = (getSession(workspaceId, sessionId).phoneNumber ?? "").replace(/\D/gu, "");
+              const sessionHasPhone = sessionDigits.length >= 7;
+              const initiatorJid = (resolvedSenderJid ?? senderJid) ?? "";
+
+              // Digital Confirm — the native/traditional DECK is always the
+              // functional channel (rich: native-flow buttons; traditional:
+              // typed `.dc <token> yes|no`). In rich mode with a reachable
+              // session phone the decorative HTML card is sent first and
+              // shares the SAME one-shot token as the deck, so the card's .cc
+              // beacon and the deck's dc: buttons answer one pending entry.
+              let confirmDeck:
+                | { content: { text: string; nativeFlow?: Array<{ text: string; id: string }> }; token: string }
+                | undefined;
+              let confirmCardHtml: string | undefined;
+              if (mediaReply.digitalConfirm) {
+                const definition = mediaReply.digitalConfirm;
+                confirmDeck = renderDigitalConfirmReply({
+                  workspaceId,
+                  sessionId,
+                  chatJid: jid,
+                  initiatorJid,
+                  definition,
+                  responseType,
+                  prefix: sessionPrefix,
+                });
+                if (responseType === "rich" && sessionHasPhone) {
+                  confirmCardHtml = renderDigitalConfirmCardForToken({
+                    definition,
+                    botNumber: sessionDigits,
+                    token: confirmDeck.token,
+                  });
+                }
+              }
+
+              // Assemble the single content object the send layer understands.
+              // CARD + DECK pairs (htmlBubble alongside native-flow buttons)
+              // are split below: the HTML bubble goes first, then the deck.
+              const content: Record<string, unknown> = {};
+              if (confirmDeck) {
+                content.text = confirmDeck.content.text;
+                if (confirmDeck.content.nativeFlow?.length)
+                  content.nativeFlow = confirmDeck.content.nativeFlow;
+                if (confirmCardHtml) content.htmlBubble = confirmCardHtml;
+              } else if (mediaReply.media) {
+                if (mediaReply.media.kind === "sticker") {
+                  content.sticker = mediaReply.media.bytes;
+                  content.mimetype = "image/webp";
+                } else {
+                  content[mediaReply.media.kind] = mediaReply.media.bytes;
+                  if (mediaReply.media.kind !== "audio" && mediaReply.caption)
+                    content.caption = mediaReply.caption;
+                  if (mediaReply.media.mimeType) content.mimetype = mediaReply.media.mimeType;
+                  if (mediaReply.media.kind === "video" || mediaReply.media.kind === "document")
+                    content.fileName = mediaReply.media.fileName;
+                }
+                if (mediaReply.nativeFlow) content.nativeFlow = mediaReply.nativeFlow;
+                if (mediaReply.nativeTable) content.nativeTable = mediaReply.nativeTable;
+                if (mediaReply.richMenu) content.richMenu = mediaReply.richMenu;
+                if (mediaReply.mentions?.length) content.mentions = mediaReply.mentions;
+              } else {
+                if (mediaReply.text) content.text = mediaReply.text;
+                if (mediaReply.nativeFlow) content.nativeFlow = mediaReply.nativeFlow;
+                if (mediaReply.nativeTable) content.nativeTable = mediaReply.nativeTable;
+                if (mediaReply.richMenu) content.richMenu = mediaReply.richMenu;
+                if (mediaReply.htmlBubble) content.htmlBubble = mediaReply.htmlBubble;
+                if (mediaReply.mentions?.length) content.mentions = mediaReply.mentions;
+              }
+
+              const cardHtml =
+                typeof content.htmlBubble === "string" ? content.htmlBubble : undefined;
+              const hasDeck =
+                Array.isArray(content.nativeFlow) && content.nativeFlow.length > 0;
+              const deckContent: Record<string, unknown> =
+                cardHtml !== undefined ? { ...content } : content;
+              if (cardHtml !== undefined) delete deckContent.htmlBubble;
+              const sendOne = async (payload: Record<string, unknown>): Promise<void> => {
+                await sendTrackedMessage(jid, payload);
+              };
               try {
-                await sendTrackedMessage(jid, content);
+                if (cardHtml !== undefined && hasDeck) {
+                  // Decorative HTML card first — its failure never suppresses
+                  // the functional deck below it (same resilience rule as the
+                  // plain-text fallback further down).
+                  try {
+                    await sendOne({ htmlBubble: cardHtml });
+                  } catch (cardError) {
+                    console.warn(
+                      `[pappy-omega-mini] html card not delivered session=${sessionId}: ${cardError instanceof Error ? cardError.message : String(cardError)}`,
+                    );
+                  }
+                  await sendOne(deckContent);
+                } else {
+                  await sendOne(content);
+                }
               } catch (error) {
                 const reason = error instanceof Error ? error.message : String(error);
-                if (!mediaReply.nativeFlow) throw error;
-                // nativeFlow is an optional enhancement; a rejected extension must never suppress the command reply.
-                const { nativeFlow: _nativeFlow, nativeTable: _nativeTable, richMenu: _richMenu, ...plainContent } = content as Record<string, unknown>;
+                // nativeFlow / digitalConfirm / card+deck are optional
+                // enhancements; a rejected extension must never suppress the
+                // command reply.
+                if (!mediaReply.nativeFlow && !mediaReply.digitalConfirm && !hasDeck)
+                  throw error;
+                const { nativeFlow: _nativeFlow, nativeTable: _nativeTable, richMenu: _richMenu, htmlBubble: _htmlBubble, ...plainContent } = deckContent as Record<string, unknown>;
                 await sendTrackedMessage(jid, plainContent).catch((fallbackError) => {
                   throw new Error(`${reason}; plain-text fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
                 });
               }
             };
-            if (mediaReply.media || mediaReply.text || mediaReply.nativeFlow || mediaReply.nativeTable || mediaReply.richMenu || mediaReply.mentions?.length) {
+            if (mediaReply.media || mediaReply.text || mediaReply.nativeFlow || mediaReply.nativeTable || mediaReply.richMenu || mediaReply.mentions?.length || mediaReply.digitalConfirm || mediaReply.htmlBubble) {
               void deliverObjectReply()
                 .then(() =>
                   saveWhatsAppMessageTrace({

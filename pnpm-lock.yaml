@@ -4,13 +4,15 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  plogme@1.0.3:
+    hash: cfb16d789a745e1af9ef2df0498f391abe15b65c7102e05262328a1fd0d6330f
+    path: patches/plogme@1.0.3.patch
+
 importers:
 
   .:
     dependencies:
-      '@crysnovax/baileys':
-        specifier: ^2.7.15
-        version: 2.7.15(link-preview-js@4.0.4)(sharp@0.35.3(@types/node@24.13.3))
       bullmq:
         specifier: ^5.58.0
         version: 5.81.3
@@ -29,6 +31,9 @@ importers:
       pino:
         specifier: ^9.9.0
         version: 9.14.0
+      plogme:
+        specifier: 1.0.3
+        version: 1.0.3(patch_hash=cfb16d789a745e1af9ef2df0498f391abe15b65c7102e05262328a1fd0d6330f)(link-preview-js@4.0.4)(sharp@0.35.3(@types/node@24.13.3))
       sharp:
         specifier: 0.35.3
         version: 0.35.3(@types/node@24.13.3)
@@ -75,28 +80,6 @@ packages:
 
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
-
-  '@crysnovax/baileys@2.7.15':
-    resolution: {integrity: sha512-wJI2YT2tKcqIY6qoFvnY7UZzyDvzZdmGOtIR4FmR3H0MoomXOW7j0mW/fLOfppEZBE92vlbco14mcfYWzrBv0A==}
-    engines: {node: '>=20.0.0'}
-    peerDependencies:
-      '@napi-rs/image': ~1.12.0
-      audio-decode: ^2.2.3
-      better-sqlite3: ^11.0.0
-      jimp: ^1.6.1
-      link-preview-js: ^3.0.0
-      sharp: '*'
-    peerDependenciesMeta:
-      '@napi-rs/image':
-        optional: true
-      audio-decode:
-        optional: true
-      better-sqlite3:
-        optional: true
-      jimp:
-        optional: true
-      link-preview-js:
-        optional: true
 
   '@emnapi/runtime@1.11.3':
     resolution: {integrity: sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==}
@@ -1097,6 +1080,28 @@ packages:
     resolution: {integrity: sha512-8OEwKp5juEvb/MjpIc4hjqfgCNysrS94RIOMXYvpYCdm/jglrKEiAYmiumbmGhCvs+IcInsphYDFwqrjr7398w==}
     hasBin: true
 
+  plogme@1.0.3:
+    resolution: {integrity: sha512-/8RAENCo3P2rBq4VX2oMUFrJ5JEeuQSrn7LmxoakL49zYDonCndkyp36GnM0Ogv3Kn2rlXDupVzA6IYSxPxpqg==}
+    engines: {node: '>=20.0.0'}
+    peerDependencies:
+      '@napi-rs/image': ~1.12.0
+      audio-decode: ^2.2.3
+      better-sqlite3: ^11.0.0
+      jimp: ^1.6.1
+      link-preview-js: ^3.0.0
+      sharp: '*'
+    peerDependenciesMeta:
+      '@napi-rs/image':
+        optional: true
+      audio-decode:
+        optional: true
+      better-sqlite3:
+        optional: true
+      jimp:
+        optional: true
+      link-preview-js:
+        optional: true
+
   postcss@8.5.26:
     resolution: {integrity: sha512-u82N74LFzG8ca+dD8puPnplTXoGH4fTPpVGuIbt36G3qvNlkvfD0lEAZSxaly3KX8TS/L1A1gsCEmvKmBcVbkQ==}
     engines: {node: ^10 || ^12 || >=14}
@@ -1411,31 +1416,6 @@ snapshots:
     dependencies:
       hashery: 1.5.1
       keyv: 5.6.0
-
-  '@crysnovax/baileys@2.7.15(link-preview-js@4.0.4)(sharp@0.35.3(@types/node@24.13.3))':
-    dependencies:
-      '@adiwajshing/keyed-db': 0.2.4
-      '@cacheable/node-cache': 1.7.6
-      '@hapi/boom': 9.1.4
-      async-mutex: 0.5.0
-      cache-manager: 7.2.9
-      fflate: 0.8.3
-      libsignal: 6.0.0
-      long: 5.3.2
-      lru-cache: 11.5.2
-      music-metadata: 11.14.0
-      p-queue: 9.3.3
-      pino: 9.14.0
-      protobufjs: 7.6.5
-      sharp: 0.35.3(@types/node@24.13.3)
-      whatsapp-rust-bridge: 0.5.5
-      ws: 8.21.3
-    optionalDependencies:
-      link-preview-js: 4.0.4
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
 
   '@emnapi/runtime@1.11.3':
     dependencies:
@@ -2254,6 +2234,31 @@ snapshots:
       safe-stable-stringify: 2.5.0
       sonic-boom: 4.2.1
       thread-stream: 3.2.0
+
+  plogme@1.0.3(patch_hash=cfb16d789a745e1af9ef2df0498f391abe15b65c7102e05262328a1fd0d6330f)(link-preview-js@4.0.4)(sharp@0.35.3(@types/node@24.13.3)):
+    dependencies:
+      '@adiwajshing/keyed-db': 0.2.4
+      '@cacheable/node-cache': 1.7.6
+      '@hapi/boom': 9.1.4
+      async-mutex: 0.5.0
+      cache-manager: 7.2.9
+      fflate: 0.8.3
+      libsignal: 6.0.0
+      long: 5.3.2
+      lru-cache: 11.5.2
+      music-metadata: 11.14.0
+      p-queue: 9.3.3
+      pino: 9.14.0
+      protobufjs: 7.6.5
+      sharp: 0.35.3(@types/node@24.13.3)
+      whatsapp-rust-bridge: 0.5.5
+      ws: 8.21.3
+    optionalDependencies:
+      link-preview-js: 4.0.4
+    transitivePeerDependencies:
+      - bufferutil
+      - supports-color
+      - utf-8-validate
 
   postcss@8.5.26:
     dependencies:

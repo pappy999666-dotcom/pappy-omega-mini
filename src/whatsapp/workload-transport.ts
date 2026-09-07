@@ -1,4 +1,4 @@
-import type { WASocket } from "@crysnovax/baileys";
+import type { WASocket } from "plogme";
 import { readFile } from "node:fs/promises";
 import { getSession } from "../core/session-registry.js";
 import { queueWorkloadCommand, waitForWorkloadCommand } from "../workload/service.js";

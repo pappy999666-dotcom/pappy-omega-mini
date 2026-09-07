@@ -104,6 +104,51 @@ const envSchema = z.object({
    * so API responses stay fast even when the main event loop is saturated
    * with Baileys/crypto work. Recommended for production.
    */
+
+  // --------------------------------------------------------------------------
+  // Baileys engine tuning (fork plogme). Audit 2026-09-06.
+  // Env toggles allow rollback without a code change.
+  // --------------------------------------------------------------------------
+  /**
+   * Baileys send/decrypt retry budget. 0 disables retries entirely (silent
+   * message drops on transient failures). A small bounded value is safe now
+   * that the per-session crypto guard prevents retry storms.
+   */
+  BAILEYS_MAX_MSG_RETRY_COUNT: z.coerce.number().int().min(0).max(5).default(1),
+  /** Delay between Baileys retry requests (ms). 0 disables the delay. */
+  BAILEYS_RETRY_REQUEST_DELAY_MS: z.coerce.number().int().min(0).max(10_000).default(250),
+  /**
+   * Fire initial contacts/chats queries on socket open. The app resolves its
+   * own inventories on demand, so these startup queries are largely redundant
+   * work on reconnects. Set true only if contact/chat resolution degrades.
+   */
+  BAILEYS_FIRE_INIT_QUERIES: z.preprocess(
+    (value) => (value === undefined || value === "" ? false : String(value).toLowerCase() === "true"),
+    z.boolean(),
+  ),
+  /**
+   * Let the engine generate high-quality link previews on outbound messages.
+   * The app supplies its own cached native previews, so engine-side preview
+   * generation is duplicate fetch/thumbnail work on URL-heavy broadcasts.
+   */
+  BAILEYS_HIGH_QUALITY_LINK_PREVIEW: z.preprocess(
+    (value) => (value === undefined || value === "" ? false : String(value).toLowerCase() === "true"),
+    z.boolean(),
+  ),
+  /**
+   * Skip JIDs the bot never routes to (@newsletter, @broadcast, unknown
+   * suffixes) to reduce per-message processing on busy accounts.
+   */
+  BAILEYS_IGNORE_EXTRA_JIDS: z.preprocess(
+    (value) => (value === undefined || value === "" ? true : String(value).toLowerCase() === "true"),
+    z.boolean(),
+  ),
+  /**
+   * Which history-sync types the engine is allowed to hand to the app.
+   * - nonblocking: only NON_BLOCKING_DATA / PUSH_NAME (smallest reconnect cost)
+   * - standard: fork default (everything except FULL)
+   */
+  BAILEYS_HISTORY_MODE: z.enum(["nonblocking", "standard"]).default("nonblocking"),
 });
 
 export const env = envSchema.parse(process.env);

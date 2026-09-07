@@ -1,4 +1,4 @@
-declare module "@crysnovax/baileys/lib/Utils/auth-utils.js" {
+declare module "plogme/lib/Utils/auth-utils.js" {
   export function makeCacheableSignalKeyStore(
     store: {
       get: (

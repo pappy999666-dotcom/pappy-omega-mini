@@ -874,7 +874,7 @@ async function nativeLinkPreview(
       const pending = (async () => {
         try {
           const { prepareWAMessageMedia } = (await import(
-            "@crysnovax/baileys"
+            "plogme"
           )) as unknown as {
             prepareWAMessageMedia: (
               message: Record<string, unknown>,

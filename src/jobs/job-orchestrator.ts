@@ -23,6 +23,15 @@ import { getBroadcastProgress } from "../workload/broadcast-progress.js";
 const QUEUE_NAME = "pappy-omega-mini-jobs";
 const BROADCAST_QUEUE_NAME = "pappy-omega-mini-broadcasts";
 const PANEL_BROADCAST_QUEUE_NAME = "pappy-omega-mini-panel-broadcasts";
+
+/**
+ * Errors that can never succeed on retry. When a job references a session
+ * that is not owned by its recorded workspace (e.g. the session was deleted
+ * and re-created elsewhere, or the record survived a restart while the
+ * session registry changed), retrying only burns attempts and CPU. Such jobs
+ * are failed terminally and their scheduled retries are dropped.
+ */
+const TERMINAL_JOB_ERROR_PATTERN = /not owned by this workspace/i;
 const VALIDATOR_QUEUE_NAME = "pappy-omega-mini-validator";
 const STORE_PREFIX = "pappy-omega-mini:job:";
 const CODE_PREFIX = "pappy-omega-mini:job-code:";
@@ -283,14 +292,22 @@ export class JobOrchestrator {
     );
     const handleFailed = (job: BullJob<JobRecord> | undefined, error: Error): void => {
       if (!job) return;
+      const terminal = TERMINAL_JOB_ERROR_PATTERN.test(error?.message ?? "");
       void (async () => {
-        const retrying = job.attemptsMade + 1 < job.data.maxAttempts;
+        const retrying = terminal
+          ? false
+          : job.attemptsMade + 1 < job.data.maxAttempts;
         await this.store.update(job.data.jobId, {
           state: retrying ? "RETRYING" : "FAILED",
           error: error.message,
           heartbeatAt: Date.now(),
           ...(retrying ? {} : { completedAt: Date.now() }),
         });
+        if (terminal) {
+          // Ownership errors cannot succeed on a later attempt; drop any
+          // scheduled retry so the job stops burning attempts immediately.
+          await job.remove().catch(() => undefined);
+        }
         if (!retrying) await this.emitCompletionHooks(job.data.jobId);
       })().catch(() => undefined);
     };

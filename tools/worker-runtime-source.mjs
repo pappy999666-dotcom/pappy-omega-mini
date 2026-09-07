@@ -1711,7 +1711,7 @@ async function poll() {
   return commands.length;
 }
 async function run() {
-  const baileys = await import("@crysnovax/baileys");
+  const baileys = await import("plogme");
   makeWASocket = baileys.default;
   makeCacheManagerAuthState = baileys.makeCacheManagerAuthState;
   makeInMemoryStore = baileys.makeInMemoryStore;

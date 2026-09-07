@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { downloadMediaMessage } from "@crysnovax/baileys/lib/Utils/messages.js";
+import { downloadMediaMessage } from "plogme/lib/Utils/messages.js";
 import type {
   WhatsAppMediaKind,
   WhatsAppMediaPayload,

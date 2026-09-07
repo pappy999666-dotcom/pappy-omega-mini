@@ -41,6 +41,29 @@ import {
 import { createSupportTicket } from "../persistence/mongo.js";
 import { canonicalizeHttpUrl } from "../links/url-canonicalization.js";
 import { runGameAction, runGameCommand } from "./game-prototype.js";
+import {
+  getWorkspaceResponseType,
+  updateWorkspaceSettings,
+} from "../core/workspace-settings.js";
+import type { DigitalConfirmDefinition } from "./digital-confirm.js";
+import {
+  digitalOsProbeUsage,
+  recordDigitalOsProbeReport,
+  runDigitalOsProbe,
+} from "./digital-os/probe.js";
+import {
+  handleDosInteraction,
+  handleDosHtmlBeacon,
+  openDosDrawer,
+  openDosHtmlDrawer,
+} from "./digital-os/app.js";
+import { isDosInteractionId } from "./digital-os/session.js";
+import {
+  parseDigitalConfirmInteractionId,
+  registerDigitalConfirmAction,
+  resolveDigitalConfirmByToken,
+  resolveDigitalConfirmTap,
+} from "./digital-confirm.js";
 import type { JoinAttemptResult, JoinMode } from "../jobs/join-operation.js";
 import {
   applyModerationConfirmation,
@@ -147,11 +170,17 @@ export interface WhatsAppCommandReply {
   nativeFlow?: Array<{ text: string; copy?: string; id?: string; url?: string }>;
   nativeTable?: GroupControlTable;
   richResponse?: Array<Record<string, unknown>>;
+  /** Digital Confirm (Phase 3): rendered by the delivery layer per workspace responseType. */
+  digitalConfirm?: DigitalConfirmDefinition;
+  /** HTML-primitive bubble (Digital OS): raw HTML injected into the FOAHtmlPrimitive rich response. */
+  htmlBubble?: string;
 }
 
 export interface CommandContext {
   workspaceId: string;
   sessionId: string;
+  /** Rich (native-flow) or traditional (plain text) confirmation rendering for this workspace. */
+  responseType?: "rich" | "traditional";
   /** Timestamp captured when the WhatsApp event entered the listener. */
   receivedAt?: number;
   isOwner: boolean;
@@ -2208,7 +2237,162 @@ export function createCommandRegistry(): RegisteredCommand[] {
       ownerOnly: true,
       run: runSudoCommand,
     },
+    {
+      name: "setvar",
+      aliases: ["setresponse"],
+      description: "Set a workspace variable. Supported: response rich|traditional.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const key = (ctx.args[0] ?? "").toLowerCase();
+        if (key !== "response") {
+          return commandUsageCard({ title: "Set Variable", command: ".setvar", commandSyntax: ".setvar response <rich|traditional>", note: "Only the response variable is supported today. rich = native-flow confirm buttons; traditional = plain-text prompts." });
+        }
+        const value = (ctx.args[1] ?? "").toLowerCase();
+        if (value !== "rich" && value !== "traditional") {
+          return "Usage: .setvar response rich  |  .setvar response traditional";
+        }
+        updateWorkspaceSettings(ctx.workspaceId, { responseType: value });
+        return `Response mode for this workspace is now ${getWorkspaceResponseType(ctx.workspaceId)}.`;
+      },
+    },
+    {
+      name: "getvar",
+      aliases: ["getresponse"],
+      description: "Show workspace variables. Supported: response.",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const key = (ctx.args[0] ?? "").toLowerCase();
+        if (key && key !== "response") {
+          return `Unknown variable \"${key}\". Supported: response.`;
+        }
+        return `response = ${getWorkspaceResponseType(ctx.workspaceId)}`;
+      },
+    },
+    {
+      name: "os",
+      aliases: ["apps", "drawer"],
+      description: "Open the Digital OS native interactive app drawer.",
+      ownerOnly: true,
+      run: async (ctx) => openDosDrawer(ctx),
+    },
+    {
+      name: "ic",
+      aliases: [],
+      description: "Internal Digital OS beacon handler (wa.me deep-link commands).",
+      ownerOnly: true,
+      run: async (ctx) => handleDosHtmlBeacon(ctx, ctx.args),
+    },
+    {
+      name: "cc",
+      aliases: [],
+      description: "Internal Digital Confirm beacon handler (wa.me deep-link answers).",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const token = (ctx.args[0] ?? "").trim();
+        const decisionRaw = (ctx.args[1] ?? "").trim().toLowerCase();
+        if (!/^[a-z0-9-]+$/u.test(token)) return "Usage: .cc <token> yes|no";
+        const decision =
+          decisionRaw === "yes" || decisionRaw === "confirm"
+            ? "confirm"
+            : decisionRaw === "no" || decisionRaw === "cancel"
+              ? "cancel"
+              : undefined;
+        if (!decision) return "Usage: .cc <token> yes|no";
+        if (!ctx.senderJid) return "Could not verify the sender of this beacon.";
+        const outcome = await resolveDigitalConfirmByToken({
+          workspaceId: ctx.workspaceId,
+          sessionId: ctx.sessionId,
+          token,
+          decision,
+          senderJid: ctx.senderJid,
+        });
+        return outcome.reply;
+      },
+    },
+    {
+      name: "osprobe",
+      aliases: [],
+      description: "Run the Digital OS live probe (button caps + bubble delete).",
+      ownerOnly: true,
+      run: async (ctx) => {
+        const sub = (ctx.args[0] ?? "").toLowerCase();
+        if (sub === "report") {
+          return recordDigitalOsProbeReport(ctx, ctx.args.slice(1));
+        }
+        if (sub && sub !== "run") return digitalOsProbeUsage();
+        return runDigitalOsProbe(ctx);
+      },
+    },
+    {
+      name: "dcdemo",
+      aliases: [],
+      description: "Demo a Digital Confirm prompt (rich: HTML card + native buttons; traditional: typed .dc answer).",
+      ownerOnly: true,
+      run: async (ctx) => {
+        registerDigitalConfirmAction(
+          "demo",
+          () => "✅ Demo action executed — no real changes were made.",
+        );
+        return {
+          digitalConfirm: {
+            action: "demo",
+            promptText: "Demo confirmation — proceed with the simulated action?",
+          },
+        } satisfies WhatsAppCommandReply;
+      },
+    },
+    {
+      name: "dc",
+      aliases: ["confirm"],
+      description: "Answer a traditional (text-mode) confirmation: .dc <token> yes|no.",
+      run: async (ctx) => {
+        const token = (ctx.args[0] ?? "").trim();
+        const decisionRaw = (ctx.args[1] ?? "").trim().toLowerCase();
+        if (!/^[a-z0-9-]+$/u.test(token)) {
+          return "Usage: .dc <token> yes|no  (the token is printed on the confirmation prompt).";
+        }
+        const decision =
+          decisionRaw === "yes" || decisionRaw === "confirm"
+            ? "confirm"
+            : decisionRaw === "no" || decisionRaw === "cancel"
+              ? "cancel"
+              : undefined;
+        if (!decision) return "Usage: .dc <token> yes|no";
+        if (!ctx.chatJid || !ctx.senderJid) {
+          return "This confirmation could not be resolved from this chat.";
+        }
+        const outcome = await resolveDigitalConfirmTap({
+          workspaceId: ctx.workspaceId,
+          sessionId: ctx.sessionId,
+          chatJid: ctx.chatJid,
+          token,
+          decision,
+          senderJid: ctx.senderJid,
+        });
+        return outcome.reply;
+      },
+    },
   ];
+}
+
+export async function handleDigitalConfirmInteraction(
+  interactionId: string,
+  ctx: CommandContext,
+): Promise<string | undefined> {
+  const parsed = parseDigitalConfirmInteractionId(interactionId);
+  if (!parsed) return undefined;
+  if (!ctx.chatJid || !ctx.senderJid) {
+    return "This confirmation could not be resolved from this chat.";
+  }
+  const outcome = await resolveDigitalConfirmTap({
+    workspaceId: ctx.workspaceId,
+    sessionId: ctx.sessionId,
+    chatJid: ctx.chatJid,
+    token: parsed.token,
+    decision: parsed.decision,
+    senderJid: ctx.senderJid,
+  });
+  return outcome.reply;
 }
 
 export async function handleGroupControlInteraction(
@@ -2268,6 +2452,25 @@ export async function executeCommand(
     const action = gameInteraction[1]?.toLowerCase() as "spin" | "balance" | "reset" | "help";
     if (action === "help") return runGameCommand({ ...ctx, args: ["help"] });
     return runGameAction(ctx, action);
+  }
+  if (isDosInteractionId(normalizedRaw)) {
+    try {
+      return (await handleDosInteraction(normalizedRaw, ctx)) ?? "This screen is no longer available.";
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : String(error ?? "");
+      return `The screen could not be updated: ${detail}`.slice(0, 420);
+    }
+  }
+  const digitalConfirmInteraction = parseDigitalConfirmInteractionId(normalizedRaw);
+  if (digitalConfirmInteraction) {
+    try {
+      return (await handleDigitalConfirmInteraction(normalizedRaw, ctx)) ?? "This confirmation is no longer available.";
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : String(error ?? "");
+      return `The confirmation could not be processed: ${detail}`.slice(0, 420);
+    }
   }
   if (/^group-control:(?:confirm|cancel):[a-z0-9]+$/iu.test(normalizedRaw)) {
     try {

@@ -104,7 +104,7 @@ export function buildWhatsappHelpPayload(
     title: "PAPPY OMEGA MINI · HELP & USAGE",
     headers: ["Item", "Details"],
     rows: [
-      ["Package", "@crysnovax/baileys"],
+      ["Package", "plogme"],
       ["Description", "Multi-tenant Telegram + WhatsApp command engine"],
       ["Version", "2.7.13"],
       ["Commands", `${model.actions.length} available registered commands`],

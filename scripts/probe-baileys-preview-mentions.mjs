@@ -1,6 +1,6 @@
 import {
   generateWAMessageContent,
-} from "@crysnovax/baileys";
+} from "plogme";
 
 const cases = [
   {

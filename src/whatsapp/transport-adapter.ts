@@ -1,4 +1,4 @@
-import type { WASocket } from "@crysnovax/baileys";
+import type { WASocket } from "plogme";
 import { createHash } from "node:crypto";
 import { getWhatsAppSocket } from "./session-manager.js";
 import {

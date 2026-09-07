@@ -1,0 +1,58 @@
+--- a/lib/Signal/lid-mapping.js
++++ b/lib/Signal/lid-mapping.js
+@@ -3,8 +3,15 @@
+ export class LIDMappingStore {
+     constructor(keys, logger, pnToLIDFunc) {
+         this.mappingCache = new LRUCache({
+-            ttl: 3 * 24 * 60 * 60 * 1000, // 7 days
+-            ttlAutopurge: true,
++            // PAPPY PERF FIX 2026-09-07: `max` was unset, so every unique
++            // pn:/lid: mapping lived forever, and ttlAutopurge scheduled a
++            // live 3-day setTimeout PER ENTRY (lru-cache sizes its purge
++            // timer array from `max`, which was 0) — unbounded heap + timer
++            // growth on busy group traffic. Bound the cache; the durable
++            // keys store remains the source of truth on miss.
++            max: 50_000,
++            ttl: 3 * 24 * 60 * 60 * 1000,
++            ttlAutopurge: false,
+             updateAgeOnGet: true
+         });
+         this.inflightLIDLookups = new Map();
+--- a/lib/Signal/libsignal.js
++++ b/lib/Signal/libsignal.js
+@@ -36,8 +36,12 @@
+     const storage = signalStorage(auth, lidMapping);
+     const parsedKeys = auth.keys;
+     const migratedSessionCache = new LRUCache({
+-        ttl: 3 * 24 * 60 * 60 * 1000, // 7 days
+-        ttlAutopurge: true,
++        // PAPPY PERF FIX 2026-09-07: bounded (was unbounded + per-entry
++        // 3-day timers via ttlAutopurge). Holds whole libsignal session
++        // records, so unbounded growth was fast on busy groups.
++        max: 5_000,
++        ttl: 3 * 24 * 60 * 60 * 1000,
++        ttlAutopurge: false,
+         updateAgeOnGet: true
+     });
+     const ensureSenderKeyAndCreateSkdm = async (group, meId) => {
+--- a/lib/Utils/message-retry-manager.js
++++ b/lib/Utils/message-retry-manager.js
+@@ -44,12 +44,16 @@
+         });
+         this.messageKeyIndex = new Map();
+         this.sessionRecreateHistory = new LRUCache({
++            // PAPPY PERF FIX 2026-09-07: bound + no per-entry timers.
++            max: 500,
+             ttl: RECREATE_SESSION_TIMEOUT * 2,
+-            ttlAutopurge: true
++            ttlAutopurge: false
+         });
+         this.retryCounters = new LRUCache({
++            // PAPPY PERF FIX 2026-09-07: bound + no per-entry timers.
++            max: 5_000,
+             ttl: 15 * 60 * 1000,
+-            ttlAutopurge: true,
++            ttlAutopurge: false,
+             updateAgeOnGet: true
+         }); // 15 minutes TTL
+         this.pendingPhoneRequests = {};

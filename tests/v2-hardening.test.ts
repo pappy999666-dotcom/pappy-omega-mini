@@ -2,6 +2,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { env } from "../src/config/env.js";
 import {
   decryptJson,
   encryptJson,
@@ -129,10 +130,12 @@ describe("V2 hardening", () => {
       connectTimeoutMs: 20_000,
       keepAliveIntervalMs: 15_000,
       defaultQueryTimeoutMs: 60_000,
-      retryRequestDelayMs: 0,
-      maxMsgRetryCount: 0,
       enableAutoSessionRecreation: false,
     });
+    // Retry budget and other tuning knobs are env-driven (audit 2026-09-06),
+    // applied in the makeWASocket call: bounded retries instead of 0.
+    expect(env.BAILEYS_MAX_MSG_RETRY_COUNT).toBeGreaterThanOrEqual(1);
+    expect(env.BAILEYS_RETRY_REQUEST_DELAY_MS).toBeGreaterThanOrEqual(1);
   });
 
   it("treats only notify or omitted upserts as live user actions", () => {

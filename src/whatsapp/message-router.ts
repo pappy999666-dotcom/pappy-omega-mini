@@ -56,6 +56,18 @@ import {
   getStickerCommandBinding,
   stickerBindingMatches,
 } from "./sticker-command-bindings.js";
+import type { DigitalConfirmDefinition } from "./digital-confirm.js";
+import {
+  isDigitalConfirmInteractionId,
+  parseDigitalConfirmInteractionId,
+  peekDigitalConfirmTap,
+} from "./digital-confirm.js";
+import { getWorkspaceResponseType } from "../core/workspace-settings.js";
+import {
+  isDosInteractionId,
+  parseDosInteractionId as parseDosInteraction,
+  peekDosToken,
+} from "./digital-os/session.js";
 
 const registry = createCommandRegistry();
 const recentStickerTriggers = new Map<string, number>();
@@ -100,6 +112,10 @@ export interface WhatsAppReply {
   nativeTable?: GroupControlTable;
   richResponse?: Array<Record<string, unknown>>;
   richMenu?: RichMenuContent;
+  /** Digital Confirm (Phase 3): rendered by the delivery layer per workspace responseType. */
+  digitalConfirm?: DigitalConfirmDefinition;
+  /** HTML-primitive bubble (Digital OS): raw HTML injected into the FOAHtmlPrimitive rich response. */
+  htmlBubble?: string;
   media?: WhatsAppMediaPayload;
   caption?: string;
 }
@@ -185,6 +201,9 @@ export async function routeWhatsAppText(
   const looksLikeExpiredNativeMenuId = Boolean(interactionValue && /^(?:ui:menu:|cmd:)/i.test(interactionValue) && !menuAction);
   if (looksLikeExpiredNativeMenuId) return null;
   const trimmed = menuAction?.command || (viewAction?.view ? "menu" : interactionValue || commandInput.trim());
+  // HTML-bubble beacons (`.ic`/`.cc`) are prefix-independent: the wa.me deep
+  // link always writes a dot-prefixed command regardless of the session prefix.
+  const internalBeacon = /^\.(?:ic|cc)(?:\s|$)/iu.test(trimmed);
   if (
     getEmergencyState().enabled &&
     /^(?:[^\w\s]{1,3})?(?:menu|help|m)(?:\s|$)/i.test(trimmed)
@@ -200,9 +219,11 @@ export async function routeWhatsAppText(
   // presents bare command names such as `allstatus` without the session prefix.
   if (stickerTrigger && !isOwnerFor(message, session)) return null;
   if (stickerTrigger && !acceptStickerTrigger(message)) return null;
-  if (!interactionValue && !menuAction && !viewAction && !stickerTrigger && !message.bridgeAuthorized && !selfAuthoredText && !ownerAuthorizedText && prefix && !trimmed.startsWith(prefix)) return null;
+  if (!interactionValue && !menuAction && !viewAction && !stickerTrigger && !message.bridgeAuthorized && !selfAuthoredText && !ownerAuthorizedText && !internalBeacon && prefix && !trimmed.startsWith(prefix)) return null;
   const raw = stickerTrigger
     ? stickerCommandInput as string
+    : internalBeacon
+    ? trimmed.slice(1)
     : menuAction?.command || menuAction?.view || viewAction?.view
     ? trimmed
     : interactionValue
@@ -233,6 +254,39 @@ export async function routeWhatsAppText(
   // proof that this was sent by the authenticated account itself, even when
   // Baileys exposes its LID rather than its phone JID.
   if (!isOwner) {
+    // Digital Confirm group safety: a non-initiator tapping a still-valid
+    // prompt button learns it is not theirs instead of silently getting
+    // nothing; stale/unknown/answered tokens stay silent (no information leak).
+    if (interactionValue && isDigitalConfirmInteractionId(interactionValue)) {
+      const dcTap = parseDigitalConfirmInteractionId(interactionValue);
+      if (dcTap && message.chatJid) {
+        const peek = peekDigitalConfirmTap({
+          workspaceId: message.workspaceId,
+          sessionId: message.sessionId,
+          chatJid: message.chatJid,
+          token: dcTap.token,
+        });
+        if (peek.valid)
+          return "Unauthorized — only the user who requested this confirmation may answer it.";
+        return null;
+      }
+    }
+    // Digital OS screens are bound to the user who opened them; a non-owner
+    // tapping a live screen token gets a notice, stale tokens stay silent.
+    if (interactionValue && isDosInteractionId(interactionValue)) {
+      const dosTap = parseDosInteraction(interactionValue);
+      if (dosTap && message.chatJid) {
+        const peek = peekDosToken(
+          message.workspaceId,
+          message.sessionId,
+          message.chatJid,
+          dosTap.token,
+        );
+        if (peek.live)
+          return "Unauthorized — only the user who opened this screen may change it.";
+        return null;
+      }
+    }
     if (process.env.PAPPY_DEBUG_WA_COMMANDS === "1")
       console.info(
         `[pappy-omega-mini] WhatsApp command unauthorized session=${message.sessionId} sender=${message.senderJid} command=${commandName}`,
@@ -270,6 +324,7 @@ export async function routeWhatsAppText(
     workspaceId: message.workspaceId,
     sessionId: message.sessionId,
     ...(message.receivedAt ? { receivedAt: message.receivedAt } : {}),
+    responseType: getWorkspaceResponseType(message.workspaceId),
     isOwner,
     senderJid: message.senderJid,
     ...(message.quotedSenderJid ? { quotedSenderJid: message.quotedSenderJid } : {}),

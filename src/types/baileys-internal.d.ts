@@ -1,4 +1,4 @@
-declare module "@crysnovax/baileys/lib/Utils/messages.js" {
+declare module "plogme/lib/Utils/messages.js" {
   export function downloadMediaMessage(
     message: unknown,
     type: "buffer" | "stream",

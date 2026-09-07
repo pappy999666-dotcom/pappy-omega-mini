@@ -2,7 +2,7 @@
 
 **pappy-omega-mini** is a from-scratch Telegram + WhatsApp SaaS bot foundation. It is designed around isolated workspaces, isolated WhatsApp sessions, a shared command/menu model, durable session authentication boundaries, bounded background work, and a polished text-first interface that remains readable in ordinary WhatsApp clients.
 
-> Stability comes before feature breadth. The WhatsApp transport is kept behind a dedicated session-manager boundary and uses the installed `@crysnovax/baileys` package rather than a substitute protocol library.
+> Stability comes before feature breadth. The WhatsApp transport is kept behind a dedicated session-manager boundary and uses the installed `plogme` engine (maintained fork of Baileys, formerly `@crysnovax/baileys`) rather than a substitute protocol library.
 
 ## Current foundation
 

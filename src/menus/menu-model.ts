@@ -125,6 +125,12 @@ export function buildSessionMenu(
     { id: "dlt", label: "Delete message", command: "dlt", description: "Delete one quoted message from this group." },
     { id: "deleteall", label: "Delete all bot cache", command: "deleteall", description: "Delete all recent bot-authored messages retained for this group." },
     { id: "purge", label: "Purge", command: "purge", description: "Permanently remove this session.", ownerOnly: true },
+    { id: "os", label: "App drawer", command: "os", description: "Open the Digital OS interactive app drawer.", ownerOnly: true },
+    { id: "osprobe", label: "OS probe", command: "osprobe", description: "Run the Digital OS live probe (button caps + bubble delete).", ownerOnly: true },
+    { id: "setvar", label: "Set variable", command: "setvar", description: "Workspace variable: response rich|traditional.", ownerOnly: true },
+    { id: "getvar", label: "Get variable", command: "getvar", description: "Show workspace variables.", ownerOnly: true },
+    { id: "dcdemo", label: "Digital confirm demo", command: "dcdemo", description: "Demo a native-flow Confirm/Cancel prompt.", ownerOnly: true },
+    { id: "dc", label: "Answer confirm", command: "dc", description: "Answer a text-mode confirmation: .dc <token> yes|no.", ownerOnly: true },
     ...ANTI_MENU_COMMANDS.map((command) => ({ id: `anti-${command}`, label: command, command, description: `Omega-V1 Anti System control: .${command}` })),
   ];
 

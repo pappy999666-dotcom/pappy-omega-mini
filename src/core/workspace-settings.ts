@@ -21,8 +21,16 @@ export interface WorkspaceSettings {
   /** Shared WhatsApp .menu attachment applied to every session in this workspace. */
   whatsappMenuMediaId?: string | undefined;
   whatsappMenuCaption?: string | undefined;
+  /** How confirmation prompts render for this workspace: native-flow buttons ("rich") or plain text ("traditional"). */
+  responseType?: "rich" | "traditional";
   timezone: string;
   updatedAt: number;
+}
+
+export type WorkspaceResponseType = NonNullable<WorkspaceSettings["responseType"]>;
+
+export function getWorkspaceResponseType(workspaceId: string): WorkspaceResponseType {
+  return getWorkspaceSettings(workspaceId).responseType ?? "traditional";
 }
 
 const settingsPath = join(env.SESSION_ROOT, "..", "workspace-settings.json");
@@ -230,6 +238,9 @@ export function updateWorkspaceSettings(
       patch.defaultJoinMode === "request"
         ? patch.defaultJoinMode
         : "auto",
+    ...(patch.responseType === "rich" || patch.responseType === "traditional"
+      ? { responseType: patch.responseType }
+      : {}),
     updatedAt: Date.now(),
   };
   settings.set(workspaceId, next);

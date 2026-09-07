@@ -2,6 +2,8 @@ allowBuilds:
   '@crysnovax/baileys': true
   esbuild: true
   msgpackr-extract: true
+  plogme: true
   protobufjs: true
 minimumReleaseAgeExclude:
   - '@crysnovax/baileys@2.7.12 || 2.7.15'
+  - plogme@1.0.0 || 1.0.3
