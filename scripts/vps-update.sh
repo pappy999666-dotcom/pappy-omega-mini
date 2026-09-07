@@ -139,7 +139,7 @@ fi
 
 # -- step 4: deps + typecheck + build inside the pinned image ----------------
 log "installing dependencies + building inside $IMAGE (this mounts $ROOT)..."
-docker run --rm --entrypoint /bin/bash -v "$ROOT:/app" -w /app "$IMAGE" -c '
+docker run --rm --entrypoint /bin/bash -e CI=true -v "$ROOT:/app" -w /app "$IMAGE" -c '
   set -e
   pnpm install --frozen-lockfile >/tmp/pnpm-install.log 2>&1 || { tail -20 /tmp/pnpm-install.log; exit 1; }
   pnpm run typecheck >/tmp/tsc-check.log 2>&1 || { tail -20 /tmp/tsc-check.log; exit 1; }
